@@ -623,6 +623,11 @@ class Parser:
             self.expect('OF')
             self.parse_type()
             return
+        if kind == 'LPAREN':
+            self.pos += 1
+            self.parse_identifier_list()
+            self.expect('RPAREN')
+            return
         if kind == 'LSTRING':
             self.pos += 1
             self.expect('LPAREN')
