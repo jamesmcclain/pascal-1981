@@ -141,7 +141,7 @@ class Parser:
         self.parse_uses_import()
         while self.match('COMMA'):
             self.parse_uses_import()
-        self.expect('SEMICOLON')
+        self.match('SEMICOLON')
 
     def parse_uses_import(self) -> None:
         self.expect('IDENTIFIER')
@@ -658,8 +658,8 @@ class Parser:
     def parse_index_range(self, allow_star: bool = False) -> None:
         self.parse_constant()
         self.expect('RANGE')
-        if allow_star and self.current().kind == 'MUL':
-            self.pos += 1
+        if allow_star:
+            self.expect('MUL')
         else:
             self.parse_constant()
 
