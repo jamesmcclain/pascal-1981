@@ -49,6 +49,16 @@ class Scope:
         return None
 
 
+_SCALAR_SIZES = {
+    'INTEGER': 4,
+    'REAL': 8,
+    'WORD': 2,
+    'CHAR': 1,
+    'BOOLEAN': 1,   # vintage Pascal BOOLEAN is one byte
+    'ADRMEM': 8,    # 64-bit pointer
+}
+
+
 class Codegen:
     """LLVM IR code generator."""
 
@@ -59,6 +69,7 @@ class Codegen:
         self.scope = Scope()  # global scope
         self.current_function: Optional[ir.Function] = None
         self.current_return_block: Optional[ir.BasicBlock] = None
+        self.constants: Dict[str, int] = {}  # compile-time constant values, keyed UPPER
 
     # ========================================================================
     # Type System
@@ -70,7 +81,7 @@ class Codegen:
             if type_expr.name == 'INTEGER':
                 return ir.IntType(32)
             elif type_expr.name == 'BOOLEAN':
-                return ir.IntType(1)
+                return ir.IntType(8)  # one byte, so adr/sizeof/fillc agree on layout
             elif type_expr.name == 'WORD':
                 return ir.IntType(16)
             elif type_expr.name == 'CHAR':
@@ -78,19 +89,34 @@ class Codegen:
             elif type_expr.name == 'REAL':
                 raise CodegenError('REAL type not yet supported')
             elif type_expr.name == 'ADRMEM':
-                return ir.IntType(32)  # address/memory word
+                return ir.PointerType(ir.IntType(8))  # pointer/address
             else:
                 raise CodegenError(f'Unknown built-in type: {type_expr.name}')
         elif isinstance(type_expr, NamedType):
-            # For now, treat as INTEGER (would need type table lookup)
+            name_up = type_expr.name.upper()
+            if name_up == 'ADRMEM':
+                return ir.PointerType(ir.IntType(8))
+            elif name_up == 'INTEGER':
+                return ir.IntType(32)
+            elif name_up == 'BOOLEAN':
+                return ir.IntType(8)
+            elif name_up == 'WORD':
+                return ir.IntType(16)
+            elif name_up == 'CHAR':
+                return ir.IntType(8)
             return ir.IntType(32)
         elif isinstance(type_expr, PointerType):
             base_type = self.llvm_type(type_expr.base)
             return ir.PointerType(base_type)
         elif isinstance(type_expr, ArrayType):
             elem_type = self.llvm_type(type_expr.element_type)
-            # For now, fixed-size arrays
-            size = 100  # placeholder
+            # Compute actual array size
+            try:
+                low_val = self.eval_const_expr(type_expr.index_range.low)
+                high_val = self.eval_const_expr(type_expr.index_range.high) if type_expr.index_range.high else low_val + 99
+                size = high_val - low_val + 1
+            except Exception:
+                size = 100
             return ir.ArrayType(elem_type, size)
         else:
             raise CodegenError(f'Type {type(type_expr).__name__} not yet supported')
@@ -195,10 +221,10 @@ class Codegen:
 
     def codegen_const_decl(self, decl: ConstDecl) -> None:
         """Codegen for CONST declaration."""
-        # Evaluate constant at compile time
+        # Evaluate constant at compile time and remember it so that later
+        # uses (array bounds, sizeof, and plain value references) can resolve it.
         value = self.eval_const_expr(decl.value)
-        # Store in scope for later use (const folding)
-        # For now, we just evaluate and discard
+        self.constants[decl.name.upper()] = value
 
     def codegen_var_decl(self, decl: VarDecl) -> None:
         """Codegen for VAR declaration."""
@@ -218,8 +244,12 @@ class Codegen:
 
     def codegen_proc_decl(self, decl: ProcDecl) -> None:
         """Codegen for PROCEDURE declaration."""
-        # Build parameter types
-        param_types = [self.llvm_type(param.type_expr) for param in decl.params]
+        # Flatten parameter types: one per name in each Param group
+        param_types = []
+        for param in decl.params:
+            param_type = self.llvm_type(param.type_expr)
+            for _ in param.names:
+                param_types.append(param_type)
         func_type = ir.FunctionType(ir.IntType(32), param_types)
 
         # Create function
@@ -241,9 +271,11 @@ class Codegen:
         self.scope = Scope(parent=prev_scope)
 
         # Bind parameters to the scope
-        for param, arg in zip(decl.params, func.args):
-            arg.name = param.names[0]
+        args_iter = iter(func.args)
+        for param in decl.params:
             for name in param.names:
+                arg = next(args_iter)
+                arg.name = name
                 self.scope.define(name, arg, param.type_expr, is_parameter=True)
 
         # Codegen body
@@ -263,8 +295,12 @@ class Codegen:
 
     def codegen_func_decl(self, decl: FuncDecl) -> None:
         """Codegen for FUNCTION declaration."""
-        # Build parameter types
-        param_types = [self.llvm_type(param.type_expr) for param in decl.params]
+        # Flatten parameter types: one per name in each Param group
+        param_types = []
+        for param in decl.params:
+            param_type = self.llvm_type(param.type_expr)
+            for _ in param.names:
+                param_types.append(param_type)
         return_type = self.llvm_type(decl.return_type)
         func_type = ir.FunctionType(return_type, param_types)
 
@@ -287,9 +323,11 @@ class Codegen:
         self.scope = Scope(parent=prev_scope)
 
         # Bind parameters
-        for param, arg in zip(decl.params, func.args):
-            arg.name = param.names[0]
+        args_iter = iter(func.args)
+        for param in decl.params:
             for name in param.names:
+                arg = next(args_iter)
+                arg.name = name
                 self.scope.define(name, arg, param.type_expr, is_parameter=True)
 
         # Allocate space for return value
@@ -358,7 +396,7 @@ class Codegen:
     def codegen_assign_stmt(self, stmt: AssignStmt) -> None:
         """Codegen for assignment statement."""
         target_name = stmt.target.name
-        symbol = self.scope.lookup(target_name)
+        symbol = self.scope.lookup(target_name) or self.scope.lookup(target_name.upper())
         if not symbol:
             raise CodegenError(f'Undefined variable: {target_name}')
         
@@ -366,30 +404,50 @@ class Codegen:
         if symbol.is_parameter:
             raise CodegenError(f'Cannot assign to parameter: {target_name}')
 
+        # Resolve the pointer (handles array indexing, etc.)
+        ptr = self.resolve_designator_ptr(stmt.target)
         value = self.codegen_expr(stmt.expr)
-        self.builder.store(value, symbol.llvm_value)
+        
+        # Handle simple type conversions
+        if hasattr(ptr.type, 'pointee'):
+            target_type = ptr.type.pointee
+            if isinstance(target_type, ir.IntType) and isinstance(value.type, ir.IntType):
+                if target_type.width < value.type.width:
+                    value = self.builder.trunc(value, target_type)
+                elif target_type.width > value.type.width:
+                    value = self.builder.zext(value, target_type)
+
+        self.builder.store(value, ptr)
 
     def codegen_proc_call_stmt(self, stmt: ProcCallStmt) -> None:
         """Codegen for procedure call statement."""
-        symbol = self.scope.lookup(stmt.name)
+        lookup_name = stmt.name.upper()
+        symbol = self.scope.lookup(lookup_name) or self.scope.lookup(stmt.name)
         if not symbol:
             # Try built-in procedures
-            if stmt.name == 'WRITELN':
+            if lookup_name == 'WRITELN':
                 self.builtin_writeln(stmt.args)
-            elif stmt.name == 'READLN':
+            elif lookup_name == 'READLN':
                 self.builtin_readln(stmt.args)
             else:
                 raise CodegenError(f'Undefined procedure: {stmt.name}')
         else:
             # User-defined procedure
-            args = [self.codegen_expr(arg) for arg in stmt.args]
-            self.builder.call(symbol.llvm_value, args)
+            fn = symbol.llvm_value
+            param_types = fn.function_type.args
+            args = []
+            for i, arg in enumerate(stmt.args):
+                v = self.codegen_expr(arg)
+                if i < len(param_types):
+                    v = self.coerce_arg(v, param_types[i])
+                args.append(v)
+            self.builder.call(fn, args)
 
     def codegen_if_stmt(self, stmt: IfStmt) -> None:
         """Codegen for IF statement."""
         cond = self.codegen_expr(stmt.cond)
-        # Convert to 1-bit for branch
-        cond_bit = self.builder.icmp_signed('!=', cond, ir.Constant(ir.IntType(32), 0))
+        # Reduce to i1 (handles boolean loads as well as integer conditions)
+        cond_bit = self.to_bool(cond)
 
         # Create basic blocks
         then_block = self.current_function.append_basic_block(name='if_then')
@@ -481,7 +539,7 @@ class Codegen:
         # Condition check
         self.builder.position_at_end(loop_block)
         cond = self.codegen_expr(stmt.cond)
-        cond_bit = self.builder.icmp_signed('!=', cond, ir.Constant(ir.IntType(32), 0))
+        cond_bit = self.to_bool(cond)
         self.builder.cbranch(cond_bit, body_block, end_block)
 
         # Body
@@ -506,7 +564,7 @@ class Codegen:
 
         # Condition (until = exit when true)
         cond = self.codegen_expr(stmt.cond)
-        cond_bit = self.builder.icmp_signed('!=', cond, ir.Constant(ir.IntType(32), 0))
+        cond_bit = self.to_bool(cond)
         self.builder.cbranch(cond_bit, end_block, loop_block)
 
         # After loop
@@ -554,6 +612,94 @@ class Codegen:
         """Codegen for RETURN statement."""
         self.builder.ret(ir.Constant(ir.IntType(32), 0))
 
+    def resolve_designator_ptr(self, designator: Designator) -> ir.Value:
+        """Resolve a designator to its LLVM pointer (handles arrays/selectors)."""
+        symbol = self.scope.lookup(designator.name)
+        if not symbol:
+            symbol = self.scope.lookup(designator.name.upper())
+            if not symbol:
+                raise CodegenError(f'Undefined variable: {designator.name}')
+            
+        ptr = symbol.llvm_value
+        
+        if designator.selectors:
+            for selector in designator.selectors:
+                if selector.kind == 'INDEX':
+                    index = self.codegen_expr(selector.index_or_field)
+                    # GEP requires [0, index] for pointers to arrays, or [index] for flat pointers
+                    if isinstance(ptr.type.pointee, ir.ArrayType):
+                        ptr = self.builder.gep(ptr, [ir.Constant(ir.IntType(32), 0), index])
+                    else:
+                        ptr = self.builder.gep(ptr, [index])
+                elif selector.kind == 'FIELD':
+                    # Record field access (simplified)
+                    pass
+                elif selector.kind == 'DEREF':
+                    # Pointer dereference
+                    ptr = self.builder.load(ptr)
+        return ptr
+
+    # ========================================================================
+    # Type-size, argument coercion, and boolean helpers
+    # ========================================================================
+
+    def _scalar_size(self, name: str) -> int:
+        """Size in bytes of a scalar/built-in type, by name."""
+        return _SCALAR_SIZES.get(name.upper(), 4)
+
+    def get_type_size(self, t: Type) -> int:
+        """Size in bytes of an AST type node (consults constants for bounds)."""
+        if isinstance(t, BuiltinType):
+            return self._scalar_size(t.name)
+        elif isinstance(t, NamedType):
+            return self._scalar_size(t.name)
+        elif isinstance(t, ArrayType):
+            low = self.eval_const_expr(t.index_range.low)
+            high = self.eval_const_expr(t.index_range.high) if t.index_range.high else low
+            count = high - low + 1
+            return count * self.get_type_size(t.element_type)
+        elif isinstance(t, PointerType):
+            return 8  # 64-bit pointer
+        elif isinstance(t, RecordType):
+            # AST RecordType.fields is a list of (name_list, type) pairs
+            total = 0
+            for names, ftype in t.fields:
+                total += len(names) * self.get_type_size(ftype)
+            return total
+        else:
+            return 4  # fallback
+
+    def coerce_arg(self, value: ir.Value, target_type: ir.Type) -> ir.Value:
+        """Coerce a call argument to the callee's declared parameter type.
+
+        Handles the two cases the vintage benchmark needs: any-pointer-to-any
+        -pointer (adrmem) via bitcast, and integer width adjustment (e.g. an
+        i32 expression into a WORD/i16 parameter).
+        """
+        vt = value.type
+        if vt == target_type:
+            return value
+        if isinstance(target_type, ir.PointerType) and isinstance(vt, ir.PointerType):
+            return self.builder.bitcast(value, target_type)
+        if isinstance(target_type, ir.IntType) and isinstance(vt, ir.IntType):
+            if vt.width > target_type.width:
+                return self.builder.trunc(value, target_type)
+            elif vt.width < target_type.width:
+                return self.builder.zext(value, target_type)
+        return value
+
+    def to_bool(self, cond: ir.Value) -> ir.Value:
+        """Reduce a condition value to an i1 for a branch.
+
+        An already-i1 value is used directly; wider integers (e.g. an i8
+        BOOLEAN load or an i32) are compared against zero.
+        """
+        if isinstance(cond.type, ir.IntType):
+            if cond.type.width == 1:
+                return cond
+            return self.builder.icmp_signed('!=', cond, ir.Constant(cond.type, 0))
+        return cond
+
     # ========================================================================
     # Expressions
     # ========================================================================
@@ -568,11 +714,51 @@ class Codegen:
             # Convert char to int
             return ir.Constant(ir.IntType(8), ord(expr.value[0]) if expr.value else 0)
         elif isinstance(expr, StringLiteral):
-            raise CodegenError('String literals not yet supported')
+            # Remove single quotes around the Pascal string literal if any
+            val_str = expr.value
+            if val_str.startswith("'") and val_str.endswith("'"):
+                val_str = val_str[1:-1]
+            # Replace double single-quotes with single-quote (Pascal escape)
+            val_str = val_str.replace("''", "'")
+            
+            # Create a global string constant in the module (null-terminated)
+            str_bytes = bytearray(val_str.encode('utf-8') + b'\0')
+            str_const = ir.Constant(ir.ArrayType(ir.IntType(8), len(str_bytes)), str_bytes)
+            str_global = ir.GlobalVariable(self.module, str_const.type, name=self.unique_name('str'))
+            str_global.initializer = str_const
+            str_global.global_constant = True
+            
+            # Return pointer to the first character of the string constant
+            zero = ir.Constant(ir.IntType(32), 0)
+            return self.builder.gep(str_global, [zero, zero])
         elif isinstance(expr, BoolLiteral):
             return ir.Constant(ir.IntType(1), 1 if expr.value else 0)
-        elif isinstance(expr, Identifier):
+        elif isinstance(expr, AdrExpr):
+            # Address-of operator (adr var_name)
             symbol = self.scope.lookup(expr.name)
+            if not symbol:
+                raise CodegenError(f'Undefined variable: {expr.name}')
+            # Local/global variables are represented as pointers in LLVM, so symbol.llvm_value is the address
+            return symbol.llvm_value
+        elif isinstance(expr, SizeofExpr):
+            # Sizeof operator (sizeof var_name or sizeof type)
+            if isinstance(expr.target, str):
+                symbol = self.scope.lookup(expr.target) or self.scope.lookup(expr.target.upper())
+                if symbol is not None and symbol.type_expr is not None:
+                    size_val = self.get_type_size(symbol.type_expr)
+                else:
+                    # Not a variable: treat the name as a built-in type name
+                    size_val = self._scalar_size(expr.target)
+            else:
+                # An AST Type node was supplied directly
+                size_val = self.get_type_size(expr.target)
+            return ir.Constant(ir.IntType(16), size_val)  # WORD is 16-bit
+        elif isinstance(expr, Identifier):
+            # A named constant used as a value (e.g. FOR i := 0 TO size)
+            key = expr.name.upper()
+            if key in self.constants:
+                return ir.Constant(ir.IntType(32), self.constants[key])
+            symbol = self.scope.lookup(expr.name) or self.scope.lookup(key)
             if not symbol:
                 raise CodegenError(f'Undefined variable: {expr.name}')
             # Parameters are passed by value, don't load them
@@ -580,14 +766,18 @@ class Codegen:
                 return symbol.llvm_value
             return self.builder.load(symbol.llvm_value)
         elif isinstance(expr, Designator):
-            # For MVP, just load the base variable
-            symbol = self.scope.lookup(expr.name)
+            symbol = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
             if not symbol:
                 raise CodegenError(f'Undefined variable: {expr.name}')
             # Parameters are passed by value, don't load them
             if symbol.is_parameter:
                 return symbol.llvm_value
-            return self.builder.load(symbol.llvm_value)
+            
+            ptr = self.resolve_designator_ptr(expr)
+            # If the designator is a constant, return its value directly (not a pointer)
+            if not isinstance(ptr.type, ir.PointerType):
+                return ptr
+            return self.builder.load(ptr)
         elif isinstance(expr, BinOp):
             return self.codegen_binop(expr)
         elif isinstance(expr, UnaryOp):
@@ -647,53 +837,84 @@ class Codegen:
 
     def codegen_func_call(self, expr: FuncCall) -> ir.Value:
         """Codegen function call."""
-        symbol = self.scope.lookup(expr.name)
+        lookup_name = expr.name.upper()
+        
+        # Inline built-in functions
+        if lookup_name == 'CHR':
+            val = self.codegen_expr(expr.args[0])
+            if val.type.width == 8:
+                return val
+            elif val.type.width > 8:
+                return self.builder.trunc(val, ir.IntType(8))
+            else:
+                return self.builder.zext(val, ir.IntType(8))
+        elif lookup_name == 'ORD':
+            val = self.codegen_expr(expr.args[0])
+            if val.type.width == 32:
+                return val
+            return self.builder.zext(val, ir.IntType(32))
+
+        symbol = self.scope.lookup(lookup_name) or self.scope.lookup(expr.name)
         if not symbol:
             raise CodegenError(f'Undefined function: {expr.name}')
 
-        args = [self.codegen_expr(arg) for arg in expr.args]
-        return self.builder.call(symbol.llvm_value, args)
+        fn = symbol.llvm_value
+        param_types = fn.function_type.args
+        args = []
+        for i, arg in enumerate(expr.args):
+            v = self.codegen_expr(arg)
+            if i < len(param_types):
+                v = self.coerce_arg(v, param_types[i])
+            args.append(v)
+        return self.builder.call(fn, args)
 
     # ========================================================================
     # Built-in Functions
     # ========================================================================
 
     def builtin_writeln(self, args: List[Expression]) -> None:
-        """Implement WRITELN for integers."""
+        """Implement WRITELN for any combination of string/integer/boolean types."""
         # Declare printf if not already declared
         if 'printf' not in [f.name for f in self.module.functions]:
             printf_type = ir.FunctionType(ir.IntType(32), [ir.PointerType(ir.IntType(8))], var_arg=True)
             ir.Function(self.module, printf_type, name='printf')
 
         # Get printf function
-        printf_func = None
-        for func in self.module.functions:
-            if func.name == 'printf':
-                printf_func = func
-                break
+        printf_func = next(f for f in self.module.functions if f.name == 'printf')
 
-        # Build format string and args
-        if args:
-            for arg in args:
-                val = self.codegen_expr(arg)
-                # Create format string "%d\n" for integers
-                fmt_str = "%d\n"
-                fmt_const = ir.Constant(ir.ArrayType(ir.IntType(8), len(fmt_str) + 1),
-                                       bytearray(fmt_str.encode('utf-8') + b'\0'))
-                fmt_global = ir.GlobalVariable(self.module, fmt_const.type, name=self.unique_name('fmt'))
-                fmt_global.initializer = fmt_const
-                fmt_ptr = self.builder.bitcast(fmt_global, ir.PointerType(ir.IntType(8)))
+        fmt_parts = []
+        val_args = []
+        for arg in args:
+            val = self.codegen_expr(arg)
+            val_args.append(val)
+            
+            # Determine format based on LLVM type
+            val_type_str = str(val.type)
+            if 'i32' in val_type_str:
+                fmt_parts.append("%d")
+            elif 'i16' in val_type_str:
+                fmt_parts.append("%u")
+            elif 'i8*' in val_type_str or '[' in val_type_str:
+                fmt_parts.append("%s")
+            elif 'i8' in val_type_str:
+                fmt_parts.append("%c")
+            elif 'i1' in val_type_str:
+                # Booleans as integers for printf
+                fmt_parts.append("%d")
+            elif 'double' in val_type_str or 'float' in val_type_str:
+                fmt_parts.append("%f")
+            else:
+                fmt_parts.append("%s")
 
-                self.builder.call(printf_func, [fmt_ptr, val])
-        else:
-            # Just print newline
-            fmt_str = "\n"
-            fmt_const = ir.Constant(ir.ArrayType(ir.IntType(8), len(fmt_str) + 1),
-                                   bytearray(fmt_str.encode('utf-8') + b'\0'))
-            fmt_global = ir.GlobalVariable(self.module, fmt_const.type, name=self.unique_name('fmt'))
-            fmt_global.initializer = fmt_const
-            fmt_ptr = self.builder.bitcast(fmt_global, ir.PointerType(ir.IntType(8)))
-            self.builder.call(printf_func, [fmt_ptr])
+        fmt_str = "".join(fmt_parts) + "\n"
+        fmt_const = ir.Constant(ir.ArrayType(ir.IntType(8), len(fmt_str) + 1),
+                               bytearray(fmt_str.encode('utf-8') + b'\0'))
+        fmt_global = ir.GlobalVariable(self.module, fmt_const.type, name=self.unique_name('fmt'))
+        fmt_global.initializer = fmt_const
+        fmt_global.global_constant = True
+        fmt_ptr = self.builder.gep(fmt_global, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0)])
+
+        self.builder.call(printf_func, [fmt_ptr] + val_args)
 
     def builtin_readln(self, args: List[Expression]) -> None:
         """Implement READLN for integers."""
@@ -738,6 +959,16 @@ class Codegen:
             return expr.value
         elif isinstance(expr, BoolLiteral):
             return 1 if expr.value else 0
+        elif isinstance(expr, Identifier):
+            key = expr.name.upper()
+            if key in self.constants:
+                return self.constants[key]
+            raise CodegenError(f'Unknown constant: {expr.name}')
+        elif isinstance(expr, Designator) and not expr.selectors:
+            key = expr.name.upper()
+            if key in self.constants:
+                return self.constants[key]
+            raise CodegenError(f'Unknown constant: {expr.name}')
         elif isinstance(expr, UnaryOp):
             val = self.eval_const_expr(expr.operand)
             if expr.op == 'MINUS':

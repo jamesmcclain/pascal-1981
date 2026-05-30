@@ -18,7 +18,8 @@ from ast_nodes import (
     NamedType, ArrayType as ASTArrayType, RecordType as ASTRecordType,
     Identifier, BinOp, UnaryOp, IntLiteral, RealLiteral, BoolLiteral,
     IfStmt, ForStmt, WhileStmt, RepeatStmt, CaseStmt, AssignStmt, 
-    ProcCallStmt, FuncCall, Designator, ReturnStmt, Selector
+    ProcCallStmt, FuncCall, Designator, ReturnStmt, Selector, StringLiteral,
+    AdrExpr, SizeofExpr
 )
 
 from type_system import (
@@ -118,6 +119,24 @@ class PascalTypeChecker(TypeChecker):
         self.symbol_table.define('LENGTH', Symbol(
             name='LENGTH',
             type=length_type,
+            kind='function',
+            is_mutable=False
+        ))
+
+        # CHR function (returns CHAR)
+        chr_type = FunctionType('CHR', [('n', INTEGER_TYPE)], CHAR_TYPE)
+        self.symbol_table.define('CHR', Symbol(
+            name='CHR',
+            type=chr_type,
+            kind='function',
+            is_mutable=False
+        ))
+
+        # ORD function (returns INTEGER)
+        ord_type = FunctionType('ORD', [('c', CHAR_TYPE)], INTEGER_TYPE)
+        self.symbol_table.define('ORD', Symbol(
+            name='ORD',
+            type=ord_type,
             kind='function',
             is_mutable=False
         ))
@@ -586,8 +605,9 @@ class PascalTypeChecker(TypeChecker):
         if not stmt.name:
             return
         
-        # Look up the procedure
-        sym = self.symbol_table.lookup(stmt.name)
+        # Look up the procedure (Pascal is case-insensitive)
+        lookup_name = stmt.name.upper()
+        sym = self.symbol_table.lookup(lookup_name) or self.symbol_table.lookup(stmt.name)
         if not sym:
             self.error(f"Undefined procedure: {stmt.name}", stmt)
             return
@@ -636,6 +656,18 @@ class PascalTypeChecker(TypeChecker):
             return REAL_TYPE
         elif isinstance(expr, BoolLiteral):
             return BOOLEAN_TYPE
+        elif isinstance(expr, StringLiteral):
+            return PointerType(CHAR_TYPE)
+        elif isinstance(expr, AdrExpr):
+            # Address-of operator (adr var_name)
+            sym = self.symbol_table.lookup(expr.name)
+            if not sym:
+                self.error(f"Undefined variable: {expr.name}", expr)
+                return None
+            return PointerType(sym.type)
+        elif isinstance(expr, SizeofExpr):
+            # Sizeof operator (sizeof var_name or type)
+            return INTEGER_TYPE
         elif isinstance(expr, Identifier):
             sym = self.symbol_table.lookup(expr.name)
             if not sym:
@@ -654,7 +686,8 @@ class PascalTypeChecker(TypeChecker):
                 return unary_op_result_type(operand_type, expr.op)
             return None
         elif isinstance(expr, FuncCall):
-            sym = self.symbol_table.lookup(expr.name)
+            lookup_name = expr.name.upper()
+            sym = self.symbol_table.lookup(lookup_name) or self.symbol_table.lookup(expr.name)
             if not sym:
                 self.error(f"Undefined function: {expr.name}", expr)
                 return None
@@ -764,6 +797,8 @@ class PascalTypeChecker(TypeChecker):
                 return WORD_TYPE
             elif name == 'CHAR':
                 return CHAR_TYPE
+            elif name == 'ADRMEM':
+                return PointerType(CHAR_TYPE)
             else:
                 # Could be a user-defined type
                 return None

@@ -147,7 +147,8 @@ class PointerType(Type):
     def equivalent_to(self, other: Type) -> bool:
         if not isinstance(other, PointerType):
             return False
-        return self.target_type.equivalent_to(other.target_type)
+        # In vintage systems programming, any pointer is equivalent/compatible with any other pointer (like adrmem)
+        return True
 
 
 @dataclass
