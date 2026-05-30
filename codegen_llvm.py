@@ -10,7 +10,9 @@ Walks the AST and emits LLVM IR. Supports:
 """
 
 from __future__ import annotations
+
 from typing import Any, Dict, List, Optional, Union
+
 import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
@@ -23,6 +25,7 @@ class CodegenError(Exception):
 
 class Symbol:
     """A symbol in the current scope."""
+
     def __init__(self, name: str, llvm_value: Any, type_expr: Type, is_parameter: bool = False):
         self.name = name
         self.llvm_value = llvm_value  # ir.Value or ir.Function or ir.GlobalVariable
@@ -32,6 +35,7 @@ class Symbol:
 
 class Scope:
     """A scope (function or block) with symbol table."""
+
     def __init__(self, parent: Optional[Scope] = None):
         self.parent = parent
         self.symbols: Dict[str, Symbol] = {}
@@ -54,8 +58,8 @@ _SCALAR_SIZES = {
     'REAL': 8,
     'WORD': 2,
     'CHAR': 1,
-    'BOOLEAN': 1,   # vintage Pascal BOOLEAN is one byte
-    'ADRMEM': 8,    # 64-bit pointer
+    'BOOLEAN': 1,  # vintage Pascal BOOLEAN is one byte
+    'ADRMEM': 8,  # 64-bit pointer
 }
 
 
@@ -184,7 +188,7 @@ class Codegen:
         """Codegen for IMPLEMENTATION unit."""
         for decl in unit.decls:
             self.codegen_decl(decl)
-        
+
         # Codegen init body if present
         if unit.init_body:
             init_type = ir.FunctionType(ir.IntType(32), [])
@@ -238,7 +242,7 @@ class Codegen:
     def codegen_var_decl(self, decl: VarDecl) -> None:
         """Codegen for VAR declaration."""
         llvm_type = self.llvm_type(decl.type_expr)
-        
+
         if self.builder:
             # Local variable (inside a function)
             for name in decl.names:
@@ -409,7 +413,7 @@ class Codegen:
         symbol = self.scope.lookup(target_name) or self.scope.lookup(target_name.upper())
         if not symbol:
             raise CodegenError(f'Undefined variable: {target_name}')
-        
+
         # Can't assign to parameters (passed by value)
         if symbol.is_parameter:
             raise CodegenError(f'Cannot assign to parameter: {target_name}')
@@ -417,7 +421,7 @@ class Codegen:
         # Resolve the pointer (handles array indexing, etc.)
         ptr = self.resolve_designator_ptr(stmt.target)
         value = self.codegen_expr(stmt.expr)
-        
+
         # Handle simple type conversions
         if hasattr(ptr.type, 'pointee'):
             target_type = ptr.type.pointee
@@ -462,16 +466,16 @@ class Codegen:
         # Create basic blocks
         then_block = self.current_function.append_basic_block(name='if_then')
         end_block = self.current_function.append_basic_block(name='if_end')
-        
+
         if stmt.else_branch:
             else_block = self.current_function.append_basic_block(name='if_else')
             self.builder.cbranch(cond_bit, then_block, else_block)
-            
+
             # Then branch
             self.builder.position_at_end(then_block)
             self.codegen_stmt(stmt.then_branch)
             self.builder.branch(end_block)
-            
+
             # Else branch
             self.builder.position_at_end(else_block)
             self.codegen_stmt(stmt.else_branch)
@@ -479,12 +483,12 @@ class Codegen:
         else:
             # No else branch
             self.builder.cbranch(cond_bit, then_block, end_block)
-            
+
             # Then branch
             self.builder.position_at_end(then_block)
             self.codegen_stmt(stmt.then_branch)
             self.builder.branch(end_block)
-        
+
         # Continue after if
         self.builder.position_at_end(end_block)
 
@@ -583,9 +587,9 @@ class Codegen:
     def codegen_case_stmt(self, stmt: CaseStmt) -> None:
         """Codegen for CASE statement."""
         expr = self.codegen_expr(stmt.expr)
-        
+
         end_block = self.current_function.append_basic_block(name='case_end')
-        
+
         # For simplicity, use if-else chain
         for element in stmt.elements:
             case_block = self.current_function.append_basic_block(name='case_block')
@@ -614,7 +618,7 @@ class Codegen:
         # Otherwise branch
         if stmt.otherwise:
             self.codegen_stmt(stmt.otherwise)
-        
+
         self.builder.branch(end_block)
         self.builder.position_at_end(end_block)
 
@@ -629,9 +633,9 @@ class Codegen:
             symbol = self.scope.lookup(designator.name.upper())
             if not symbol:
                 raise CodegenError(f'Undefined variable: {designator.name}')
-            
+
         ptr = symbol.llvm_value
-        
+
         if designator.selectors:
             for selector in designator.selectors:
                 if selector.kind == 'INDEX':
@@ -742,14 +746,14 @@ class Codegen:
                 val_str = val_str[1:-1]
             # Replace double single-quotes with single-quote (Pascal escape)
             val_str = val_str.replace("''", "'")
-            
+
             # Create a global string constant in the module (null-terminated)
             str_bytes = bytearray(val_str.encode('utf-8') + b'\0')
             str_const = ir.Constant(ir.ArrayType(ir.IntType(8), len(str_bytes)), str_bytes)
             str_global = ir.GlobalVariable(self.module, str_const.type, name=self.unique_name('str'))
             str_global.initializer = str_const
             str_global.global_constant = True
-            
+
             # Return pointer to the first character of the string constant
             zero = ir.Constant(ir.IntType(32), 0)
             return self.builder.gep(str_global, [zero, zero])
@@ -794,7 +798,7 @@ class Codegen:
             # Parameters are passed by value, don't load them
             if symbol.is_parameter:
                 return symbol.llvm_value
-            
+
             ptr = self.resolve_designator_ptr(expr)
             # If the designator is a constant, return its value directly (not a pointer)
             if not isinstance(ptr.type, ir.PointerType):
@@ -860,7 +864,7 @@ class Codegen:
     def codegen_func_call(self, expr: FuncCall) -> ir.Value:
         """Codegen function call."""
         lookup_name = expr.name.upper()
-        
+
         # Inline built-in functions
         if lookup_name == 'CHR':
             val = self.codegen_expr(expr.args[0])
@@ -909,7 +913,7 @@ class Codegen:
         for arg in args:
             val = self.codegen_expr(arg)
             val_args.append(val)
-            
+
             # Determine format based on LLVM type
             val_type_str = str(val.type)
             if 'i32' in val_type_str:
@@ -929,8 +933,7 @@ class Codegen:
                 fmt_parts.append("%s")
 
         fmt_str = "".join(fmt_parts) + "\n"
-        fmt_const = ir.Constant(ir.ArrayType(ir.IntType(8), len(fmt_str) + 1),
-                               bytearray(fmt_str.encode('utf-8') + b'\0'))
+        fmt_const = ir.Constant(ir.ArrayType(ir.IntType(8), len(fmt_str) + 1), bytearray(fmt_str.encode('utf-8') + b'\0'))
         fmt_global = ir.GlobalVariable(self.module, fmt_const.type, name=self.unique_name('fmt'))
         fmt_global.initializer = fmt_const
         fmt_global.global_constant = True
@@ -957,14 +960,13 @@ class Codegen:
                 symbol = self.scope.lookup(arg.name)
                 if not symbol:
                     raise CodegenError(f'Undefined variable: {arg.name}')
-                
+
                 # Can't read into parameters
                 if symbol.is_parameter:
                     raise CodegenError(f'Cannot read into parameter: {arg.name}')
 
                 fmt_str = "%d"
-                fmt_const = ir.Constant(ir.ArrayType(ir.IntType(8), len(fmt_str) + 1),
-                                       bytearray(fmt_str.encode('utf-8') + b'\0'))
+                fmt_const = ir.Constant(ir.ArrayType(ir.IntType(8), len(fmt_str) + 1), bytearray(fmt_str.encode('utf-8') + b'\0'))
                 fmt_global = ir.GlobalVariable(self.module, fmt_const.type, name=self.unique_name('fmt'))
                 fmt_global.initializer = fmt_const
                 fmt_ptr = self.builder.bitcast(fmt_global, ir.PointerType(ir.IntType(8)))
