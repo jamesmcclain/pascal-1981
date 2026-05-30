@@ -18,12 +18,12 @@ from ast_nodes import (
     NamedType, ArrayType as ASTArrayType, RecordType as ASTRecordType,
     Identifier, BinOp, UnaryOp, IntLiteral, RealLiteral, BoolLiteral,
     IfStmt, ForStmt, WhileStmt, RepeatStmt, CaseStmt, AssignStmt, 
-    ProcCallStmt, FuncCall, Designator
+    ProcCallStmt, FuncCall, Designator, ReturnStmt, Selector
 )
 
 from type_system import (
     Type, INTEGER_TYPE, BOOLEAN_TYPE, REAL_TYPE, WORD_TYPE, CHAR_TYPE,
-    ArrayType, RecordType, FunctionType, ProcedureType,
+    ArrayType, RecordType, FunctionType, ProcedureType, PointerType, SetType,
     can_assign, binary_op_result_type, unary_op_result_type
 )
 
@@ -71,6 +71,7 @@ class PascalTypeChecker(TypeChecker):
         self.errors: List[TypeCheckError] = []
         self.warnings: List[TypeCheckError] = []
         self.current_function: Optional[FuncDecl] = None
+        self.current_function_return_type: Optional[Type] = None
         self.current_procedure: Optional[ProcDecl] = None
         self._setup_builtins()
     
@@ -272,8 +273,8 @@ class PascalTypeChecker(TypeChecker):
         
         # Resolve return type
         return_type = INTEGER_TYPE
-        if decl.type_expr:
-            return_type = self.resolve_type(decl.type_expr)
+        if decl.return_type:
+            return_type = self.resolve_type(decl.return_type)
             if not return_type:
                 self.error(f"Unknown return type", decl)
                 return_type = INTEGER_TYPE
@@ -301,7 +302,9 @@ class PascalTypeChecker(TypeChecker):
         
         # Check function body
         old_func = self.current_function
+        old_return_type = self.current_function_return_type
         self.current_function = decl
+        self.current_function_return_type = return_type
         self.symbol_table.enter_scope()
         
         # Add parameters to scope
@@ -319,10 +322,11 @@ class PascalTypeChecker(TypeChecker):
                     self.symbol_table.define(param.name, param_symbol)
         
         # Check body
-        self.check_block(decl.block)
+        self.check_block(decl.body)
         
         self.symbol_table.exit_scope()
         self.current_function = old_func
+        self.current_function_return_type = old_return_type
     
     def check_proc_decl(self, decl: ProcDecl) -> None:
         """Type check a procedure declaration."""
@@ -379,7 +383,7 @@ class PascalTypeChecker(TypeChecker):
                     self.symbol_table.define(param.name, param_symbol)
         
         # Check body
-        self.check_block(decl.block)
+        self.check_block(decl.body)
         
         self.symbol_table.exit_scope()
         self.current_procedure = old_proc
@@ -400,6 +404,8 @@ class PascalTypeChecker(TypeChecker):
             self.check_assign_stmt(stmt)
         elif isinstance(stmt, ProcCallStmt):
             self.check_proc_call_stmt(stmt)
+        elif isinstance(stmt, ReturnStmt):
+            self.check_return_stmt(stmt)
     
     def check_if_stmt(self, stmt: IfStmt) -> None:
         """Type check an IF statement."""
@@ -485,32 +491,83 @@ class PascalTypeChecker(TypeChecker):
         # TODO: Check selector type and case value types
         pass
     
+    def check_return_stmt(self, stmt: ReturnStmt) -> None:
+        """Type check a RETURN statement."""
+        # RETURN is only valid inside a function
+        if not self.current_function:
+            self.error(
+                "RETURN statement outside of function",
+                stmt
+            )
+            return
+        
+        # If function has return type, RETURN value must match
+        if self.current_function_return_type and hasattr(stmt, 'value') and stmt.value:
+            value_type = self.infer_expression_type(stmt.value)
+            if value_type and not can_assign(value_type, self.current_function_return_type):
+                self.error(
+                    f"RETURN type mismatch: expected {self.current_function_return_type}, got {value_type}",
+                    stmt
+                )
+    
     def check_assign_stmt(self, stmt: AssignStmt) -> None:
         """Type check an assignment statement."""
         if not stmt.target or not stmt.expr:
             return
         
-        # Get the target variable name
+        # Get the target variable name and type
         target_name = None
+        target_type = None
+        
         if isinstance(stmt.target, Identifier):
             target_name = stmt.target.name
+            # Special case: assigning to function name inside function body (sets return value)
+            if self.current_function and target_name == self.current_function.name:
+                value_type = self.infer_expression_type(stmt.expr)
+                if value_type and self.current_function_return_type:
+                    if not can_assign(value_type, self.current_function_return_type):
+                        self.error(
+                            f"Cannot assign {value_type} to function return type {self.current_function_return_type}",
+                            stmt
+                        )
+                return
+            # Regular variable assignment
+            sym = self.symbol_table.lookup(target_name)
+            if sym:
+                target_type = sym.type
         elif isinstance(stmt.target, Designator):
-            target_name = stmt.target.name if hasattr(stmt.target, 'name') else None
+            # Designator with selectors (array/record/pointer access)
+            target_type = self.infer_designator_type(stmt.target)
+            if target_type:
+                # Type check successful - target_type is now the element/field type
+                value_type = self.infer_expression_type(stmt.expr)
+                if value_type and not can_assign(value_type, target_type):
+                    self.error(
+                        f"Cannot assign {value_type} to {target_type}",
+                        stmt
+                    )
+                return
+            else:
+                # Error already reported by infer_designator_type
+                return
         else:
-            # Other designators (array access, record fields, etc.) - skip for now
             return
         
         if not target_name:
             return
         
-        # Look up the variable
-        sym = self.symbol_table.lookup(target_name)
-        if not sym:
-            self.error(f"Undefined variable: {target_name}", stmt)
-            return
+        # Look up the variable (already done above for Identifier case in special function case)
+        if not target_type:
+            sym = self.symbol_table.lookup(target_name)
+            if not sym:
+                self.error(f"Undefined variable: {target_name}", stmt)
+                return
+            target_type = sym.type
+        else:
+            sym = None
         
-        # Check mutability
-        if not sym.is_mutable:
+        # Check mutability (only for variables, not designators)
+        if sym and not sym.is_mutable:
             self.error(
                 f"Cannot assign to immutable {sym.kind}: {target_name}",
                 stmt
@@ -519,9 +576,9 @@ class PascalTypeChecker(TypeChecker):
         # Check type compatibility
         value_type = self.infer_expression_type(stmt.expr)
         if value_type:
-            if not can_assign(value_type, sym.type):
+            if not can_assign(value_type, target_type):
                 self.error(
-                    f"Cannot assign {value_type} to {sym.type} variable",
+                    f"Cannot assign {value_type} to {target_type}",
                     stmt
                 )
     
@@ -622,9 +679,77 @@ class PascalTypeChecker(TypeChecker):
                             )
                 return sym.type.return_type
             return None
+        elif isinstance(expr, Designator):
+            return self.infer_designator_type(expr)
         else:
             # Unknown expression type
             return None
+    
+    def infer_designator_type(self, designator: Designator) -> Optional[Type]:
+        """Infer the type of a designator (with selectors for array/record access)."""
+        # Special case: inside a function, referencing the function name gets the return type
+        if self.current_function and designator.name == self.current_function.name:
+            current_type = self.current_function_return_type
+            if not current_type:
+                return None
+        else:
+            # Look up the base name
+            sym = self.symbol_table.lookup(designator.name)
+            if not sym:
+                self.error(f"Undefined variable: {designator.name}", designator)
+                return None
+            current_type = sym.type
+        
+        # Process selectors (array indexing, field access, pointer dereference)
+        if designator.selectors:
+            for selector in designator.selectors:
+                if selector.kind == 'INDEX':
+                    # Array indexing
+                    if not isinstance(current_type, ArrayType):
+                        self.error(
+                            f"Cannot index non-array type {current_type}",
+                            designator
+                        )
+                        return None
+                    # Check that index is INTEGER
+                    if selector.index_or_field:
+                        index_type = self.infer_expression_type(selector.index_or_field)
+                        if index_type and not index_type.equivalent_to(INTEGER_TYPE):
+                            self.error(
+                                f"Array index must be INTEGER, got {index_type}",
+                                designator
+                            )
+                    current_type = current_type.element_type
+                
+                elif selector.kind == 'FIELD':
+                    # Record field access
+                    if not isinstance(current_type, RecordType):
+                        self.error(
+                            f"Cannot access field on non-record type {current_type}",
+                            designator
+                        )
+                        return None
+                    field_name = selector.index_or_field
+                    field_type = current_type.get_field_type(field_name)
+                    if not field_type:
+                        self.error(
+                            f"Record has no field '{field_name}'",
+                            designator
+                        )
+                        return None
+                    current_type = field_type
+                
+                elif selector.kind == 'DEREF':
+                    # Pointer dereference
+                    if not isinstance(current_type, PointerType):
+                        self.error(
+                            f"Cannot dereference non-pointer type {current_type}",
+                            designator
+                        )
+                        return None
+                    current_type = current_type.target_type
+        
+        return current_type
     
     def resolve_type(self, type_expr) -> Optional[Type]:
         """Resolve a type expression to a Type object."""
@@ -644,9 +769,30 @@ class PascalTypeChecker(TypeChecker):
                 # Could be a user-defined type
                 return None
         elif isinstance(type_expr, ASTArrayType):
-            element_type = self.resolve_type(type_expr.type_expr)
-            if element_type and type_expr.lower and type_expr.upper:
-                return ArrayType(element_type, type_expr.lower, type_expr.upper)
+            # Resolve the element type
+            if isinstance(type_expr.element_type, Type):
+                # Already a Type object (from AST)
+                element_type = type_expr.element_type
+            else:
+                # Resolve as type expression
+                element_type = self.resolve_type(type_expr.element_type)
+            
+            if element_type and type_expr.index_range:
+                # Extract bounds - these are expressions, evaluate them as constants
+                try:
+                    if isinstance(type_expr.index_range.low, IntLiteral):
+                        lower = type_expr.index_range.low.value
+                    else:
+                        lower = 1  # Default if not a constant
+                    
+                    if type_expr.index_range.high and isinstance(type_expr.index_range.high, IntLiteral):
+                        upper = type_expr.index_range.high.value
+                    else:
+                        upper = 10  # Default if not a constant
+                    
+                    return ArrayType(element_type, lower, upper)
+                except:
+                    return None
             return None
         elif isinstance(type_expr, ASTRecordType):
             fields = {}
