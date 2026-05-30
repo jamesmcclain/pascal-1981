@@ -54,6 +54,7 @@ class Codegen:
 
     def __init__(self):
         self.module = ir.Module(name="pascal_program")
+        self.module.triple = "x86_64-pc-linux-gnu"  # Standard Linux target
         self.builder: Optional[IRBuilder] = None
         self.scope = Scope()  # global scope
         self.current_function: Optional[ir.Function] = None
@@ -209,9 +210,10 @@ class Codegen:
                 alloca = self.builder.alloca(llvm_type, name=name)
                 self.scope.define(name, alloca, decl.type_expr)
         else:
-            # Global variable
-            global_var = ir.GlobalVariable(self.module, llvm_type, name=decl.names[0])
+            # Global variable - define with initial value (zero-initialized)
             for name in decl.names:
+                global_var = ir.GlobalVariable(self.module, llvm_type, name=name)
+                global_var.initializer = ir.Constant(llvm_type, 0)
                 self.scope.define(name, global_var, decl.type_expr)
 
     def codegen_proc_decl(self, decl: ProcDecl) -> None:
@@ -389,12 +391,34 @@ class Codegen:
         # Convert to 1-bit for branch
         cond_bit = self.builder.icmp_signed('!=', cond, ir.Constant(ir.IntType(32), 0))
 
-        with self.builder.if_else(cond_bit) as (then_bb, else_bb):
-            with then_bb:
-                self.codegen_stmt(stmt.then_branch)
-            if stmt.else_branch:
-                with else_bb:
-                    self.codegen_stmt(stmt.else_branch)
+        # Create basic blocks
+        then_block = self.current_function.append_basic_block(name='if_then')
+        end_block = self.current_function.append_basic_block(name='if_end')
+        
+        if stmt.else_branch:
+            else_block = self.current_function.append_basic_block(name='if_else')
+            self.builder.cbranch(cond_bit, then_block, else_block)
+            
+            # Then branch
+            self.builder.position_at_end(then_block)
+            self.codegen_stmt(stmt.then_branch)
+            self.builder.branch(end_block)
+            
+            # Else branch
+            self.builder.position_at_end(else_block)
+            self.codegen_stmt(stmt.else_branch)
+            self.builder.branch(end_block)
+        else:
+            # No else branch
+            self.builder.cbranch(cond_bit, then_block, end_block)
+            
+            # Then branch
+            self.builder.position_at_end(then_block)
+            self.codegen_stmt(stmt.then_branch)
+            self.builder.branch(end_block)
+        
+        # Continue after if
+        self.builder.position_at_end(end_block)
 
     def codegen_for_stmt(self, stmt: ForStmt) -> None:
         """Codegen for FOR loop."""
