@@ -98,36 +98,28 @@ class Parser:
         while self.current().kind in self.declaration_starters():
             self.parse_declaration_section()
             self.skip_include_directives()
-        if self.current().kind == 'BEGIN':
-            self.parse_compound_statement()
-        elif self.current().kind == 'END':
-            self.pos += 1
-        self.skip_include_directives()
         self.expect('DOT')
 
     def parse_interface_unit(self) -> None:
         self.expect('INTERFACE')
         self.expect('SEMICOLON')
         self.skip_include_directives()
-        if self.current().kind == 'IDENTIFIER' and self.current().lexeme.upper() == 'UNIT':
-            self.pos += 1
-            self.expect('IDENTIFIER')
-            if self.match('LPAREN'):
-                self.parse_identifier_list()
-                self.expect('RPAREN')
-            self.expect('SEMICOLON')
+        self.expect('UNIT')
+        self.expect('IDENTIFIER')
+        if self.match('LPAREN'):
+            self.parse_identifier_list()
+            self.expect('RPAREN')
+        self.expect('SEMICOLON')
         self.skip_include_directives()
         while self.current().kind in self.declaration_starters():
             self.parse_interface_declaration()
             self.skip_include_directives()
-        if self.current().kind == 'END':
-            self.advance_end_semicolon()
+        self.advance_end_semicolon()
 
     def parse_implementation_unit(self) -> None:
         self.expect('IMPLEMENTATION')
-        if self.current().kind == 'OF':
-            self.expect('OF')
-            self.expect('IDENTIFIER')
+        self.expect('OF')
+        self.expect('IDENTIFIER')
         self.expect('SEMICOLON')
         self.skip_include_directives()
         while self.current().kind == 'USES':
@@ -249,7 +241,7 @@ class Parser:
             self.expect('SEMICOLON')
             return
         self.parse_block()
-        self.match('SEMICOLON')
+        self.expect('SEMICOLON')
 
     def parse_func_decl(self) -> None:
         self.parse_func_decl_header()
@@ -259,7 +251,7 @@ class Parser:
             self.expect('SEMICOLON')
             return
         self.parse_block()
-        self.match('SEMICOLON')
+        self.expect('SEMICOLON')
 
     def parse_proc_decl_header(self) -> None:
         self.expect('PROCEDURE')
@@ -353,8 +345,6 @@ class Parser:
             return
         if kind == 'RETURN':
             self.pos += 1
-            if self.current().kind not in {'SEMICOLON', 'END', 'UNTIL', 'ELSE', 'OTHERWISE', 'RPAREN'}:
-                self.parse_expression()
             return
         if kind in {'BREAK', 'CYCLE'}:
             self.pos += 1

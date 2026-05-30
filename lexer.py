@@ -11,6 +11,7 @@ KEYWORD_CODES = {
     'MODULE': 0x0002,
     'INTERFACE': 0x0003,
     'IMPLEMENTATION': 0x0004,
+    'UNIT': 0x0058,
     'USES': 0x0005,
     'CONST': 0x0006,
     'TYPE': 0x0007,
