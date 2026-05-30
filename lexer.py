@@ -14,8 +14,10 @@ KEYWORD_CODES = {
     'UNIT': 0x0058,
     'USES': 0x0005,
     'CONST': 0x0006,
+    'CONSTS': 0x005A,
     'TYPE': 0x0007,
     'VAR': 0x0008,
+    'VARS': 0x0059,
     'VALUE': 0x0009,
     'LABEL': 0x000A,
     'PROCEDURE': 0x000B,
@@ -252,11 +254,31 @@ class Lexer:
             self.advance()  # dot
             while self.current() and self.current().isdigit():
                 self.advance()
+            self._read_exponent()
             lexeme = self.source[start:self.pos]
             return self.emit('REAL_LITERAL', lexeme, float(lexeme), line, column)
 
         lexeme = self.source[start:self.pos]
         return self.emit('INTEGER_LITERAL', lexeme, int(lexeme), line, column)
+
+    def _read_exponent(self) -> None:
+        if self.current() and self.current().upper() == 'E':
+            self.advance()
+            if self.current() in '+-':
+                self.advance()
+            while self.current() and self.current().isdigit():
+                self.advance()
+
+    def read_hex_number(self) -> Token:
+        line, column = self.line, self.column
+        start = self.pos
+        self.advance()  # skip $
+        while self.current() and self.current().upper() in '0123456789ABCDEF':
+            self.advance()
+        lexeme = self.source[start:self.pos]
+        if len(lexeme) == 1:
+            raise LexerError(f"Invalid hex constant at line {line}, column {column}")
+        return self.emit('INTEGER_LITERAL', lexeme, int(lexeme[1:], 16), line, column)
 
     def read_string_or_char(self) -> Token:
         line, column = self.line, self.column
@@ -349,6 +371,8 @@ class Lexer:
                 break
             if ch.isalpha() or ch == '_':
                 tokens.append(self.read_identifier_or_keyword())
+            elif ch == '$':
+                tokens.append(self.read_hex_number())
             elif ch.isdigit():
                 tokens.append(self.read_number())
             elif ch == "'":
