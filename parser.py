@@ -138,13 +138,16 @@ class Parser:
 
     def parse_uses_clause(self) -> None:
         self.expect('USES')
-        self.expect('IDENTIFIER')
+        self.parse_uses_import()
         while self.match('COMMA'):
-            self.expect('IDENTIFIER')
+            self.parse_uses_import()
+        self.expect('SEMICOLON')
+
+    def parse_uses_import(self) -> None:
+        self.expect('IDENTIFIER')
         if self.match('LPAREN'):
             self.parse_identifier_list()
             self.expect('RPAREN')
-        self.expect('SEMICOLON')
 
     def declaration_starters(self) -> set[str]:
         return {'CONST', 'TYPE', 'VAR', 'VALUE', 'LABEL', 'PROCEDURE', 'FUNCTION'}
