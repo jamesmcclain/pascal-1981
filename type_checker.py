@@ -220,37 +220,32 @@ class PascalTypeChecker(TypeChecker):
     
     def check_const_decl(self, decl: ConstDecl) -> None:
         """Type check a constant declaration."""
-        if not decl.names or not decl.value:
+        if not decl.name or not decl.value:
             return
         
         # Evaluate the constant value and infer type
-        # For now, just check it's valid
-        if not decl.value:
-            return
-        
         value_type = self.infer_expression_type(decl.value)
         if not value_type:
             self.error(f"Cannot infer type of constant", decl)
             return
         
-        # Add each constant to the symbol table
-        for name in decl.names:
-            existing = self.symbol_table.lookup_local(name)
-            if existing:
-                self.error(
-                    f"Constant '{name}' already declared at {existing.location}",
-                    decl
-                )
-                continue
-            
-            symbol = Symbol(
-                name=name,
-                type=value_type,
-                kind='const',
-                location=self.make_location(decl),
-                is_mutable=False
+        # Add constant to the symbol table
+        existing = self.symbol_table.lookup_local(decl.name)
+        if existing:
+            self.error(
+                f"Constant '{decl.name}' already declared at {existing.location}",
+                decl
             )
-            self.symbol_table.define(name, symbol)
+            return
+        
+        symbol = Symbol(
+            name=decl.name,
+            type=value_type,
+            kind='const',
+            location=self.make_location(decl),
+            is_mutable=False
+        )
+        self.symbol_table.define(decl.name, symbol)
     
     def check_type_decl(self, decl: TypeDecl) -> None:
         """Type check a type declaration."""
