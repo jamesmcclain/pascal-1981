@@ -111,6 +111,9 @@ class Parser:
             self.expect('RPAREN')
         self.expect('SEMICOLON')
         self.skip_include_directives()
+        while self.current().kind == 'USES':
+            self.parse_uses_clause()
+            self.skip_include_directives()
         while self.current().kind in self.declaration_starters():
             self.parse_interface_declaration()
             self.skip_include_directives()
