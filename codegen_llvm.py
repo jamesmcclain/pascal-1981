@@ -62,7 +62,7 @@ _SCALAR_SIZES = {
 class Codegen:
     """LLVM IR code generator."""
 
-    def __init__(self):
+    def __init__(self, verbose: bool = False):
         self.module = ir.Module(name="pascal_program")
         self.module.triple = "x86_64-pc-linux-gnu"  # Standard Linux target
         self.builder: Optional[IRBuilder] = None
@@ -70,6 +70,13 @@ class Codegen:
         self.current_function: Optional[ir.Function] = None
         self.current_return_block: Optional[ir.BasicBlock] = None
         self.constants: Dict[str, int] = {}  # compile-time constant values, keyed UPPER
+        self.verbose = verbose
+
+    def _log(self, msg: str) -> None:
+        """Emit a diagnostic line to stderr when verbose mode is on."""
+        if self.verbose:
+            import sys
+            print(f'[codegen] {msg}', file=sys.stderr)
 
     # ========================================================================
     # Type System
@@ -199,6 +206,8 @@ class Codegen:
 
     def codegen_decl(self, decl: Declaration) -> None:
         """Codegen a declaration."""
+        names = getattr(decl, 'names', None) or getattr(decl, 'name', '')
+        self._log(f'decl  {type(decl).__name__} {names}')
         if isinstance(decl, ConstDecl):
             self.codegen_const_decl(decl)
         elif isinstance(decl, VarDecl):
@@ -236,10 +245,10 @@ class Codegen:
                 alloca = self.builder.alloca(llvm_type, name=name)
                 self.scope.define(name, alloca, decl.type_expr)
         else:
-            # Global variable - define with initial value (zero-initialized)
+            # Global variable - define with a zero initializer
             for name in decl.names:
                 global_var = ir.GlobalVariable(self.module, llvm_type, name=name)
-                global_var.initializer = ir.Constant(llvm_type, 0)
+                global_var.initializer = self.zero_initializer(llvm_type)
                 self.scope.define(name, global_var, decl.type_expr)
 
     def codegen_proc_decl(self, decl: ProcDecl) -> None:
@@ -355,6 +364,7 @@ class Codegen:
 
     def codegen_stmt(self, stmt: Statement) -> None:
         """Codegen a statement."""
+        self._log(f'stmt  {type(stmt).__name__}')
         if isinstance(stmt, CompoundStmt):
             for s in stmt.stmts:
                 self.codegen_stmt(s)
@@ -646,6 +656,18 @@ class Codegen:
     def _scalar_size(self, name: str) -> int:
         """Size in bytes of a scalar/built-in type, by name."""
         return _SCALAR_SIZES.get(name.upper(), 4)
+
+    def zero_initializer(self, llvm_type: ir.Type) -> ir.Value:
+        """Produce a valid zero initializer for any LLVM type.
+
+        Aggregates (arrays/structs) and pointers cannot be initialized with a
+        scalar 0 -- llvmlite would try to iterate the int. ``None`` renders as
+        ``zeroinitializer`` (and ``null`` for pointers), which is valid for any
+        type; scalars keep an explicit 0 for readable IR.
+        """
+        if isinstance(llvm_type, ir.IntType):
+            return ir.Constant(llvm_type, 0)
+        return ir.Constant(llvm_type, None)
 
     def get_type_size(self, t: Type) -> int:
         """Size in bytes of an AST type node (consults constants for bounds)."""
@@ -1000,8 +1022,8 @@ class Codegen:
         return f'{prefix}_{self._name_counter[prefix]}'
 
 
-def compile_to_llvm(ast: Union[ProgramUnit, ModuleUnit, InterfaceUnit, ImplementationUnit]) -> str:
+def compile_to_llvm(ast: Union[ProgramUnit, ModuleUnit, InterfaceUnit, ImplementationUnit], verbose: bool = False) -> str:
     """Compile AST to LLVM IR string."""
-    codegen = Codegen()
+    codegen = Codegen(verbose=verbose)
     module = codegen.codegen(ast)
     return str(module)
