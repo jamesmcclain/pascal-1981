@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Union
 
 from lexer import (
     ALL_CODES,
@@ -12,15 +11,73 @@ from lexer import (
     lex_file,
 )
 
+from ast_nodes import (
+    ASTNode,
+    Block,
+    ProgramUnit,
+    ModuleUnit,
+    InterfaceUnit,
+    ImplementationUnit,
+    UseClause,
+    ConstDecl,
+    TypeDecl,
+    VarDecl,
+    ValueDecl,
+    LabelDecl,
+    ProcDecl,
+    FuncDecl,
+    Param,
+    CompoundStmt,
+    AssignStmt,
+    ProcCallStmt,
+    IfStmt,
+    ForStmt,
+    WhileStmt,
+    RepeatStmt,
+    CaseStmt,
+    CaseElement,
+    WithStmt,
+    GotoStmt,
+    ReturnStmt,
+    BreakStmt,
+    CycleStmt,
+    LabelStmt,
+    EmptyStmt,
+    BinOp,
+    UnaryOp,
+    IntLiteral,
+    RealLiteral,
+    CharLiteral,
+    StringLiteral,
+    BoolLiteral,
+    Identifier,
+    Designator,
+    FuncCall,
+    SetConstructor,
+    AdrExpr,
+    SizeofExpr,
+    UpperExpr,
+    RangeExpr,
+    NamedType,
+    ArrayType,
+    RecordType,
+    SetType,
+    FileType,
+    EnumType,
+    PointerType,
+    LStringType,
+    BuiltinType,
+    IndexRange,
+    Selector,
+    Declaration,
+    Statement,
+    Expression,
+    Type,
+)
+
 
 class ParserError(Exception):
     pass
-
-
-@dataclass
-class Node:
-    kind: str
-    children: List[object]
 
 
 class Parser:
@@ -54,545 +111,707 @@ class Parser:
         tok = self.current()
         raise ParserError(f"{message} at line {tok.line}, column {tok.column} (token {tok.kind} {tok.lexeme!r})")
 
-    def parse(self) -> None:
+    def parse(self) -> Union[ProgramUnit, ModuleUnit, InterfaceUnit, ImplementationUnit]:
         self.skip_include_directives()
-        self.parse_compilation_unit()
+        unit = self.parse_compilation_unit()
         self.skip_include_directives()
         self.expect('EOF')
+        return unit
 
-    def parse_compilation_unit(self) -> None:
+    def parse_compilation_unit(self) -> Union[ProgramUnit, ModuleUnit, InterfaceUnit, ImplementationUnit]:
         if self.current().kind == 'PROGRAM':
-            self.parse_program_unit()
+            return self.parse_program_unit()
         elif self.current().kind == 'MODULE':
-            self.parse_module_unit()
+            return self.parse_module_unit()
         elif self.current().kind == 'INTERFACE':
-            self.parse_interface_unit()
+            return self.parse_interface_unit()
         elif self.current().kind == 'IMPLEMENTATION':
-            self.parse_implementation_unit()
+            return self.parse_implementation_unit()
         else:
             self.error('expected compilation unit start')
 
-    def parse_program_unit(self) -> None:
+    def parse_program_unit(self) -> ProgramUnit:
         self.expect('PROGRAM')
-        self.expect('IDENTIFIER')
+        name = self.expect('IDENTIFIER').lexeme
+        params: List[str] = []
         if self.match('LPAREN'):
-            self.parse_identifier_list()
+            params = self.parse_identifier_list()
             self.expect('RPAREN')
         self.expect('SEMICOLON')
         self.skip_include_directives()
+        uses: List[UseClause] = []
         while self.current().kind == 'USES':
-            self.parse_uses_clause()
+            uses.extend(self.parse_uses_clause())
             self.skip_include_directives()
-        self.parse_block()
+        block = self.parse_block()
         self.skip_include_directives()
         self.expect('DOT')
+        return ProgramUnit(name, params, uses, block)
 
-    def parse_module_unit(self) -> None:
+    def parse_module_unit(self) -> ModuleUnit:
         self.expect('MODULE')
-        self.expect('IDENTIFIER')
+        name = self.expect('IDENTIFIER').lexeme
         self.expect('SEMICOLON')
         self.skip_include_directives()
+        uses: List[UseClause] = []
         while self.current().kind == 'USES':
-            self.parse_uses_clause()
+            uses.extend(self.parse_uses_clause())
             self.skip_include_directives()
+        decls: List[Declaration] = []
         while self.current().kind in self.declaration_starters():
-            self.parse_declaration_section()
+            decls.extend(self.parse_declaration_section())
             self.skip_include_directives()
         self.expect('DOT')
+        return ModuleUnit(name, uses, decls)
 
-    def parse_interface_unit(self) -> None:
+    def parse_interface_unit(self) -> InterfaceUnit:
         self.expect('INTERFACE')
         self.expect('SEMICOLON')
         self.skip_include_directives()
         self.expect('UNIT')
-        self.expect('IDENTIFIER')
+        name = self.expect('IDENTIFIER').lexeme
+        params: List[str] = []
         if self.match('LPAREN'):
-            self.parse_identifier_list()
+            params = self.parse_identifier_list()
             self.expect('RPAREN')
         self.expect('SEMICOLON')
         self.skip_include_directives()
+        uses: List[UseClause] = []
         while self.current().kind == 'USES':
-            self.parse_uses_clause()
+            uses.extend(self.parse_uses_clause())
             self.skip_include_directives()
+        decls: List[Declaration] = []
         while self.current().kind in self.declaration_starters():
-            self.parse_interface_declaration()
+            decls.extend(self.parse_interface_declaration())
             self.skip_include_directives()
         self.advance_end_semicolon()
+        return InterfaceUnit(name, params, uses, decls)
 
-    def parse_implementation_unit(self) -> None:
+    def parse_implementation_unit(self) -> ImplementationUnit:
         self.expect('IMPLEMENTATION')
         self.expect('OF')
-        self.expect('IDENTIFIER')
+        name = self.expect('IDENTIFIER').lexeme
         self.expect('SEMICOLON')
         self.skip_include_directives()
+        uses: List[UseClause] = []
         while self.current().kind == 'USES':
-            self.parse_uses_clause()
+            uses.extend(self.parse_uses_clause())
             self.skip_include_directives()
+        decls: List[Declaration] = []
         while self.current().kind in self.declaration_starters():
-            self.parse_declaration_section()
+            decls.extend(self.parse_declaration_section())
             self.skip_include_directives()
+        init_body: Optional[List[Statement]] = None
         if self.current().kind == 'BEGIN':
-            self.parse_compound_statement()
+            init_body = self.parse_compound_statement().stmts
         self.skip_include_directives()
         self.expect('DOT')
+        return ImplementationUnit(name, uses, decls, init_body)
 
-    def parse_uses_clause(self) -> None:
+    def parse_uses_clause(self) -> List[UseClause]:
         self.expect('USES')
-        self.parse_uses_import()
+        clauses: List[UseClause] = []
+        clauses.append(self.parse_uses_import())
         while self.match('COMMA'):
-            self.parse_uses_import()
+            clauses.append(self.parse_uses_import())
         self.match('SEMICOLON')
+        return clauses
 
-    def parse_uses_import(self) -> None:
-        self.expect('IDENTIFIER')
+    def parse_uses_import(self) -> UseClause:
+        name = self.expect('IDENTIFIER').lexeme
+        imports: Optional[List[str]] = None
         if self.match('LPAREN'):
-            self.parse_identifier_list()
+            imports = self.parse_identifier_list()
             self.expect('RPAREN')
+        return UseClause(name, imports)
 
     def declaration_starters(self) -> set[str]:
         return {'CONST', 'TYPE', 'VAR', 'VALUE', 'LABEL', 'PROCEDURE', 'FUNCTION'}
 
-    def parse_block(self) -> None:
+    def parse_block(self) -> Block:
         self.skip_include_directives()
+        decls: List[Declaration] = []
         while self.current().kind in self.declaration_starters():
-            self.parse_declaration_section()
+            decls.extend(self.parse_declaration_section())
             self.skip_include_directives()
-        self.parse_compound_statement()
+        body = self.parse_compound_statement().stmts
+        return Block(decls, body)
 
-    def parse_declaration_section(self) -> None:
+    def parse_declaration_section(self) -> List[Declaration]:
         self.skip_include_directives()
         kind = self.current().kind
         if kind == 'CONST':
-            self.parse_const_decl()
+            return self.parse_const_decl()
         elif kind == 'TYPE':
-            self.parse_type_decl()
+            return self.parse_type_decl()
         elif kind == 'VAR':
-            self.parse_var_decl()
+            return self.parse_var_decl()
         elif kind == 'VALUE':
-            self.parse_value_decl()
+            return self.parse_value_decl()
         elif kind == 'LABEL':
-            self.parse_label_decl()
+            return [self.parse_label_decl()]
         elif kind == 'PROCEDURE':
-            self.parse_proc_decl()
+            return [self.parse_proc_decl()]
         elif kind == 'FUNCTION':
-            self.parse_func_decl()
+            return [self.parse_func_decl()]
         else:
             self.error('expected declaration section')
 
-    def parse_interface_declaration(self) -> None:
+    def parse_interface_declaration(self) -> List[Declaration]:
         kind = self.current().kind
         if kind in {'CONST', 'TYPE', 'VAR', 'LABEL'}:
-            self.parse_declaration_section()
-            return
+            return self.parse_declaration_section()
         if kind == 'PROCEDURE':
-            self.parse_proc_decl_header()
+            header = self.parse_proc_decl_header()
             self.expect('SEMICOLON')
-            return
+            return [header]
         if kind == 'FUNCTION':
-            self.parse_func_decl_header()
+            header = self.parse_func_decl_header()
             self.expect('SEMICOLON')
-            return
+            return [header]
         self.error('expected interface declaration')
 
-    def parse_const_decl(self) -> None:
+    def parse_const_decl(self) -> List[ConstDecl]:
         self.expect('CONST')
+        decls: List[ConstDecl] = []
         while self.current().kind == 'IDENTIFIER':
-            self.expect('IDENTIFIER')
+            name = self.expect('IDENTIFIER').lexeme
             self.expect('EQ')
-            self.parse_constant()
+            value = self.parse_constant()
             self.expect('SEMICOLON')
+            decls.append(ConstDecl(name, value))
+        return decls
 
-    def parse_type_decl(self) -> None:
+    def parse_type_decl(self) -> List[TypeDecl]:
         self.expect('TYPE')
+        decls: List[TypeDecl] = []
         while self.current().kind == 'IDENTIFIER':
-            self.expect('IDENTIFIER')
+            name = self.expect('IDENTIFIER').lexeme
             self.expect('EQ')
-            self.parse_type()
+            type_expr = self.parse_type()
             self.expect('SEMICOLON')
+            decls.append(TypeDecl(name, type_expr))
+        return decls
 
-    def parse_var_decl(self) -> None:
+    def parse_var_decl(self) -> List[VarDecl]:
         self.expect('VAR')
+        decls: List[VarDecl] = []
         while self.current().kind == 'IDENTIFIER' or self.current().kind == 'LBRACKET':
-            self.parse_attribute_section_optional()
-            self.parse_identifier_list()
+            attributes = self.parse_attribute_section_optional()
+            names = self.parse_identifier_list()
             self.expect('COLON')
-            self.parse_type()
+            type_expr = self.parse_type()
             self.expect('SEMICOLON')
+            decls.append(VarDecl(names, type_expr, attributes))
+        return decls
 
-    def parse_value_decl(self) -> None:
+    def parse_value_decl(self) -> List[ValueDecl]:
         self.expect('VALUE')
+        decls: List[ValueDecl] = []
         while self.current().kind == 'IDENTIFIER':
-            self.expect('IDENTIFIER')
+            name = self.expect('IDENTIFIER').lexeme
             if self.current().kind in {'EQ', 'ASSIGN'}:
                 self.pos += 1
             else:
                 self.error('expected = or := in value declaration')
-            self.parse_constant()
+            value = self.parse_constant()
             self.expect('SEMICOLON')
+            decls.append(ValueDecl(name, value))
+        return decls
 
-    def parse_label_decl(self) -> None:
+    def parse_label_decl(self) -> LabelDecl:
         self.expect('LABEL')
-        self.parse_label_id()
+        labels: List[Union[int, str]] = []
+        labels.append(self.parse_label_id())
         while self.match('COMMA'):
-            self.parse_label_id()
+            labels.append(self.parse_label_id())
         self.expect('SEMICOLON')
+        return LabelDecl(labels)
 
-    def parse_proc_decl(self) -> None:
-        self.parse_proc_decl_header()
+    def parse_proc_decl(self) -> ProcDecl:
+        name, params, attributes = self.parse_proc_decl_header()
         self.expect('SEMICOLON')
+        body: Optional[Block] = None
         if self.current().kind in {'EXTERN', 'EXTERNAL', 'FORWARD'}:
             self.pos += 1
             self.expect('SEMICOLON')
-            return
-        self.parse_block()
-        self.expect('SEMICOLON')
+        else:
+            body = self.parse_block()
+            self.expect('SEMICOLON')
+        return ProcDecl(name, params, attributes, body)
 
-    def parse_func_decl(self) -> None:
-        self.parse_func_decl_header()
+    def parse_func_decl(self) -> FuncDecl:
+        name, params, return_type, attributes = self.parse_func_decl_header()
         self.expect('SEMICOLON')
+        body: Optional[Block] = None
         if self.current().kind in {'EXTERN', 'EXTERNAL', 'FORWARD'}:
             self.pos += 1
             self.expect('SEMICOLON')
-            return
-        self.parse_block()
-        self.expect('SEMICOLON')
+        else:
+            body = self.parse_block()
+            self.expect('SEMICOLON')
+        return FuncDecl(name, params, return_type, attributes, body)
 
-    def parse_proc_decl_header(self) -> None:
+    def parse_proc_decl_header(self) -> tuple[str, List[Param], List[str]]:
         self.expect('PROCEDURE')
-        self.expect('IDENTIFIER')
+        name = self.expect('IDENTIFIER').lexeme
+        params: List[Param] = []
         if self.match('LPAREN'):
-            self.parse_parameter_list()
+            params = self.parse_parameter_list()
             self.expect('RPAREN')
-        self.parse_attribute_section_optional()
+        attributes = self.parse_attribute_section_optional()
+        return name, params, attributes
 
-    def parse_func_decl_header(self) -> None:
+    def parse_func_decl_header(self) -> tuple[str, List[Param], Type, List[str]]:
         self.expect('FUNCTION')
-        self.expect('IDENTIFIER')
+        name = self.expect('IDENTIFIER').lexeme
+        params: List[Param] = []
         if self.match('LPAREN'):
-            self.parse_parameter_list()
+            params = self.parse_parameter_list()
             self.expect('RPAREN')
         self.expect('COLON')
-        self.parse_type()
-        self.parse_attribute_section_optional()
+        return_type = self.parse_type()
+        attributes = self.parse_attribute_section_optional()
+        return name, params, return_type, attributes
 
-    def parse_parameter_list(self) -> None:
-        self.parse_parameter_group()
+    def parse_parameter_list(self) -> List[Param]:
+        params: List[Param] = []
+        params.append(self.parse_parameter_group())
         while self.match('SEMICOLON'):
             if self.current().kind == 'RPAREN':
                 break
-            self.parse_parameter_group()
+            params.append(self.parse_parameter_group())
+        return params
 
-    def parse_parameter_group(self) -> None:
+    def parse_parameter_group(self) -> Param:
+        mode: Optional[str] = None
         if self.current().kind in {'VAR', 'CONST', 'VARS', 'CONSTS'}:
+            mode = self.current().kind
             self.pos += 1
-        self.parse_identifier_list()
+        names = self.parse_identifier_list()
         self.expect('COLON')
-        self.parse_type()
+        type_expr = self.parse_type()
+        return Param(mode, names, type_expr)
 
-    def parse_attribute_section_optional(self) -> None:
+    def parse_attribute_section_optional(self) -> List[str]:
+        attributes: List[str] = []
         if not self.match('LBRACKET'):
-            return
+            return attributes
         if self.current().kind != 'RBRACKET':
-            self.parse_attribute_item()
+            attributes.append(self.parse_attribute_item())
             while self.match('COMMA'):
-                self.parse_attribute_item()
+                attributes.append(self.parse_attribute_item())
         self.expect('RBRACKET')
+        return attributes
 
-    def parse_attribute_item(self) -> None:
+    def parse_attribute_item(self) -> str:
         if self.current().kind == 'ORIGIN':
             self.pos += 1
             self.expect('LPAREN')
             self.parse_constant()
             self.expect('RPAREN')
-            return
+            return 'ORIGIN'
         if self.current().kind in {'READONLY', 'PUBLIC', 'STATIC', 'EXTERNAL', 'EXTERN', 'PURE', 'OVERLAY', 'FORTRAN'}:
+            attr = self.current().kind
             self.pos += 1
-            return
+            return attr
         self.error('expected attribute item')
 
-    def parse_compound_statement(self) -> None:
+    def parse_compound_statement(self) -> CompoundStmt:
         self.expect('BEGIN')
+        stmts: List[Statement] = []
         if self.current().kind != 'END':
-            self.parse_statement()
+            stmts.append(self.parse_statement())
             while self.match('SEMICOLON'):
                 if self.current().kind == 'END':
                     break
-                self.parse_statement()
+                stmts.append(self.parse_statement())
         self.expect('END')
+        return CompoundStmt(stmts)
 
-    def parse_statement(self) -> None:
+    def parse_statement(self) -> Statement:
         kind = self.current().kind
         if kind == 'BEGIN':
-            self.parse_compound_statement()
-            return
+            return self.parse_compound_statement()
         if kind == 'IF':
-            self.parse_if_statement()
-            return
+            return self.parse_if_statement()
         if kind == 'FOR':
-            self.parse_for_statement()
-            return
+            return self.parse_for_statement()
         if kind == 'REPEAT':
-            self.parse_repeat_statement()
-            return
+            return self.parse_repeat_statement()
         if kind == 'WHILE':
-            self.parse_while_statement()
-            return
+            return self.parse_while_statement()
         if kind == 'CASE':
-            self.parse_case_statement()
-            return
+            return self.parse_case_statement()
         if kind == 'WITH':
-            self.parse_with_statement()
-            return
+            return self.parse_with_statement()
         if kind == 'GOTO':
             self.pos += 1
-            self.parse_label_id()
-            return
+            label = self.parse_label_id()
+            return GotoStmt(label)
         if kind == 'RETURN':
             self.pos += 1
-            return
-        if kind in {'BREAK', 'CYCLE'}:
+            return ReturnStmt()
+        if kind == 'BREAK':
             self.pos += 1
-            return
+            return BreakStmt()
+        if kind == 'CYCLE':
+            self.pos += 1
+            return CycleStmt()
         if kind == 'INTEGER_LITERAL' and self.next_kind() == 'COLON':
-            self.parse_label_statement()
-            return
+            return self.parse_label_statement()
         if kind == 'IDENTIFIER':
-            self.parse_assignment_or_proc_call()
-            return
+            return self.parse_assignment_or_proc_call()
         if kind in {'SEMICOLON', 'END', 'UNTIL', 'ELSE', 'OTHERWISE', 'RPAREN'}:
-            return
+            return EmptyStmt()
         self.error('expected statement')
 
-    def parse_assignment_or_proc_call(self) -> None:
-        self.expect('IDENTIFIER')
-        saw_selector = False
+    def parse_assignment_or_proc_call(self) -> Statement:
+        name = self.expect('IDENTIFIER').lexeme
+        selectors: List[Selector] = []
         while self.current().kind in {'LBRACKET', 'DOT', 'POINTER'}:
-            saw_selector = True
-            self.parse_selector()
+            selectors.append(self.parse_selector())
 
         if self.current().kind == 'ASSIGN':
             self.pos += 1
-            self.parse_expression()
-            return
+            expr = self.parse_expression()
+            target = Designator(name, selectors)
+            return AssignStmt(target, expr)
 
-        if saw_selector:
+        if selectors:
             self.error('designator statement must be an assignment')
 
+        args: List[Expression] = []
         if self.current().kind == 'LPAREN':
             self.pos += 1
             if self.current().kind != 'RPAREN':
-                self.parse_actual_parameter_list()
+                args = self.parse_actual_parameter_list()
             self.expect('RPAREN')
         # Bare procedure call is allowed.
+        return ProcCallStmt(name, args)
 
-    def parse_actual_parameter_list(self) -> None:
-        self.parse_actual_parameter()
+    def parse_actual_parameter_list(self) -> List[Expression]:
+        exprs: List[Expression] = []
+        exprs.append(self.parse_actual_parameter())
         while self.match('COMMA'):
-            self.parse_actual_parameter()
+            exprs.append(self.parse_actual_parameter())
+        return exprs
 
-    def parse_actual_parameter(self) -> None:
-        self.parse_expression()
+    def parse_actual_parameter(self) -> Expression:
+        expr = self.parse_expression()
         while self.match('COLON'):
+            # Additional format specifiers; we'll ignore them for now
             self.parse_expression()
+        return expr
 
-    def parse_if_statement(self) -> None:
+    def parse_if_statement(self) -> IfStmt:
         self.expect('IF')
-        self.parse_expression()
+        cond = self.parse_expression()
         self.expect('THEN')
-        self.parse_statement()
+        then_branch = self.parse_statement()
+        else_branch: Optional[Statement] = None
         if self.match('ELSE'):
-            self.parse_statement()
+            else_branch = self.parse_statement()
+        return IfStmt(cond, then_branch, else_branch)
 
-    def parse_for_statement(self) -> None:
+    def parse_for_statement(self) -> ForStmt:
         self.expect('FOR')
-        self.expect('IDENTIFIER')
+        var = self.expect('IDENTIFIER').lexeme
         self.expect('ASSIGN')
-        self.parse_expression()
+        start = self.parse_expression()
         if self.current().kind in {'TO', 'DOWNTO'}:
+            direction = self.current().kind
             self.pos += 1
         else:
             self.error('expected TO or DOWNTO')
-        self.parse_expression()
+        end = self.parse_expression()
         self.expect('DO')
-        self.parse_statement()
+        body = self.parse_statement()
+        return ForStmt(var, start, end, direction, body)
 
-    def parse_repeat_statement(self) -> None:
+    def parse_repeat_statement(self) -> RepeatStmt:
         self.expect('REPEAT')
+        stmts: List[Statement] = []
         if self.current().kind != 'UNTIL':
-            self.parse_statement()
+            stmts.append(self.parse_statement())
             while self.match('SEMICOLON'):
                 if self.current().kind == 'UNTIL':
                     break
-                self.parse_statement()
+                stmts.append(self.parse_statement())
         self.expect('UNTIL')
-        self.parse_expression()
+        cond = self.parse_expression()
+        return RepeatStmt(stmts, cond)
 
-    def parse_while_statement(self) -> None:
+    def parse_while_statement(self) -> WhileStmt:
         self.expect('WHILE')
-        self.parse_expression()
+        cond = self.parse_expression()
         self.expect('DO')
-        self.parse_statement()
+        body = self.parse_statement()
+        return WhileStmt(cond, body)
 
-    def parse_case_statement(self) -> None:
+    def parse_case_statement(self) -> CaseStmt:
         self.expect('CASE')
-        self.parse_expression()
+        expr = self.parse_expression()
         self.expect('OF')
+        elements: List[CaseElement] = []
         if self.current().kind != 'END':
-            self.parse_case_element()
+            elements.append(self.parse_case_element())
             while self.match('SEMICOLON'):
                 if self.current().kind in {'OTHERWISE', 'END'}:
                     break
-                self.parse_case_element()
+                elements.append(self.parse_case_element())
+        otherwise: Optional[Statement] = None
         if self.match('OTHERWISE'):
-            self.parse_statement()
+            otherwise = self.parse_statement()
         self.expect('END')
+        return CaseStmt(expr, elements, otherwise)
 
-    def parse_case_element(self) -> None:
-        self.parse_case_constant_list()
+    def parse_case_element(self) -> CaseElement:
+        constants = self.parse_case_constant_list()
         self.expect('COLON')
-        self.parse_statement()
+        stmt = self.parse_statement()
+        return CaseElement(constants, stmt)
 
-    def parse_case_constant_list(self) -> None:
-        self.parse_case_constant()
+    def parse_case_constant_list(self) -> List[Expression]:
+        exprs: List[Expression] = []
+        exprs.append(self.parse_case_constant())
         while self.match('COMMA'):
-            self.parse_case_constant()
+            exprs.append(self.parse_case_constant())
+        return exprs
 
-    def parse_case_constant(self) -> None:
-        self.parse_constant()
+    def parse_case_constant(self) -> Expression:
+        expr = self.parse_constant()
         if self.match('RANGE'):
-            self.parse_constant()
+            high = self.parse_constant()
+            return RangeExpr(expr, high)
+        return expr
 
-    def parse_with_statement(self) -> None:
+    def parse_with_statement(self) -> WithStmt:
         self.expect('WITH')
-        self.parse_with_target()
+        targets: List[Designator] = []
+        targets.append(self.parse_with_target())
         while self.match('COMMA'):
-            self.parse_with_target()
+            targets.append(self.parse_with_target())
         self.expect('DO')
-        self.parse_statement()
+        body = self.parse_statement()
+        return WithStmt(targets, body)
 
-    def parse_with_target(self) -> None:
-        self.expect('IDENTIFIER')
+    def parse_with_target(self) -> Designator:
+        name = self.expect('IDENTIFIER').lexeme
+        selectors: List[Selector] = []
         while self.current().kind in {'LBRACKET', 'DOT', 'POINTER'}:
-            self.parse_selector()
+            selectors.append(self.parse_selector())
+        return Designator(name, selectors)
 
-    def parse_label_statement(self) -> None:
-        self.parse_label_id()
+    def parse_label_statement(self) -> LabelStmt:
+        label = self.parse_label_id()
         self.expect('COLON')
-        self.parse_statement()
+        stmt = self.parse_statement()
+        return LabelStmt(label, stmt)
 
-    def parse_selector(self) -> None:
+    def parse_selector(self) -> Selector:
         kind = self.current().kind
         if kind == 'LBRACKET':
             self.pos += 1
-            self.parse_expression()
+            index = self.parse_expression()
             self.expect('RBRACKET')
-            return
+            return Selector('INDEX', index)
         if kind == 'DOT':
             self.pos += 1
-            self.expect('IDENTIFIER')
-            return
+            field = self.expect('IDENTIFIER').lexeme
+            return Selector('FIELD', field)
         if kind == 'POINTER':
             self.pos += 1
-            return
+            return Selector('DEREF', None)
         self.error('expected selector')
 
-    def parse_expression(self) -> None:
-        self.parse_simple_expression()
+    def parse_expression(self) -> Expression:
+        left = self.parse_simple_expression()
         if self.current().kind in {'EQ', 'NEQ', 'LT', 'LE', 'GT', 'GE', 'IN'}:
+            op = self.current().kind
             self.pos += 1
-            self.parse_simple_expression()
+            right = self.parse_simple_expression()
+            return BinOp(op, left, right)
+        return left
 
-    def parse_simple_expression(self) -> None:
+    def parse_simple_expression(self) -> Expression:
+        sign: Optional[str] = None
         if self.current().kind in {'PLUS', 'MINUS'}:
+            sign = self.current().kind
             self.pos += 1
-        self.parse_term()
+        left = self.parse_term()
+        if sign == 'MINUS':
+            left = UnaryOp('MINUS', left)
         while self.current().kind in {'PLUS', 'MINUS', 'OR', 'XOR'}:
+            op = self.current().kind
             self.pos += 1
-            self.parse_term()
+            right = self.parse_term()
+            left = BinOp(op, left, right)
+        return left
 
-    def parse_term(self) -> None:
-        self.parse_factor()
+    def parse_term(self) -> Expression:
+        left = self.parse_factor()
         while self.current().kind in {'MUL', 'SLASH', 'DIV', 'MOD', 'AND'}:
+            op = self.current().kind
             self.pos += 1
-            self.parse_factor()
+            right = self.parse_factor()
+            left = BinOp(op, left, right)
+        return left
 
-    def parse_factor(self) -> None:
+    def parse_factor(self) -> Expression:
         kind = self.current().kind
         if kind == 'NOT':
             self.pos += 1
-            self.parse_factor()
-            return
+            operand = self.parse_factor()
+            return UnaryOp('NOT', operand)
         if kind == 'IDENTIFIER':
+            name = self.current().lexeme
             if self.next_kind() == 'LPAREN':
                 self.pos += 1
                 self.pos += 1
+                args: List[Expression] = []
                 if self.current().kind != 'RPAREN':
-                    self.parse_actual_parameter_list()
+                    args = self.parse_actual_parameter_list()
                 self.expect('RPAREN')
+                return FuncCall(name, args)
             else:
-                self.parse_designator()
-            return
-        if kind in {'INTEGER_LITERAL', 'REAL_LITERAL', 'CHAR_LITERAL', 'STRING_LITERAL', 'BOOLEAN_LITERAL'}:
+                self.pos += 1  # consume IDENTIFIER
+                designator = self.parse_designator_rest(name)
+                return designator
+        if kind == 'INTEGER_LITERAL':
+            lexeme = self.current().lexeme
+            # Handle hex literals ($FF form)
+            if lexeme.startswith('$'):
+                value = int(lexeme[1:], 16)
+            else:
+                value = int(lexeme)
             self.pos += 1
-            return
+            return IntLiteral(value)
+        if kind == 'REAL_LITERAL':
+            value = float(self.current().lexeme)
+            self.pos += 1
+            return RealLiteral(value)
+        if kind == 'CHAR_LITERAL':
+            value = self.current().lexeme
+            self.pos += 1
+            return CharLiteral(value)
+        if kind == 'STRING_LITERAL':
+            value = self.current().lexeme
+            self.pos += 1
+            return StringLiteral(value)
+        if kind == 'BOOLEAN_LITERAL':
+            value = self.current().lexeme.upper() == 'TRUE'
+            self.pos += 1
+            return BoolLiteral(value)
         if kind == 'LPAREN':
             self.pos += 1
-            self.parse_expression()
+            expr = self.parse_expression()
             self.expect('RPAREN')
-            return
+            return expr
         if kind == 'ADR':
             self.pos += 1
-            self.expect('IDENTIFIER')
-            return
+            name = self.expect('IDENTIFIER').lexeme
+            return AdrExpr(name)
         if kind == 'SIZEOF':
             self.pos += 1
             self.expect('LPAREN')
+            target: Union[str, Type]
             if self.current().kind == 'IDENTIFIER':
+                target = self.current().lexeme
                 self.pos += 1
             else:
-                self.parse_type()
+                target = self.parse_type()
             self.expect('RPAREN')
-            return
+            return SizeofExpr(target)
         if kind == 'UPPER':
             self.pos += 1
             self.expect('LPAREN')
-            self.expect('IDENTIFIER')
+            name = self.expect('IDENTIFIER').lexeme
             self.expect('RPAREN')
-            return
+            return UpperExpr(name)
         if kind == 'LBRACKET':
             self.pos += 1
+            elements: List[Expression] = []
             if self.current().kind != 'RBRACKET':
-                self.parse_set_element()
+                elements.append(self.parse_set_element())
                 while self.match('COMMA'):
-                    self.parse_set_element()
+                    elements.append(self.parse_set_element())
             self.expect('RBRACKET')
-            return
+            return SetConstructor(elements)
         self.error('expected factor')
 
-    def parse_designator(self) -> None:
-        self.expect('IDENTIFIER')
+    def parse_designator_rest(self, name: str) -> Expression:
+        """Continue parsing a designator or return as identifier."""
+        selectors: List[Selector] = []
         while self.current().kind in {'LBRACKET', 'DOT', 'POINTER'}:
-            self.parse_selector()
+            selectors.append(self.parse_selector())
+        if selectors:
+            return Designator(name, selectors)
+        else:
+            return Identifier(name)
 
-    def parse_constant(self) -> None:
+    def parse_designator(self) -> Designator:
+        name = self.expect('IDENTIFIER').lexeme
+        selectors: List[Selector] = []
+        while self.current().kind in {'LBRACKET', 'DOT', 'POINTER'}:
+            selectors.append(self.parse_selector())
+        return Designator(name, selectors)
+
+    def parse_constant(self) -> Expression:
         kind = self.current().kind
-        if kind in {'INTEGER_LITERAL', 'REAL_LITERAL', 'CHAR_LITERAL', 'STRING_LITERAL', 'BOOLEAN_LITERAL'}:
+        if kind == 'INTEGER_LITERAL':
+            lexeme = self.current().lexeme
+            # Handle hex literals ($FF form)
+            if lexeme.startswith('$'):
+                value = int(lexeme[1:], 16)
+            else:
+                value = int(lexeme)
             self.pos += 1
-            return
+            return IntLiteral(value)
+        if kind == 'REAL_LITERAL':
+            value = float(self.current().lexeme)
+            self.pos += 1
+            return RealLiteral(value)
+        if kind == 'CHAR_LITERAL':
+            value = self.current().lexeme
+            self.pos += 1
+            return CharLiteral(value)
+        if kind == 'STRING_LITERAL':
+            value = self.current().lexeme
+            self.pos += 1
+            return StringLiteral(value)
+        if kind == 'BOOLEAN_LITERAL':
+            value = self.current().lexeme.upper() == 'TRUE'
+            self.pos += 1
+            return BoolLiteral(value)
         if kind == 'IDENTIFIER':
+            name = self.current().lexeme
             self.pos += 1
-            return
+            return Identifier(name)
         if kind in {'PLUS', 'MINUS'}:
+            sign = self.current().kind
             self.pos += 1
-            if self.current().kind in {'INTEGER_LITERAL', 'REAL_LITERAL'}:
+            if self.current().kind == 'INTEGER_LITERAL':
+                lexeme = self.current().lexeme
+                if lexeme.startswith('$'):
+                    value = int(lexeme[1:], 16)
+                else:
+                    value = int(lexeme)
+                if sign == 'MINUS':
+                    value = -value
                 self.pos += 1
-                return
+                return IntLiteral(value)
+            if self.current().kind == 'REAL_LITERAL':
+                value = float(self.current().lexeme)
+                if sign == 'MINUS':
+                    value = -value
+                self.pos += 1
+                return RealLiteral(value)
             self.error('expected numeric constant')
         self.error('expected constant')
 
-    def parse_type(self) -> None:
-        if self.match('PACKED'):
-            pass
+    def parse_type(self) -> Type:
+        packed = self.match('PACKED')
         kind = self.current().kind
         if kind in {'ARRAY', 'SUPER'}:
             is_super = kind == 'SUPER'
@@ -602,100 +821,131 @@ class Parser:
             else:
                 self.pos += 1
             self.expect('LBRACKET')
-            self.parse_index_range(allow_star=is_super)
+            index_range = self.parse_index_range(allow_star=is_super)
             self.expect('RBRACKET')
             self.expect('OF')
-            self.parse_type()
-            return
+            element_type = self.parse_type()
+            return ArrayType(index_range, element_type, packed, is_super)
         if kind == 'RECORD':
             self.pos += 1
+            fields: List[tuple[List[str], Type]] = []
             while self.current().kind != 'END':
-                self.parse_identifier_list()
+                names = self.parse_identifier_list()
                 self.expect('COLON')
-                self.parse_type()
+                field_type = self.parse_type()
+                fields.append((names, field_type))
                 if self.current().kind == 'SEMICOLON':
                     self.pos += 1
                 else:
                     break
             self.expect('END')
-            return
+            return RecordType(fields, packed)
         if kind == 'SET':
             self.pos += 1
             self.expect('OF')
-            self.parse_set_base()
-            return
+            base = self.parse_set_base()
+            return SetType(base)
         if kind == 'FILE':
             self.pos += 1
             self.expect('OF')
-            self.parse_type()
-            return
+            element_type = self.parse_type()
+            return FileType(element_type)
         if kind == 'LPAREN':
             self.pos += 1
-            self.parse_identifier_list()
+            values = self.parse_identifier_list()
             self.expect('RPAREN')
-            return
+            return EnumType(values)
         if kind == 'LSTRING':
             self.pos += 1
             self.expect('LPAREN')
-            self.parse_constant()
+            max_len_expr = self.parse_constant()
             self.expect('RPAREN')
-            return
+            # Extract integer value from expression
+            if isinstance(max_len_expr, IntLiteral):
+                max_len = max_len_expr.value
+            else:
+                max_len = 256  # fallback
+            return LStringType(max_len)
         if kind == 'POINTER':
             self.pos += 1
-            self.parse_type()
-            return
+            base = self.parse_type()
+            return PointerType(base)
         if kind == 'IDENTIFIER':
+            name = self.current().lexeme
             self.pos += 1
+            param: Optional[Union[int, str]] = None
             if self.match('LPAREN'):
-                self.parse_constant()
+                param_expr = self.parse_constant()
                 self.expect('RPAREN')
-            return
+                if isinstance(param_expr, IntLiteral):
+                    param = param_expr.value
+                elif isinstance(param_expr, Identifier):
+                    param = param_expr.name
+            return NamedType(name, param)
         if kind in {'INTEGER', 'REAL', 'BOOLEAN', 'CHAR', 'WORD', 'ADRMEM'}:
+            name = self.current().kind
             self.pos += 1
-            return
+            return BuiltinType(name)
         self.error('expected type')
 
-    def parse_index_range(self, allow_star: bool = False) -> None:
-        self.parse_constant()
+    def parse_index_range(self, allow_star: bool = False) -> IndexRange:
+        low = self.parse_constant()
         self.expect('RANGE')
+        high: Optional[Expression] = None
         if allow_star:
             self.expect('MUL')
+            high = None
         else:
-            self.parse_constant()
+            high = self.parse_constant()
+        return IndexRange(low, high)
 
-    def parse_set_base(self) -> None:
+    def parse_set_base(self) -> Type:
+        """Parse a set base type, which can be a simple type or a range."""
         if self.current().kind == 'IDENTIFIER':
             if self.next_kind() == 'RANGE':
-                self.parse_constant()
+                low_expr = self.parse_constant()
                 self.expect('RANGE')
-                self.parse_constant()
-                return
+                high_expr = self.parse_constant()
+                # Return as a special type (for now, just enum)
+                return BuiltinType('INTEGER')  # placeholder
+            name = self.current().lexeme
             self.pos += 1
-            return
+            return NamedType(name, None)
         if self.current().kind in {'INTEGER_LITERAL', 'REAL_LITERAL', 'CHAR_LITERAL', 'STRING_LITERAL', 'BOOLEAN_LITERAL'}:
-            self.parse_constant()
+            expr = self.parse_constant()
             if self.match('RANGE'):
                 self.parse_constant()
-            return
+            # For set base, just return a built-in type
+            return BuiltinType('INTEGER')  # placeholder
+        if self.current().kind in {'INTEGER', 'REAL', 'BOOLEAN', 'CHAR', 'WORD', 'ADRMEM'}:
+            name = self.current().kind
+            self.pos += 1
+            return BuiltinType(name)
         self.error('expected set base type or range')
 
-    def parse_set_element(self) -> None:
-        self.parse_expression()
+    def parse_set_element(self) -> Expression:
+        expr = self.parse_expression()
         if self.match('RANGE'):
-            self.parse_expression()
+            high = self.parse_expression()
+            return RangeExpr(expr, high)
+        return expr
 
-    def parse_identifier_list(self) -> None:
-        self.expect('IDENTIFIER')
+    def parse_identifier_list(self) -> List[str]:
+        names: List[str] = []
+        names.append(self.expect('IDENTIFIER').lexeme)
         while self.match('COMMA'):
-            self.expect('IDENTIFIER')
+            names.append(self.expect('IDENTIFIER').lexeme)
+        return names
 
-    def parse_label_id(self) -> None:
+    def parse_label_id(self) -> Union[int, str]:
         if self.current().kind == 'INTEGER_LITERAL':
+            value = int(self.current().lexeme)
             self.pos += 1
-            return
+            return value
         if self.current().kind == 'IDENTIFIER':
+            name = self.current().lexeme
             self.pos += 1
-            return
+            return name
         self.error('expected label id')
 
     def skip_include_directives(self) -> None:
@@ -707,9 +957,10 @@ class Parser:
         self.expect('SEMICOLON')
 
 
-def parse_file(path: str) -> None:
+def parse_file(path: str) -> Union[ProgramUnit, ModuleUnit, InterfaceUnit, ImplementationUnit]:
+    """Parse a Pascal source file and return the AST root node."""
     tokens = lex_file(path)
-    Parser(tokens).parse()
+    return Parser(tokens).parse()
 
 
 def main() -> int:
@@ -717,14 +968,14 @@ def main() -> int:
         print('Usage: python3 parser.py <source-file>', file=sys.stderr)
         return 2
     try:
-        parse_file(sys.argv[1])
+        ast = parse_file(sys.argv[1])
+        print(f'OK: Parsed as {type(ast).__name__}')
     except (LexerError, ParserError) as exc:
         print(f'Parse error: {exc}', file=sys.stderr)
         return 1
     except OSError as exc:
         print(f'File error: {exc}', file=sys.stderr)
         return 1
-    print('OK')
     return 0
 
 
