@@ -130,8 +130,6 @@ class Parser:
             self.skip_include_directives()
         if self.current().kind == 'BEGIN':
             self.parse_compound_statement()
-        elif self.current().kind == 'END':
-            self.pos += 1
         self.skip_include_directives()
         self.expect('DOT')
 
@@ -499,7 +497,7 @@ class Parser:
             self.parse_simple_expression()
 
     def parse_simple_expression(self) -> None:
-        if self.current().kind in {'PLUS', 'MINUS', 'NOT'}:
+        if self.current().kind in {'PLUS', 'MINUS'}:
             self.pos += 1
         self.parse_term()
         while self.current().kind in {'PLUS', 'MINUS', 'OR', 'XOR'}:
@@ -514,6 +512,10 @@ class Parser:
 
     def parse_factor(self) -> None:
         kind = self.current().kind
+        if kind == 'NOT':
+            self.pos += 1
+            self.parse_factor()
+            return
         if kind == 'IDENTIFIER':
             if self.next_kind() == 'LPAREN':
                 self.pos += 1
@@ -576,8 +578,10 @@ class Parser:
             return
         if kind in {'PLUS', 'MINUS'}:
             self.pos += 1
-            self.parse_constant()
-            return
+            if self.current().kind in {'INTEGER_LITERAL', 'REAL_LITERAL'}:
+                self.pos += 1
+                return
+            self.error('expected numeric constant')
         self.error('expected constant')
 
     def parse_type(self) -> None:
@@ -585,13 +589,14 @@ class Parser:
             pass
         kind = self.current().kind
         if kind in {'ARRAY', 'SUPER'}:
-            if kind == 'SUPER':
+            is_super = kind == 'SUPER'
+            if is_super:
                 self.pos += 1
                 self.expect('ARRAY')
             else:
                 self.pos += 1
             self.expect('LBRACKET')
-            self.parse_index_range()
+            self.parse_index_range(allow_star=is_super)
             self.expect('RBRACKET')
             self.expect('OF')
             self.parse_type()
@@ -639,10 +644,10 @@ class Parser:
             return
         self.error('expected type')
 
-    def parse_index_range(self) -> None:
+    def parse_index_range(self, allow_star: bool = False) -> None:
         self.parse_constant()
         self.expect('RANGE')
-        if self.current().kind == 'MUL':
+        if allow_star and self.current().kind == 'MUL':
             self.pos += 1
         else:
             self.parse_constant()
