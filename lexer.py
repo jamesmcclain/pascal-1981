@@ -262,12 +262,18 @@ class Lexer:
         return self.emit('INTEGER_LITERAL', lexeme, int(lexeme), line, column)
 
     def _read_exponent(self) -> None:
-        if self.current() and self.current().upper() == 'E':
+        if self.current().upper() != 'E':
+            return
+        i = 1
+        if self.peek(i) in '+-':
+            i += 1
+        if not self.peek(i).isdigit():   # no digits -> not an exponent; leave 'E'
+            return
+        self.advance()                   # consume 'E'
+        if self.current() in '+-':
             self.advance()
-            if self.current() in '+-':
-                self.advance()
-            while self.current() and self.current().isdigit():
-                self.advance()
+        while self.current().isdigit():
+            self.advance()
 
     def read_hex_number(self) -> Token:
         line, column = self.line, self.column
