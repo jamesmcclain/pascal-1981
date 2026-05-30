@@ -14,6 +14,9 @@ class ASTNode:
     """Base class for all AST nodes."""
     pass
 
+# NOTE: Source location tracking (filename, line, column) will be added later
+# when we update the lexer/parser to track positions. For now, we use None.
+
 
 # ============================================================================
 # Program/Module Units
