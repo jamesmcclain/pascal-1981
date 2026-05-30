@@ -10,6 +10,7 @@ If output.ll is not specified, IR is written to stdout.
 
 import sys
 from parser import parse_file
+from type_checker import PascalTypeChecker
 from codegen_llvm import compile_to_llvm
 
 
@@ -25,6 +26,21 @@ def main() -> int:
         # Parse
         print(f'Parsing {source_file}...', file=sys.stderr)
         ast = parse_file(source_file)
+
+        # Type check
+        print(f'Type checking...', file=sys.stderr)
+        type_checker = PascalTypeChecker()
+        check_result = type_checker.check(ast)
+        
+        if not check_result.success:
+            print(f'Type checking failed:', file=sys.stderr)
+            for error in check_result.errors:
+                print(f'  {error}', file=sys.stderr)
+            return 1
+        
+        if check_result.warnings:
+            for warning in check_result.warnings:
+                print(f'Warning: {warning}', file=sys.stderr)
 
         # Codegen
         print(f'Generating LLVM IR...', file=sys.stderr)

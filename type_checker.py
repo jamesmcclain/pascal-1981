@@ -269,7 +269,8 @@ class PascalTypeChecker(TypeChecker):
                 if param.type_expr:
                     param_type = self.resolve_type(param.type_expr)
                     if param_type:
-                        param_types.append((param.name, param_type))
+                        for name in param.names:
+                            param_types.append((name, param_type))
         
         # Resolve return type
         return_type = INTEGER_TYPE
@@ -312,14 +313,15 @@ class PascalTypeChecker(TypeChecker):
             for param in decl.params:
                 param_type = self.resolve_type(param.type_expr)
                 if param_type:
-                    param_symbol = Symbol(
-                        name=param.name,
-                        type=param_type,
-                        kind='parameter',
-                        location=self.make_location(param),
-                        is_mutable=False
-                    )
-                    self.symbol_table.define(param.name, param_symbol)
+                    for name in param.names:
+                        param_symbol = Symbol(
+                            name=name,
+                            type=param_type,
+                            kind='parameter',
+                            location=self.make_location(param),
+                            is_mutable=False
+                        )
+                        self.symbol_table.define(name, param_symbol)
         
         # Check body
         self.check_block(decl.body)
@@ -340,7 +342,8 @@ class PascalTypeChecker(TypeChecker):
                 if param.type_expr:
                     param_type = self.resolve_type(param.type_expr)
                     if param_type:
-                        param_types.append((param.name, param_type))
+                        for name in param.names:
+                            param_types.append((name, param_type))
         
         # Create procedure type
         proc_type = ProcedureType(decl.name, param_types)
@@ -373,14 +376,15 @@ class PascalTypeChecker(TypeChecker):
             for param in decl.params:
                 param_type = self.resolve_type(param.type_expr)
                 if param_type:
-                    param_symbol = Symbol(
-                        name=param.name,
-                        type=param_type,
-                        kind='parameter',
-                        location=self.make_location(param),
-                        is_mutable=False
-                    )
-                    self.symbol_table.define(param.name, param_symbol)
+                    for name in param.names:
+                        param_symbol = Symbol(
+                            name=name,
+                            type=param_type,
+                            kind='parameter',
+                            location=self.make_location(param),
+                            is_mutable=False
+                        )
+                        self.symbol_table.define(name, param_symbol)
         
         # Check body
         self.check_block(decl.body)
@@ -437,19 +441,19 @@ class PascalTypeChecker(TypeChecker):
                 )
         
         # Loop bounds must be INTEGER
-        if stmt.lower:
-            lower_type = self.infer_expression_type(stmt.lower)
-            if lower_type and not lower_type.equivalent_to(INTEGER_TYPE):
+        if stmt.start:
+            start_type = self.infer_expression_type(stmt.start)
+            if start_type and not start_type.equivalent_to(INTEGER_TYPE):
                 self.error(
-                    f"FOR lower bound must be INTEGER, got {lower_type}",
+                    f"FOR start bound must be INTEGER, got {start_type}",
                     stmt
                 )
         
-        if stmt.upper:
-            upper_type = self.infer_expression_type(stmt.upper)
-            if upper_type and not upper_type.equivalent_to(INTEGER_TYPE):
+        if stmt.end:
+            end_type = self.infer_expression_type(stmt.end)
+            if end_type and not end_type.equivalent_to(INTEGER_TYPE):
                 self.error(
-                    f"FOR upper bound must be INTEGER, got {upper_type}",
+                    f"FOR end bound must be INTEGER, got {end_type}",
                     stmt
                 )
         
