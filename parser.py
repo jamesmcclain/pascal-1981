@@ -277,7 +277,7 @@ class Parser:
             self.parse_parameter_group()
 
     def parse_parameter_group(self) -> None:
-        if self.current().kind in {'VAR', 'CONST'}:
+        if self.current().kind in {'VAR', 'CONST', 'VARS', 'CONSTS'}:
             self.pos += 1
         self.parse_identifier_list()
         self.expect('COLON')
@@ -299,7 +299,7 @@ class Parser:
             self.parse_constant()
             self.expect('RPAREN')
             return
-        if self.current().kind in {'READONLY', 'PUBLIC', 'STATIC', 'EXTERNAL', 'PURE', 'OVERLAY', 'FORTRAN'}:
+        if self.current().kind in {'READONLY', 'PUBLIC', 'STATIC', 'EXTERNAL', 'EXTERN', 'PURE', 'OVERLAY', 'FORTRAN'}:
             self.pos += 1
             return
         self.error('expected attribute item')
