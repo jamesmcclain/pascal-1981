@@ -4,7 +4,6 @@ import sys
 from dataclasses import dataclass
 from typing import Any, List, Optional
 
-
 # Token code assignments. These are stable for hex-stream output.
 KEYWORD_CODES = {
     'PROGRAM': 0x0001,
@@ -72,27 +71,27 @@ KEYWORD_CODES = {
 }
 
 SYMBOL_CODES = {
-    'ASSIGN': 0x003B,      # :=
-    'EQ': 0x003C,          # =
-    'NEQ': 0x003D,         # <>
-    'LT': 0x003E,          # <
-    'LE': 0x003F,          # <=
-    'GT': 0x0040,          # >
-    'GE': 0x0041,          # >=
-    'PLUS': 0x0042,        # +
-    'MINUS': 0x0043,       # -
-    'MUL': 0x0044,         # *
-    'SLASH': 0x0045,       # /
-    'RANGE': 0x0046,       # ..
-    'POINTER': 0x0047,     # ^
-    'LBRACKET': 0x0048,    # [
-    'RBRACKET': 0x0049,    # ]
-    'LPAREN': 0x004A,      # (
-    'RPAREN': 0x004B,      # )
-    'SEMICOLON': 0x004C,   # ;
-    'COMMA': 0x004D,       # ,
-    'COLON': 0x004E,       # :
-    'DOT': 0x004F,         # .
+    'ASSIGN': 0x003B,  # :=
+    'EQ': 0x003C,  # =
+    'NEQ': 0x003D,  # <>
+    'LT': 0x003E,  # <
+    'LE': 0x003F,  # <=
+    'GT': 0x0040,  # >
+    'GE': 0x0041,  # >=
+    'PLUS': 0x0042,  # +
+    'MINUS': 0x0043,  # -
+    'MUL': 0x0044,  # *
+    'SLASH': 0x0045,  # /
+    'RANGE': 0x0046,  # ..
+    'POINTER': 0x0047,  # ^
+    'LBRACKET': 0x0048,  # [
+    'RBRACKET': 0x0049,  # ]
+    'LPAREN': 0x004A,  # (
+    'RPAREN': 0x004B,  # )
+    'SEMICOLON': 0x004C,  # ;
+    'COMMA': 0x004D,  # ,
+    'COLON': 0x004E,  # :
+    'DOT': 0x004F,  # .
 }
 
 LITERAL_CODES = {
@@ -127,6 +126,7 @@ class LexerError(Exception):
 
 
 class Lexer:
+
     def __init__(self, source: str):
         self.source = source
         self.pos = 0
@@ -267,9 +267,9 @@ class Lexer:
         i = 1
         if self.peek(i) in '+-':
             i += 1
-        if not self.peek(i).isdigit():   # no digits -> not an exponent; leave 'E'
+        if not self.peek(i).isdigit():  # no digits -> not an exponent; leave 'E'
             return
-        self.advance()                   # consume 'E'
+        self.advance()  # consume 'E'
         if self.current() in '+-':
             self.advance()
         while self.current().isdigit():

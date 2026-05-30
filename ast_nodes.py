@@ -4,6 +4,7 @@ Each dataclass represents a construct in the Pascal grammar.
 """
 
 from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Any, List, Optional, Union
 
@@ -14,13 +15,14 @@ class ASTNode:
     """Base class for all AST nodes."""
     pass
 
+
 # NOTE: Source location tracking (filename, line, column) will be added later
 # when we update the lexer/parser to track positions. For now, we use None.
-
 
 # ============================================================================
 # Program/Module Units
 # ============================================================================
+
 
 @dataclass
 class ProgramUnit(ASTNode):
@@ -57,16 +59,14 @@ class ImplementationUnit(ASTNode):
 # Blocks and Declarations
 # ============================================================================
 
+
 @dataclass
 class Block(ASTNode):
     decls: List[Declaration]
     body: List[Statement]
 
 
-Declaration = Union[
-    'ConstDecl', 'TypeDecl', 'VarDecl', 'ValueDecl', 'LabelDecl',
-    'ProcDecl', 'FuncDecl'
-]
+Declaration = Union['ConstDecl', 'TypeDecl', 'VarDecl', 'ValueDecl', 'LabelDecl', 'ProcDecl', 'FuncDecl']
 
 
 @dataclass
@@ -127,11 +127,8 @@ class Param(ASTNode):
 # Statements
 # ============================================================================
 
-Statement = Union[
-    'CompoundStmt', 'AssignStmt', 'ProcCallStmt', 'IfStmt', 'ForStmt',
-    'WhileStmt', 'RepeatStmt', 'CaseStmt', 'WithStmt', 'GotoStmt',
-    'ReturnStmt', 'BreakStmt', 'CycleStmt', 'LabelStmt', 'EmptyStmt'
-]
+Statement = Union['CompoundStmt', 'AssignStmt', 'ProcCallStmt', 'IfStmt', 'ForStmt', 'WhileStmt', 'RepeatStmt', 'CaseStmt', 'WithStmt', 'GotoStmt', 'ReturnStmt', 'BreakStmt',
+                  'CycleStmt', 'LabelStmt', 'EmptyStmt']
 
 
 @dataclass
@@ -233,12 +230,8 @@ class EmptyStmt(ASTNode):
 # Expressions
 # ============================================================================
 
-Expression = Union[
-    'BinOp', 'UnaryOp', 'IntLiteral', 'RealLiteral', 'CharLiteral',
-    'StringLiteral', 'BoolLiteral', 'Identifier', 'Designator',
-    'FuncCall', 'SetConstructor', 'AdrExpr', 'SizeofExpr', 'UpperExpr',
-    'RangeExpr'
-]
+Expression = Union['BinOp', 'UnaryOp', 'IntLiteral', 'RealLiteral', 'CharLiteral', 'StringLiteral', 'BoolLiteral', 'Identifier', 'Designator', 'FuncCall', 'SetConstructor',
+                   'AdrExpr', 'SizeofExpr', 'UpperExpr', 'RangeExpr']
 
 
 @dataclass
@@ -326,10 +319,7 @@ class RangeExpr(ASTNode):
 # Types
 # ============================================================================
 
-Type = Union[
-    'NamedType', 'ArrayType', 'RecordType', 'SetType', 'FileType',
-    'EnumType', 'PointerType', 'LStringType', 'BuiltinType'
-]
+Type = Union['NamedType', 'ArrayType', 'RecordType', 'SetType', 'FileType', 'EnumType', 'PointerType', 'LStringType', 'BuiltinType']
 
 
 @dataclass

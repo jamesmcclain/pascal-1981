@@ -3,77 +3,12 @@ from __future__ import annotations
 import sys
 from typing import List, Optional, Sequence, Union
 
-from lexer import (
-    ALL_CODES,
-    KEYWORD_CODES,
-    LexerError,
-    Token,
-    lex_file,
-)
-
-from ast_nodes import (
-    ASTNode,
-    Block,
-    ProgramUnit,
-    ModuleUnit,
-    InterfaceUnit,
-    ImplementationUnit,
-    UseClause,
-    ConstDecl,
-    TypeDecl,
-    VarDecl,
-    ValueDecl,
-    LabelDecl,
-    ProcDecl,
-    FuncDecl,
-    Param,
-    CompoundStmt,
-    AssignStmt,
-    ProcCallStmt,
-    IfStmt,
-    ForStmt,
-    WhileStmt,
-    RepeatStmt,
-    CaseStmt,
-    CaseElement,
-    WithStmt,
-    GotoStmt,
-    ReturnStmt,
-    BreakStmt,
-    CycleStmt,
-    LabelStmt,
-    EmptyStmt,
-    BinOp,
-    UnaryOp,
-    IntLiteral,
-    RealLiteral,
-    CharLiteral,
-    StringLiteral,
-    BoolLiteral,
-    Identifier,
-    Designator,
-    FuncCall,
-    SetConstructor,
-    AdrExpr,
-    SizeofExpr,
-    UpperExpr,
-    RangeExpr,
-    NamedType,
-    ArrayType,
-    RecordType,
-    SetType,
-    FileType,
-    EnumType,
-    PointerType,
-    LStringType,
-    BuiltinType,
-    IndexRange,
-    Selector,
-    Declaration,
-    Statement,
-    Expression,
-    Type,
-)
+from ast_nodes import (AdrExpr, ArrayType, AssignStmt, ASTNode, BinOp, Block, BoolLiteral, BreakStmt, BuiltinType, CaseElement, CaseStmt, CharLiteral, CompoundStmt, ConstDecl,
+                       CycleStmt, Declaration, Designator, EmptyStmt, EnumType, Expression, FileType, ForStmt, FuncCall, FuncDecl, GotoStmt, Identifier, IfStmt, ImplementationUnit,
+                       IndexRange, InterfaceUnit, IntLiteral, LabelDecl, LabelStmt, LStringType, ModuleUnit, NamedType, Param, PointerType, ProcCallStmt, ProcDecl, ProgramUnit,
+                       RangeExpr, RealLiteral, RecordType, RepeatStmt, ReturnStmt, Selector, SetConstructor, SetType, SizeofExpr, Statement, StringLiteral, Type, TypeDecl, UnaryOp,
+                       UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt)
+from lexer import ALL_CODES, KEYWORD_CODES, LexerError, Token, lex_file
 
 
 class ParserError(Exception):
@@ -81,6 +16,7 @@ class ParserError(Exception):
 
 
 class Parser:
+
     def __init__(self, tokens: Sequence[Token]):
         self.tokens = list(tokens)
         self.pos = 0
