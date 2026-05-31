@@ -206,7 +206,7 @@ CHAR_TYPE = CharType()
 def can_assign(from_type: Type, to_type: Type) -> bool:
     """
     Check if a value of from_type can be assigned to a variable of to_type.
-    
+
     Pascal has strict typing: no implicit coercion.
     Both types must be equivalent.
     """
@@ -223,14 +223,14 @@ def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optiona
       comparison    : EQ NEQ LT LE GT GE
     Returns None if the operation is invalid for these types.
     """
-    ARITH = {'PLUS', 'MINUS', 'MUL', 'DIV', 'MOD'}      # integer-preserving arithmetic
+    ARITH = {'PLUS', 'MINUS', 'MUL', 'DIV', 'MOD'}  # integer-preserving arithmetic
     BITWISE = {'AND', 'OR', 'XOR'}
     COMPARE = {'EQ', 'NEQ', 'LT', 'LE', 'GT', 'GE'}
 
     # Integer arithmetic
     if isinstance(left_type, IntegerType) and isinstance(right_type, IntegerType):
         if op == 'SLASH':
-            return REAL_TYPE                # real division
+            return REAL_TYPE  # real division
         if op in ARITH or op in BITWISE:
             return INTEGER_TYPE
         if op in COMPARE:
@@ -292,7 +292,7 @@ def unary_op_result_type(operand_type: Type, op: str) -> Optional[Type]:
         if isinstance(operand_type, BooleanType):
             return BOOLEAN_TYPE
         if isinstance(operand_type, (IntegerType, WordType)):
-            return operand_type            # bitwise complement
+            return operand_type  # bitwise complement
 
     if op in ('PLUS', 'MINUS'):
         if isinstance(operand_type, IntegerType):

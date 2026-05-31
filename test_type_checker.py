@@ -21,7 +21,7 @@ DRIVER = os.path.join(HERE, 'compile_to_llvm.py')
 def run_type_checker(source: str) -> tuple:
     """
     Compile a Pascal program through the full pipeline.
-    
+
     Returns: (success: bool, stderr: str)
     """
     with tempfile.NamedTemporaryFile(mode='w', suffix='.pas', delete=False) as f:
@@ -38,13 +38,13 @@ def run_type_checker(source: str) -> tuple:
 def test_case(name: str, source: str, should_pass: bool, error_pattern: str = None) -> bool:
     """
     Run a single test case.
-    
+
     Args:
         name: Test description
         source: Pascal source code
         should_pass: Whether compilation should succeed
         error_pattern: If should_pass=False, error message must contain this
-    
+
     Returns: True if test passed
     """
     success, stderr = run_type_checker(source)

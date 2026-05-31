@@ -6,19 +6,19 @@ Tests type checking, module validation, and implementation-interface matching.
 Run: python3 test_semantic.py
 """
 
-import sys
-import tempfile
 import os
 import shutil
+import sys
+import tempfile
+from parser import parse_file
 from pathlib import Path
 
-from parser import parse_file
 from type_checker import PascalTypeChecker
 
 
 class SemanticTest:
     """A single semantic test case."""
-    
+
     def __init__(self, name: str, should_pass: bool, iface_code: str = None, impl_code: str = None, prog_code: str = None):
         self.name = name
         self.should_pass = should_pass
@@ -27,18 +27,18 @@ class SemanticTest:
         self.prog_code = prog_code
         self.module_name = 'TEST'  # Default module name
         self.result = None
-        
+
     def run(self) -> bool:
         """Run the test and return True if it passed, False if it failed."""
         tmpdir = tempfile.mkdtemp()
-        
+
         try:
             # Write files
             if self.iface_code:
                 iface_path = os.path.join(tmpdir, f'{self.module_name.lower()}.int')
                 with open(iface_path, 'w') as f:
                     f.write(self.iface_code)
-            
+
             # Determine what to type-check
             if self.impl_code:
                 file_to_check = os.path.join(tmpdir, f'{self.module_name.lower()}.pas')
@@ -50,19 +50,19 @@ class SemanticTest:
                     f.write(self.prog_code)
             else:
                 return False
-            
+
             # Parse and type-check
             ast = parse_file(file_to_check)
             checker = PascalTypeChecker(source_file=file_to_check)
             result = checker.check(ast)
             self.result = result
-            
+
             # Evaluate result
             if self.should_pass:
                 return result.success
             else:
                 return not result.success
-                
+
         except Exception as e:
             # Parsing errors count as failures
             if self.should_pass:
@@ -95,7 +95,6 @@ BEGIN
 END.
 """,
         ),
-        
         SemanticTest(
             "Implementation matches interface (function)",
             should_pass=True,
@@ -115,7 +114,6 @@ BEGIN
 END.
 """,
         ),
-        
         SemanticTest(
             "Implementation with private procedures",
             should_pass=True,
@@ -137,7 +135,6 @@ BEGIN
 END.
 """,
         ),
-        
         SemanticTest(
             "Missing implementation",
             should_pass=False,
@@ -157,7 +154,6 @@ BEGIN
 END.
 """,
         ),
-        
         SemanticTest(
             "Parameter count mismatch",
             should_pass=False,
@@ -176,7 +172,6 @@ BEGIN
 END.
 """,
         ),
-        
         SemanticTest(
             "Parameter type mismatch",
             should_pass=False,
@@ -195,7 +190,6 @@ BEGIN
 END.
 """,
         ),
-        
         SemanticTest(
             "Function return type mismatch",
             should_pass=False,
@@ -215,7 +209,7 @@ BEGIN
 END.
 """,
         ),
-        
+
         # ===== Module Import Tests =====
         SemanticTest(
             "Program imports module (selective)",
@@ -233,7 +227,6 @@ BEGIN
 END.
 """,
         ),
-        
         SemanticTest(
             "Program imports module (all)",
             should_pass=True,
@@ -250,7 +243,6 @@ BEGIN
 END.
 """,
         ),
-        
         SemanticTest(
             "Missing module",
             should_pass=False,
@@ -260,7 +252,6 @@ BEGIN
 END.
 """,
         ),
-        
         SemanticTest(
             "Non-exported symbol import",
             should_pass=False,
@@ -279,31 +270,31 @@ END.
 """,
         ),
     ]
-    
+
     print("=" * 70)
     print("SEMANTIC VALIDATION TEST SUITE")
     print("=" * 70)
     print()
-    
+
     passed = 0
     failed = 0
-    
+
     for test in tests:
         result = test.run()
         status = "✓ PASS" if result else "✗ FAIL"
         passed += result
         failed += not result
-        
+
         print(f"{status}: {test.name}")
         if not result and test.result:
             if test.result.errors:
                 print(f"       Errors: {test.result.errors[0]}")
-    
+
     print()
     print("=" * 70)
     print(f"Results: {passed}/{len(tests)} passed, {failed}/{len(tests)} failed")
     print("=" * 70)
-    
+
     return 0 if failed == 0 else 1
 
 
