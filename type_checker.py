@@ -10,14 +10,16 @@ Performs semantic analysis on the AST:
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ast_nodes import AdrExpr
 from ast_nodes import ArrayType as ASTArrayType
 from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, ConstDecl, Designator, Expression, ForStmt, FuncCall, FuncDecl, Identifier, IfStmt, IntLiteral,
-                       ModuleUnit, NamedType, ProcCallStmt, ProcDecl, ProgramUnit, RealLiteral)
+                       InterfaceUnit, ModuleUnit, NamedType, ProcCallStmt, ProcDecl, ProgramUnit, RealLiteral, UseClause)
 from ast_nodes import RecordType as ASTRecordType
 from ast_nodes import (RepeatStmt, ReturnStmt, Selector, SizeofExpr, Statement, StringLiteral, TypeDecl, UnaryOp, VarDecl, WhileStmt)
+from parser import parse_file
 from symbol_table import SourceLocation, Symbol, SymbolTable
 from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, FunctionType, PointerType, ProcedureType, RecordType, SetType, Type,
                          binary_op_result_type, can_assign, unary_op_result_type)
@@ -59,13 +61,14 @@ class TypeChecker(ABC):
 class PascalTypeChecker(TypeChecker):
     """Type checker for Pascal-1981."""
 
-    def __init__(self):
+    def __init__(self, source_file: Optional[str] = None):
         self.symbol_table = SymbolTable()
         self.errors: List[TypeCheckError] = []
         self.warnings: List[TypeCheckError] = []
         self.current_function: Optional[FuncDecl] = None
         self.current_function_return_type: Optional[Type] = None
         self.current_procedure: Optional[ProcDecl] = None
+        self.source_file = source_file  # Path to the source file being compiled
         self._setup_builtins()
 
     def _setup_builtins(self) -> None:
@@ -130,15 +133,192 @@ class PascalTypeChecker(TypeChecker):
 
         return TypeCheckResult(success=len(self.errors) == 0, symbol_table=self.symbol_table, errors=self.errors, warnings=self.warnings, annotated_ast=ast)
 
+    def resolve_module_path(self, module_name: str, search_dir: Optional[str]) -> Optional[str]:
+        """Resolve a module name to a .int file path.
+        
+        Args:
+            module_name: The name of the module (e.g., 'MathUtil')
+            search_dir: Directory to search in; if None, use current directory
+            
+        Returns:
+            Absolute path to the .int file if found, None otherwise
+        """
+        if search_dir is None:
+            search_dir = '.'
+        
+        search_path = Path(search_dir)
+        
+        # Try case-insensitive lookup: lowercase the module name and search
+        for suffix in ['.int', '.INT', '.Int']:
+            # Try exact name + suffix
+            candidate = search_path / (module_name + suffix)
+            if candidate.exists():
+                return str(candidate.resolve())
+            
+            # Try lowercase name + suffix
+            candidate = search_path / (module_name.lower() + suffix)
+            if candidate.exists():
+                return str(candidate.resolve())
+        
+        return None
+
+    def load_interface(self, path: str) -> Optional[InterfaceUnit]:
+        """Load and type-check an interface file.
+        
+        Args:
+            path: Path to the .int file
+            
+        Returns:
+            Parsed and type-checked InterfaceUnit, or None if failed
+        """
+        try:
+            ast = parse_file(path)
+            if not isinstance(ast, InterfaceUnit):
+                self.error(f"Expected interface file, got {type(ast).__name__} in {path}", None)
+                return None
+            
+            # Type-check the interface independently
+            # (We don't check it fully here, just validate it's valid enough to import)
+            return ast
+        except Exception as e:
+            self.error(f"Failed to load interface from {path}: {e}", None)
+            return None
+
+    def import_symbols(self, interface: InterfaceUnit, uses: UseClause) -> None:
+        """Import symbols from an interface into the current scope.
+        
+        Args:
+            interface: The loaded InterfaceUnit
+            uses: The USES clause specifying what to import
+        """
+        # Get the export list from the interface
+        export_list = interface.params  # params field holds the UNIT (name, exports) list
+        
+        # Determine what to import
+        if uses.imports:
+            # Selective import: USES Module(A, B, C);
+            names_to_import = set(uses.imports)
+            
+            # Validate that all requested names are exported
+            for name in names_to_import:
+                if name not in export_list:
+                    self.error(f"Module {uses.name} does not export '{name}'", None)
+        else:
+            # Import all exports: USES Module;
+            names_to_import = set(export_list)
+        
+        # Import the matching declarations from the interface
+        for decl in interface.decls:
+            decl_name = getattr(decl, 'name', None)
+            if decl_name and decl_name in names_to_import:
+                # Add to symbol table with a note about where it came from
+                symbol = Symbol(
+                    name=decl_name,
+                    type=self._get_declaration_type(decl),
+                    kind=self._get_declaration_kind(decl),
+                    is_mutable=isinstance(decl, VarDecl)
+                )
+                
+                # Check for duplicate definitions
+                if self.symbol_table.lookup(decl_name):
+                    self.error(f"Symbol '{decl_name}' from module {uses.name} conflicts with existing definition", None)
+                else:
+                    self.symbol_table.define(decl_name, symbol)
+
+    def _get_declaration_kind(self, decl: Any) -> str:
+        """Get the kind of a declaration (procedure, function, const, type, var)."""
+        if isinstance(decl, ProcDecl):
+            return 'procedure'
+        elif isinstance(decl, FuncDecl):
+            return 'function'
+        elif isinstance(decl, ConstDecl):
+            return 'const'
+        elif isinstance(decl, TypeDecl):
+            return 'type'
+        elif isinstance(decl, VarDecl):
+            return 'var'
+        else:
+            return 'unknown'
+
+    def _get_declaration_type(self, decl: Any) -> Type:
+        """Get the Type object for a declaration."""
+        if isinstance(decl, FuncDecl):
+            # For functions, use the return type
+            return decl.return_type if decl.return_type else INTEGER_TYPE
+        elif isinstance(decl, ProcDecl):
+            # For procedures, create a ProcedureType
+            param_list = [(p.name, p.type if hasattr(p, 'type') else INTEGER_TYPE) for p in decl.params]
+            return ProcedureType(decl.name, param_list)
+        elif isinstance(decl, ConstDecl):
+            # For constants, try to infer type from value
+            if isinstance(decl.value, IntLiteral):
+                return INTEGER_TYPE
+            elif isinstance(decl.value, RealLiteral):
+                return REAL_TYPE
+            elif isinstance(decl.value, StringLiteral):
+                return CHAR_TYPE
+            elif isinstance(decl.value, BoolLiteral):
+                return BOOLEAN_TYPE
+            else:
+                return INTEGER_TYPE
+        elif isinstance(decl, TypeDecl):
+            # For type declarations, use the type itself
+            return decl.type if hasattr(decl, 'type') else INTEGER_TYPE
+        elif isinstance(decl, VarDecl):
+            # For variables, use their declared type
+            return decl.type if hasattr(decl, 'type') else INTEGER_TYPE
+        else:
+            return INTEGER_TYPE
+
     def check_program_unit(self, prog: ProgramUnit) -> None:
         """Type check a program unit."""
-        # Program name is implicit
+        # Process USES clauses first
+        if prog.uses:
+            # Get directory of source file for module resolution
+            source_dir = str(Path(self.source_file).parent) if self.source_file else None
+            for use_clause in prog.uses:
+                # Resolve module path
+                module_path = self.resolve_module_path(use_clause.name, source_dir)
+                if module_path is None:
+                    self.error(f"Module '{use_clause.name}' not found", None)
+                    continue
+                
+                # Load interface
+                interface = self.load_interface(module_path)
+                if interface is None:
+                    continue
+                
+                # Import symbols
+                self.import_symbols(interface, use_clause)
+        
+        # Now type-check the program block
         self.check_block(prog.block)
 
     def check_module_unit(self, mod: ModuleUnit) -> None:
         """Type check a module unit."""
-        # TODO: Handle module imports and exports
-        self.check_block(mod.impl_block)
+        # Process USES clauses first
+        if mod.uses:
+            # Get directory of source file for module resolution
+            source_dir = str(Path(self.source_file).parent) if self.source_file else None
+            for use_clause in mod.uses:
+                # Resolve module path
+                module_path = self.resolve_module_path(use_clause.name, source_dir)
+                if module_path is None:
+                    self.error(f"Module '{use_clause.name}' not found", None)
+                    continue
+                
+                # Load interface
+                interface = self.load_interface(module_path)
+                if interface is None:
+                    continue
+                
+                # Import symbols
+                self.import_symbols(interface, use_clause)
+        
+        # Check declarations
+        if mod.decls:
+            for decl in mod.decls:
+                self.check_declaration(decl)
 
     def check_block(self, block: Block) -> None:
         """Type check a block (declarations + statements)."""

@@ -45,7 +45,7 @@ def main() -> int:
 
         # Type check
         print(f'Type checking...', file=sys.stderr)
-        type_checker = PascalTypeChecker()
+        type_checker = PascalTypeChecker(source_file=source_file)
         check_result = type_checker.check(ast)
 
         if not check_result.success:
