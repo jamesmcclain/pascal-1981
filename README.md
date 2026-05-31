@@ -120,17 +120,21 @@ pascal-1981/
 ├── type_checker.py       # semantic analysis
 ├── codegen_llvm.py       # LLVM IR generation
 ├── compile_to_llvm.py    # driver (parse -> type-check -> codegen), supports -v
-├── test_type_checker.py  # type checker tests (full pipeline, via the driver)
-├── test_semantic.py      # interface / implementation / module semantics tests
+├── tests/                # unified test suite (unittest framework)
+│   ├── __init__.py
+│   ├── support.py        # capability probes, skip decorators, in-process helpers
+│   ├── test_parser.py    # parser accept/reject corpus (no llvmlite)
+│   ├── test_typecheck.py # type rules + module semantics (no llvmlite)
+│   ├── test_codegen.py   # IR generation + build/run (requires llvmlite [+ clang])
+│   └── fixtures/
+│       └── parser/
+│           ├── should_pass/      # programs a conforming parser MUST accept
+│           ├── should_fail/      # programs a conforming parser MUST reject
+│           └── judgment_calls/   # cases whose verdict depends on dialect decisions
 ├── runtime/              # C runtime
 │   └── fillc.c
 ├── scripts/
 │   └── beautify.sh       # isort + yapf over the Python sources
-├── pascal_test_suite/    # parser accept/reject corpus
-│   ├── run_suite.sh
-│   ├── should_pass/      # programs a conforming parser MUST accept
-│   ├── should_fail/      # programs a conforming parser MUST reject
-│   └── judgment_calls/   # cases whose verdict depends on dialect decisions
 ├── docs/
 │   └── ebnf_grammar.md   # the grammar this dialect is checked against
 └── README.md             # this file
@@ -138,35 +142,50 @@ pascal-1981/
 
 ## Testing
 
-Three independent checks, in increasing order of what they pull in:
+One unified test suite, built on Python's stdlib `unittest`, with automatic
+re-run-time dependency detection. The suite is organized by **pipeline layer**:
+
+### Run the entire test suite
 
 ```bash
-# 1. Parser accept/reject corpus — lexer + parser only, no llvmlite.
-bash pascal_test_suite/run_suite.sh
+# All tests; codegen tests auto-skip if llvmlite/clang are unavailable
+python -m unittest discover -s tests -v
 ```
 
-The corpus is organized by what the grammar (`docs/ebnf_grammar.md`) dictates,
-not by what the parser happens to do: `should_pass/` programs must be accepted,
-`should_fail/` programs must be rejected, and `judgment_calls/` collects cases
-whose verdict depends on dialect decisions you may not have settled. Any line
-the runner marks `BUG` is a divergence from the grammar.
+### Run by layer
 
 ```bash
-# 2. Interface / implementation / module semantics — imports the type
-#    checker directly, no llvmlite.
-python3 test_semantic.py
+# Parser accept/reject corpus + type rules (no llvmlite needed)
+python -m unittest tests.test_parser tests.test_typecheck
+
+# Codegen only (requires llvmlite [+ clang])
+python -m unittest tests.test_codegen
 ```
 
-```bash
-# 3. Type checker, end to end — runs each program through the driver
-#    (parse -> type-check -> codegen), so this one needs llvmlite + clang.
-python3 test_type_checker.py
-```
+### How it works
+
+- **`tests/test_parser.py`** — Parser accept/reject verdicts over the fixture
+  corpus (`should_pass/`, `should_fail/`, `judgment_calls/`). The corpus is
+  organized by what the grammar (`docs/ebnf_grammar.md`) dictates. No subprocess
+  or stdout grepping; verdicts come from catching `(ParserError, LexerError)`.
+  Each fixture runs in a `subTest` so failures are isolated.
+
+- **`tests/test_typecheck.py`** — Type rules, scope, compatibility, control
+  flow, and module semantics. Organized by topic into `TestCase` classes
+  (`TestVariableScope`, `TestTypeCompatibility`, `TestModuleSemantics`, etc.).
+  In-process, no subprocess or `llvmlite` dependency.
+
+- **`tests/test_codegen.py`** — LLVM IR generation and native build/run tests.
+  Decorated with `@requires_llvm` (IR tests) and `@requires_exe` (build/run
+  tests). Automatically skipped if the toolchain is unavailable; the suite
+  still exits 0.
+
+### Dependency isolation
 
 The front end (lexer, parser, type checker) is pure Python with no `llvmlite`
-dependency, so the first two checks run without an LLVM toolchain installed.
-`test_type_checker.py` drives the whole pipeline through `compile_to_llvm.py`,
-so its valid-program cases need `llvmlite` to reach a successful exit.
+dependency. `test_parser.py` and `test_typecheck.py` run on any Python 3.8+
+environment. `test_codegen.py` is the only place `llvmlite` and `codegen_llvm`
+are imported, keeping the optional dependency obvious and isolated.
 
 ## Implementation Notes
 
