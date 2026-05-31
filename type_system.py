@@ -206,7 +206,7 @@ CHAR_TYPE = CharType()
 def can_assign(from_type: Type, to_type: Type) -> bool:
     """
     Check if a value of from_type can be assigned to a variable of to_type.
-    
+
     Pascal has strict typing: no implicit coercion.
     Both types must be equivalent.
     """
@@ -216,44 +216,66 @@ def can_assign(from_type: Type, to_type: Type) -> bool:
 def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optional[Type]:
     """
     Determine the result type of a binary operation.
-    
+
+    `op` is the AST/token-kind operator name produced by the parser:
+      additive/mul  : PLUS MINUS MUL SLASH DIV MOD
+      bitwise/logic : AND OR XOR
+      comparison    : EQ NEQ LT LE GT GE
     Returns None if the operation is invalid for these types.
     """
+    ARITH = {'PLUS', 'MINUS', 'MUL', 'DIV', 'MOD'}  # integer-preserving arithmetic
+    BITWISE = {'AND', 'OR', 'XOR'}
+    COMPARE = {'EQ', 'NEQ', 'LT', 'LE', 'GT', 'GE'}
+
     # Integer arithmetic
     if isinstance(left_type, IntegerType) and isinstance(right_type, IntegerType):
-        if op in ['+', '-', '*', '/', 'DIV', 'MOD']:
-            # DIV and MOD return INTEGER, / returns REAL (in some Pascal dialects)
-            if op == '/':
-                return REAL_TYPE
+        if op == 'SLASH':
+            return REAL_TYPE  # real division
+        if op in ARITH or op in BITWISE:
             return INTEGER_TYPE
-        if op in ['=', '<>', '<', '<=', '>', '>=']:
+        if op in COMPARE:
             return BOOLEAN_TYPE
 
     # Boolean logic
     if isinstance(left_type, BooleanType) and isinstance(right_type, BooleanType):
-        if op in ['AND', 'OR', 'XOR']:
+        if op in BITWISE:
             return BOOLEAN_TYPE
-        if op in ['=', '<>']:
+        if op in ('EQ', 'NEQ'):
             return BOOLEAN_TYPE
 
     # Real arithmetic
     if isinstance(left_type, RealType) and isinstance(right_type, RealType):
-        if op in ['+', '-', '*', '/']:
+        if op in ('PLUS', 'MINUS', 'MUL', 'SLASH'):
             return REAL_TYPE
-        if op in ['=', '<>', '<', '<=', '>', '>=']:
+        if op in COMPARE:
             return BOOLEAN_TYPE
 
-    # INTEGER op REAL (some dialects allow this)
+    # INTEGER op REAL (mixed arithmetic widens to REAL)
     if (isinstance(left_type, IntegerType) and isinstance(right_type, RealType)) or \
        (isinstance(left_type, RealType) and isinstance(right_type, IntegerType)):
-        if op in ['+', '-', '*', '/']:
+        if op in ('PLUS', 'MINUS', 'MUL', 'SLASH'):
             return REAL_TYPE
-        if op in ['=', '<>', '<', '<=', '>', '>=']:
+        if op in COMPARE:
             return BOOLEAN_TYPE
 
-    # String/character operations
+    # WORD arithmetic / bitwise / comparison (16-bit unsigned)
+    if isinstance(left_type, WordType) and isinstance(right_type, WordType):
+        if op in ARITH or op in BITWISE:
+            return WORD_TYPE
+        if op in COMPARE:
+            return BOOLEAN_TYPE
+
+    # WORD mixed with INTEGER -> widens to INTEGER
+    if (isinstance(left_type, WordType) and isinstance(right_type, IntegerType)) or \
+       (isinstance(left_type, IntegerType) and isinstance(right_type, WordType)):
+        if op in ARITH or op in BITWISE:
+            return INTEGER_TYPE
+        if op in COMPARE:
+            return BOOLEAN_TYPE
+
+    # Character comparison
     if isinstance(left_type, CharType) and isinstance(right_type, CharType):
-        if op in ['=', '<>', '<', '<=', '>', '>=']:
+        if op in COMPARE:
             return BOOLEAN_TYPE
 
     return None
@@ -262,17 +284,22 @@ def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optiona
 def unary_op_result_type(operand_type: Type, op: str) -> Optional[Type]:
     """
     Determine the result type of a unary operation.
-    
+
+    `op` is the AST/token-kind name: NOT, MINUS, PLUS.
     Returns None if the operation is invalid for this type.
     """
     if op == 'NOT':
         if isinstance(operand_type, BooleanType):
             return BOOLEAN_TYPE
+        if isinstance(operand_type, (IntegerType, WordType)):
+            return operand_type  # bitwise complement
 
-    if op in ['+', '-']:
+    if op in ('PLUS', 'MINUS'):
         if isinstance(operand_type, IntegerType):
             return INTEGER_TYPE
         if isinstance(operand_type, RealType):
             return REAL_TYPE
+        if isinstance(operand_type, WordType):
+            return WORD_TYPE
 
     return None

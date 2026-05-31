@@ -10,16 +10,16 @@ Performs semantic analysis on the AST:
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from parser import parse_file
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ast_nodes import AdrExpr
 from ast_nodes import ArrayType as ASTArrayType
-from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, ConstDecl, Designator, Expression, ForStmt, FuncCall, FuncDecl, Identifier, IfStmt, IntLiteral,
-                       ImplementationUnit, InterfaceUnit, ModuleUnit, NamedType, ProcCallStmt, ProcDecl, ProgramUnit, RealLiteral, UseClause)
+from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, ConstDecl, Designator, Expression, ForStmt, FuncCall, FuncDecl, Identifier, IfStmt,
+                       ImplementationUnit, InterfaceUnit, IntLiteral, ModuleUnit, NamedType, ProcCallStmt, ProcDecl, ProgramUnit, RealLiteral)
 from ast_nodes import RecordType as ASTRecordType
-from ast_nodes import (RepeatStmt, ReturnStmt, Selector, SizeofExpr, Statement, StringLiteral, TypeDecl, UnaryOp, VarDecl, WhileStmt)
-from parser import parse_file
+from ast_nodes import (RepeatStmt, ReturnStmt, Selector, SizeofExpr, Statement, StringLiteral, TypeDecl, UnaryOp, UseClause, VarDecl, WhileStmt)
 from symbol_table import SourceLocation, Symbol, SymbolTable
 from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, FunctionType, PointerType, ProcedureType, RecordType, SetType, Type,
                          binary_op_result_type, can_assign, unary_op_result_type)
@@ -139,39 +139,39 @@ class PascalTypeChecker(TypeChecker):
 
     def resolve_module_path(self, module_name: str, search_dir: Optional[str]) -> Optional[str]:
         """Resolve a module name to a .int file path.
-        
+
         Args:
             module_name: The name of the module (e.g., 'MathUtil')
             search_dir: Directory to search in; if None, use current directory
-            
+
         Returns:
             Absolute path to the .int file if found, None otherwise
         """
         if search_dir is None:
             search_dir = '.'
-        
+
         search_path = Path(search_dir)
-        
+
         # Try case-insensitive lookup: lowercase the module name and search
         for suffix in ['.int', '.INT', '.Int']:
             # Try exact name + suffix
             candidate = search_path / (module_name + suffix)
             if candidate.exists():
                 return str(candidate.resolve())
-            
+
             # Try lowercase name + suffix
             candidate = search_path / (module_name.lower() + suffix)
             if candidate.exists():
                 return str(candidate.resolve())
-        
+
         return None
 
     def load_interface(self, path: str) -> Optional[InterfaceUnit]:
         """Load and type-check an interface file.
-        
+
         Args:
             path: Path to the .int file
-            
+
         Returns:
             Parsed and type-checked InterfaceUnit, or None if failed
         """
@@ -180,7 +180,7 @@ class PascalTypeChecker(TypeChecker):
             if not isinstance(ast, InterfaceUnit):
                 self.error(f"Expected interface file, got {type(ast).__name__} in {path}", None)
                 return None
-            
+
             # Type-check the interface independently
             # (We don't check it fully here, just validate it's valid enough to import)
             return ast
@@ -190,19 +190,19 @@ class PascalTypeChecker(TypeChecker):
 
     def import_symbols(self, interface: InterfaceUnit, uses: UseClause) -> None:
         """Import symbols from an interface into the current scope.
-        
+
         Args:
             interface: The loaded InterfaceUnit
             uses: The USES clause specifying what to import
         """
         # Get the export list from the interface
         export_list = interface.params  # params field holds the UNIT (name, exports) list
-        
+
         # Determine what to import
         if uses.imports:
             # Selective import: USES Module(A, B, C);
             names_to_import = set(uses.imports)
-            
+
             # Validate that all requested names are exported
             for name in names_to_import:
                 if name not in export_list:
@@ -210,19 +210,14 @@ class PascalTypeChecker(TypeChecker):
         else:
             # Import all exports: USES Module;
             names_to_import = set(export_list)
-        
+
         # Import the matching declarations from the interface
         for decl in interface.decls:
             decl_name = getattr(decl, 'name', None)
             if decl_name and decl_name in names_to_import:
                 # Add to symbol table with a note about where it came from
-                symbol = Symbol(
-                    name=decl_name,
-                    type=self._get_declaration_type(decl),
-                    kind=self._get_declaration_kind(decl),
-                    is_mutable=isinstance(decl, VarDecl)
-                )
-                
+                symbol = Symbol(name=decl_name, type=self._get_declaration_type(decl), kind=self._get_declaration_kind(decl), is_mutable=isinstance(decl, VarDecl))
+
                 # Check for duplicate definitions
                 if self.symbol_table.lookup(decl_name):
                     self.error(f"Symbol '{decl_name}' from module {uses.name} conflicts with existing definition", None)
@@ -276,11 +271,11 @@ class PascalTypeChecker(TypeChecker):
 
     def validate_implementation_against_interface(self, impl: ImplementationUnit, iface: InterfaceUnit) -> None:
         """Validate that implementation matches its interface.
-        
+
         For each exported symbol in the interface:
         - Must have a corresponding implementation
         - Signatures must match exactly
-        
+
         Args:
             impl: The implementation unit to validate
             iface: The interface unit that defines the contract
@@ -291,7 +286,7 @@ class PascalTypeChecker(TypeChecker):
             name = getattr(decl, 'name', None)
             if name:
                 impl_decls[name.lower()] = decl
-        
+
         # For each exported symbol, check that it's implemented with matching signature
         for export_name in iface.params:
             # Find the corresponding interface declaration
@@ -300,22 +295,19 @@ class PascalTypeChecker(TypeChecker):
                 if getattr(decl, 'name', '').lower() == export_name.lower():
                     iface_decl = decl
                     break
-            
+
             if not iface_decl:
                 # This shouldn't happen if the interface is well-formed
                 continue
-            
+
             # Check that implementation has it
             impl_decl = impl_decls.get(export_name.lower())
             if not impl_decl:
                 # Missing implementation
                 kind = 'procedure' if isinstance(iface_decl, ProcDecl) else 'function'
-                self.error(
-                    f"Missing implementation for exported {kind} '{export_name}'",
-                    None
-                )
+                self.error(f"Missing implementation for exported {kind} '{export_name}'", None)
                 continue
-            
+
             # Check signature match
             if not self.match_signatures(iface_decl, impl_decl):
                 msg = self._signature_mismatch_message(iface_decl, impl_decl)
@@ -323,28 +315,28 @@ class PascalTypeChecker(TypeChecker):
 
     def match_signatures(self, iface_decl: Any, impl_decl: Any) -> bool:
         """Check if implementation signature matches interface declaration.
-        
+
         Returns:
             True if signatures match, False otherwise
         """
         # Both must be the same kind
         if type(iface_decl) != type(impl_decl):
             return False
-        
+
         if isinstance(iface_decl, FuncDecl):
             # Check return types match
             iface_ret = iface_decl.return_type
             impl_ret = impl_decl.return_type
             if not self._types_equal(iface_ret, impl_ret):
                 return False
-        
+
         # Check parameter count
         iface_params = iface_decl.params if hasattr(iface_decl, 'params') else []
         impl_params = impl_decl.params if hasattr(impl_decl, 'params') else []
-        
+
         if len(iface_params) != len(impl_params):
             return False
-        
+
         # Check each parameter
         for iface_param, impl_param in zip(iface_params, impl_params):
             # Name should match - use first name from Param.names list
@@ -354,19 +346,19 @@ class PascalTypeChecker(TypeChecker):
             impl_name = impl_names[0] if impl_names else ''
             if iface_name.lower() != impl_name.lower():
                 return False
-            
+
             # Type should match - use type_expr from Param
             iface_type = getattr(iface_param, 'type_expr', None)
             impl_type = getattr(impl_param, 'type_expr', None)
             if not self._types_equal(iface_type, impl_type):
                 return False
-            
+
             # Mode (VAR/CONST) should match
             iface_mode = getattr(iface_param, 'mode', None)
             impl_mode = getattr(impl_param, 'mode', None)
             if iface_mode != impl_mode:
                 return False
-        
+
         return True
 
     def _types_equal(self, type1: Any, type2: Any) -> bool:
@@ -375,32 +367,32 @@ class PascalTypeChecker(TypeChecker):
             return True
         if type1 is None or type2 is None:
             return False
-        
+
         # NamedType comparison
         if isinstance(type1, NamedType) and isinstance(type2, NamedType):
             return type1.name.lower() == type2.name.lower()
-        
+
         # Direct type comparison (INTEGER_TYPE, etc.)
         if isinstance(type1, type(type2)):
             if hasattr(type1, 'name') and hasattr(type2, 'name'):
                 return type1.name.lower() == type2.name.lower()
             return type1 == type2
-        
+
         return False
 
     def _signature_mismatch_message(self, iface_decl: Any, impl_decl: Any) -> str:
         """Generate a detailed error message for signature mismatch."""
         name = getattr(iface_decl, 'name', 'Unknown')
         kind = 'FUNCTION' if isinstance(iface_decl, FuncDecl) else 'PROCEDURE'
-        
+
         iface_params = iface_decl.params if hasattr(iface_decl, 'params') else []
         impl_params = impl_decl.params if hasattr(impl_decl, 'params') else []
-        
+
         # Check what kind of mismatch
         if len(iface_params) != len(impl_params):
             return (f"{kind} '{name}' signature mismatch: "
-                   f"expected {len(iface_params)} parameter(s), got {len(impl_params)}")
-        
+                    f"expected {len(iface_params)} parameter(s), got {len(impl_params)}")
+
         # Check parameter details
         for i, (iface_param, impl_param) in enumerate(zip(iface_params, impl_params)):
             iface_type = getattr(iface_param, 'type_expr', None)
@@ -412,8 +404,8 @@ class PascalTypeChecker(TypeChecker):
                 iface_names = getattr(iface_param, 'names', [])
                 param_name = iface_names[0] if iface_names else f'param{i}'
                 return (f"{kind} '{name}' parameter '{param_name}' type mismatch: "
-                       f"expected {iface_type_str}, got {impl_type_str}")
-            
+                        f"expected {iface_type_str}, got {impl_type_str}")
+
             # Check mode (VAR/CONST) mismatch
             iface_mode = getattr(iface_param, 'mode', None)
             impl_mode = getattr(impl_param, 'mode', None)
@@ -423,8 +415,8 @@ class PascalTypeChecker(TypeChecker):
                 iface_mode_str = iface_mode if iface_mode else 'value'
                 impl_mode_str = impl_mode if impl_mode else 'value'
                 return (f"{kind} '{name}' parameter '{param_name}' mode mismatch: "
-                       f"expected {iface_mode_str}, got {impl_mode_str}")
-        
+                        f"expected {iface_mode_str}, got {impl_mode_str}")
+
         # Check return type for functions
         if isinstance(iface_decl, FuncDecl):
             iface_ret = iface_decl.return_type
@@ -433,8 +425,8 @@ class PascalTypeChecker(TypeChecker):
                 iface_ret_str = self._type_to_string(iface_ret)
                 impl_ret_str = self._type_to_string(impl_ret)
                 return (f"FUNCTION '{name}' return type mismatch: "
-                       f"expected {iface_ret_str}, got {impl_ret_str}")
-        
+                        f"expected {iface_ret_str}, got {impl_ret_str}")
+
         # Fallback
         return f"{kind} '{name}' signature mismatch"
 
@@ -460,15 +452,15 @@ class PascalTypeChecker(TypeChecker):
                 if module_path is None:
                     self.error(f"Module '{use_clause.name}' not found", None)
                     continue
-                
+
                 # Load interface
                 interface = self.load_interface(module_path)
                 if interface is None:
                     continue
-                
+
                 # Import symbols
                 self.import_symbols(interface, use_clause)
-        
+
         # Now type-check the program block
         self.check_block(prog.block)
 
@@ -484,15 +476,15 @@ class PascalTypeChecker(TypeChecker):
                 if module_path is None:
                     self.error(f"Module '{use_clause.name}' not found", None)
                     continue
-                
+
                 # Load interface
                 interface = self.load_interface(module_path)
                 if interface is None:
                     continue
-                
+
                 # Import symbols
                 self.import_symbols(interface, use_clause)
-        
+
         # Check declarations
         if mod.decls:
             for decl in mod.decls:
@@ -512,7 +504,7 @@ class PascalTypeChecker(TypeChecker):
                 if interface is None:
                     continue
                 self.import_symbols(interface, use_clause)
-        
+
         # Check declarations
         if iface.decls:
             for decl in iface.decls:
@@ -531,7 +523,7 @@ class PascalTypeChecker(TypeChecker):
                 self.validate_implementation_against_interface(impl, iface)
         else:
             self.error(f"Interface file for module '{impl.name}' not found", None)
-        
+
         # Process USES clauses
         if impl.uses:
             for use_clause in impl.uses:
@@ -543,7 +535,7 @@ class PascalTypeChecker(TypeChecker):
                 if loaded_iface is None:
                     continue
                 self.import_symbols(loaded_iface, use_clause)
-        
+
         # Check declarations
         if impl.decls:
             for decl in impl.decls:
@@ -959,12 +951,18 @@ class PascalTypeChecker(TypeChecker):
             left_type = self.infer_expression_type(expr.left)
             right_type = self.infer_expression_type(expr.right)
             if left_type and right_type:
-                return binary_op_result_type(left_type, expr.op, right_type)
+                result = binary_op_result_type(left_type, expr.op, right_type)
+                if result is None:
+                    self.error(f"Operator '{expr.op}' cannot be applied to operands of type {left_type} and {right_type}", expr)
+                return result
             return None
         elif isinstance(expr, UnaryOp):
             operand_type = self.infer_expression_type(expr.operand)
             if operand_type:
-                return unary_op_result_type(operand_type, expr.op)
+                result = unary_op_result_type(operand_type, expr.op)
+                if result is None:
+                    self.error(f"Operator '{expr.op}' cannot be applied to operand of type {operand_type}", expr)
+                return result
             return None
         elif isinstance(expr, FuncCall):
             lookup_name = expr.name.upper()
