@@ -441,6 +441,8 @@ class Codegen:
             # Try built-in procedures
             if lookup_name == 'WRITELN':
                 self.builtin_writeln(stmt.args)
+            elif lookup_name == 'WRITE':
+                self.builtin_write(stmt.args)
             elif lookup_name == 'READLN':
                 self.builtin_readln(stmt.args)
             else:
@@ -879,6 +881,19 @@ class Codegen:
             if val.type.width == 32:
                 return val
             return self.builder.zext(val, ir.IntType(32))
+        elif lookup_name == 'ODD':
+            val = self.codegen_expr(expr.args[0])
+            # ODD(n) = (n & 1) != 0
+            one = ir.Constant(ir.IntType(32), 1)
+            result = self.builder.and_(val, one)
+            # Convert to i1 (boolean): result != 0
+            zero = ir.Constant(ir.IntType(32), 0)
+            return self.builder.icmp_signed('!=', result, zero)
+        elif lookup_name == 'SUCC':
+            val = self.codegen_expr(expr.args[0])
+            # SUCC(n) = n + 1
+            one = ir.Constant(ir.IntType(32), 1)
+            return self.builder.add(val, one)
 
         symbol = self.scope.lookup(lookup_name) or self.scope.lookup(expr.name)
         if not symbol:
@@ -933,6 +948,49 @@ class Codegen:
                 fmt_parts.append("%s")
 
         fmt_str = "".join(fmt_parts) + "\n"
+        fmt_const = ir.Constant(ir.ArrayType(ir.IntType(8), len(fmt_str) + 1), bytearray(fmt_str.encode('utf-8') + b'\0'))
+        fmt_global = ir.GlobalVariable(self.module, fmt_const.type, name=self.unique_name('fmt'))
+        fmt_global.initializer = fmt_const
+        fmt_global.global_constant = True
+        fmt_ptr = self.builder.gep(fmt_global, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0)])
+
+        self.builder.call(printf_func, [fmt_ptr] + val_args)
+
+    def builtin_write(self, args: List[Expression]) -> None:
+        """Implement WRITE for any combination of string/integer/boolean types (no newline)."""
+        # Declare printf if not already declared
+        if 'printf' not in [f.name for f in self.module.functions]:
+            printf_type = ir.FunctionType(ir.IntType(32), [ir.PointerType(ir.IntType(8))], var_arg=True)
+            ir.Function(self.module, printf_type, name='printf')
+
+        # Get printf function
+        printf_func = next(f for f in self.module.functions if f.name == 'printf')
+
+        fmt_parts = []
+        val_args = []
+        for arg in args:
+            val = self.codegen_expr(arg)
+            val_args.append(val)
+
+            # Determine format based on LLVM type
+            val_type_str = str(val.type)
+            if 'i32' in val_type_str:
+                fmt_parts.append("%d")
+            elif 'i16' in val_type_str:
+                fmt_parts.append("%u")
+            elif 'i8*' in val_type_str or '[' in val_type_str:
+                fmt_parts.append("%s")
+            elif 'i8' in val_type_str:
+                fmt_parts.append("%c")
+            elif 'i1' in val_type_str:
+                # Booleans as integers for printf
+                fmt_parts.append("%d")
+            elif 'double' in val_type_str or 'float' in val_type_str:
+                fmt_parts.append("%f")
+            else:
+                fmt_parts.append("%s")
+
+        fmt_str = "".join(fmt_parts)
         fmt_const = ir.Constant(ir.ArrayType(ir.IntType(8), len(fmt_str) + 1), bytearray(fmt_str.encode('utf-8') + b'\0'))
         fmt_global = ir.GlobalVariable(self.module, fmt_const.type, name=self.unique_name('fmt'))
         fmt_global.initializer = fmt_const

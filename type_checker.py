@@ -74,6 +74,10 @@ class PascalTypeChecker(TypeChecker):
         writeln_type = ProcedureType('WRITELN', [])
         self.symbol_table.define('WRITELN', Symbol(name='WRITELN', type=writeln_type, kind='procedure', is_mutable=False))
 
+        # WRITE - variable argument procedure (no newline)
+        write_type = ProcedureType('WRITE', [])
+        self.symbol_table.define('WRITE', Symbol(name='WRITE', type=write_type, kind='procedure', is_mutable=False))
+
         # READLN - variable argument procedure
         readln_type = ProcedureType('READLN', [])
         self.symbol_table.define('READLN', Symbol(name='READLN', type=readln_type, kind='procedure', is_mutable=False))
@@ -97,6 +101,14 @@ class PascalTypeChecker(TypeChecker):
         # ORD function (returns INTEGER)
         ord_type = FunctionType('ORD', [('c', CHAR_TYPE)], INTEGER_TYPE)
         self.symbol_table.define('ORD', Symbol(name='ORD', type=ord_type, kind='function', is_mutable=False))
+
+        # ODD function (returns BOOLEAN)
+        odd_type = FunctionType('ODD', [('n', INTEGER_TYPE)], BOOLEAN_TYPE)
+        self.symbol_table.define('ODD', Symbol(name='ODD', type=odd_type, kind='function', is_mutable=False))
+
+        # SUCC function (returns INTEGER)
+        succ_type = FunctionType('SUCC', [('n', INTEGER_TYPE)], INTEGER_TYPE)
+        self.symbol_table.define('SUCC', Symbol(name='SUCC', type=succ_type, kind='function', is_mutable=False))
 
     def check(self, ast: ASTNode) -> TypeCheckResult:
         """Main entry point for type checking."""
@@ -487,9 +499,9 @@ class PascalTypeChecker(TypeChecker):
 
         # Check argument types (including built-in procedures)
         if stmt.args:
-            # For built-in procedures like WRITELN/READLN, skip count/type checks but still
+            # For built-in procedures like WRITELN/WRITE/READLN, skip count/type checks but still
             # check that the arguments are valid expressions (e.g., defined variables)
-            if stmt.name.upper() not in ['WRITELN', 'READLN']:
+            if stmt.name.upper() not in ['WRITELN', 'WRITE', 'READLN']:
                 # For user-defined procedures, check argument count
                 expected_args = len(sym.type.params)
                 actual_args = len(stmt.args)
@@ -501,7 +513,7 @@ class PascalTypeChecker(TypeChecker):
             for i, arg in enumerate(stmt.args):
                 arg_type = self.infer_expression_type(arg)
                 # If it's a user-defined procedure, also check type compatibility
-                if stmt.name.upper() not in ['WRITELN', 'READLN'] and arg_type:
+                if stmt.name.upper() not in ['WRITELN', 'WRITE', 'READLN'] and arg_type:
                     if i < len(sym.type.params):
                         _, param_type = sym.type.params[i]
                         if not can_assign(arg_type, param_type):
