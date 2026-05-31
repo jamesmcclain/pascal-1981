@@ -37,6 +37,8 @@ Pascal Source -> Lexer -> Parser -> Type Checker -> Codegen -> LLVM IR -> clang 
 - **Codegen (`codegen_llvm.py`)** — walks the AST and emits LLVM IR via `llvmlite`, wiring built-in I/O to the C runtime (`printf`/`scanf`).
 - **Linking** — `clang` lowers the IR and links any required runtime objects.
 
+The grammar this dialect is checked against lives in [`docs/ebnf_grammar.md`](docs/ebnf_grammar.md); it is the reference the parser test suite is graded against.
+
 Type errors are reported before codegen runs:
 
 ```pascal
@@ -113,30 +115,58 @@ pascal-1981/
 ├── lexer.py              # tokenizer
 ├── parser.py             # syntax analysis -> AST
 ├── ast_nodes.py          # typed dataclass node definitions
-├── type_system.py        # type hierarchy and operations
+├── type_system.py        # type hierarchy and type-rule operations
 ├── symbol_table.py       # scope management
 ├── type_checker.py       # semantic analysis
 ├── codegen_llvm.py       # LLVM IR generation
 ├── compile_to_llvm.py    # driver (parse -> type-check -> codegen), supports -v
-├── test_type_checker.py  # type checker tests
+├── test_type_checker.py  # type checker tests (full pipeline, via the driver)
+├── test_semantic.py      # interface / implementation / module semantics tests
 ├── runtime/              # C runtime
 │   └── fillc.c
+├── scripts/
+│   └── beautify.sh       # isort + yapf over the Python sources
+├── pascal_test_suite/    # parser accept/reject corpus
+│   ├── run_suite.sh
+│   ├── should_pass/      # programs a conforming parser MUST accept
+│   ├── should_fail/      # programs a conforming parser MUST reject
+│   └── judgment_calls/   # cases whose verdict depends on dialect decisions
+├── docs/
+│   └── ebnf_grammar.md   # the grammar this dialect is checked against
 └── README.md             # this file
 ```
 
 ## Testing
 
-```bash
-# Type checker tests
-python3 test_type_checker.py
-```
+Three independent checks, in increasing order of what they pull in:
 
 ```bash
-# Lexing/parsing tests
+# 1. Parser accept/reject corpus — lexer + parser only, no llvmlite.
 bash pascal_test_suite/run_suite.sh
 ```
 
-The front end (lexer, parser, type checker) is pure Python with no `llvmlite` dependency, so it can be exercised without an LLVM toolchain installed.
+The corpus is organized by what the grammar (`docs/ebnf_grammar.md`) dictates,
+not by what the parser happens to do: `should_pass/` programs must be accepted,
+`should_fail/` programs must be rejected, and `judgment_calls/` collects cases
+whose verdict depends on dialect decisions you may not have settled. Any line
+the runner marks `BUG` is a divergence from the grammar.
+
+```bash
+# 2. Interface / implementation / module semantics — imports the type
+#    checker directly, no llvmlite.
+python3 test_semantic.py
+```
+
+```bash
+# 3. Type checker, end to end — runs each program through the driver
+#    (parse -> type-check -> codegen), so this one needs llvmlite + clang.
+python3 test_type_checker.py
+```
+
+The front end (lexer, parser, type checker) is pure Python with no `llvmlite`
+dependency, so the first two checks run without an LLVM toolchain installed.
+`test_type_checker.py` drives the whole pipeline through `compile_to_llvm.py`,
+so its valid-program cases need `llvmlite` to reach a successful exit.
 
 ## Implementation Notes
 
