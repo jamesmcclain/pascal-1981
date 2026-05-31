@@ -126,6 +126,7 @@ pascal-1981/
 │   ├── test_parser.py    # parser accept/reject corpus (no llvmlite)
 │   ├── test_typecheck.py # type rules + module semantics (no llvmlite)
 │   ├── test_codegen.py   # IR generation + build/run (requires llvmlite [+ clang])
+│   ├── test_integration.py # known-good real programs from pascal-code/
 │   └── fixtures/
 │       └── parser/
 │           ├── should_pass/      # programs a conforming parser MUST accept
@@ -179,6 +180,10 @@ python -m unittest tests.test_codegen
   Decorated with `@requires_llvm` (IR tests) and `@requires_exe` (build/run
   tests). Automatically skipped if the toolchain is unavailable; the suite
   still exits 0.
+
+- **`tests/test_integration.py`** — Real Pascal programs from `pascal-code/`.
+  Uses the known-good subset that already parses and type-checks cleanly here;
+  includes a few stable IR/run checks for simple programs.
 
 ### Dependency isolation
 
