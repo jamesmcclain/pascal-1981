@@ -14,6 +14,9 @@ import subprocess
 import sys
 import tempfile
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+DRIVER = os.path.join(HERE, 'compile_to_llvm.py')
+
 
 def run_type_checker(source: str) -> tuple:
     """
@@ -26,7 +29,7 @@ def run_type_checker(source: str) -> tuple:
         pas_file = f.name
 
     try:
-        result = subprocess.run(['python3', '/home/ubuntu/pascal-1981/compile_to_llvm.py', pas_file, '/dev/null'], capture_output=True, text=True)
+        result = subprocess.run([sys.executable, DRIVER, pas_file, '/dev/null'], capture_output=True, text=True)
         return result.returncode == 0, result.stderr
     finally:
         os.unlink(pas_file)
