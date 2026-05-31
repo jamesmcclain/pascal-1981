@@ -120,6 +120,10 @@ class Parser:
         while self.current().kind in self.declaration_starters():
             decls.extend(self.parse_interface_declaration())
             self.skip_include_directives()
+        # Optional BEGIN...END; initialization block in interface
+        if self.current().kind == 'BEGIN':
+            self.parse_compound_statement()
+            self.expect('SEMICOLON')
         self.advance_end_semicolon()
         return InterfaceUnit(name, params, uses, decls)
 
@@ -198,13 +202,15 @@ class Parser:
         if kind in {'CONST', 'TYPE', 'VAR', 'LABEL'}:
             return self.parse_declaration_section()
         if kind == 'PROCEDURE':
-            header = self.parse_proc_decl_header()
+            name, params, attributes = self.parse_proc_decl_header()
             self.expect('SEMICOLON')
-            return [header]
+            # In an interface, procedures have no body (signature-only)
+            return [ProcDecl(name, params, attributes, body=None)]
         if kind == 'FUNCTION':
-            header = self.parse_func_decl_header()
+            name, params, return_type, attributes = self.parse_func_decl_header()
             self.expect('SEMICOLON')
-            return [header]
+            # In an interface, functions have no body (signature-only)
+            return [FuncDecl(name, params, return_type, attributes, body=None)]
         self.error('expected interface declaration')
 
     def parse_const_decl(self) -> List[ConstDecl]:

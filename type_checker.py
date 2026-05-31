@@ -10,14 +10,16 @@ Performs semantic analysis on the AST:
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from parser import parse_file
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ast_nodes import AdrExpr
 from ast_nodes import ArrayType as ASTArrayType
-from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, ConstDecl, Designator, Expression, ForStmt, FuncCall, FuncDecl, Identifier, IfStmt, IntLiteral,
-                       ModuleUnit, NamedType, ProcCallStmt, ProcDecl, ProgramUnit, RealLiteral)
+from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, ConstDecl, Designator, Expression, ForStmt, FuncCall, FuncDecl, Identifier, IfStmt,
+                       ImplementationUnit, InterfaceUnit, IntLiteral, ModuleUnit, NamedType, ProcCallStmt, ProcDecl, ProgramUnit, RealLiteral)
 from ast_nodes import RecordType as ASTRecordType
-from ast_nodes import (RepeatStmt, ReturnStmt, Selector, SizeofExpr, Statement, StringLiteral, TypeDecl, UnaryOp, VarDecl, WhileStmt)
+from ast_nodes import (RepeatStmt, ReturnStmt, Selector, SizeofExpr, Statement, StringLiteral, TypeDecl, UnaryOp, UseClause, VarDecl, WhileStmt)
 from symbol_table import SourceLocation, Symbol, SymbolTable
 from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, FunctionType, PointerType, ProcedureType, RecordType, SetType, Type,
                          binary_op_result_type, can_assign, unary_op_result_type)
@@ -59,13 +61,14 @@ class TypeChecker(ABC):
 class PascalTypeChecker(TypeChecker):
     """Type checker for Pascal-1981."""
 
-    def __init__(self):
+    def __init__(self, source_file: Optional[str] = None):
         self.symbol_table = SymbolTable()
         self.errors: List[TypeCheckError] = []
         self.warnings: List[TypeCheckError] = []
         self.current_function: Optional[FuncDecl] = None
         self.current_function_return_type: Optional[Type] = None
         self.current_procedure: Optional[ProcDecl] = None
+        self.source_file = source_file  # Path to the source file being compiled
         self._setup_builtins()
 
     def _setup_builtins(self) -> None:
@@ -73,6 +76,10 @@ class PascalTypeChecker(TypeChecker):
         # WRITELN - variable argument procedure
         writeln_type = ProcedureType('WRITELN', [])
         self.symbol_table.define('WRITELN', Symbol(name='WRITELN', type=writeln_type, kind='procedure', is_mutable=False))
+
+        # WRITE - variable argument procedure (no newline)
+        write_type = ProcedureType('WRITE', [])
+        self.symbol_table.define('WRITE', Symbol(name='WRITE', type=write_type, kind='procedure', is_mutable=False))
 
         # READLN - variable argument procedure
         readln_type = ProcedureType('READLN', [])
@@ -98,6 +105,14 @@ class PascalTypeChecker(TypeChecker):
         ord_type = FunctionType('ORD', [('c', CHAR_TYPE)], INTEGER_TYPE)
         self.symbol_table.define('ORD', Symbol(name='ORD', type=ord_type, kind='function', is_mutable=False))
 
+        # ODD function (returns BOOLEAN)
+        odd_type = FunctionType('ODD', [('n', INTEGER_TYPE)], BOOLEAN_TYPE)
+        self.symbol_table.define('ODD', Symbol(name='ODD', type=odd_type, kind='function', is_mutable=False))
+
+        # SUCC function (returns INTEGER)
+        succ_type = FunctionType('SUCC', [('n', INTEGER_TYPE)], INTEGER_TYPE)
+        self.symbol_table.define('SUCC', Symbol(name='SUCC', type=succ_type, kind='function', is_mutable=False))
+
     def check(self, ast: ASTNode) -> TypeCheckResult:
         """Main entry point for type checking."""
         self.errors = []
@@ -109,6 +124,10 @@ class PascalTypeChecker(TypeChecker):
         try:
             if isinstance(ast, ProgramUnit):
                 self.check_program_unit(ast)
+            elif isinstance(ast, InterfaceUnit):
+                self.check_interface_unit(ast)
+            elif isinstance(ast, ImplementationUnit):
+                self.check_implementation_unit(ast)
             elif isinstance(ast, ModuleUnit):
                 self.check_module_unit(ast)
             else:
@@ -118,15 +137,409 @@ class PascalTypeChecker(TypeChecker):
 
         return TypeCheckResult(success=len(self.errors) == 0, symbol_table=self.symbol_table, errors=self.errors, warnings=self.warnings, annotated_ast=ast)
 
+    def resolve_module_path(self, module_name: str, search_dir: Optional[str]) -> Optional[str]:
+        """Resolve a module name to a .int file path.
+
+        Args:
+            module_name: The name of the module (e.g., 'MathUtil')
+            search_dir: Directory to search in; if None, use current directory
+
+        Returns:
+            Absolute path to the .int file if found, None otherwise
+        """
+        if search_dir is None:
+            search_dir = '.'
+
+        search_path = Path(search_dir)
+
+        # Try case-insensitive lookup: lowercase the module name and search
+        for suffix in ['.int', '.INT', '.Int']:
+            # Try exact name + suffix
+            candidate = search_path / (module_name + suffix)
+            if candidate.exists():
+                return str(candidate.resolve())
+
+            # Try lowercase name + suffix
+            candidate = search_path / (module_name.lower() + suffix)
+            if candidate.exists():
+                return str(candidate.resolve())
+
+        return None
+
+    def load_interface(self, path: str) -> Optional[InterfaceUnit]:
+        """Load and type-check an interface file.
+
+        Args:
+            path: Path to the .int file
+
+        Returns:
+            Parsed and type-checked InterfaceUnit, or None if failed
+        """
+        try:
+            ast = parse_file(path)
+            if not isinstance(ast, InterfaceUnit):
+                self.error(f"Expected interface file, got {type(ast).__name__} in {path}", None)
+                return None
+
+            # Type-check the interface independently
+            # (We don't check it fully here, just validate it's valid enough to import)
+            return ast
+        except Exception as e:
+            self.error(f"Failed to load interface from {path}: {e}", None)
+            return None
+
+    def import_symbols(self, interface: InterfaceUnit, uses: UseClause) -> None:
+        """Import symbols from an interface into the current scope.
+
+        Args:
+            interface: The loaded InterfaceUnit
+            uses: The USES clause specifying what to import
+        """
+        # Get the export list from the interface
+        export_list = interface.params  # params field holds the UNIT (name, exports) list
+
+        # Determine what to import
+        if uses.imports:
+            # Selective import: USES Module(A, B, C);
+            names_to_import = set(uses.imports)
+
+            # Validate that all requested names are exported
+            for name in names_to_import:
+                if name not in export_list:
+                    self.error(f"Module {uses.name} does not export '{name}'", None)
+        else:
+            # Import all exports: USES Module;
+            names_to_import = set(export_list)
+
+        # Import the matching declarations from the interface
+        for decl in interface.decls:
+            decl_name = getattr(decl, 'name', None)
+            if decl_name and decl_name in names_to_import:
+                # Add to symbol table with a note about where it came from
+                symbol = Symbol(name=decl_name, type=self._get_declaration_type(decl), kind=self._get_declaration_kind(decl), is_mutable=isinstance(decl, VarDecl))
+
+                # Check for duplicate definitions
+                if self.symbol_table.lookup(decl_name):
+                    self.error(f"Symbol '{decl_name}' from module {uses.name} conflicts with existing definition", None)
+                else:
+                    self.symbol_table.define(decl_name, symbol)
+
+    def _get_declaration_kind(self, decl: Any) -> str:
+        """Get the kind of a declaration (procedure, function, const, type, var)."""
+        if isinstance(decl, ProcDecl):
+            return 'procedure'
+        elif isinstance(decl, FuncDecl):
+            return 'function'
+        elif isinstance(decl, ConstDecl):
+            return 'const'
+        elif isinstance(decl, TypeDecl):
+            return 'type'
+        elif isinstance(decl, VarDecl):
+            return 'var'
+        else:
+            return 'unknown'
+
+    def _get_declaration_type(self, decl: Any) -> Type:
+        """Get the Type object for a declaration."""
+        if isinstance(decl, FuncDecl):
+            # For functions, use the return type
+            return decl.return_type if decl.return_type else INTEGER_TYPE
+        elif isinstance(decl, ProcDecl):
+            # For procedures, create a ProcedureType
+            param_list = [(p.name, p.type if hasattr(p, 'type') else INTEGER_TYPE) for p in decl.params]
+            return ProcedureType(decl.name, param_list)
+        elif isinstance(decl, ConstDecl):
+            # For constants, try to infer type from value
+            if isinstance(decl.value, IntLiteral):
+                return INTEGER_TYPE
+            elif isinstance(decl.value, RealLiteral):
+                return REAL_TYPE
+            elif isinstance(decl.value, StringLiteral):
+                return CHAR_TYPE
+            elif isinstance(decl.value, BoolLiteral):
+                return BOOLEAN_TYPE
+            else:
+                return INTEGER_TYPE
+        elif isinstance(decl, TypeDecl):
+            # For type declarations, use the type itself
+            return decl.type if hasattr(decl, 'type') else INTEGER_TYPE
+        elif isinstance(decl, VarDecl):
+            # For variables, use their declared type
+            return decl.type if hasattr(decl, 'type') else INTEGER_TYPE
+        else:
+            return INTEGER_TYPE
+
+    def validate_implementation_against_interface(self, impl: ImplementationUnit, iface: InterfaceUnit) -> None:
+        """Validate that implementation matches its interface.
+
+        For each exported symbol in the interface:
+        - Must have a corresponding implementation
+        - Signatures must match exactly
+
+        Args:
+            impl: The implementation unit to validate
+            iface: The interface unit that defines the contract
+        """
+        # Build a map of implementation declarations by name (case-insensitive)
+        impl_decls = {}
+        for decl in impl.decls:
+            name = getattr(decl, 'name', None)
+            if name:
+                impl_decls[name.lower()] = decl
+
+        # For each exported symbol, check that it's implemented with matching signature
+        for export_name in iface.params:
+            # Find the corresponding interface declaration
+            iface_decl = None
+            for decl in iface.decls:
+                if getattr(decl, 'name', '').lower() == export_name.lower():
+                    iface_decl = decl
+                    break
+
+            if not iface_decl:
+                # This shouldn't happen if the interface is well-formed
+                continue
+
+            # Check that implementation has it
+            impl_decl = impl_decls.get(export_name.lower())
+            if not impl_decl:
+                # Missing implementation
+                kind = 'procedure' if isinstance(iface_decl, ProcDecl) else 'function'
+                self.error(f"Missing implementation for exported {kind} '{export_name}'", None)
+                continue
+
+            # Check signature match
+            if not self.match_signatures(iface_decl, impl_decl):
+                msg = self._signature_mismatch_message(iface_decl, impl_decl)
+                self.error(msg, None)
+
+    def match_signatures(self, iface_decl: Any, impl_decl: Any) -> bool:
+        """Check if implementation signature matches interface declaration.
+
+        Returns:
+            True if signatures match, False otherwise
+        """
+        # Both must be the same kind
+        if type(iface_decl) != type(impl_decl):
+            return False
+
+        if isinstance(iface_decl, FuncDecl):
+            # Check return types match
+            iface_ret = iface_decl.return_type
+            impl_ret = impl_decl.return_type
+            if not self._types_equal(iface_ret, impl_ret):
+                return False
+
+        # Check parameter count
+        iface_params = iface_decl.params if hasattr(iface_decl, 'params') else []
+        impl_params = impl_decl.params if hasattr(impl_decl, 'params') else []
+
+        if len(iface_params) != len(impl_params):
+            return False
+
+        # Check each parameter
+        for iface_param, impl_param in zip(iface_params, impl_params):
+            # Name should match - use first name from Param.names list
+            iface_names = getattr(iface_param, 'names', [])
+            impl_names = getattr(impl_param, 'names', [])
+            iface_name = iface_names[0] if iface_names else ''
+            impl_name = impl_names[0] if impl_names else ''
+            if iface_name.lower() != impl_name.lower():
+                return False
+
+            # Type should match - use type_expr from Param
+            iface_type = getattr(iface_param, 'type_expr', None)
+            impl_type = getattr(impl_param, 'type_expr', None)
+            if not self._types_equal(iface_type, impl_type):
+                return False
+
+            # Mode (VAR/CONST) should match
+            iface_mode = getattr(iface_param, 'mode', None)
+            impl_mode = getattr(impl_param, 'mode', None)
+            if iface_mode != impl_mode:
+                return False
+
+        return True
+
+    def _types_equal(self, type1: Any, type2: Any) -> bool:
+        """Check if two types are equal."""
+        if type1 is None and type2 is None:
+            return True
+        if type1 is None or type2 is None:
+            return False
+
+        # NamedType comparison
+        if isinstance(type1, NamedType) and isinstance(type2, NamedType):
+            return type1.name.lower() == type2.name.lower()
+
+        # Direct type comparison (INTEGER_TYPE, etc.)
+        if isinstance(type1, type(type2)):
+            if hasattr(type1, 'name') and hasattr(type2, 'name'):
+                return type1.name.lower() == type2.name.lower()
+            return type1 == type2
+
+        return False
+
+    def _signature_mismatch_message(self, iface_decl: Any, impl_decl: Any) -> str:
+        """Generate a detailed error message for signature mismatch."""
+        name = getattr(iface_decl, 'name', 'Unknown')
+        kind = 'FUNCTION' if isinstance(iface_decl, FuncDecl) else 'PROCEDURE'
+
+        iface_params = iface_decl.params if hasattr(iface_decl, 'params') else []
+        impl_params = impl_decl.params if hasattr(impl_decl, 'params') else []
+
+        # Check what kind of mismatch
+        if len(iface_params) != len(impl_params):
+            return (f"{kind} '{name}' signature mismatch: "
+                    f"expected {len(iface_params)} parameter(s), got {len(impl_params)}")
+
+        # Check parameter details
+        for i, (iface_param, impl_param) in enumerate(zip(iface_params, impl_params)):
+            iface_type = getattr(iface_param, 'type_expr', None)
+            impl_type = getattr(impl_param, 'type_expr', None)
+            if not self._types_equal(iface_type, impl_type):
+                iface_type_str = self._type_to_string(iface_type)
+                impl_type_str = self._type_to_string(impl_type)
+                # Get parameter name from names list
+                iface_names = getattr(iface_param, 'names', [])
+                param_name = iface_names[0] if iface_names else f'param{i}'
+                return (f"{kind} '{name}' parameter '{param_name}' type mismatch: "
+                        f"expected {iface_type_str}, got {impl_type_str}")
+
+            # Check mode (VAR/CONST) mismatch
+            iface_mode = getattr(iface_param, 'mode', None)
+            impl_mode = getattr(impl_param, 'mode', None)
+            if iface_mode != impl_mode:
+                iface_names = getattr(iface_param, 'names', [])
+                param_name = iface_names[0] if iface_names else f'param{i}'
+                iface_mode_str = iface_mode if iface_mode else 'value'
+                impl_mode_str = impl_mode if impl_mode else 'value'
+                return (f"{kind} '{name}' parameter '{param_name}' mode mismatch: "
+                        f"expected {iface_mode_str}, got {impl_mode_str}")
+
+        # Check return type for functions
+        if isinstance(iface_decl, FuncDecl):
+            iface_ret = iface_decl.return_type
+            impl_ret = impl_decl.return_type
+            if not self._types_equal(iface_ret, impl_ret):
+                iface_ret_str = self._type_to_string(iface_ret)
+                impl_ret_str = self._type_to_string(impl_ret)
+                return (f"FUNCTION '{name}' return type mismatch: "
+                        f"expected {iface_ret_str}, got {impl_ret_str}")
+
+        # Fallback
+        return f"{kind} '{name}' signature mismatch"
+
+    def _type_to_string(self, typ: Any) -> str:
+        """Convert a type to a string representation."""
+        if typ is None:
+            return "(unknown)"
+        if isinstance(typ, NamedType):
+            return typ.name
+        if hasattr(typ, 'name'):
+            return typ.name
+        return str(typ)
+
     def check_program_unit(self, prog: ProgramUnit) -> None:
         """Type check a program unit."""
-        # Program name is implicit
+        # Process USES clauses first
+        if prog.uses:
+            # Get directory of source file for module resolution
+            source_dir = str(Path(self.source_file).parent) if self.source_file else None
+            for use_clause in prog.uses:
+                # Resolve module path
+                module_path = self.resolve_module_path(use_clause.name, source_dir)
+                if module_path is None:
+                    self.error(f"Module '{use_clause.name}' not found", None)
+                    continue
+
+                # Load interface
+                interface = self.load_interface(module_path)
+                if interface is None:
+                    continue
+
+                # Import symbols
+                self.import_symbols(interface, use_clause)
+
+        # Now type-check the program block
         self.check_block(prog.block)
 
     def check_module_unit(self, mod: ModuleUnit) -> None:
         """Type check a module unit."""
-        # TODO: Handle module imports and exports
-        self.check_block(mod.impl_block)
+        # Process USES clauses first
+        if mod.uses:
+            # Get directory of source file for module resolution
+            source_dir = str(Path(self.source_file).parent) if self.source_file else None
+            for use_clause in mod.uses:
+                # Resolve module path
+                module_path = self.resolve_module_path(use_clause.name, source_dir)
+                if module_path is None:
+                    self.error(f"Module '{use_clause.name}' not found", None)
+                    continue
+
+                # Load interface
+                interface = self.load_interface(module_path)
+                if interface is None:
+                    continue
+
+                # Import symbols
+                self.import_symbols(interface, use_clause)
+
+        # Check declarations
+        if mod.decls:
+            for decl in mod.decls:
+                self.check_declaration(decl)
+
+    def check_interface_unit(self, iface: InterfaceUnit) -> None:
+        """Type check an interface unit."""
+        # Process USES clauses first
+        if iface.uses:
+            source_dir = str(Path(self.source_file).parent) if self.source_file else None
+            for use_clause in iface.uses:
+                module_path = self.resolve_module_path(use_clause.name, source_dir)
+                if module_path is None:
+                    self.error(f"Module '{use_clause.name}' not found", None)
+                    continue
+                interface = self.load_interface(module_path)
+                if interface is None:
+                    continue
+                self.import_symbols(interface, use_clause)
+
+        # Check declarations
+        if iface.decls:
+            for decl in iface.decls:
+                self.check_declaration(decl)
+
+    def check_implementation_unit(self, impl: ImplementationUnit) -> None:
+        """Type check an implementation unit and validate against its interface."""
+        # First, resolve and load the corresponding interface
+        iface = None
+        source_dir = str(Path(self.source_file).parent) if self.source_file else None
+        iface_path = self.resolve_module_path(impl.name, source_dir)
+        if iface_path:
+            iface = self.load_interface(iface_path)
+            if iface:
+                # Validate implementation against interface
+                self.validate_implementation_against_interface(impl, iface)
+        else:
+            self.error(f"Interface file for module '{impl.name}' not found", None)
+
+        # Process USES clauses
+        if impl.uses:
+            for use_clause in impl.uses:
+                module_path = self.resolve_module_path(use_clause.name, source_dir)
+                if module_path is None:
+                    self.error(f"Module '{use_clause.name}' not found", None)
+                    continue
+                loaded_iface = self.load_interface(module_path)
+                if loaded_iface is None:
+                    continue
+                self.import_symbols(loaded_iface, use_clause)
+
+        # Check declarations
+        if impl.decls:
+            for decl in impl.decls:
+                self.check_declaration(decl)
 
     def check_block(self, block: Block) -> None:
         """Type check a block (declarations + statements)."""
@@ -487,9 +900,9 @@ class PascalTypeChecker(TypeChecker):
 
         # Check argument types (including built-in procedures)
         if stmt.args:
-            # For built-in procedures like WRITELN/READLN, skip count/type checks but still
+            # For built-in procedures like WRITELN/WRITE/READLN, skip count/type checks but still
             # check that the arguments are valid expressions (e.g., defined variables)
-            if stmt.name.upper() not in ['WRITELN', 'READLN']:
+            if stmt.name.upper() not in ['WRITELN', 'WRITE', 'READLN']:
                 # For user-defined procedures, check argument count
                 expected_args = len(sym.type.params)
                 actual_args = len(stmt.args)
@@ -501,7 +914,7 @@ class PascalTypeChecker(TypeChecker):
             for i, arg in enumerate(stmt.args):
                 arg_type = self.infer_expression_type(arg)
                 # If it's a user-defined procedure, also check type compatibility
-                if stmt.name.upper() not in ['WRITELN', 'READLN'] and arg_type:
+                if stmt.name.upper() not in ['WRITELN', 'WRITE', 'READLN'] and arg_type:
                     if i < len(sym.type.params):
                         _, param_type = sym.type.params[i]
                         if not can_assign(arg_type, param_type):
@@ -538,12 +951,18 @@ class PascalTypeChecker(TypeChecker):
             left_type = self.infer_expression_type(expr.left)
             right_type = self.infer_expression_type(expr.right)
             if left_type and right_type:
-                return binary_op_result_type(left_type, expr.op, right_type)
+                result = binary_op_result_type(left_type, expr.op, right_type)
+                if result is None:
+                    self.error(f"Operator '{expr.op}' cannot be applied to operands of type {left_type} and {right_type}", expr)
+                return result
             return None
         elif isinstance(expr, UnaryOp):
             operand_type = self.infer_expression_type(expr.operand)
             if operand_type:
-                return unary_op_result_type(operand_type, expr.op)
+                result = unary_op_result_type(operand_type, expr.op)
+                if result is None:
+                    self.error(f"Operator '{expr.op}' cannot be applied to operand of type {operand_type}", expr)
+                return result
             return None
         elif isinstance(expr, FuncCall):
             lookup_name = expr.name.upper()

@@ -1,0 +1,432 @@
+"""
+Type checker test suite.
+
+Combines all semantic validation, type rules, and module-level semantics tests.
+Organized by topic into TestCase classes.
+
+Runs in-process (no subprocess); no llvmlite dependency.
+"""
+
+import unittest
+
+from tests.support import typecheck_source, typecheck_module
+
+
+class TestVariableScope(unittest.TestCase):
+    """Variable scope and name resolution."""
+
+    def test_undefined_variable(self):
+        """Undefined variable is an error."""
+        result = typecheck_source("PROGRAM P; BEGIN WRITELN(x) END.")
+        self.assertFalse(result.success)
+        self.assertIn("Undefined", " ".join(str(e) for e in result.errors))
+
+    def test_defined_variable(self):
+        """Defined variable passes type check."""
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN WRITELN(x) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_scope_isolation_procedure(self):
+        """Procedure scope does not leak to outer scope."""
+        result = typecheck_source(
+            "PROGRAM P; "
+            "PROCEDURE P1; VAR x: INTEGER; BEGIN END; "
+            "BEGIN WRITELN(x) END."
+        )
+        self.assertFalse(result.success)
+        self.assertIn("Undefined", " ".join(str(e) for e in result.errors))
+
+    def test_const_declaration(self):
+        """Const declaration is valid."""
+        result = typecheck_source("PROGRAM P; CONST x = 42; BEGIN END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_shadowing_nested_scope(self):
+        """Variable shadowing in nested scope is allowed."""
+        result = typecheck_source(
+            "PROGRAM P; "
+            "VAR x: INTEGER; "
+            "PROCEDURE P1; VAR x: INTEGER; BEGIN x := 1 END; "
+            "BEGIN x := 2 END."
+        )
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+
+class TestTypeCompatibility(unittest.TestCase):
+    """Type compatibility and assignment rules."""
+
+    def test_integer_to_integer_assignment(self):
+        """INTEGER to INTEGER assignment is valid."""
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := 42 END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_real_to_integer_assignment_error(self):
+        """REAL to INTEGER assignment is an error."""
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := 3.14 END.")
+        self.assertFalse(result.success)
+        self.assertIn("Cannot assign", " ".join(str(e) for e in result.errors))
+
+    def test_integer_to_boolean_assignment_error(self):
+        """INTEGER to BOOLEAN assignment is an error."""
+        result = typecheck_source("PROGRAM P; VAR b: BOOLEAN; BEGIN b := 1 END.")
+        self.assertFalse(result.success)
+        self.assertIn("Cannot assign", " ".join(str(e) for e in result.errors))
+
+    def test_boolean_in_condition(self):
+        """BOOLEAN in IF condition is valid."""
+        result = typecheck_source("PROGRAM P; VAR b: BOOLEAN; VAR x: INTEGER; BEGIN IF b THEN x := 1 END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_multiple_assignments(self):
+        """Multiple assignments to same variable are valid."""
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := 1; x := 2; x := 3 END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+
+class TestControlFlow(unittest.TestCase):
+    """Control flow type validation (IF, WHILE, FOR, REPEAT, CASE)."""
+
+    def test_if_boolean_condition(self):
+        """IF with BOOLEAN condition is valid."""
+        result = typecheck_source("PROGRAM P; BEGIN IF TRUE THEN WRITELN(1) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_if_integer_condition_error(self):
+        """IF with INTEGER condition is an error."""
+        result = typecheck_source("PROGRAM P; BEGIN IF 42 THEN WRITELN(1) END.")
+        self.assertFalse(result.success)
+        self.assertIn("must be BOOLEAN", " ".join(str(e) for e in result.errors))
+
+    def test_while_boolean_condition(self):
+        """WHILE with BOOLEAN condition is valid."""
+        result = typecheck_source(
+            "PROGRAM P; VAR x: INTEGER; BEGIN x := 0; WHILE x < 10 DO x := x + 1 END."
+        )
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_while_integer_condition_error(self):
+        """WHILE with INTEGER condition is an error."""
+        result = typecheck_source(
+            "PROGRAM P; VAR x: INTEGER; BEGIN WHILE x DO x := x + 1 END."
+        )
+        self.assertFalse(result.success)
+        self.assertIn("must be BOOLEAN", " ".join(str(e) for e in result.errors))
+
+    def test_for_loop_integer_variable(self):
+        """FOR with INTEGER loop variable is valid."""
+        result = typecheck_source(
+            "PROGRAM P; VAR i: INTEGER; BEGIN FOR i := 1 TO 10 DO WRITELN(i) END."
+        )
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_for_loop_real_variable_error(self):
+        """FOR with REAL loop variable is an error."""
+        result = typecheck_source(
+            "PROGRAM P; VAR r: REAL; BEGIN FOR r := 1.0 TO 10.0 DO WRITELN(r) END."
+        )
+        self.assertFalse(result.success)
+        self.assertIn("must be INTEGER", " ".join(str(e) for e in result.errors))
+
+
+class TestCallValidation(unittest.TestCase):
+    """Function and procedure call validation."""
+
+    def test_undefined_procedure_call_error(self):
+        """Call to undefined procedure is an error."""
+        result = typecheck_source("PROGRAM P; BEGIN UNDEFINED_PROC() END.")
+        self.assertFalse(result.success)
+        self.assertIn("Undefined", " ".join(str(e) for e in result.errors))
+
+    def test_valid_procedure_call(self):
+        """Call to defined procedure is valid."""
+        result = typecheck_source("PROGRAM P; PROCEDURE P1; BEGIN END; BEGIN P1 END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_procedure_with_parameters(self):
+        """Procedure call with correct parameters is valid."""
+        result = typecheck_source(
+            "PROGRAM P; PROCEDURE P1(x: INTEGER); BEGIN END; BEGIN P1(42) END."
+        )
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_undefined_function_error(self):
+        """Call to undefined function is an error."""
+        result = typecheck_source("PROGRAM P; BEGIN WRITELN(UNDEFINED_FUNC()) END.")
+        self.assertFalse(result.success)
+        self.assertIn("Undefined", " ".join(str(e) for e in result.errors))
+
+
+class TestFunctionReturnTypes(unittest.TestCase):
+    """Function return type validation."""
+
+    def test_mismatched_return_type_error(self):
+        """Function return with wrong type is an error."""
+        result = typecheck_source(
+            "PROGRAM P; "
+            "FUNCTION F: INTEGER; BEGIN F := 3.14 END; "
+            "BEGIN END."
+        )
+        self.assertFalse(result.success)
+        self.assertIn("Cannot assign", " ".join(str(e) for e in result.errors))
+
+
+class TestArrayTypeChecking(unittest.TestCase):
+    """Array indexing and type validation."""
+
+    def test_array_real_index_error(self):
+        """Array index with REAL is an error."""
+        result = typecheck_source(
+            "PROGRAM P; VAR a: ARRAY[1..10] OF INTEGER; BEGIN a[1.5] := 42 END."
+        )
+        self.assertFalse(result.success)
+        self.assertIn("Array index must be INTEGER", " ".join(str(e) for e in result.errors))
+
+
+class TestArithmetic(unittest.TestCase):
+    """Arithmetic and logic type checking."""
+
+    def test_integer_arithmetic(self):
+        """Integer arithmetic is valid."""
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := 1 + 2 END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_mixed_type_arithmetic_error(self):
+        """Mixing incompatible types in arithmetic is an error."""
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := 1 + TRUE END.")
+        self.assertFalse(result.success)
+
+
+class TestIntegration(unittest.TestCase):
+    """Integration and edge cases."""
+
+    def test_simple_program(self):
+        """Simple valid program passes."""
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := 1 END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_const_undefined_use_error(self):
+        """Using undefined variable in const scope is an error."""
+        result = typecheck_source("PROGRAM P; CONST z = 10; BEGIN WRITELN(y) END.")
+        self.assertFalse(result.success)
+        self.assertIn("Undefined", " ".join(str(e) for e in result.errors))
+
+    def test_parameter_type_mismatch_error(self):
+        """Parameter type mismatch is an error."""
+        result = typecheck_source(
+            "PROGRAM P; PROCEDURE P1(x: INTEGER); BEGIN END; BEGIN P1(1.5) END."
+        )
+        self.assertFalse(result.success)
+        # Error message may say "type mismatch" or similar
+        self.assertTrue(
+            not result.success,
+            msg="Expected type error on parameter mismatch"
+        )
+
+
+class TestModuleSemantics(unittest.TestCase):
+    """Interface/implementation/module-level semantics (multi-file module tests)."""
+
+    def test_implementation_matches_interface_procedure(self):
+        """Implementation procedure signature must match interface."""
+        iface = """INTERFACE;
+   UNIT TEST (Proc1);
+PROCEDURE Proc1(X: INTEGER);
+BEGIN
+END;
+END;
+"""
+        impl = """IMPLEMENTATION OF TEST;
+PROCEDURE Proc1(X: INTEGER);
+BEGIN
+END;
+BEGIN
+END.
+"""
+        result = typecheck_module(iface_code=iface, impl_code=impl)
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_implementation_matches_interface_function(self):
+        """Implementation function signature must match interface."""
+        iface = """INTERFACE;
+   UNIT TEST (Func1);
+FUNCTION Func1(X: INTEGER): INTEGER;
+BEGIN
+END;
+END;
+"""
+        impl = """IMPLEMENTATION OF TEST;
+FUNCTION Func1(X: INTEGER): INTEGER;
+BEGIN
+  Func1 := X + 1
+END;
+BEGIN
+END.
+"""
+        result = typecheck_module(iface_code=iface, impl_code=impl)
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_implementation_with_private_procedures(self):
+        """Implementation can include procedures not in interface."""
+        iface = """INTERFACE;
+   UNIT TEST (DoWork);
+PROCEDURE DoWork;
+BEGIN
+END;
+END;
+"""
+        impl = """IMPLEMENTATION OF TEST;
+PROCEDURE DoWork;
+BEGIN
+END;
+PROCEDURE Helper;
+BEGIN
+END;
+BEGIN
+END.
+"""
+        result = typecheck_module(iface_code=iface, impl_code=impl)
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_missing_implementation_error(self):
+        """Missing procedure in implementation is an error."""
+        iface = """INTERFACE;
+   UNIT TEST (Proc1, Proc2);
+PROCEDURE Proc1;
+PROCEDURE Proc2;
+BEGIN
+END;
+END;
+"""
+        impl = """IMPLEMENTATION OF TEST;
+PROCEDURE Proc1;
+BEGIN
+END;
+BEGIN
+END.
+"""
+        result = typecheck_module(iface_code=iface, impl_code=impl)
+        self.assertFalse(result.success)
+
+    def test_parameter_count_mismatch_error(self):
+        """Parameter count mismatch between interface and implementation is an error."""
+        iface = """INTERFACE;
+   UNIT TEST (Proc1);
+PROCEDURE Proc1(X: INTEGER; Y: INTEGER);
+BEGIN
+END;
+END;
+"""
+        impl = """IMPLEMENTATION OF TEST;
+PROCEDURE Proc1(X: INTEGER);
+BEGIN
+END;
+BEGIN
+END.
+"""
+        result = typecheck_module(iface_code=iface, impl_code=impl)
+        self.assertFalse(result.success)
+
+    def test_parameter_type_mismatch_error(self):
+        """Parameter type mismatch between interface and implementation is an error."""
+        iface = """INTERFACE;
+   UNIT TEST (Proc1);
+PROCEDURE Proc1(X: INTEGER);
+BEGIN
+END;
+END;
+"""
+        impl = """IMPLEMENTATION OF TEST;
+PROCEDURE Proc1(X: REAL);
+BEGIN
+END;
+BEGIN
+END.
+"""
+        result = typecheck_module(iface_code=iface, impl_code=impl)
+        self.assertFalse(result.success)
+
+    def test_function_return_type_mismatch_error(self):
+        """Function return type mismatch is an error."""
+        iface = """INTERFACE;
+   UNIT TEST (Func1);
+FUNCTION Func1: INTEGER;
+BEGIN
+END;
+END;
+"""
+        impl = """IMPLEMENTATION OF TEST;
+FUNCTION Func1: REAL;
+BEGIN
+  Func1 := 0.0
+END;
+BEGIN
+END.
+"""
+        result = typecheck_module(iface_code=iface, impl_code=impl)
+        self.assertFalse(result.success)
+
+    def test_program_selective_module_import(self):
+        """Program can selectively import named symbols from a module."""
+        iface = """INTERFACE;
+   UNIT TEST (Func1);
+FUNCTION Func1(X: INTEGER): INTEGER;
+BEGIN
+END;
+END;
+"""
+        prog = """PROGRAM Prog (OUTPUT);
+USES TEST (Func1);
+BEGIN
+END.
+"""
+        result = typecheck_module(iface_code=iface, prog_code=prog, module_name='TEST')
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_program_all_module_import(self):
+        """Program can import all exported symbols from a module."""
+        iface = """INTERFACE;
+   UNIT TEST (Func1);
+FUNCTION Func1(X: INTEGER): INTEGER;
+BEGIN
+END;
+END;
+"""
+        prog = """PROGRAM Prog (OUTPUT);
+USES TEST;
+BEGIN
+END.
+"""
+        result = typecheck_module(iface_code=iface, prog_code=prog, module_name='TEST')
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_missing_module_error(self):
+        """Missing module in USES clause is an error."""
+        prog = """PROGRAM Prog (OUTPUT);
+USES NONEXISTENT;
+BEGIN
+END.
+"""
+        result = typecheck_module(prog_code=prog)
+        self.assertFalse(result.success)
+
+    def test_non_exported_symbol_import_error(self):
+        """Importing non-exported symbol is an error."""
+        iface = """INTERFACE;
+   UNIT TEST (PublicFunc);
+FUNCTION PublicFunc: INTEGER;
+FUNCTION PrivateFunc: INTEGER;
+BEGIN
+END;
+END;
+"""
+        prog = """PROGRAM Prog (OUTPUT);
+USES TEST (PrivateFunc);
+BEGIN
+END.
+"""
+        result = typecheck_module(iface_code=iface, prog_code=prog, module_name='TEST')
+        self.assertFalse(result.success)
+
+
+if __name__ == '__main__':
+    unittest.main()
