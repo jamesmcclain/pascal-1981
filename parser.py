@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import argparse
 from typing import List, Optional, Sequence, Union
 
 from ast_nodes import (AdrExpr, ArrayType, AssignStmt, ASTNode, BinOp, Block, BoolLiteral, BreakStmt, BuiltinType, CaseElement, CaseStmt, CharLiteral, CompoundStmt, ConstDecl,
@@ -906,19 +907,24 @@ def parse_file(path: str) -> Union[ProgramUnit, ModuleUnit, InterfaceUnit, Imple
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print('Usage: python3 parser.py <source-file>', file=sys.stderr)
-        return 2
+    parser = argparse.ArgumentParser(description="Pascal Parser Driver.")
+    parser.add_argument("source_file", type=str, help="The Pascal source file to parse (e.g., program.pas).")
+    args = parser.parse_args()
+
+    source_file = args.source_file
     try:
-        ast = parse_file(sys.argv[1])
+        ast = parse_file(source_file)
         print(f'OK: Parsed as {type(ast).__name__}')
+        return 0
     except (LexerError, ParserError) as exc:
         print(f'Parse error: {exc}', file=sys.stderr)
         return 1
-    except OSError as exc:
-        print(f'File error: {exc}', file=sys.stderr)
+    except FileNotFoundError:
+        print(f'File not found: {source_file}', file=sys.stderr)
         return 1
-    return 0
+    except OSError as exc:
+        print(f'System file error: {exc}', file=sys.stderr)
+        return 1
 
 
 if __name__ == '__main__':
