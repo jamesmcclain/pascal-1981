@@ -959,12 +959,18 @@ class PascalTypeChecker(TypeChecker):
             left_type = self.infer_expression_type(expr.left)
             right_type = self.infer_expression_type(expr.right)
             if left_type and right_type:
-                return binary_op_result_type(left_type, expr.op, right_type)
+                result = binary_op_result_type(left_type, expr.op, right_type)
+                if result is None:
+                    self.error(f"Operator '{expr.op}' cannot be applied to operands of type {left_type} and {right_type}", expr)
+                return result
             return None
         elif isinstance(expr, UnaryOp):
             operand_type = self.infer_expression_type(expr.operand)
             if operand_type:
-                return unary_op_result_type(operand_type, expr.op)
+                result = unary_op_result_type(operand_type, expr.op)
+                if result is None:
+                    self.error(f"Operator '{expr.op}' cannot be applied to operand of type {operand_type}", expr)
+                return result
             return None
         elif isinstance(expr, FuncCall):
             lookup_name = expr.name.upper()
