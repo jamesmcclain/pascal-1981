@@ -21,6 +21,7 @@ class Parser:
     def __init__(self, tokens: Sequence[Token]):
         self.tokens = list(tokens)
         self.pos = 0
+        self.last_interface_abbreviated = False
 
     def current(self) -> Token:
         return self.tokens[self.pos]
@@ -50,7 +51,17 @@ class Parser:
 
     def parse(self) -> Union[ProgramUnit, ModuleUnit, InterfaceUnit, ImplementationUnit]:
         self.skip_include_directives()
+        interface: Optional[InterfaceUnit] = None
+        if self.current().kind == 'INTERFACE':
+            interface = self.parse_interface_unit()
+            self.skip_include_directives()
+            if self.current().kind == 'EOF':
+                if self.last_interface_abbreviated:
+                    self.error('expected END')
+                return interface
         unit = self.parse_compilation_unit()
+        if interface is not None and isinstance(unit, ImplementationUnit):
+            unit.interface = interface
         self.skip_include_directives()
         self.expect('EOF')
         return unit
@@ -121,11 +132,19 @@ class Parser:
         while self.current().kind in self.declaration_starters():
             decls.extend(self.parse_interface_declaration())
             self.skip_include_directives()
-        # Optional BEGIN...END; initialization block in interface
+        # Interface terminator: standalone interfaces may use BEGIN...END; END;
+        # while include-spliced source accepted by MS-Pascal uses BEGIN...END;
+        # immediately followed by the main compilation header.
+        self.last_interface_abbreviated = False
         if self.current().kind == 'BEGIN':
             self.parse_compound_statement()
             self.expect('SEMICOLON')
-        self.advance_end_semicolon()
+            if self.current().kind == 'END':
+                self.advance_end_semicolon()
+            else:
+                self.last_interface_abbreviated = True
+        else:
+            self.advance_end_semicolon()
         return InterfaceUnit(name, params, uses, decls)
 
     def parse_implementation_unit(self) -> ImplementationUnit:

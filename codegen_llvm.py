@@ -74,6 +74,7 @@ class Codegen:
         self.current_function: Optional[ir.Function] = None
         self.current_return_block: Optional[ir.BasicBlock] = None
         self.constants: Dict[str, int] = {}  # compile-time constant values, keyed UPPER
+        self.current_interface_decls: Dict[str, Declaration] = {}
         self.verbose = verbose
 
     def _log(self, msg: str) -> None:
@@ -186,8 +187,13 @@ class Codegen:
 
     def codegen_implementation(self, unit: ImplementationUnit) -> ir.Module:
         """Codegen for IMPLEMENTATION unit."""
-        for decl in unit.decls:
-            self.codegen_decl(decl)
+        old_iface = self.current_interface_decls
+        self.current_interface_decls = {getattr(decl, 'name', '').lower(): decl for decl in (unit.interface.decls if unit.interface else []) if getattr(decl, 'name', None)}
+        try:
+            for decl in unit.decls:
+                self.codegen_decl(decl)
+        finally:
+            self.current_interface_decls = old_iface
 
         # Codegen init body if present
         if unit.init_body:
@@ -257,9 +263,14 @@ class Codegen:
 
     def codegen_proc_decl(self, decl: ProcDecl) -> None:
         """Codegen for PROCEDURE declaration."""
+        effective_decl = decl
+        iface_decl = self.current_interface_decls.get(decl.name.lower()) if decl.name else None
+        if iface_decl and not decl.params:
+            effective_decl = iface_decl
+
         # Flatten parameter types: one per name in each Param group
         param_types = []
-        for param in decl.params:
+        for param in effective_decl.params:
             param_type = self.llvm_type(param.type_expr)
             for _ in param.names:
                 param_types.append(param_type)
@@ -285,7 +296,7 @@ class Codegen:
 
         # Bind parameters to the scope
         args_iter = iter(func.args)
-        for param in decl.params:
+        for param in effective_decl.params:
             for name in param.names:
                 arg = next(args_iter)
                 arg.name = name
@@ -308,9 +319,14 @@ class Codegen:
 
     def codegen_func_decl(self, decl: FuncDecl) -> None:
         """Codegen for FUNCTION declaration."""
+        effective_decl = decl
+        iface_decl = self.current_interface_decls.get(decl.name.lower()) if decl.name else None
+        if iface_decl and not decl.params:
+            effective_decl = iface_decl
+
         # Flatten parameter types: one per name in each Param group
         param_types = []
-        for param in decl.params:
+        for param in effective_decl.params:
             param_type = self.llvm_type(param.type_expr)
             for _ in param.names:
                 param_types.append(param_type)
@@ -337,7 +353,7 @@ class Codegen:
 
         # Bind parameters
         args_iter = iter(func.args)
-        for param in decl.params:
+        for param in effective_decl.params:
             for name in param.names:
                 arg = next(args_iter)
                 arg.name = name
