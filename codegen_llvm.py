@@ -17,6 +17,7 @@ import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
 from ast_nodes import *
+from parser import parse_file
 
 
 class CodegenError(Exception):
@@ -42,12 +43,13 @@ class Scope:
 
     def define(self, name: str, llvm_value: Any, type_expr: Type, is_parameter: bool = False) -> None:
         """Define a symbol in this scope."""
-        self.symbols[name] = Symbol(name, llvm_value, type_expr, is_parameter)
+        self.symbols[name.lower()] = Symbol(name, llvm_value, type_expr, is_parameter)
 
     def lookup(self, name: str) -> Optional[Symbol]:
         """Look up a symbol, checking parent scopes."""
-        if name in self.symbols:
-            return self.symbols[name]
+        key = name.lower()
+        if key in self.symbols:
+            return self.symbols[key]
         if self.parent:
             return self.parent.lookup(name)
         return None
@@ -66,8 +68,9 @@ _SCALAR_SIZES = {
 class Codegen:
     """LLVM IR code generator."""
 
-    def __init__(self, verbose: bool = False):
+    def __init__(self, verbose: bool = False, source_file: Optional[str] = None):
         self.module = ir.Module(name="pascal_program")
+        self.source_file = source_file
         self.module.triple = "x86_64-pc-linux-gnu"  # Standard Linux target
         self.builder: Optional[IRBuilder] = None
         self.scope = Scope()  # global scope
@@ -152,6 +155,10 @@ class Codegen:
 
     def codegen_program(self, unit: ProgramUnit) -> ir.Module:
         """Codegen for PROGRAM unit."""
+        # Import any modules referenced by USES before we codegen the body.
+        for use_clause in unit.uses:
+            self.codegen_use_clause(use_clause)
+
         # Codegen all declarations
         for decl in unit.block.decls:
             self.codegen_decl(decl)
@@ -178,6 +185,28 @@ class Codegen:
         for decl in unit.decls:
             self.codegen_decl(decl)
         return self.module
+
+    def codegen_use_clause(self, use_clause: UseClause) -> None:
+        """Import declarations from a USES module as external symbols."""
+        module_path = None
+        import os
+        from pathlib import Path
+        search_dir = Path(self.source_file).parent if self.source_file else Path('.')
+        for candidate in (use_clause.name, use_clause.name.lower(), use_clause.name.upper()):
+            for suffix in ('', '.inc', '.pas'):
+                path = search_dir / f'{candidate}{suffix}'
+                if path.exists():
+                    module_path = str(path)
+                    break
+            if module_path:
+                break
+        if not module_path:
+            return
+        ast = parse_file(module_path)
+        decls = getattr(ast, 'decls', [])
+        for decl in decls:
+            if isinstance(decl, (ProcDecl, FuncDecl)) and getattr(decl, 'name', None):
+                self.codegen_decl(ProcDecl(decl.name, decl.params, getattr(decl, 'attributes', []), body=None) if isinstance(decl, ProcDecl) else FuncDecl(decl.name, decl.params, decl.return_type, getattr(decl, 'attributes', []), body=None))
 
     def codegen_interface(self, unit: InterfaceUnit) -> ir.Module:
         """Codegen for INTERFACE unit (declarations only)."""
@@ -1098,8 +1127,8 @@ class Codegen:
         return f'{prefix}_{self._name_counter[prefix]}'
 
 
-def compile_to_llvm(ast: Union[ProgramUnit, ModuleUnit, InterfaceUnit, ImplementationUnit], verbose: bool = False) -> str:
+def compile_to_llvm(ast: Union[ProgramUnit, ModuleUnit, InterfaceUnit, ImplementationUnit], verbose: bool = False, source_file: Optional[str] = None) -> str:
     """Compile AST to LLVM IR string."""
-    codegen = Codegen(verbose=verbose)
+    codegen = Codegen(verbose=verbose, source_file=source_file)
     module = codegen.codegen(ast)
     return str(module)

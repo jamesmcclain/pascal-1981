@@ -139,76 +139,87 @@ class PascalTypeChecker(TypeChecker):
         return TypeCheckResult(success=len(self.errors) == 0, symbol_table=self.symbol_table, errors=self.errors, warnings=self.warnings, annotated_ast=ast)
 
     def resolve_module_path(self, module_name: str, search_dir: Optional[str]) -> Optional[str]:
-        """Resolve a module name to a literal source filename.
+        """Resolve a module name to a source filename.
 
-        The source text supplies the unit name, and we treat that name as a
-        literal basename with no extension inference.
+        We first try the literal basename used by the source text, then the same
+        basename with common Pascal-era source suffixes (.inc / .pas) and simple
+        case variants.
         """
         if search_dir is None:
             search_dir = '.'
 
         search_path = Path(search_dir)
+        stems = [module_name, module_name.lower(), module_name.upper()]
+        suffixes = ['', '.inc', '.pas']
 
-        # Literal basename only -- no extension is inferred or appended. The 1981
-        # compiler takes the included filename verbatim (e.g. GRAPHI, not GRAPHI.INT),
-        # so we never synthesize a `.int` (or any other) extension here.
-        candidates = [module_name, module_name.lower(), module_name.upper()]
-        for candidate_name in candidates:
-            candidate = search_path / candidate_name
-            if candidate.exists():
-                return str(candidate.resolve())
+        for stem in stems:
+            for suffix in suffixes:
+                candidate = search_path / f"{stem}{suffix}"
+                if candidate.exists():
+                    return str(candidate.resolve())
 
         return None
 
-    def load_interface(self, path: str) -> Optional[InterfaceUnit]:
-        """Load and type-check an interface file.
+    def load_interface(self, path: str) -> Optional[Any]:
+        """Load a module source file for symbol import.
 
-        Args:
-            path: Path to the interface source file (literal name, no fixed extension)
-
-        Returns:
-            Parsed and type-checked InterfaceUnit, or None if failed
+        Historically, the source that feeds USES may be an INTERFACE unit or a
+        module/implementation file that carries the exported declarations.
         """
         try:
             ast = parse_file(path)
-            if not isinstance(ast, InterfaceUnit):
-                self.error(f"Expected interface file, got {type(ast).__name__} in {path}", None)
+            if not isinstance(ast, (InterfaceUnit, ImplementationUnit, ModuleUnit)):
+                self.error(f"Expected module/interface file, got {type(ast).__name__} in {path}", None)
                 return None
-
-            # Type-check the interface independently
-            # (We don't check it fully here, just validate it's valid enough to import)
             return ast
         except Exception as e:
             self.error(f"Failed to load interface from {path}: {e}", None)
             return None
 
-    def import_symbols(self, interface: InterfaceUnit, uses: UseClause) -> None:
-        """Import symbols from an interface into the current scope.
-
-        Imports are positional: USES aliases map to the interface export list
-        by index, preserving the exported name as the external symbol.
-        """
-        export_names = list(interface.params)
-        export_decls = list(interface.decls)
-
-        if len(export_names) != len(export_decls):
-            self.error(
-                f"Interface '{interface.name}' export list does not match its declarations",
-                None,
-            )
-            return
-
-        if uses.imports:
-            imported_aliases = list(uses.imports)
-            if len(imported_aliases) > len(export_names):
+    def import_symbols(self, interface: Any, uses: UseClause) -> None:
+        """Import symbols from a loaded module/interface into the current scope."""
+        if isinstance(interface, InterfaceUnit):
+            export_names = list(interface.params)
+            export_decls = list(interface.decls)
+            if len(export_names) != len(export_decls):
                 self.error(
-                    f"Module {uses.name} imports {len(imported_aliases)} name(s) but only exports {len(export_names)}",
+                    f"Interface '{interface.name}' export list does not match its declarations",
                     None,
                 )
                 return
-            pairs = list(zip(imported_aliases, export_names[:len(imported_aliases)], export_decls[:len(imported_aliases)]))
+            if uses.imports:
+                imported_aliases = list(uses.imports)
+                if len(imported_aliases) > len(export_names):
+                    self.error(
+                        f"Module {uses.name} imports {len(imported_aliases)} name(s) but only exports {len(export_names)}",
+                        None,
+                    )
+                    return
+                pairs = list(zip(imported_aliases, export_names[:len(imported_aliases)], export_decls[:len(imported_aliases)]))
+            else:
+                pairs = list(zip(export_names, export_names, export_decls))
         else:
-            pairs = list(zip(export_names, export_names, export_decls))
+            export_decls = [decl for decl in getattr(interface, 'decls', []) if getattr(decl, 'name', None)]
+            export_names = [decl.name for decl in export_decls]
+            if uses.imports:
+                imported_aliases = list(uses.imports)
+                if len(imported_aliases) > len(export_names):
+                    self.error(
+                        f"Module {uses.name} imports {len(imported_aliases)} name(s) but only exports {len(export_names)}",
+                        None,
+                    )
+                    return
+                wanted = []
+                for alias in imported_aliases:
+                    try:
+                        idx = [name.lower() for name in export_names].index(alias.lower())
+                    except ValueError:
+                        self.error(f"Module {uses.name} does not export '{alias}'", None)
+                        continue
+                    wanted.append((alias, export_names[idx], export_decls[idx]))
+                pairs = wanted
+            else:
+                pairs = list(zip(export_names, export_names, export_decls))
 
         for local_name, exported_name, decl in pairs:
             symbol = Symbol(
@@ -240,11 +251,18 @@ class PascalTypeChecker(TypeChecker):
     def _get_declaration_type(self, decl: Any) -> Type:
         """Get the Type object for a declaration."""
         if isinstance(decl, FuncDecl):
-            # For functions, use the return type
-            return decl.return_type if decl.return_type else INTEGER_TYPE
+            # For functions, use the resolved return type
+            return_type = self.resolve_type(decl.return_type) if decl.return_type else INTEGER_TYPE
+            return return_type if return_type else INTEGER_TYPE
         elif isinstance(decl, ProcDecl):
-            # For procedures, create a ProcedureType
-            param_list = [(p.name, p.type if hasattr(p, 'type') else INTEGER_TYPE) for p in decl.params]
+            # For procedures, create a ProcedureType with resolved parameter types
+            param_list = []
+            for p in decl.params:
+                param_type = self.resolve_type(p.type_expr) if hasattr(p, 'type_expr') else INTEGER_TYPE
+                if not param_type:
+                    param_type = INTEGER_TYPE
+                for name in getattr(p, 'names', []):
+                    param_list.append((name, param_type))
             return ProcedureType(decl.name, param_list)
         elif isinstance(decl, ConstDecl):
             # For constants, try to infer type from value

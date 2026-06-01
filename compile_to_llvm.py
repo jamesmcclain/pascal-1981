@@ -75,7 +75,7 @@ def main() -> int:
 
         # Codegen
         print(f'Generating LLVM IR...', file=sys.stderr)
-        ir = compile_to_llvm(ast, verbose=verbose)
+        ir = compile_to_llvm(ast, verbose=verbose, source_file=source_file)
 
         # Output
         if output_file:
