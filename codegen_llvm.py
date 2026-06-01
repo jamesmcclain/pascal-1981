@@ -227,7 +227,8 @@ class Codegen:
         # Codegen init body if present
         if unit.init_body:
             init_type = ir.FunctionType(ir.IntType(32), [])
-            init_func = ir.Function(self.module, init_type, name='_init')
+            init_name = f'pascal_init_{unit.name.lower()}'
+            init_func = ir.Function(self.module, init_type, name=init_name)
             entry_block = init_func.append_basic_block(name='entry')
             self.builder = IRBuilder(entry_block)
             self.current_function = init_func
