@@ -21,7 +21,6 @@ class Parser:
     def __init__(self, tokens: Sequence[Token]):
         self.tokens = list(tokens)
         self.pos = 0
-        self.last_interface_abbreviated = False
 
     def current(self) -> Token:
         return self.tokens[self.pos]
@@ -56,8 +55,6 @@ class Parser:
             interface = self.parse_interface_unit()
             self.skip_include_directives()
             if self.current().kind == 'EOF':
-                if self.last_interface_abbreviated:
-                    self.error('expected END')
                 return interface
         unit = self.parse_compilation_unit()
         if interface is not None and isinstance(unit, ImplementationUnit):
@@ -132,19 +129,24 @@ class Parser:
         while self.current().kind in self.declaration_starters():
             decls.extend(self.parse_interface_declaration())
             self.skip_include_directives()
-        # Interface terminator: standalone interfaces may use BEGIN...END; END;
-        # while include-spliced source accepted by MS-Pascal uses BEGIN...END;
-        # immediately followed by the main compilation header.
-        self.last_interface_abbreviated = False
+        # Interface terminator: either explicit END; or implicit termination by next major section.
+        # In include-spliced source, the interface may be followed immediately by IMPLEMENTATION,
+        # PROGRAM, or MODULE without an explicit END; token.
+        # In standalone interface files, END; is required.
         if self.current().kind == 'BEGIN':
             self.parse_compound_statement()
             self.expect('SEMICOLON')
-            if self.current().kind == 'END':
-                self.advance_end_semicolon()
-            else:
-                self.last_interface_abbreviated = True
+
+        # Check for explicit END; or implicit termination by major section keyword
+        if self.current().kind == 'END':
+            self.expect('END')
+            self.expect('SEMICOLON')
+        elif self.current().kind in {'IMPLEMENTATION', 'PROGRAM', 'MODULE'}:
+            # Implicit termination by major section (include-spliced case)
+            pass
         else:
-            self.advance_end_semicolon()
+            # Standalone interface or error condition
+            self.error('expected END or major section keyword')
         return InterfaceUnit(name, params, uses, decls)
 
     def parse_implementation_unit(self) -> ImplementationUnit:
