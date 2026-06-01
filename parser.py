@@ -129,24 +129,17 @@ class Parser:
         while self.current().kind in self.declaration_starters():
             decls.extend(self.parse_interface_declaration())
             self.skip_include_directives()
-        # Interface terminator: either explicit END; or implicit termination by next major section.
-        # In include-spliced source, the interface may be followed immediately by IMPLEMENTATION,
-        # PROGRAM, or MODULE without an explicit END; token.
-        # In standalone interface files, END; is required.
+        # Interface terminator (grammar: {BEGIN}- END ;): exactly one END, optionally
+        # preceded by a BEGIN initialization block. The END closes the optional block
+        # AND terminates the interface -- there is no second END. The unit is therefore
+        # self-delimiting: when include-spliced, this END;/`;` is immediately followed by
+        # the IMPLEMENTATION/PROGRAM/MODULE that included it, with no special-casing.
         if self.current().kind == 'BEGIN':
-            self.parse_compound_statement()
+            self.parse_compound_statement()  # consumes BEGIN [statements] END
             self.expect('SEMICOLON')
-
-        # Check for explicit END; or implicit termination by major section keyword
-        if self.current().kind == 'END':
+        else:
             self.expect('END')
             self.expect('SEMICOLON')
-        elif self.current().kind in {'IMPLEMENTATION', 'PROGRAM', 'MODULE'}:
-            # Implicit termination by major section (include-spliced case)
-            pass
-        else:
-            # Standalone interface or error condition
-            self.error('expected END or major section keyword')
         return InterfaceUnit(name, params, uses, decls)
 
     def parse_implementation_unit(self) -> ImplementationUnit:

@@ -233,7 +233,7 @@ class TestModuleSemantics(unittest.TestCase):
 PROCEDURE Proc1(X: INTEGER);
 BEGIN
 END;
-END;
+
 """
         impl = """IMPLEMENTATION OF TEST;
 PROCEDURE Proc1(X: INTEGER);
@@ -252,7 +252,7 @@ END.
 FUNCTION Func1(X: INTEGER): INTEGER;
 BEGIN
 END;
-END;
+
 """
         impl = """IMPLEMENTATION OF TEST;
 FUNCTION Func1(X: INTEGER): INTEGER;
@@ -272,7 +272,7 @@ END.
 PROCEDURE DoWork;
 BEGIN
 END;
-END;
+
 """
         impl = """IMPLEMENTATION OF TEST;
 PROCEDURE DoWork;
@@ -295,7 +295,7 @@ PROCEDURE Proc1;
 PROCEDURE Proc2;
 BEGIN
 END;
-END;
+
 """
         impl = """IMPLEMENTATION OF TEST;
 PROCEDURE Proc1;
@@ -314,7 +314,7 @@ END.
 PROCEDURE Proc1(X: INTEGER; Y: INTEGER);
 BEGIN
 END;
-END;
+
 """
         impl = """IMPLEMENTATION OF TEST;
 PROCEDURE Proc1(X: INTEGER);
@@ -333,7 +333,7 @@ END.
 PROCEDURE Proc1(X: INTEGER);
 BEGIN
 END;
-END;
+
 """
         impl = """IMPLEMENTATION OF TEST;
 PROCEDURE Proc1(X: REAL);
@@ -352,7 +352,7 @@ END.
 FUNCTION Func1: INTEGER;
 BEGIN
 END;
-END;
+
 """
         impl = """IMPLEMENTATION OF TEST;
 FUNCTION Func1: REAL;
@@ -372,7 +372,7 @@ END.
 FUNCTION Func1(X: INTEGER): INTEGER;
 BEGIN
 END;
-END;
+
 """
         prog = """PROGRAM Prog (OUTPUT);
 USES TEST (Func1);
@@ -389,7 +389,7 @@ END.
 FUNCTION Func1(X: INTEGER): INTEGER;
 BEGIN
 END;
-END;
+
 """
         prog = """PROGRAM Prog (OUTPUT);
 USES TEST;
@@ -417,7 +417,7 @@ FUNCTION PublicFunc: INTEGER;
 FUNCTION PrivateFunc: INTEGER;
 BEGIN
 END;
-END;
+
 """
         prog = """PROGRAM Prog (OUTPUT);
 USES TEST (PrivateFunc);

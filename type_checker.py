@@ -149,15 +149,12 @@ class PascalTypeChecker(TypeChecker):
 
         search_path = Path(search_dir)
 
+        # Literal basename only -- no extension is inferred or appended. The 1981
+        # compiler takes the included filename verbatim (e.g. GRAPHI, not GRAPHI.INT),
+        # so we never synthesize a `.int` (or any other) extension here.
         candidates = [module_name, module_name.lower(), module_name.upper()]
         for candidate_name in candidates:
             candidate = search_path / candidate_name
-            if candidate.exists():
-                return str(candidate.resolve())
-
-        # Legacy compatibility: some test harnesses materialize interfaces as .int files.
-        for candidate_name in candidates:
-            candidate = search_path / f"{candidate_name}.int"
             if candidate.exists():
                 return str(candidate.resolve())
 
@@ -167,7 +164,7 @@ class PascalTypeChecker(TypeChecker):
         """Load and type-check an interface file.
 
         Args:
-            path: Path to the .int file
+            path: Path to the interface source file (literal name, no fixed extension)
 
         Returns:
             Parsed and type-checked InterfaceUnit, or None if failed

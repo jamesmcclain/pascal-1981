@@ -40,7 +40,10 @@ interface_unit =
     "UNIT" identifier [ "(" identifier_list ")" ] ";"
     [ uses_clause ]
     interface_block
+    [ "BEGIN" [ statement { ";" statement } [ ";" ] ] ]
     "END" ";" ;
+    (* {BEGIN}- END ; : one END terminates the optional init block AND the
+       interface. GRAPHI = "BEGIN END;", BASEPLOT = "END;". Never two ENDs. *)
 
 implementation_unit =
     [ include_directive ]
