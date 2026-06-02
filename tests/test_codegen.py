@@ -100,6 +100,13 @@ class TestCodegenIR(unittest.TestCase):
         self.assertIsInstance(ir, str)
         self.assertGreater(len(ir), 0)
 
+    def test_real_literal_and_assignment(self):
+        """REAL literals and assignment generate valid IR."""
+        src = "PROGRAM P; VAR x: REAL; BEGIN x := 1.5; WRITELN(x) END."
+        ir = compile_to_ir(src)
+        self.assertIsInstance(ir, str)
+        self.assertIn("double", ir)
+
     def test_arithmetic_expression(self):
         """Arithmetic expression generates valid IR."""
         src = "PROGRAM P; VAR x: INTEGER; BEGIN x := 1 + 2 * 3; WRITELN(x) END."
@@ -170,6 +177,13 @@ class TestCodegenBuildRun(unittest.TestCase):
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         self.assertIn("42", stdout)
+
+    def test_real_assignment_and_output(self):
+        """REAL assignment and output runs and produces correct output."""
+        src = "PROGRAM P; VAR x: REAL; BEGIN x := 1.5; WRITELN(x) END."
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertIn("1.5", stdout)
 
     def test_simple_arithmetic(self):
         """Simple arithmetic: 2 + 3 = 5."""

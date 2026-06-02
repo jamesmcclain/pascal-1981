@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 from ast_nodes import AdrExpr
 from ast_nodes import ArrayType as ASTArrayType
 from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, ConstDecl, Designator, Expression, ForStmt, FuncCall, FuncDecl, Identifier, IfStmt,
-                       ImplementationUnit, InterfaceUnit, IntLiteral, ModuleUnit, NamedType, ProcCallStmt, ProcDecl, ProgramUnit, RealLiteral)
+                       ImplementationUnit, InterfaceUnit, IntLiteral, ModuleUnit, NamedType, ProcCallStmt, ProcDecl, ProgramUnit, RealLiteral, WriteArg)
 from ast_nodes import RecordType as ASTRecordType
 from ast_nodes import (RepeatStmt, ReturnStmt, Selector, SizeofExpr, Statement, StringLiteral, TypeDecl, UnaryOp, UseClause, VarDecl, WhileStmt)
 from symbol_table import SourceLocation, Symbol, SymbolTable
@@ -895,7 +895,13 @@ class PascalTypeChecker(TypeChecker):
 
             # Check that all arguments are well-formed (this will catch undefined variables)
             for i, arg in enumerate(stmt.args):
-                arg_type = self.infer_expression_type(arg)
+                value_arg = arg.expr if isinstance(arg, WriteArg) else arg
+                arg_type = self.infer_expression_type(value_arg)
+                if isinstance(arg, WriteArg):
+                    if arg.width is not None:
+                        self.infer_expression_type(arg.width)
+                    if arg.precision is not None:
+                        self.infer_expression_type(arg.precision)
                 # If it's a user-defined procedure, also check type compatibility
                 if stmt.name.upper() not in ['WRITELN', 'WRITE', 'READLN'] and arg_type:
                     if i < len(sym.type.params):

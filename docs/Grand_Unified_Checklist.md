@@ -24,7 +24,7 @@ manual specifies is in scope.
 
 ## 0. Top priority — the grammar bug that is actively wrong
 
-- [ ] **0.1 — Restrict `:` field-width/format args to the I/O builtins.** `[OBSERVED]` **S**
+- [x] **0.1 — Restrict `:` field-width/format args to the I/O builtins.** `[OBSERVED]` **S**
   `parse_actual_parameter` consumes `:expr` suffixes on *every* call, so
   `WRITELN(x:5:2)` works but so does `FOO(1:2:3)` on an ordinary procedure.
   Field-width is a `WRITE`/`WRITELN` feature only.
@@ -34,6 +34,10 @@ manual specifies is in scope.
     syntax recognized only for the write family; the manual's `WRITE` entry is the
     reference. Add a `should_pass` for `WRITELN(x:5:2)` and a `should_fail` for
     `FOO(1:2:3)`.
+  - Done: added `WriteArg` parsing only for `WRITE`/`WRITELN`, preserved
+    width/precision for printf-style codegen, and promoted the two judgment
+    fixtures to parser assertions. Proven by `python -m unittest tests.test_parser`
+    and `python -m unittest tests.test_typecheck tests.test_codegen`.
 
 ---
 

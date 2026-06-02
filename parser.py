@@ -8,7 +8,7 @@ from ast_nodes import (AdrExpr, ArrayType, AssignStmt, ASTNode, BinOp, Block, Bo
                        CycleStmt, Declaration, Designator, EmptyStmt, EnumType, Expression, FileType, ForStmt, FuncCall, FuncDecl, GotoStmt, Identifier, IfStmt, ImplementationUnit,
                        IndexRange, InterfaceUnit, IntLiteral, LabelDecl, LabelStmt, LStringType, ModuleUnit, NamedType, Param, PointerType, ProcCallStmt, ProcDecl, ProgramUnit,
                        RangeExpr, RealLiteral, RecordType, RepeatStmt, ReturnStmt, Selector, SetConstructor, SetType, SizeofExpr, Statement, StringLiteral, Type, TypeDecl, UnaryOp,
-                       UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt)
+                       UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt, WriteArg)
 from lexer import ALL_CODES, KEYWORD_CODES, LexerError, Token, lex_file
 
 
@@ -438,11 +438,14 @@ class Parser:
         if selectors:
             self.error('designator statement must be an assignment')
 
-        args: List[Expression] = []
+        args: List[Union[Expression, WriteArg]] = []
         if self.current().kind == 'LPAREN':
             self.pos += 1
             if self.current().kind != 'RPAREN':
-                args = self.parse_actual_parameter_list()
+                if name.upper() in {'WRITE', 'WRITELN'}:
+                    args = self.parse_write_actual_parameter_list()
+                else:
+                    args = self.parse_actual_parameter_list()
             self.expect('RPAREN')
         # Bare procedure call is allowed.
         return ProcCallStmt(name, args)
@@ -455,11 +458,24 @@ class Parser:
         return exprs
 
     def parse_actual_parameter(self) -> Expression:
+        return self.parse_expression()
+
+    def parse_write_actual_parameter_list(self) -> List[WriteArg]:
+        args: List[WriteArg] = []
+        args.append(self.parse_write_actual_parameter())
+        while self.match('COMMA'):
+            args.append(self.parse_write_actual_parameter())
+        return args
+
+    def parse_write_actual_parameter(self) -> WriteArg:
         expr = self.parse_expression()
-        while self.match('COLON'):
-            # Additional format specifiers; we'll ignore them for now
-            self.parse_expression()
-        return expr
+        width: Optional[Expression] = None
+        precision: Optional[Expression] = None
+        if self.match('COLON'):
+            width = self.parse_expression()
+            if self.match('COLON'):
+                precision = self.parse_expression()
+        return WriteArg(expr, width, precision)
 
     def parse_if_statement(self) -> IfStmt:
         self.expect('IF')

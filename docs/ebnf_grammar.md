@@ -299,7 +299,10 @@ cycle_stmt  = "CYCLE" ;   (* continue to next loop iteration *)
 return_stmt = "RETURN" ;
 
 assignment = designator ":=" expression ;
-proc_call  = identifier [ "(" expression_list ")" ] ;
+proc_call  = identifier [ "(" expression_list ")" ]
+           | ( "WRITE" | "WRITELN" ) [ "(" write_arg_list ")" ] ;
+write_arg_list = write_arg { "," write_arg } ;
+write_arg      = expression [ ":" expression [ ":" expression ] ] ;
 
 
 (* ═══════════════════════════════════════════════════════════════════

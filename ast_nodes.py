@@ -144,9 +144,16 @@ class AssignStmt(ASTNode):
 
 
 @dataclass
+class WriteArg(ASTNode):
+    expr: Expression
+    width: Optional[Expression] = None
+    precision: Optional[Expression] = None
+
+
+@dataclass
 class ProcCallStmt(ASTNode):
     name: str
-    args: List[Expression]
+    args: List[Union[Expression, WriteArg]]
 
 
 @dataclass
