@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import argparse
 from typing import List, Optional, Sequence, Union
 
 from ast_nodes import (AdrExpr, ArrayType, AssignStmt, ASTNode, BinOp, Block, BoolLiteral, BreakStmt, BuiltinType, CaseElement, CaseStmt, CharLiteral, CompoundStmt, ConstDecl,
@@ -49,7 +50,15 @@ class Parser:
 
     def parse(self) -> Union[ProgramUnit, ModuleUnit, InterfaceUnit, ImplementationUnit]:
         self.skip_include_directives()
+        interface: Optional[InterfaceUnit] = None
+        if self.current().kind == 'INTERFACE':
+            interface = self.parse_interface_unit()
+            self.skip_include_directives()
+            if self.current().kind == 'EOF':
+                return interface
         unit = self.parse_compilation_unit()
+        if interface is not None and isinstance(unit, ImplementationUnit):
+            unit.interface = interface
         self.skip_include_directives()
         self.expect('EOF')
         return unit
@@ -120,11 +129,17 @@ class Parser:
         while self.current().kind in self.declaration_starters():
             decls.extend(self.parse_interface_declaration())
             self.skip_include_directives()
-        # Optional BEGIN...END; initialization block in interface
+        # Interface terminator (grammar: {BEGIN}- END ;): exactly one END, optionally
+        # preceded by a BEGIN initialization block. The END closes the optional block
+        # AND terminates the interface -- there is no second END. The unit is therefore
+        # self-delimiting: when include-spliced, this END;/`;` is immediately followed by
+        # the IMPLEMENTATION/PROGRAM/MODULE that included it, with no special-casing.
         if self.current().kind == 'BEGIN':
-            self.parse_compound_statement()
+            self.parse_compound_statement()  # consumes BEGIN [statements] END
             self.expect('SEMICOLON')
-        self.advance_end_semicolon()
+        else:
+            self.expect('END')
+            self.expect('SEMICOLON')
         return InterfaceUnit(name, params, uses, decls)
 
     def parse_implementation_unit(self) -> ImplementationUnit:
@@ -906,19 +921,24 @@ def parse_file(path: str) -> Union[ProgramUnit, ModuleUnit, InterfaceUnit, Imple
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print('Usage: python3 parser.py <source-file>', file=sys.stderr)
-        return 2
+    parser = argparse.ArgumentParser(description="Pascal Parser Driver.")
+    parser.add_argument("source_file", type=str, help="The Pascal source file to parse (e.g., program.pas).")
+    args = parser.parse_args()
+
+    source_file = args.source_file
     try:
-        ast = parse_file(sys.argv[1])
+        ast = parse_file(source_file)
         print(f'OK: Parsed as {type(ast).__name__}')
+        return 0
     except (LexerError, ParserError) as exc:
         print(f'Parse error: {exc}', file=sys.stderr)
         return 1
-    except OSError as exc:
-        print(f'File error: {exc}', file=sys.stderr)
+    except FileNotFoundError:
+        print(f'File not found: {source_file}', file=sys.stderr)
         return 1
-    return 0
+    except OSError as exc:
+        print(f'System file error: {exc}', file=sys.stderr)
+        return 1
 
 
 if __name__ == '__main__':

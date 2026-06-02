@@ -53,6 +53,7 @@ class ImplementationUnit(ASTNode):
     uses: List[UseClause]
     decls: List[Declaration]
     init_body: Optional[List[Statement]]  # None if no BEGIN..END
+    interface: Optional[InterfaceUnit] = None
 
 
 # ============================================================================

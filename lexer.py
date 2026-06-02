@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from pathlib import Path
+from typing import Any, List, Optional, Set
 
 # Token code assignments. These are stable for hex-stream output.
 KEYWORD_CODES = {
@@ -416,9 +417,41 @@ def tokens_to_hex(tokens: List[Token], include_eof: bool = False, annotate_value
     return ' '.join(parts)
 
 
-def lex_file(path: str) -> List[Token]:
-    with open(path, 'r', encoding='utf-8', errors='replace') as f:
-        return Lexer(f.read()).tokenize()
+def lex_file(path: str, _include_stack: Optional[Set[Path]] = None) -> List[Token]:
+    """Lex a Pascal source file, splicing $INCLUDE files inline.
+
+    MS-Pascal's $INCLUDE argument is a literal filename.  We resolve it
+    relative to the including file and do no extension inference.
+    """
+    source_path = Path(path).resolve()
+    if _include_stack is None:
+        _include_stack = set()
+    if source_path in _include_stack:
+        raise LexerError(f"Recursive include detected for {source_path}")
+
+    _include_stack.add(source_path)
+    try:
+        with open(source_path, 'r', encoding='utf-8', errors='replace') as f:
+            raw_tokens = Lexer(f.read()).tokenize()
+
+        tokens: List[Token] = []
+        for tok in raw_tokens:
+            if tok.kind == 'INCLUDE_DIRECTIVE':
+                include_path = source_path.parent / tok.value
+                if not include_path.exists():
+                    lowered = tok.value.lower()
+                    for child in source_path.parent.iterdir():
+                        if child.name.lower() == lowered:
+                            include_path = child
+                            break
+                include_path = include_path.resolve()
+                included = lex_file(str(include_path), _include_stack)
+                tokens.extend(t for t in included if t.kind != 'EOF')
+            else:
+                tokens.append(tok)
+        return tokens
+    finally:
+        _include_stack.remove(source_path)
 
 
 def main() -> int:

@@ -74,7 +74,7 @@ def typecheck_module(iface_code: str = None, impl_code: str = None, prog_code: s
     Type-check a module with optional interface and implementation files.
     
     Args:
-        iface_code: Optional interface (.int) file content
+        iface_code: Optional interface file content (written under a literal name)
         impl_code: Optional implementation (.pas) file content  
         prog_code: Optional program (.pas) file content (if checking a standalone program)
         module_name: Module name (default 'TEST')
@@ -84,9 +84,10 @@ def typecheck_module(iface_code: str = None, impl_code: str = None, prog_code: s
     """
     tmpdir = tempfile.mkdtemp()
     try:
-        # Write interface file if provided
+        # Materialize the interface under a literal, extensionless basename so the
+        # type checker's strict (no-extension-inference) resolution can find it.
         if iface_code:
-            iface_path = os.path.join(tmpdir, f"{module_name.lower()}.int")
+            iface_path = os.path.join(tmpdir, module_name.lower())
             with open(iface_path, 'w') as f:
                 f.write(iface_code)
         

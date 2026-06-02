@@ -1,4 +1,5 @@
 howto.md
 pascal-code/
 __pycache__/
-
+tests/*.pyc
+*.ll
