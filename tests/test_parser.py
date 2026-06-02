@@ -150,6 +150,14 @@ class TestParserJudgmentCalls(unittest.TestCase):
         self.assertIsNone(loop_body.stmts[0].label)
         self.assertIsNone(loop_body.stmts[1].label)
 
+    def test_short_circuit_and_then_or_else_parse(self):
+        """Boolean conditions accept IBM Pascal short-circuit operators."""
+        ast = parse_source(
+            "PROGRAM P; VAR a, b: BOOLEAN; BEGIN IF a AND THEN b THEN WRITELN(1); WHILE a OR ELSE b DO a := FALSE END."
+        )
+        self.assertEqual(ast.block.body[0].cond.op, 'AND_THEN')
+        self.assertEqual(ast.block.body[1].cond.op, 'OR_ELSE')
+
     def test_manual_radix_integer_constant(self):
         """The manual radix form n#digits should lex and parse as an integer constant."""
         ast = parse_source("PROGRAM P; CONST MASK = 16#FF; BEGIN END.")

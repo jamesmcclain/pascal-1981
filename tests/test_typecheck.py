@@ -107,6 +107,19 @@ class TestControlFlow(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("must be BOOLEAN", " ".join(str(e) for e in result.errors))
 
+    def test_short_circuit_boolean_operands(self):
+        """AND THEN / OR ELSE are valid for BOOLEAN operands."""
+        result = typecheck_source(
+            "PROGRAM P; VAR a, b: BOOLEAN; BEGIN IF a AND THEN b THEN WRITELN(1); IF a OR ELSE b THEN WRITELN(2) END."
+        )
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_short_circuit_rejects_integer_operands(self):
+        """AND THEN / OR ELSE are boolean-only, unlike ordinary bitwise AND/OR."""
+        result = typecheck_source("PROGRAM P; VAR x, y: INTEGER; BEGIN IF x AND THEN y THEN WRITELN(1) END.")
+        self.assertFalse(result.success)
+        self.assertIn("AND_THEN", " ".join(str(e) for e in result.errors))
+
     def test_while_boolean_condition(self):
         """WHILE with BOOLEAN condition is valid."""
         result = typecheck_source(

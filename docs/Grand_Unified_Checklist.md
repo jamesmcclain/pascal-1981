@@ -128,10 +128,11 @@ full reimplementation.
   spelling confirmed correct — the manual `CYCL` was a single-page typo.)
   - Done: BREAK/CYCLE now accept optional integer or identifier labels and preserve them on the AST while bare forms remain valid. Proven by `python -m unittest tests.test_parser`.
 
-- [ ] **2.5 — Short-circuit `AND THEN` / `OR ELSE`.** `[OBSERVED]` **M**
+- [x] **2.5 — Short-circuit `AND THEN` / `OR ELSE`.** `[OBSERVED]` **M**
   Manual `boolexp ::= expr {{AND THEN | OR ELSE} expr}*`; parser rejects both
   (`expected factor` at `THEN`/`ELSE`). Needs grammar + codegen (true
   short-circuit branching, distinct from bitwise `AND`/`OR`).
+  - Done: added `boolexp` parsing for condition contexts, boolean-only type rules for `AND_THEN`/`OR_ELSE`, and LLVM branch/PHI lowering that skips unnecessary RHS evaluation. Proven by `python -m unittest tests.test_parser tests.test_typecheck tests.test_codegen`.
 
 - [ ] **2.6 — `ADS ident` factor and `ADR OF` / `ADS OF` pointer types.** `[OBSERVED]` **M**
   Manual `factor` has `ADS ident` (alongside `ADR ident`, which exists); manual

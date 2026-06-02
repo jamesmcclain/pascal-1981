@@ -224,11 +224,13 @@ def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optiona
     `op` is the AST/token-kind operator name produced by the parser:
       additive/mul  : PLUS MINUS MUL SLASH DIV MOD
       bitwise/logic : AND OR XOR
+      short-circuit : AND_THEN OR_ELSE
       comparison    : EQ NEQ LT LE GT GE
     Returns None if the operation is invalid for these types.
     """
     ARITH = {'PLUS', 'MINUS', 'MUL', 'DIV', 'MOD'}  # integer-preserving arithmetic
     BITWISE = {'AND', 'OR', 'XOR'}
+    SHORT_CIRCUIT = {'AND_THEN', 'OR_ELSE'}
     COMPARE = {'EQ', 'NEQ', 'LT', 'LE', 'GT', 'GE'}
 
     # Integer arithmetic
@@ -242,7 +244,7 @@ def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optiona
 
     # Boolean logic
     if isinstance(left_type, BooleanType) and isinstance(right_type, BooleanType):
-        if op in BITWISE:
+        if op in BITWISE or op in SHORT_CIRCUIT:
             return BOOLEAN_TYPE
         if op in ('EQ', 'NEQ'):
             return BOOLEAN_TYPE

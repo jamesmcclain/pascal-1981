@@ -895,6 +895,9 @@ class Codegen:
 
     def codegen_binop(self, expr: BinOp) -> ir.Value:
         """Codegen binary operation."""
+        if expr.op in {'AND_THEN', 'OR_ELSE'}:
+            return self.codegen_short_circuit_binop(expr)
+
         left = self.codegen_expr(expr.left)
         right = self.codegen_expr(expr.right)
 
@@ -935,6 +938,35 @@ class Codegen:
             return self.builder.fcmp_ordered('>=', left, right) if is_real else self.builder.icmp_signed('>=', left, right)
         else:
             raise CodegenError(f'Unknown binary operator: {expr.op}')
+
+    def codegen_short_circuit_binop(self, expr: BinOp) -> ir.Value:
+        """Codegen short-circuit boolean AND THEN / OR ELSE."""
+        left = self.to_bool(self.codegen_expr(expr.left))
+
+        rhs_block = self.current_function.append_basic_block(name='sc_rhs')
+        merge_block = self.current_function.append_basic_block(name='sc_merge')
+
+        if expr.op == 'AND_THEN':
+            self.builder.cbranch(left, rhs_block, merge_block)
+            short_value = ir.Constant(ir.IntType(1), 0)
+        elif expr.op == 'OR_ELSE':
+            self.builder.cbranch(left, merge_block, rhs_block)
+            short_value = ir.Constant(ir.IntType(1), 1)
+        else:
+            raise CodegenError(f'Unknown short-circuit operator: {expr.op}')
+
+        left_block = self.builder.block
+
+        self.builder.position_at_end(rhs_block)
+        right = self.to_bool(self.codegen_expr(expr.right))
+        right_block = self.builder.block
+        self.builder.branch(merge_block)
+
+        self.builder.position_at_end(merge_block)
+        result = self.builder.phi(ir.IntType(1), name='sc_result')
+        result.add_incoming(short_value, left_block)
+        result.add_incoming(right, right_block)
+        return result
 
     def codegen_unaryop(self, expr: UnaryOp) -> ir.Value:
         """Codegen unary operation."""

@@ -201,6 +201,19 @@ class TestCodegenIR(unittest.TestCase):
         self.assertIn("sqrt", ir)
         self.assertIn("double", ir)
 
+    def test_short_circuit_generates_branching_ir(self):
+        """AND THEN / OR ELSE lower to branch + PHI, not eager bitwise ops."""
+        src = (
+            "PROGRAM P; VAR a, b: BOOLEAN; BEGIN "
+            "a := TRUE; b := FALSE; "
+            "IF a AND THEN b THEN WRITELN(1); "
+            "IF a OR ELSE b THEN WRITELN(2) END."
+        )
+        ir = compile_to_ir(src)
+        self.assertIn("sc_rhs", ir)
+        self.assertIn("sc_merge", ir)
+        self.assertIn("sc_result", ir)
+
 
 @requires_exe
 class TestCodegenBuildRun(unittest.TestCase):
@@ -250,6 +263,22 @@ class TestCodegenBuildRun(unittest.TestCase):
         src = "PROGRAM P; VAR p: ^INTEGER; BEGIN p := NIL END."
         ir = compile_to_ir(src)
         self.assertIn("null", ir)
+
+    def test_short_circuit_skips_rhs_runtime(self):
+        """Short-circuit operators must not evaluate an unnecessary RHS call."""
+        src = (
+            "PROGRAM P; "
+            "FUNCTION Bad: BOOLEAN; BEGIN WRITELN(99); Bad := TRUE END; "
+            "BEGIN "
+            "IF FALSE AND THEN Bad() THEN WRITELN(1); "
+            "IF TRUE OR ELSE Bad() THEN WRITELN(2) "
+            "END."
+        )
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertNotIn("99", stdout)
+        self.assertNotIn("1", stdout)
+        self.assertIn("2", stdout)
 
     def test_simple_arithmetic(self):
         """Simple arithmetic: 2 + 3 = 5."""

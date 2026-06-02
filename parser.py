@@ -481,7 +481,7 @@ class Parser:
 
     def parse_if_statement(self) -> IfStmt:
         self.expect('IF')
-        cond = self.parse_expression()
+        cond = self.parse_boolean_expression()
         self.expect('THEN')
         then_branch = self.parse_statement()
         else_branch: Optional[Statement] = None
@@ -515,12 +515,12 @@ class Parser:
                     break
                 stmts.append(self.parse_statement())
         self.expect('UNTIL')
-        cond = self.parse_expression()
+        cond = self.parse_boolean_expression()
         return RepeatStmt(stmts, cond)
 
     def parse_while_statement(self) -> WhileStmt:
         self.expect('WHILE')
-        cond = self.parse_expression()
+        cond = self.parse_boolean_expression()
         self.expect('DO')
         body = self.parse_statement()
         return WhileStmt(cond, body)
@@ -603,6 +603,20 @@ class Parser:
             return [Selector('DEREF', None)]
         self.error('expected selector')
 
+    def parse_boolean_expression(self) -> Expression:
+        left = self.parse_expression()
+        while (self.current().kind == 'AND' and self.next_kind() == 'THEN') or \
+              (self.current().kind == 'OR' and self.next_kind() == 'ELSE'):
+            if self.current().kind == 'AND':
+                op = 'AND_THEN'
+                self.pos += 2
+            else:
+                op = 'OR_ELSE'
+                self.pos += 2
+            right = self.parse_expression()
+            left = BinOp(op, left, right)
+        return left
+
     def parse_expression(self) -> Expression:
         left = self.parse_simple_expression()
         if self.current().kind in {'EQ', 'NEQ', 'LT', 'LE', 'GT', 'GE', 'IN'}:
@@ -621,6 +635,8 @@ class Parser:
         if sign == 'MINUS':
             left = UnaryOp('MINUS', left)
         while self.current().kind in {'PLUS', 'MINUS', 'OR', 'XOR'}:
+            if self.current().kind == 'OR' and self.next_kind() == 'ELSE':
+                break
             op = self.current().kind
             self.pos += 1
             right = self.parse_term()
@@ -630,6 +646,8 @@ class Parser:
     def parse_term(self) -> Expression:
         left = self.parse_factor()
         while self.current().kind in {'MUL', 'SLASH', 'DIV', 'MOD', 'AND'}:
+            if self.current().kind == 'AND' and self.next_kind() == 'THEN':
+                break
             op = self.current().kind
             self.pos += 1
             right = self.parse_factor()

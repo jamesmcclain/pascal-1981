@@ -240,10 +240,10 @@ statement =
 empty_stmt  = (* empty *) ;
 
 (* [OBSERVED] *)
-if_stmt     = "IF" expression "THEN" statement [ "ELSE" statement ] ;
+if_stmt     = "IF" boolexp "THEN" statement [ "ELSE" statement ] ;
 for_stmt    = "FOR" [ "STATIC" ] identifier ":=" expression ( "TO" | "DOWNTO" ) expression "DO" statement ;
-repeat_stmt = "REPEAT" [ statement { ";" statement } [ ";" ] ] "UNTIL" expression ;
-while_stmt  = "WHILE" expression "DO" statement ;
+repeat_stmt = "REPEAT" [ statement { ";" statement } [ ";" ] ] "UNTIL" boolexp ;
+while_stmt  = "WHILE" boolexp "DO" statement ;
 
 (* ── CASE statement ────────────────────────────────────────────────
    [OBSERVED] The index expression must be an ordinal type (INTEGER,
@@ -309,6 +309,7 @@ write_arg      = expression [ ":" expression [ ":" expression ] ] ;
    EXPRESSIONS
    ═══════════════════════════════════════════════════════════════════ *)
 
+boolexp     = expression { ( "AND" "THEN" | "OR" "ELSE" ) expression } ;
 expression  = simple_expr [ rel_op simple_expr ] ;
 simple_expr = [ "+" | "-" ] term { add_op term } ;
 term        = factor { mul_op factor } ;
