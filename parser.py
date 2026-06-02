@@ -879,17 +879,35 @@ class Parser:
                 low_expr = self.parse_constant()
                 self.expect('RANGE')
                 high_expr = self.parse_constant()
-                # Return as a special type (for now, just enum)
-                return BuiltinType('INTEGER')  # placeholder
+                if isinstance(low_expr, IntLiteral) and isinstance(high_expr, IntLiteral):
+                    return BuiltinType('INTEGER')
+                if isinstance(low_expr, CharLiteral) and isinstance(high_expr, CharLiteral):
+                    return BuiltinType('CHAR')
+                if isinstance(low_expr, BoolLiteral) and isinstance(high_expr, BoolLiteral):
+                    return BuiltinType('BOOLEAN')
+                return NamedType('INTEGER', None)
             name = self.current().lexeme
             self.pos += 1
             return NamedType(name, None)
         if self.current().kind in {'INTEGER_LITERAL', 'REAL_LITERAL', 'CHAR_LITERAL', 'STRING_LITERAL', 'BOOLEAN_LITERAL'}:
             expr = self.parse_constant()
             if self.match('RANGE'):
-                self.parse_constant()
-            # For set base, just return a built-in type
-            return BuiltinType('INTEGER')  # placeholder
+                high_expr = self.parse_constant()
+                if isinstance(expr, IntLiteral) and isinstance(high_expr, IntLiteral):
+                    return BuiltinType('INTEGER')
+                if isinstance(expr, CharLiteral) and isinstance(high_expr, CharLiteral):
+                    return BuiltinType('CHAR')
+                if isinstance(expr, BoolLiteral) and isinstance(high_expr, BoolLiteral):
+                    return BuiltinType('BOOLEAN')
+            if isinstance(expr, IntLiteral):
+                return BuiltinType('INTEGER')
+            if isinstance(expr, RealLiteral):
+                return BuiltinType('REAL')
+            if isinstance(expr, CharLiteral):
+                return BuiltinType('CHAR')
+            if isinstance(expr, BoolLiteral):
+                return BuiltinType('BOOLEAN')
+            return BuiltinType('INTEGER')
         if self.current().kind in {'INTEGER', 'REAL', 'BOOLEAN', 'CHAR', 'WORD', 'ADRMEM'}:
             name = self.current().kind
             self.pos += 1

@@ -79,6 +79,14 @@ class TestParserJudgmentCalls(unittest.TestCase):
                                msg=f"{fixture.name} should fail but was accepted"):
             parse_source(fixture.read_text())
 
+    def test_set_base_type_is_preserved(self):
+        """SET OF should preserve its declared base type instead of collapsing to INTEGER."""
+        ast = parse_source("PROGRAM P; VAR s: SET OF CHAR; BEGIN END.")
+        decl = ast.block.decls[0]
+        self.assertEqual(type(decl.type_expr).__name__, "SetType")
+        self.assertEqual(type(decl.type_expr.base).__name__, "NamedType")
+        self.assertEqual(decl.type_expr.base.name, "CHAR")
+
 
 if __name__ == '__main__':
     unittest.main()

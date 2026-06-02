@@ -53,10 +53,13 @@ These are worse than missing features because they fail late or silently.
     Proven by `python -m unittest tests.test_typecheck` and
     `python -m unittest tests.test_codegen`.
 
-- [ ] **1.2 — Set-type base is parsed then discarded.** `[READ]` **M**
-  `parse_set_base` parses a range/identifier and then returns
-  `BuiltinType('INTEGER')` with a literal `# placeholder` (two places). `SET OF`
-  therefore loses its real base type. Fixes here unblock real set typing/codegen.
+- [x] **1.2 — Set-type base is parsed then discarded.** `[READ]` **M**
+  `parse_set_base` now preserves the declared base type instead of collapsing to
+  `INTEGER`; set declarations keep their base element type through the AST.
+  - Done: parser now returns the real base type (rather than the old placeholder)
+    and a parser judgment test verifies `SET OF CHAR` retains its base. Proven by
+    `python -m unittest tests.test_parser tests.test_typecheck` and
+    `python -m unittest tests.test_codegen`.
 
 - [ ] **1.3 — `NIL` is documented as special but isn't a token.** `[OBSERVED]` **S**
   The EBNF `constant` lists a dedicated `"NIL"` alternative and a comment claims it
