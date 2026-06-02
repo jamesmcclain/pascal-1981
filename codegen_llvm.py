@@ -102,7 +102,7 @@ class Codegen:
             elif type_expr.name == 'CHAR':
                 return ir.IntType(8)
             elif type_expr.name == 'REAL':
-                raise CodegenError('REAL type not yet supported')
+                return ir.DoubleType()
             elif type_expr.name == 'ADRMEM':
                 return ir.PointerType(ir.IntType(8))  # pointer/address
             else:
@@ -117,6 +117,8 @@ class Codegen:
                 return ir.IntType(8)
             elif name_up == 'WORD':
                 return ir.IntType(16)
+            elif name_up == 'REAL':
+                return ir.DoubleType()
             elif name_up == 'CHAR':
                 return ir.IntType(8)
             return ir.IntType(32)
@@ -392,6 +394,7 @@ class Codegen:
         # Allocate space for return value
         return_alloca = self.builder.alloca(return_type, name='return_value')
         self.scope.define(decl.name, return_alloca, decl.return_type)
+        self.builder.store(ir.Constant(return_type, 0.0) if isinstance(return_type, ir.DoubleType) else ir.Constant(return_type, 0), return_alloca)
 
         # Codegen body
         for inner_decl in decl.body.decls:
@@ -400,8 +403,9 @@ class Codegen:
         for stmt in decl.body.body:
             self.codegen_stmt(stmt)
 
-        # Default return
-        self.builder.ret(ir.Constant(return_type, 0))
+        # Default return / function result
+        result = self.builder.load(return_alloca)
+        self.builder.ret(result)
 
         # Restore context
         self.builder = prev_builder
@@ -476,6 +480,15 @@ class Codegen:
                     value = self.builder.trunc(value, target_type)
                 elif target_type.width > value.type.width:
                     value = self.builder.zext(value, target_type)
+            elif isinstance(target_type, ir.DoubleType) and isinstance(value.type, ir.IntType):
+                value = self.builder.sitofp(value, target_type)
+            elif isinstance(target_type, ir.IntType) and isinstance(value.type, ir.DoubleType):
+                value = self.builder.fptosi(value, target_type)
+            elif isinstance(target_type, ir.PointerType) and isinstance(value.type, ir.PointerType):
+                if isinstance(stmt.expr, NilLiteral):
+                    value = ir.Constant(target_type, None)
+                elif value.type != target_type:
+                    value = self.builder.bitcast(value, target_type)
 
         self.builder.store(value, ptr)
 
@@ -760,6 +773,10 @@ class Codegen:
                 return self.builder.trunc(value, target_type)
             elif vt.width < target_type.width:
                 return self.builder.zext(value, target_type)
+        if isinstance(target_type, ir.DoubleType) and isinstance(vt, ir.IntType):
+            return self.builder.sitofp(value, target_type)
+        if isinstance(target_type, ir.IntType) and isinstance(vt, ir.DoubleType):
+            return self.builder.fptosi(value, target_type)
         return value
 
     def to_bool(self, cond: ir.Value) -> ir.Value:
@@ -783,7 +800,7 @@ class Codegen:
         if isinstance(expr, IntLiteral):
             return ir.Constant(ir.IntType(32), expr.value)
         elif isinstance(expr, RealLiteral):
-            raise CodegenError('REAL literals not yet supported')
+            return ir.Constant(ir.DoubleType(), expr.value)
         elif isinstance(expr, CharLiteral):
             # Convert char to int
             return ir.Constant(ir.IntType(8), ord(expr.value[0]) if expr.value else 0)
@@ -807,6 +824,8 @@ class Codegen:
             return self.builder.gep(str_global, [zero, zero])
         elif isinstance(expr, BoolLiteral):
             return ir.Constant(ir.IntType(1), 1 if expr.value else 0)
+        elif isinstance(expr, NilLiteral):
+            return ir.Constant(ir.PointerType(ir.IntType(8)), None)
         elif isinstance(expr, AdrExpr):
             # Address-of operator (adr var_name)
             symbol = self.scope.lookup(expr.name)
@@ -866,16 +885,23 @@ class Codegen:
         left = self.codegen_expr(expr.left)
         right = self.codegen_expr(expr.right)
 
+        is_real = isinstance(left.type, ir.DoubleType) or isinstance(right.type, ir.DoubleType)
+        if is_real:
+            if isinstance(left.type, ir.IntType):
+                left = self.builder.sitofp(left, ir.DoubleType())
+            if isinstance(right.type, ir.IntType):
+                right = self.builder.sitofp(right, ir.DoubleType())
+
         if expr.op == 'PLUS':
-            return self.builder.add(left, right)
+            return self.builder.fadd(left, right) if is_real else self.builder.add(left, right)
         elif expr.op == 'MINUS':
-            return self.builder.sub(left, right)
+            return self.builder.fsub(left, right) if is_real else self.builder.sub(left, right)
         elif expr.op == 'MUL':
-            return self.builder.mul(left, right)
+            return self.builder.fmul(left, right) if is_real else self.builder.mul(left, right)
         elif expr.op == 'SLASH' or expr.op == 'DIV':
-            return self.builder.sdiv(left, right)
+            return self.builder.fdiv(left, right) if is_real or expr.op == 'SLASH' else self.builder.sdiv(left, right)
         elif expr.op == 'MOD':
-            return self.builder.srem(left, right)
+            return self.builder.frem(left, right) if is_real else self.builder.srem(left, right)
         elif expr.op == 'AND':
             return self.builder.and_(left, right)
         elif expr.op == 'OR':
@@ -883,17 +909,17 @@ class Codegen:
         elif expr.op == 'XOR':
             return self.builder.xor(left, right)
         elif expr.op == 'EQ':
-            return self.builder.icmp_signed('==', left, right)
+            return self.builder.fcmp_ordered('==', left, right) if is_real else self.builder.icmp_signed('==', left, right)
         elif expr.op == 'NEQ':
-            return self.builder.icmp_signed('!=', left, right)
+            return self.builder.fcmp_ordered('!=', left, right) if is_real else self.builder.icmp_signed('!=', left, right)
         elif expr.op == 'LT':
-            return self.builder.icmp_signed('<', left, right)
+            return self.builder.fcmp_ordered('<', left, right) if is_real else self.builder.icmp_signed('<', left, right)
         elif expr.op == 'LE':
-            return self.builder.icmp_signed('<=', left, right)
+            return self.builder.fcmp_ordered('<=', left, right) if is_real else self.builder.icmp_signed('<=', left, right)
         elif expr.op == 'GT':
-            return self.builder.icmp_signed('>', left, right)
+            return self.builder.fcmp_ordered('>', left, right) if is_real else self.builder.icmp_signed('>', left, right)
         elif expr.op == 'GE':
-            return self.builder.icmp_signed('>=', left, right)
+            return self.builder.fcmp_ordered('>=', left, right) if is_real else self.builder.icmp_signed('>=', left, right)
         else:
             raise CodegenError(f'Unknown binary operator: {expr.op}')
 
@@ -929,17 +955,35 @@ class Codegen:
             return self.builder.zext(val, ir.IntType(32))
         elif lookup_name == 'ODD':
             val = self.codegen_expr(expr.args[0])
-            # ODD(n) = (n & 1) != 0
             one = ir.Constant(ir.IntType(32), 1)
             result = self.builder.and_(val, one)
-            # Convert to i1 (boolean): result != 0
             zero = ir.Constant(ir.IntType(32), 0)
             return self.builder.icmp_signed('!=', result, zero)
         elif lookup_name == 'SUCC':
             val = self.codegen_expr(expr.args[0])
-            # SUCC(n) = n + 1
             one = ir.Constant(ir.IntType(32), 1)
             return self.builder.add(val, one)
+        elif lookup_name == 'ABS':
+            val = self.codegen_expr(expr.args[0])
+            if isinstance(val.type, ir.DoubleType):
+                zero = ir.Constant(ir.DoubleType(), 0.0)
+                is_neg = self.builder.fcmp_ordered('<', val, zero)
+                neg = self.builder.fsub(zero, val)
+                return self.builder.select(is_neg, neg, val)
+            if isinstance(val.type, ir.IntType):
+                zero = ir.Constant(val.type, 0)
+                is_neg = self.builder.icmp_signed('<', val, zero)
+                neg = self.builder.sub(zero, val)
+                return self.builder.select(is_neg, neg, val)
+            raise CodegenError(f'ABS not supported for type {val.type}')
+        elif lookup_name == 'SQRT':
+            val = self.codegen_expr(expr.args[0])
+            if isinstance(val.type, ir.IntType):
+                val = self.builder.sitofp(val, ir.DoubleType())
+            elif not isinstance(val.type, ir.DoubleType):
+                raise CodegenError(f'SQRT not supported for type {val.type}')
+            sqrt_fn = self.module.declare_intrinsic('llvm.sqrt', [ir.DoubleType()])
+            return self.builder.call(sqrt_fn, [val])
 
         symbol = self.scope.lookup(lookup_name) or self.scope.lookup(expr.name)
         if not symbol:
@@ -959,91 +1003,98 @@ class Codegen:
     # Built-in Functions
     # ========================================================================
 
-    def builtin_writeln(self, args: List[Expression]) -> None:
+    def _declare_libm_func(self, name: str, ret_type: ir.Type, arg_types: List[ir.Type]) -> ir.Function:
+        if name not in [f.name for f in self.module.functions]:
+            fn_type = ir.FunctionType(ret_type, arg_types)
+            ir.Function(self.module, fn_type, name=name)
+        return next(f for f in self.module.functions if f.name == name)
+
+    def printf_func(self) -> ir.Function:
+        """Declare or fetch printf."""
+        if 'printf' not in [f.name for f in self.module.functions]:
+            printf_type = ir.FunctionType(ir.IntType(32), [ir.PointerType(ir.IntType(8))], var_arg=True)
+            ir.Function(self.module, printf_type, name='printf')
+        return next(f for f in self.module.functions if f.name == 'printf')
+
+    def coerce_printf_int(self, val: ir.Value) -> ir.Value:
+        """printf dynamic width/precision arguments must be C int-sized."""
+        if isinstance(val.type, ir.IntType):
+            if val.type.width < 32:
+                return self.builder.zext(val, ir.IntType(32))
+            if val.type.width > 32:
+                return self.builder.trunc(val, ir.IntType(32))
+        return val
+
+    def build_write_format_and_args(self, args: List[Union[Expression, WriteArg]]) -> tuple[str, List[ir.Value]]:
+        fmt_parts = []
+        printf_args = []
+        for arg in args:
+            if isinstance(arg, WriteArg):
+                expr = arg.expr
+                width = arg.width
+                precision = arg.precision
+            else:
+                expr = arg
+                width = None
+                precision = None
+
+            val = self.codegen_expr(expr)
+
+            prefix = '%'
+            if width is not None:
+                prefix += '*'
+                printf_args.append(self.coerce_printf_int(self.codegen_expr(width)))
+            if precision is not None:
+                prefix += '.*'
+                printf_args.append(self.coerce_printf_int(self.codegen_expr(precision)))
+
+            # Determine format based on LLVM type
+            val_type_str = str(val.type)
+            if 'i32' in val_type_str:
+                suffix = 'd'
+            elif 'i16' in val_type_str:
+                suffix = 'u'
+            elif 'i8*' in val_type_str or '[' in val_type_str:
+                suffix = 's'
+            elif 'i8' in val_type_str:
+                suffix = 'c'
+            elif 'i1' in val_type_str:
+                # Booleans as integers for printf
+                suffix = 'd'
+            elif 'double' in val_type_str or 'float' in val_type_str:
+                suffix = 'f'
+            else:
+                suffix = 's'
+
+            fmt_parts.append(prefix + suffix)
+            printf_args.append(val)
+
+        return "".join(fmt_parts), printf_args
+
+    def builtin_writeln(self, args: List[Union[Expression, WriteArg]]) -> None:
         """Implement WRITELN for any combination of string/integer/boolean types."""
-        # Declare printf if not already declared
-        if 'printf' not in [f.name for f in self.module.functions]:
-            printf_type = ir.FunctionType(ir.IntType(32), [ir.PointerType(ir.IntType(8))], var_arg=True)
-            ir.Function(self.module, printf_type, name='printf')
-
-        # Get printf function
-        printf_func = next(f for f in self.module.functions if f.name == 'printf')
-
-        fmt_parts = []
-        val_args = []
-        for arg in args:
-            val = self.codegen_expr(arg)
-            val_args.append(val)
-
-            # Determine format based on LLVM type
-            val_type_str = str(val.type)
-            if 'i32' in val_type_str:
-                fmt_parts.append("%d")
-            elif 'i16' in val_type_str:
-                fmt_parts.append("%u")
-            elif 'i8*' in val_type_str or '[' in val_type_str:
-                fmt_parts.append("%s")
-            elif 'i8' in val_type_str:
-                fmt_parts.append("%c")
-            elif 'i1' in val_type_str:
-                # Booleans as integers for printf
-                fmt_parts.append("%d")
-            elif 'double' in val_type_str or 'float' in val_type_str:
-                fmt_parts.append("%f")
-            else:
-                fmt_parts.append("%s")
-
-        fmt_str = "".join(fmt_parts) + "\n"
+        printf_func = self.printf_func()
+        fmt_str, printf_args = self.build_write_format_and_args(args)
+        fmt_str += "\n"
         fmt_const = ir.Constant(ir.ArrayType(ir.IntType(8), len(fmt_str) + 1), bytearray(fmt_str.encode('utf-8') + b'\0'))
         fmt_global = ir.GlobalVariable(self.module, fmt_const.type, name=self.unique_name('fmt'))
         fmt_global.initializer = fmt_const
         fmt_global.global_constant = True
         fmt_ptr = self.builder.gep(fmt_global, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0)])
 
-        self.builder.call(printf_func, [fmt_ptr] + val_args)
+        self.builder.call(printf_func, [fmt_ptr] + printf_args)
 
-    def builtin_write(self, args: List[Expression]) -> None:
+    def builtin_write(self, args: List[Union[Expression, WriteArg]]) -> None:
         """Implement WRITE for any combination of string/integer/boolean types (no newline)."""
-        # Declare printf if not already declared
-        if 'printf' not in [f.name for f in self.module.functions]:
-            printf_type = ir.FunctionType(ir.IntType(32), [ir.PointerType(ir.IntType(8))], var_arg=True)
-            ir.Function(self.module, printf_type, name='printf')
-
-        # Get printf function
-        printf_func = next(f for f in self.module.functions if f.name == 'printf')
-
-        fmt_parts = []
-        val_args = []
-        for arg in args:
-            val = self.codegen_expr(arg)
-            val_args.append(val)
-
-            # Determine format based on LLVM type
-            val_type_str = str(val.type)
-            if 'i32' in val_type_str:
-                fmt_parts.append("%d")
-            elif 'i16' in val_type_str:
-                fmt_parts.append("%u")
-            elif 'i8*' in val_type_str or '[' in val_type_str:
-                fmt_parts.append("%s")
-            elif 'i8' in val_type_str:
-                fmt_parts.append("%c")
-            elif 'i1' in val_type_str:
-                # Booleans as integers for printf
-                fmt_parts.append("%d")
-            elif 'double' in val_type_str or 'float' in val_type_str:
-                fmt_parts.append("%f")
-            else:
-                fmt_parts.append("%s")
-
-        fmt_str = "".join(fmt_parts)
+        printf_func = self.printf_func()
+        fmt_str, printf_args = self.build_write_format_and_args(args)
         fmt_const = ir.Constant(ir.ArrayType(ir.IntType(8), len(fmt_str) + 1), bytearray(fmt_str.encode('utf-8') + b'\0'))
         fmt_global = ir.GlobalVariable(self.module, fmt_const.type, name=self.unique_name('fmt'))
         fmt_global.initializer = fmt_const
         fmt_global.global_constant = True
         fmt_ptr = self.builder.gep(fmt_global, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0)])
 
-        self.builder.call(printf_func, [fmt_ptr] + val_args)
+        self.builder.call(printf_func, [fmt_ptr] + printf_args)
 
     def builtin_readln(self, args: List[Expression]) -> None:
         """Implement READLN for integers."""

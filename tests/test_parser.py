@@ -55,17 +55,50 @@ class TestParserReject(unittest.TestCase):
 
 
 class TestParserJudgmentCalls(unittest.TestCase):
-    """Test cases whose verdict depends on dialect decisions (skipped, not passing/failing)."""
+    """Dialect decisions promoted from informational fixtures to assertions."""
 
-    def test_judgment_calls_skipped(self):
-        """Judgment call fixtures are informational; skip them pending dialect resolution."""
-        fixtures_dir = Path(__file__).parent / "fixtures" / "parser" / "judgment_calls"
-        files = sorted(fixtures_dir.glob("*.pas"))
-        self.assertEqual(len(files), 2, f"Expected 2 judgment_calls fixtures, found {len(files)}")
+    def test_write_field_width_passes(self):
+        """WRITE/WRITELN field-width syntax is valid only for the write family."""
+        fixture = Path(__file__).parent / "fixtures" / "parser" / "judgment_calls" / "A_write_field_width.pas"
+        try:
+            parse_source(fixture.read_text())
+        except (LexerError, ParserError) as e:
+            self.fail(f"{fixture.name} should pass but raised {type(e).__name__}: {e}")
 
-        for fixture in files:
-            with self.subTest(file=fixture.name):
-                self.skipTest("dialect decision pending")
+    def test_multi_write_field_widths_pass(self):
+        """Multiple WRITE arguments may each carry width/precision formatting."""
+        parse_source(
+            "PROGRAM P; VAR x, y : REAL; z : INTEGER; "
+            "BEGIN WRITELN(x:5:2, y:5:2, z:4, 'Hello World') END."
+        )
+
+    def test_colon_args_on_ordinary_call_fail(self):
+        """Ordinary procedure calls do not accept WRITE-style :width/:precision suffixes."""
+        fixture = Path(__file__).parent / "fixtures" / "parser" / "judgment_calls" / "B_colon_args_any_call.pas"
+        with self.assertRaises((LexerError, ParserError),
+                               msg=f"{fixture.name} should fail but was accepted"):
+            parse_source(fixture.read_text())
+
+    def test_set_base_type_is_preserved(self):
+        """SET OF should preserve its declared base type instead of collapsing to INTEGER."""
+        ast = parse_source("PROGRAM P; VAR s: SET OF CHAR; BEGIN END.")
+        decl = ast.block.decls[0]
+        self.assertEqual(type(decl.type_expr).__name__, "SetType")
+        self.assertEqual(type(decl.type_expr.base).__name__, "NamedType")
+        self.assertEqual(decl.type_expr.base.name, "CHAR")
+
+    def test_identifier_labels_parse_as_labels(self):
+        """Identifier labels should be legal in both LABEL declarations and label statements."""
+        ast = parse_source("PROGRAM P; LABEL start; BEGIN start: END.")
+        self.assertEqual(ast.block.decls[0].labels, ['start'])
+        self.assertEqual(type(ast.block.body[0]).__name__, 'LabelStmt')
+        self.assertEqual(ast.block.body[0].label, 'start')
+
+    def test_manual_radix_integer_constant(self):
+        """The manual radix form n#digits should lex and parse as an integer constant."""
+        ast = parse_source("PROGRAM P; CONST MASK = 16#FF; BEGIN END.")
+        const = ast.block.decls[0]
+        self.assertEqual(const.value.value, 255)
 
 
 if __name__ == '__main__':

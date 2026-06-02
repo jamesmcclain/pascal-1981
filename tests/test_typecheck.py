@@ -82,6 +82,16 @@ class TestTypeCompatibility(unittest.TestCase):
         result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := 1; x := 2; x := 3 END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
+    def test_abs_and_sqrt_typecheck(self):
+        """ABS accepts INTEGER/REAL and SQRT returns REAL."""
+        result = typecheck_source("PROGRAM P; VAR x: REAL; BEGIN x := SQRT(ABS(-5)) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_nil_typecheck_for_pointer_assignment(self):
+        """NIL is a typed null pointer constant."""
+        result = typecheck_source("PROGRAM P; VAR p: ^INTEGER; BEGIN p := NIL END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
 
 class TestControlFlow(unittest.TestCase):
     """Control flow type validation (IF, WHILE, FOR, REPEAT, CASE)."""
@@ -146,6 +156,13 @@ class TestCallValidation(unittest.TestCase):
         """Procedure call with correct parameters is valid."""
         result = typecheck_source(
             "PROGRAM P; PROCEDURE P1(x: INTEGER); BEGIN END; BEGIN P1(42) END."
+        )
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_integer_to_real_procedure_parameter(self):
+        """INTEGER actual may flow to REAL formal parameter."""
+        result = typecheck_source(
+            "PROGRAM P; PROCEDURE P1(x: REAL); BEGIN END; BEGIN P1(42) END."
         )
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 

@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 from ast_nodes import AdrExpr
 from ast_nodes import ArrayType as ASTArrayType
 from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, ConstDecl, Designator, Expression, ForStmt, FuncCall, FuncDecl, Identifier, IfStmt,
-                       ImplementationUnit, InterfaceUnit, IntLiteral, ModuleUnit, NamedType, ProcCallStmt, ProcDecl, ProgramUnit, RealLiteral)
+                       ImplementationUnit, InterfaceUnit, IntLiteral, ModuleUnit, NamedType, NilLiteral, PointerType as ASTPointerType, ProcCallStmt, ProcDecl, ProgramUnit, RealLiteral, WriteArg)
 from ast_nodes import RecordType as ASTRecordType
 from ast_nodes import (RepeatStmt, ReturnStmt, Selector, SizeofExpr, Statement, StringLiteral, TypeDecl, UnaryOp, UseClause, VarDecl, WhileStmt)
 from symbol_table import SourceLocation, Symbol, SymbolTable
@@ -86,17 +86,9 @@ class PascalTypeChecker(TypeChecker):
         readln_type = ProcedureType('READLN', [])
         self.symbol_table.define('READLN', Symbol(name='READLN', type=readln_type, kind='procedure', is_mutable=False))
 
-        # ABS function (argument can be INTEGER or REAL)
-        abs_type = FunctionType('ABS', [('n', INTEGER_TYPE)], INTEGER_TYPE)
-        self.symbol_table.define('ABS', Symbol(name='ABS', type=abs_type, kind='function', is_mutable=False))
-
-        # SQRT function (returns REAL)
-        sqrt_type = FunctionType('SQRT', [('n', REAL_TYPE)], REAL_TYPE)
-        self.symbol_table.define('SQRT', Symbol(name='SQRT', type=sqrt_type, kind='function', is_mutable=False))
-
-        # LENGTH function (for strings/arrays - returns INTEGER)
-        length_type = FunctionType('LENGTH', [('s', CHAR_TYPE)], INTEGER_TYPE)
-        self.symbol_table.define('LENGTH', Symbol(name='LENGTH', type=length_type, kind='function', is_mutable=False))
+        # ABS and SQRT are handled as special built-ins in type inference/codegen.
+        # LENGTH is not part of the manual's predeclared list; keep it out until
+        # a dialect decision puts it back in.
 
         # CHR function (returns CHAR)
         chr_type = FunctionType('CHR', [('n', INTEGER_TYPE)], CHAR_TYPE)
@@ -895,7 +887,13 @@ class PascalTypeChecker(TypeChecker):
 
             # Check that all arguments are well-formed (this will catch undefined variables)
             for i, arg in enumerate(stmt.args):
-                arg_type = self.infer_expression_type(arg)
+                value_arg = arg.expr if isinstance(arg, WriteArg) else arg
+                arg_type = self.infer_expression_type(value_arg)
+                if isinstance(arg, WriteArg):
+                    if arg.width is not None:
+                        self.infer_expression_type(arg.width)
+                    if arg.precision is not None:
+                        self.infer_expression_type(arg.precision)
                 # If it's a user-defined procedure, also check type compatibility
                 if stmt.name.upper() not in ['WRITELN', 'WRITE', 'READLN'] and arg_type:
                     if i < len(sym.type.params):
@@ -912,6 +910,8 @@ class PascalTypeChecker(TypeChecker):
             return REAL_TYPE
         elif isinstance(expr, BoolLiteral):
             return BOOLEAN_TYPE
+        elif isinstance(expr, NilLiteral):
+            return PointerType(CHAR_TYPE)
         elif isinstance(expr, StringLiteral):
             return PointerType(CHAR_TYPE)
         elif isinstance(expr, AdrExpr):
@@ -949,6 +949,26 @@ class PascalTypeChecker(TypeChecker):
             return None
         elif isinstance(expr, FuncCall):
             lookup_name = expr.name.upper()
+            if lookup_name == 'ABS':
+                if len(expr.args) != 1:
+                    self.error(f"Function 'ABS' expects 1 argument, got {len(expr.args)}", expr)
+                    return None
+                arg_type = self.infer_expression_type(expr.args[0])
+                if arg_type in (INTEGER_TYPE, REAL_TYPE):
+                    return arg_type
+                if arg_type:
+                    self.error(f"Argument 1 type mismatch: expected INTEGER or REAL, got {arg_type}", expr)
+                return None
+            if lookup_name == 'SQRT':
+                if len(expr.args) != 1:
+                    self.error(f"Function 'SQRT' expects 1 argument, got {len(expr.args)}", expr)
+                    return None
+                arg_type = self.infer_expression_type(expr.args[0])
+                if arg_type in (INTEGER_TYPE, REAL_TYPE):
+                    return REAL_TYPE
+                if arg_type:
+                    self.error(f"Argument 1 type mismatch: expected INTEGER or REAL, got {arg_type}", expr)
+                return None
             sym = self.symbol_table.lookup(lookup_name) or self.symbol_table.lookup(expr.name)
             if not sym:
                 self.error(f"Undefined function: {expr.name}", expr)
@@ -1077,6 +1097,9 @@ class PascalTypeChecker(TypeChecker):
                     if field_type:
                         fields[field_name] = field_type
             return RecordType(type_expr.name, fields)
+        elif isinstance(type_expr, ASTPointerType):
+            base_type = self.resolve_type(type_expr.base)
+            return PointerType(base_type) if base_type else PointerType(CHAR_TYPE)
         else:
             return None
 

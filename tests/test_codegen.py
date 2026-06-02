@@ -100,6 +100,13 @@ class TestCodegenIR(unittest.TestCase):
         self.assertIsInstance(ir, str)
         self.assertGreater(len(ir), 0)
 
+    def test_real_literal_and_assignment(self):
+        """REAL literals and assignment generate valid IR."""
+        src = "PROGRAM P; VAR x: REAL; BEGIN x := 1.5; WRITELN(x) END."
+        ir = compile_to_ir(src)
+        self.assertIsInstance(ir, str)
+        self.assertIn("double", ir)
+
     def test_arithmetic_expression(self):
         """Arithmetic expression generates valid IR."""
         src = "PROGRAM P; VAR x: INTEGER; BEGIN x := 1 + 2 * 3; WRITELN(x) END."
@@ -159,6 +166,30 @@ class TestCodegenIR(unittest.TestCase):
         self.assertIsInstance(ir, str)
         self.assertGreater(len(ir), 0)
 
+    def test_real_function_parameter_and_return(self):
+        """REAL function parameters and return values generate valid IR."""
+        src = (
+            "PROGRAM P; "
+            "FUNCTION Twice(x: REAL): REAL; "
+            "BEGIN Twice := x + x END; "
+            "BEGIN WRITELN(Twice(1.5)) END."
+        )
+        ir = compile_to_ir(src)
+        self.assertIn("double", ir)
+        self.assertIn("Twice", ir)
+
+    def test_abs_and_sqrt_generate_valid_ir(self):
+        """ABS and SQRT generate valid IR for integer/real operands."""
+        src = (
+            "PROGRAM P; VAR x: REAL; BEGIN "
+            "WRITELN(ABS(-5)); "
+            "x := SQRT(9); "
+            "WRITELN(x) END."
+        )
+        ir = compile_to_ir(src)
+        self.assertIn("sqrt", ir)
+        self.assertIn("double", ir)
+
 
 @requires_exe
 class TestCodegenBuildRun(unittest.TestCase):
@@ -170,6 +201,44 @@ class TestCodegenBuildRun(unittest.TestCase):
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         self.assertIn("42", stdout)
+
+    def test_real_assignment_and_output(self):
+        """REAL assignment and output runs and produces correct output."""
+        src = "PROGRAM P; VAR x: REAL; BEGIN x := 1.5; WRITELN(x) END."
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertIn("1.5", stdout)
+
+    def test_real_function_parameter_and_return(self):
+        """REAL function parameter and return values run and produce output."""
+        src = (
+            "PROGRAM P; "
+            "FUNCTION Twice(x: REAL): REAL; "
+            "BEGIN Twice := x + x END; "
+            "BEGIN WRITELN(Twice(1.5)) END."
+        )
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertIn("3", stdout)
+
+    def test_abs_and_sqrt_run(self):
+        """ABS and SQRT run and produce correct output."""
+        src = (
+            "PROGRAM P; VAR x: REAL; BEGIN "
+            "WRITELN(ABS(-5)); "
+            "x := SQRT(9); "
+            "WRITELN(x) END."
+        )
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertIn("5", stdout)
+        self.assertIn("3", stdout)
+
+    def test_nil_codegen(self):
+        """NIL lowers to a null pointer value."""
+        src = "PROGRAM P; VAR p: ^INTEGER; BEGIN p := NIL END."
+        ir = compile_to_ir(src)
+        self.assertIn("null", ir)
 
     def test_simple_arithmetic(self):
         """Simple arithmetic: 2 + 3 = 5."""
@@ -213,6 +282,17 @@ class TestCodegenBuildRun(unittest.TestCase):
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         self.assertIn("99", stdout)
+
+    def test_integer_to_real_procedure_parameter(self):
+        """INTEGER actual coerces into REAL procedure parameter at codegen."""
+        src = (
+            "PROGRAM P; "
+            "PROCEDURE PrintReal(x: REAL); BEGIN WRITELN(x) END; "
+            "BEGIN PrintReal(7) END."
+        )
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertIn("7", stdout)
 
     def test_nested_arithmetic(self):
         """Nested arithmetic expressions."""

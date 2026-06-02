@@ -69,6 +69,7 @@ KEYWORD_CODES = {
     'XOR': 0x0039,
     'AND': 0x003A,
     'NOT': 0x0057,
+    'NIL': 0x005B,
 }
 
 SYMBOL_CODES = {
@@ -249,6 +250,23 @@ class Lexer:
         start = self.pos
         while self.current() and self.current().isdigit():
             self.advance()
+
+        if self.current() == '#':
+            base_text = self.source[start:self.pos]
+            base = int(base_text)
+            if base < 2 or base > 16:
+                raise LexerError(f"Invalid radix {base} at line {line}, column {column}")
+            self.advance()  # consume '#'
+            digits_start = self.pos
+            digits = []
+            valid = '0123456789ABCDEF'[:base]
+            while self.current() and self.current().upper() in valid:
+                digits.append(self.current())
+                self.advance()
+            if not digits:
+                raise LexerError(f"Invalid radix constant at line {line}, column {column}")
+            lexeme = self.source[start:self.pos]
+            return self.emit('INTEGER_LITERAL', lexeme, int(''.join(digits), base), line, column)
 
         # Real number only if we see digit+ '.' digit
         if self.current() == '.' and self.peek() != '.' and self.peek().isdigit():

@@ -144,9 +144,16 @@ class AssignStmt(ASTNode):
 
 
 @dataclass
+class WriteArg(ASTNode):
+    expr: Expression
+    width: Optional[Expression] = None
+    precision: Optional[Expression] = None
+
+
+@dataclass
 class ProcCallStmt(ASTNode):
     name: str
-    args: List[Expression]
+    args: List[Union[Expression, WriteArg]]
 
 
 @dataclass
@@ -231,7 +238,7 @@ class EmptyStmt(ASTNode):
 # Expressions
 # ============================================================================
 
-Expression = Union['BinOp', 'UnaryOp', 'IntLiteral', 'RealLiteral', 'CharLiteral', 'StringLiteral', 'BoolLiteral', 'Identifier', 'Designator', 'FuncCall', 'SetConstructor',
+Expression = Union['BinOp', 'UnaryOp', 'IntLiteral', 'RealLiteral', 'CharLiteral', 'StringLiteral', 'BoolLiteral', 'NilLiteral', 'Identifier', 'Designator', 'FuncCall', 'SetConstructor',
                    'AdrExpr', 'SizeofExpr', 'UpperExpr', 'RangeExpr']
 
 
@@ -271,6 +278,11 @@ class StringLiteral(ASTNode):
 @dataclass
 class BoolLiteral(ASTNode):
     value: bool
+
+
+@dataclass
+class NilLiteral(ASTNode):
+    pass
 
 
 @dataclass

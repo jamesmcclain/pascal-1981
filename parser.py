@@ -6,9 +6,9 @@ from typing import List, Optional, Sequence, Union
 
 from ast_nodes import (AdrExpr, ArrayType, AssignStmt, ASTNode, BinOp, Block, BoolLiteral, BreakStmt, BuiltinType, CaseElement, CaseStmt, CharLiteral, CompoundStmt, ConstDecl,
                        CycleStmt, Declaration, Designator, EmptyStmt, EnumType, Expression, FileType, ForStmt, FuncCall, FuncDecl, GotoStmt, Identifier, IfStmt, ImplementationUnit,
-                       IndexRange, InterfaceUnit, IntLiteral, LabelDecl, LabelStmt, LStringType, ModuleUnit, NamedType, Param, PointerType, ProcCallStmt, ProcDecl, ProgramUnit,
+                       IndexRange, InterfaceUnit, IntLiteral, LabelDecl, LabelStmt, LStringType, ModuleUnit, NamedType, NilLiteral, Param, PointerType, ProcCallStmt, ProcDecl, ProgramUnit,
                        RangeExpr, RealLiteral, RecordType, RepeatStmt, ReturnStmt, Selector, SetConstructor, SetType, SizeofExpr, Statement, StringLiteral, Type, TypeDecl, UnaryOp,
-                       UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt)
+                       UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt, WriteArg)
 from lexer import ALL_CODES, KEYWORD_CODES, LexerError, Token, lex_file
 
 
@@ -415,7 +415,7 @@ class Parser:
         if kind == 'CYCLE':
             self.pos += 1
             return CycleStmt()
-        if kind == 'INTEGER_LITERAL' and self.next_kind() == 'COLON':
+        if kind in {'INTEGER_LITERAL', 'IDENTIFIER'} and self.next_kind() == 'COLON':
             return self.parse_label_statement()
         if kind == 'IDENTIFIER':
             return self.parse_assignment_or_proc_call()
@@ -438,11 +438,14 @@ class Parser:
         if selectors:
             self.error('designator statement must be an assignment')
 
-        args: List[Expression] = []
+        args: List[Union[Expression, WriteArg]] = []
         if self.current().kind == 'LPAREN':
             self.pos += 1
             if self.current().kind != 'RPAREN':
-                args = self.parse_actual_parameter_list()
+                if name.upper() in {'WRITE', 'WRITELN'}:
+                    args = self.parse_write_actual_parameter_list()
+                else:
+                    args = self.parse_actual_parameter_list()
             self.expect('RPAREN')
         # Bare procedure call is allowed.
         return ProcCallStmt(name, args)
@@ -455,11 +458,24 @@ class Parser:
         return exprs
 
     def parse_actual_parameter(self) -> Expression:
+        return self.parse_expression()
+
+    def parse_write_actual_parameter_list(self) -> List[WriteArg]:
+        args: List[WriteArg] = []
+        args.append(self.parse_write_actual_parameter())
+        while self.match('COMMA'):
+            args.append(self.parse_write_actual_parameter())
+        return args
+
+    def parse_write_actual_parameter(self) -> WriteArg:
         expr = self.parse_expression()
-        while self.match('COLON'):
-            # Additional format specifiers; we'll ignore them for now
-            self.parse_expression()
-        return expr
+        width: Optional[Expression] = None
+        precision: Optional[Expression] = None
+        if self.match('COLON'):
+            width = self.parse_expression()
+            if self.match('COLON'):
+                precision = self.parse_expression()
+        return WriteArg(expr, width, precision)
 
     def parse_if_statement(self) -> IfStmt:
         self.expect('IF')
@@ -660,6 +676,9 @@ class Parser:
             value = self.current().lexeme.upper() == 'TRUE'
             self.pos += 1
             return BoolLiteral(value)
+        if kind == 'NIL':
+            self.pos += 1
+            return NilLiteral()
         if kind == 'LPAREN':
             self.pos += 1
             expr = self.parse_expression()
@@ -717,12 +736,7 @@ class Parser:
     def parse_constant(self) -> Expression:
         kind = self.current().kind
         if kind == 'INTEGER_LITERAL':
-            lexeme = self.current().lexeme
-            # Handle hex literals ($FF form)
-            if lexeme.startswith('$'):
-                value = int(lexeme[1:], 16)
-            else:
-                value = int(lexeme)
+            value = self.current().value
             self.pos += 1
             return IntLiteral(value)
         if kind == 'REAL_LITERAL':
@@ -741,6 +755,9 @@ class Parser:
             value = self.current().lexeme.upper() == 'TRUE'
             self.pos += 1
             return BoolLiteral(value)
+        if kind == 'NIL':
+            self.pos += 1
+            return NilLiteral()
         if kind == 'IDENTIFIER':
             name = self.current().lexeme
             self.pos += 1
@@ -863,17 +880,35 @@ class Parser:
                 low_expr = self.parse_constant()
                 self.expect('RANGE')
                 high_expr = self.parse_constant()
-                # Return as a special type (for now, just enum)
-                return BuiltinType('INTEGER')  # placeholder
+                if isinstance(low_expr, IntLiteral) and isinstance(high_expr, IntLiteral):
+                    return BuiltinType('INTEGER')
+                if isinstance(low_expr, CharLiteral) and isinstance(high_expr, CharLiteral):
+                    return BuiltinType('CHAR')
+                if isinstance(low_expr, BoolLiteral) and isinstance(high_expr, BoolLiteral):
+                    return BuiltinType('BOOLEAN')
+                return NamedType('INTEGER', None)
             name = self.current().lexeme
             self.pos += 1
             return NamedType(name, None)
         if self.current().kind in {'INTEGER_LITERAL', 'REAL_LITERAL', 'CHAR_LITERAL', 'STRING_LITERAL', 'BOOLEAN_LITERAL'}:
             expr = self.parse_constant()
             if self.match('RANGE'):
-                self.parse_constant()
-            # For set base, just return a built-in type
-            return BuiltinType('INTEGER')  # placeholder
+                high_expr = self.parse_constant()
+                if isinstance(expr, IntLiteral) and isinstance(high_expr, IntLiteral):
+                    return BuiltinType('INTEGER')
+                if isinstance(expr, CharLiteral) and isinstance(high_expr, CharLiteral):
+                    return BuiltinType('CHAR')
+                if isinstance(expr, BoolLiteral) and isinstance(high_expr, BoolLiteral):
+                    return BuiltinType('BOOLEAN')
+            if isinstance(expr, IntLiteral):
+                return BuiltinType('INTEGER')
+            if isinstance(expr, RealLiteral):
+                return BuiltinType('REAL')
+            if isinstance(expr, CharLiteral):
+                return BuiltinType('CHAR')
+            if isinstance(expr, BoolLiteral):
+                return BuiltinType('BOOLEAN')
+            return BuiltinType('INTEGER')
         if self.current().kind in {'INTEGER', 'REAL', 'BOOLEAN', 'CHAR', 'WORD', 'ADRMEM'}:
             name = self.current().kind
             self.pos += 1

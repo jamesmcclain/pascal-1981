@@ -299,7 +299,10 @@ cycle_stmt  = "CYCLE" ;   (* continue to next loop iteration *)
 return_stmt = "RETURN" ;
 
 assignment = designator ":=" expression ;
-proc_call  = identifier [ "(" expression_list ")" ] ;
+proc_call  = identifier [ "(" expression_list ")" ]
+           | ( "WRITE" | "WRITELN" ) [ "(" write_arg_list ")" ] ;
+write_arg_list = write_arg { "," write_arg } ;
+write_arg      = expression [ ":" expression [ ":" expression ] ] ;
 
 
 (* ═══════════════════════════════════════════════════════════════════
@@ -465,11 +468,14 @@ constant =
     | "NIL"
     | identifier ;
 
-(* [ADDED] Decimal and hexadecimal integer forms.
-   Hex uses a $ prefix, e.g. $FF, $1A2B. hex_digit is case-insensitive. *)
-integer_constant = decimal_integer | hex_integer ;
+(* [ADDED] Decimal, radix, and hexadecimal integer forms.
+   Radix uses the manual n#digits form, e.g. 16#FF. Hex via $FF remains
+   accepted as a compatibility extension. hex_digit is case-insensitive. *)
+integer_constant = decimal_integer | radix_integer | hex_integer ;
 decimal_integer  = digit { digit } ;
+radix_integer    = digit { digit } "#" radix_digits ;
 hex_integer      = "$" hex_digit { hex_digit } ;
+radix_digits     = hex_digit { hex_digit } ;
 hex_digit        = digit | "A" | "B" | "C" | "D" | "E" | "F" ;
 
 (* [ADDED] Optional exponent suffix for scientific notation, e.g. 1.5E10, 6.022E+23. *)
