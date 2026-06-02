@@ -6,7 +6,7 @@ from typing import List, Optional, Sequence, Union
 
 from ast_nodes import (AdrExpr, ArrayType, AssignStmt, ASTNode, BinOp, Block, BoolLiteral, BreakStmt, BuiltinType, CaseElement, CaseStmt, CharLiteral, CompoundStmt, ConstDecl,
                        CycleStmt, Declaration, Designator, EmptyStmt, EnumType, Expression, FileType, ForStmt, FuncCall, FuncDecl, GotoStmt, Identifier, IfStmt, ImplementationUnit,
-                       IndexRange, InterfaceUnit, IntLiteral, LabelDecl, LabelStmt, LStringType, ModuleUnit, NamedType, Param, PointerType, ProcCallStmt, ProcDecl, ProgramUnit,
+                       IndexRange, InterfaceUnit, IntLiteral, LabelDecl, LabelStmt, LStringType, ModuleUnit, NamedType, NilLiteral, Param, PointerType, ProcCallStmt, ProcDecl, ProgramUnit,
                        RangeExpr, RealLiteral, RecordType, RepeatStmt, ReturnStmt, Selector, SetConstructor, SetType, SizeofExpr, Statement, StringLiteral, Type, TypeDecl, UnaryOp,
                        UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt, WriteArg)
 from lexer import ALL_CODES, KEYWORD_CODES, LexerError, Token, lex_file
@@ -676,6 +676,9 @@ class Parser:
             value = self.current().lexeme.upper() == 'TRUE'
             self.pos += 1
             return BoolLiteral(value)
+        if kind == 'NIL':
+            self.pos += 1
+            return NilLiteral()
         if kind == 'LPAREN':
             self.pos += 1
             expr = self.parse_expression()
@@ -757,6 +760,9 @@ class Parser:
             value = self.current().lexeme.upper() == 'TRUE'
             self.pos += 1
             return BoolLiteral(value)
+        if kind == 'NIL':
+            self.pos += 1
+            return NilLiteral()
         if kind == 'IDENTIFIER':
             name = self.current().lexeme
             self.pos += 1

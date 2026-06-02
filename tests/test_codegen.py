@@ -234,6 +234,12 @@ class TestCodegenBuildRun(unittest.TestCase):
         self.assertIn("5", stdout)
         self.assertIn("3", stdout)
 
+    def test_nil_codegen(self):
+        """NIL lowers to a null pointer value."""
+        src = "PROGRAM P; VAR p: ^INTEGER; BEGIN p := NIL END."
+        ir = compile_to_ir(src)
+        self.assertIn("null", ir)
+
     def test_simple_arithmetic(self):
         """Simple arithmetic: 2 + 3 = 5."""
         src = "PROGRAM P; BEGIN WRITELN(2 + 3) END."

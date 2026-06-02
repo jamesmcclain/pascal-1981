@@ -484,6 +484,11 @@ class Codegen:
                 value = self.builder.sitofp(value, target_type)
             elif isinstance(target_type, ir.IntType) and isinstance(value.type, ir.DoubleType):
                 value = self.builder.fptosi(value, target_type)
+            elif isinstance(target_type, ir.PointerType) and isinstance(value.type, ir.PointerType):
+                if isinstance(stmt.expr, NilLiteral):
+                    value = ir.Constant(target_type, None)
+                elif value.type != target_type:
+                    value = self.builder.bitcast(value, target_type)
 
         self.builder.store(value, ptr)
 
@@ -819,6 +824,8 @@ class Codegen:
             return self.builder.gep(str_global, [zero, zero])
         elif isinstance(expr, BoolLiteral):
             return ir.Constant(ir.IntType(1), 1 if expr.value else 0)
+        elif isinstance(expr, NilLiteral):
+            return ir.Constant(ir.PointerType(ir.IntType(8)), None)
         elif isinstance(expr, AdrExpr):
             # Address-of operator (adr var_name)
             symbol = self.scope.lookup(expr.name)

@@ -69,6 +69,7 @@ KEYWORD_CODES = {
     'XOR': 0x0039,
     'AND': 0x003A,
     'NOT': 0x0057,
+    'NIL': 0x005B,
 }
 
 SYMBOL_CODES = {

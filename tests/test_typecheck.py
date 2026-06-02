@@ -87,6 +87,11 @@ class TestTypeCompatibility(unittest.TestCase):
         result = typecheck_source("PROGRAM P; VAR x: REAL; BEGIN x := SQRT(ABS(-5)) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
+    def test_nil_typecheck_for_pointer_assignment(self):
+        """NIL is a typed null pointer constant."""
+        result = typecheck_source("PROGRAM P; VAR p: ^INTEGER; BEGIN p := NIL END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
 
 class TestControlFlow(unittest.TestCase):
     """Control flow type validation (IF, WHILE, FOR, REPEAT, CASE)."""

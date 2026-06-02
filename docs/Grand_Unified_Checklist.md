@@ -61,12 +61,15 @@ These are worse than missing features because they fail late or silently.
     `python -m unittest tests.test_parser tests.test_typecheck` and
     `python -m unittest tests.test_codegen`.
 
-- [ ] **1.3 — `NIL` is documented as special but isn't a token.** `[OBSERVED]` **S**
-  The EBNF `constant` lists a dedicated `"NIL"` alternative and a comment claims it
-  is matched as a constant rather than a generic identifier. There is no `NIL`
-  token in the lexer and no `NIL` case in `parse_constant`/`parse_factor`; it only
-  "works" by falling through to the IDENTIFIER rule. Add a real `NIL` token + a
-  typed null-pointer constant, or correct the grammar doc to match reality.
+- [x] **1.3 — `NIL` is documented as special but isn't a token.** `[OBSERVED]` **S**
+  `NIL` is now a real lexer token and AST literal rather than an identifier
+  fallback. Parser constant/factor handling recognizes it, type checking treats it
+  as a null pointer constant, and codegen lowers it to a typed LLVM null pointer
+  during pointer assignment.
+  - Done: added `NilLiteral`, `NIL` tokenization, pointer assignment type support,
+    and tests for type checking/codegen. Proven by
+    `python -m unittest tests.test_parser tests.test_typecheck` and
+    `python -m unittest tests.test_codegen`.
 
 - [ ] **1.4 — Identifier labels are half-supported and inconsistent.** `[OBSERVED]` **S**
   `parse_label_id` and `LABEL`/`GOTO` accept identifier labels, but a *label
