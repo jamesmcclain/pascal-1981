@@ -22,7 +22,7 @@ class TestParserAccept(unittest.TestCase):
         """Load all should_pass fixtures."""
         fixtures_dir = Path(__file__).parent / "fixtures" / "parser" / "should_pass"
         self.files = sorted(fixtures_dir.glob("*.pas"))
-        self.assertEqual(len(self.files), 14, f"Expected 14 should_pass fixtures, found {len(self.files)}")
+        self.assertEqual(len(self.files), 15, f"Expected 15 should_pass fixtures, found {len(self.files)}")
 
     def test_parser_accepts_all_should_pass(self):
         """Each should_pass/ file must parse without raising."""
@@ -141,6 +141,14 @@ class TestParserJudgmentCalls(unittest.TestCase):
             ast = parse_source(src)
             assign = ast.block.body[0]
             self.assertEqual(assign.expr.value, expected)
+
+    def test_multi_dimensional_subscript_desugars(self):
+        """Comma-separated subscripts should parse as chained INDEX selectors."""
+        ast = parse_source("PROGRAM P; VAR a: ARRAY[1..3] OF ARRAY[1..4] OF INTEGER; i, j: INTEGER; BEGIN a[i,j] := 1 END.")
+        assign = ast.block.body[0]
+        self.assertEqual(type(assign.target).__name__, "Designator")
+        self.assertEqual(len(assign.target.selectors), 2)
+        self.assertEqual([s.kind for s in assign.target.selectors], ["INDEX", "INDEX"])
 
     def test_dollar_hex_is_rejected(self):
         """The '$FF' hex form is not part of the IBM Pascal 2.0 dialect (the

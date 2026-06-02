@@ -106,10 +106,13 @@ full reimplementation.
     `python -m unittest tests.test_parser tests.test_typecheck` and
     `python -m unittest tests.test_codegen`.
 
-- [ ] **2.2 — Multi-dimensional subscripts `a[i,j]`.** `[OBSERVED]` **S**
+- [x] **2.2 — Multi-dimensional subscripts `a[i,j]`.** `[OBSERVED]` **S**
   Manual `selectp ::= [ ordexpr \, ]` allows a comma list; the parser's `selector`
   takes a single `[expression]` and rejects the comma. Either desugar `a[i,j]` to
   `a[i][j]` or support comma lists directly.
+  - Done: desugared comma-separated subscripts into chained `INDEX` selectors in
+    the parser; `a[i,j]` now parses as `a[i][j]`. Proven by
+    `python -m unittest tests.test_parser`.
 
 - [ ] **2.3 — `FOR {STATIC} ident`.** `[OBSERVED]` **S**
   Manual allows an optional `STATIC` after `FOR`; parser rejects it

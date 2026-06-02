@@ -427,7 +427,7 @@ class Parser:
         name = self.expect('IDENTIFIER').lexeme
         selectors: List[Selector] = []
         while self.current().kind in {'LBRACKET', 'DOT', 'POINTER'}:
-            selectors.append(self.parse_selector())
+            selectors.extend(self.parse_selector())
 
         if self.current().kind == 'ASSIGN':
             self.pos += 1
@@ -573,7 +573,7 @@ class Parser:
         name = self.expect('IDENTIFIER').lexeme
         selectors: List[Selector] = []
         while self.current().kind in {'LBRACKET', 'DOT', 'POINTER'}:
-            selectors.append(self.parse_selector())
+            selectors.extend(self.parse_selector())
         return Designator(name, selectors)
 
     def parse_label_statement(self) -> LabelStmt:
@@ -582,20 +582,22 @@ class Parser:
         stmt = self.parse_statement()
         return LabelStmt(label, stmt)
 
-    def parse_selector(self) -> Selector:
+    def parse_selector(self) -> List[Selector]:
         kind = self.current().kind
         if kind == 'LBRACKET':
             self.pos += 1
-            index = self.parse_expression()
+            selectors: List[Selector] = [Selector('INDEX', self.parse_expression())]
+            while self.match('COMMA'):
+                selectors.append(Selector('INDEX', self.parse_expression()))
             self.expect('RBRACKET')
-            return Selector('INDEX', index)
+            return selectors
         if kind == 'DOT':
             self.pos += 1
             field = self.expect('IDENTIFIER').lexeme
-            return Selector('FIELD', field)
+            return [Selector('FIELD', field)]
         if kind == 'POINTER':
             self.pos += 1
-            return Selector('DEREF', None)
+            return [Selector('DEREF', None)]
         self.error('expected selector')
 
     def parse_expression(self) -> Expression:
@@ -717,7 +719,7 @@ class Parser:
         """Continue parsing a designator or return as identifier."""
         selectors: List[Selector] = []
         while self.current().kind in {'LBRACKET', 'DOT', 'POINTER'}:
-            selectors.append(self.parse_selector())
+            selectors.extend(self.parse_selector())
         if selectors:
             return Designator(name, selectors)
         else:
@@ -727,7 +729,7 @@ class Parser:
         name = self.expect('IDENTIFIER').lexeme
         selectors: List[Selector] = []
         while self.current().kind in {'LBRACKET', 'DOT', 'POINTER'}:
-            selectors.append(self.parse_selector())
+            selectors.extend(self.parse_selector())
         return Designator(name, selectors)
 
     def parse_constant(self) -> Expression:
