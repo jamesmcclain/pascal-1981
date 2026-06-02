@@ -736,12 +736,7 @@ class Parser:
     def parse_constant(self) -> Expression:
         kind = self.current().kind
         if kind == 'INTEGER_LITERAL':
-            lexeme = self.current().lexeme
-            # Handle hex literals ($FF form)
-            if lexeme.startswith('$'):
-                value = int(lexeme[1:], 16)
-            else:
-                value = int(lexeme)
+            value = self.current().value
             self.pos += 1
             return IntLiteral(value)
         if kind == 'REAL_LITERAL':

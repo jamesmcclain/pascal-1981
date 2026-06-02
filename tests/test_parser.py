@@ -94,6 +94,12 @@ class TestParserJudgmentCalls(unittest.TestCase):
         self.assertEqual(type(ast.block.body[0]).__name__, 'LabelStmt')
         self.assertEqual(ast.block.body[0].label, 'start')
 
+    def test_manual_radix_integer_constant(self):
+        """The manual radix form n#digits should lex and parse as an integer constant."""
+        ast = parse_source("PROGRAM P; CONST MASK = 16#FF; BEGIN END.")
+        const = ast.block.decls[0]
+        self.assertEqual(const.value.value, 255)
+
 
 if __name__ == '__main__':
     unittest.main()

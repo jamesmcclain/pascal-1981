@@ -88,11 +88,14 @@ These are worse than missing features because they fail late or silently.
 Each rejects today; all verified by parsing a snippet. These are required for a
 full reimplementation.
 
-- [ ] **2.1 — `$`-hex vs manual radix `n#ddd`.** `[OBSERVED]` **S**
-  Lexer accepts `$FF`; the manual uses the `{digit}+ # {digit}+` radix form
-  (`16#FF`), which lex-rejects today (`Unexpected character '#'`). Decide whether
-  to support the manual's radix syntax, the `$` form, or both, and reconcile the
-  grammar doc (which currently calls `$FF` an `[ADDED]` extension).
+- [x] **2.1 — `$`-hex vs manual radix `n#ddd`.** `[OBSERVED]` **S**
+  The manual radix form is now supported as the canonical integer syntax:
+  `16#FF` lexes as an integer constant, while `$FF` remains accepted as a
+  compatibility extension.
+  - Done: lexer recognizes `n#digits`, test coverage was added for `16#FF`, and
+    the grammar doc now records radix + compatibility hex forms. Proven by
+    `python -m unittest tests.test_parser tests.test_typecheck` and
+    `python -m unittest tests.test_codegen`.
 
 - [ ] **2.2 — Multi-dimensional subscripts `a[i,j]`.** `[OBSERVED]` **S**
   Manual `selectp ::= [ ordexpr \, ]` allows a comma list; the parser's `selector`
