@@ -78,10 +78,8 @@ These are worse than missing features because they fail late or silently.
   parser test suite covers the identifier-label path.
 
 - [ ] **1.5 — Non-`INCLUDE` brace directives are silently swallowed.** `[OBSERVED]` **S**
-  Only `{$INCLUDE:` / `(*$INCLUDE:` are real directives; any other `{$...}`
-  (e.g. `{$LIST+}`) falls through to comment-skipping and vanishes with no error.
-  Decide the directive policy (recognize-and-ignore known ones, error on unknown,
-  or pass through) and implement it deliberately.
+  Moved to item 9.5 for the full metacommand list. `$INCLUDE` stays working for
+  now; the remaining brace directives need an explicit policy later.
 
 ---
 
@@ -263,6 +261,16 @@ the biggest single chunk; expect it to need its own design pass.
 - [ ] **9.4 — Keep `docs/ebnf_grammar.md` in sync.** `[INFERRED]` **S (ongoing)**
   Every grammar change above should update the EBNF doc and its change log in the
   same commit, with the right evidence grade.
+
+- [ ] **9.5 — Remaining compiler metacommands.** `[OBSERVED]` **M**
+  After `$INCLUDE` and the identifier-label cleanup, the brace-directive path
+  still needs an explicit policy for the rest of the IBM Pascal metacommands:
+  `$BRAVE`, `$DEBUG`, `$ENTRY`, `$ERRORS`, `$GOTO`, `$INDEXCK`, `$INITCK`,
+  `$LINE`, `$MATHCK`, `$NILCK`, `$RANGECK`, `$RUNTIME`, `$STACKCK`, `$WARN`,
+  `$LINESIZE`, `$LIST`, `$OCODE`, `$PAGE`, `$PAGEIF`, `$PAGESIZE`, `$SKIP`,
+  `$SUBTITLE`, `$SYMTAB`, `$TITLE`, `$IF`, `$INCONST`, `$MESSAGE`, `$POP`, and
+  `$PUSH`. Decide which are ignored, which affect parser/codegen state, and
+  which should error when unsupported.
 
 ---
 
