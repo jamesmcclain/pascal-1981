@@ -241,7 +241,7 @@ empty_stmt  = (* empty *) ;
 
 (* [OBSERVED] *)
 if_stmt     = "IF" expression "THEN" statement [ "ELSE" statement ] ;
-for_stmt    = "FOR" identifier ":=" expression ( "TO" | "DOWNTO" ) expression "DO" statement ;
+for_stmt    = "FOR" [ "STATIC" ] identifier ":=" expression ( "TO" | "DOWNTO" ) expression "DO" statement ;
 repeat_stmt = "REPEAT" [ statement { ";" statement } [ ";" ] ] "UNTIL" expression ;
 while_stmt  = "WHILE" expression "DO" statement ;
 

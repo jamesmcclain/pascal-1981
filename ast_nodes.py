@@ -170,6 +170,7 @@ class ForStmt(ASTNode):
     end: Expression
     direction: str  # 'TO' or 'DOWNTO'
     body: Statement
+    static: bool = False
 
 
 @dataclass

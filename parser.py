@@ -489,8 +489,7 @@ class Parser:
 
     def parse_for_statement(self) -> ForStmt:
         self.expect('FOR')
-        if self.match('STATIC'):
-            pass
+        static = self.match('STATIC')
         var = self.expect('IDENTIFIER').lexeme
         self.expect('ASSIGN')
         start = self.parse_expression()
@@ -502,7 +501,7 @@ class Parser:
         end = self.parse_expression()
         self.expect('DO')
         body = self.parse_statement()
-        return ForStmt(var, start, end, direction, body)
+        return ForStmt(var, start, end, direction, body, static)
 
     def parse_repeat_statement(self) -> RepeatStmt:
         self.expect('REPEAT')

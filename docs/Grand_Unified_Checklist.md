@@ -117,9 +117,10 @@ full reimplementation.
 - [x] **2.3 — `FOR {STATIC} ident`.** `[OBSERVED]` **S**
   Manual allows an optional `STATIC` after `FOR`; parser rejects it
   (`expected IDENTIFIER, got STATIC`). `STATIC` already exists as a token.
-  - Done: parser now accepts an optional `STATIC` between `FOR` and the loop
-    control variable; added a parser judgment fixture for `FOR STATIC ...`.
-    Proven by `python -m unittest tests.test_parser`.
+  - Done: parser now accepts and preserves optional `STATIC` between `FOR` and
+    the loop control variable, and codegen lowers that control variable to fixed
+    internal global storage instead of stack storage. Added parser/codegen tests.
+    Proven by `python -m unittest tests.test_parser tests.test_codegen`.
 
 - [ ] **2.4 — Labeled `BREAK` / `CYCLE`.** `[OBSERVED]` **S**
   Manual `{BREAK | CYCL}{getlabl}-` allows an optional target label; parser only

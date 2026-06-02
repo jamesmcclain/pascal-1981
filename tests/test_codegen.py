@@ -143,6 +143,17 @@ class TestCodegenIR(unittest.TestCase):
         self.assertIsInstance(ir, str)
         self.assertGreater(len(ir), 0)
 
+    def test_for_static_loop_variable_uses_fixed_storage(self):
+        """FOR STATIC uses fixed storage for the control variable."""
+        src = (
+            "PROGRAM P; "
+            "VAR i: INTEGER; "
+            "BEGIN FOR STATIC i := 1 TO 5 DO WRITELN(i) END."
+        )
+        ir = compile_to_ir(src)
+        self.assertIn("__for_static", ir)
+        self.assertIn("internal global", ir)
+
     def test_procedure_call(self):
         """Procedure call generates valid IR."""
         src = (

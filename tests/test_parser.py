@@ -154,9 +154,10 @@ class TestParserJudgmentCalls(unittest.TestCase):
         """The manual permits an optional STATIC after FOR."""
         fixture = Path(__file__).parent / "fixtures" / "parser" / "should_pass" / "16_for_static.pas"
         try:
-            parse_source(fixture.read_text())
+            ast = parse_source(fixture.read_text())
         except (LexerError, ParserError) as e:
             self.fail(f"{fixture.name} should pass but raised {type(e).__name__}: {e}")
+        self.assertTrue(ast.block.body[0].static)
 
     def test_dollar_hex_is_rejected(self):
         """The '$FF' hex form is not part of the IBM Pascal 2.0 dialect (the

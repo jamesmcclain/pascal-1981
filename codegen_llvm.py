@@ -555,9 +555,22 @@ class Codegen:
 
     def codegen_for_stmt(self, stmt: ForStmt) -> None:
         """Codegen for FOR loop."""
-        # Allocate loop variable (or reuse if already exists)
+        # Allocate loop variable (or reuse if already exists).  IBM Pascal's
+        # ``FOR STATIC i := ...`` treats the control variable as STATIC: it has
+        # fixed storage instead of normal stack storage.
         symbol = self.scope.lookup(stmt.var)
-        if not symbol:
+        if stmt.static:
+            loop_type = self.llvm_type(symbol.type_expr) if symbol else ir.IntType(32)
+            owner = self.current_function.name if self.current_function else 'global'
+            global_name = f"__for_static_{owner}_{stmt.var}"
+            if global_name in self.module.globals:
+                loop_var = self.module.globals[global_name]
+            else:
+                loop_var = ir.GlobalVariable(self.module, loop_type, name=global_name)
+                loop_var.linkage = 'internal'
+                loop_var.initializer = self.zero_initializer(loop_type)
+            self.scope.define(stmt.var, loop_var, symbol.type_expr if symbol else BuiltinType('INTEGER'))
+        elif not symbol:
             loop_var = self.builder.alloca(ir.IntType(32), name=stmt.var)
             self.scope.define(stmt.var, loop_var, BuiltinType('INTEGER'))
         else:
