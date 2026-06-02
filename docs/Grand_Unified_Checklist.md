@@ -71,12 +71,11 @@ These are worse than missing features because they fail late or silently.
     `python -m unittest tests.test_parser tests.test_typecheck` and
     `python -m unittest tests.test_codegen`.
 
-- [ ] **1.4 — Identifier labels are half-supported and inconsistent.** `[OBSERVED]` **S**
-  `parse_label_id` and `LABEL`/`GOTO` accept identifier labels, but a *label
-  statement* only triggers on `INTEGER_LITERAL ':'` (parser line ~418), so an
-  identifier label can be declared and jumped to but never *defined*. Pick one
-  rule (the manual's `getlabl ::= {ident | number}` suggests identifiers are
-  legal) and make declaration, definition, and `GOTO` agree.
+- [x] **1.4 — Identifier labels are half-supported and inconsistent.** `[OBSERVED]` **S**
+  `parse_label_id` and `LABEL`/`GOTO` now agree on identifier labels. Label
+  statements accept both `IDENTIFIER ':'` and `INTEGER_LITERAL ':'`, so a label
+  can be declared, defined, and jumped to using the same identifier form. The
+  parser test suite covers the identifier-label path.
 
 - [ ] **1.5 — Non-`INCLUDE` brace directives are silently swallowed.** `[OBSERVED]` **S**
   Only `{$INCLUDE:` / `(*$INCLUDE:` are real directives; any other `{$...}`

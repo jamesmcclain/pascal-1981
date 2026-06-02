@@ -87,6 +87,13 @@ class TestParserJudgmentCalls(unittest.TestCase):
         self.assertEqual(type(decl.type_expr.base).__name__, "NamedType")
         self.assertEqual(decl.type_expr.base.name, "CHAR")
 
+    def test_identifier_labels_parse_as_labels(self):
+        """Identifier labels should be legal in both LABEL declarations and label statements."""
+        ast = parse_source("PROGRAM P; LABEL start; BEGIN start: END.")
+        self.assertEqual(ast.block.decls[0].labels, ['start'])
+        self.assertEqual(type(ast.block.body[0]).__name__, 'LabelStmt')
+        self.assertEqual(ast.block.body[0].label, 'start')
+
 
 if __name__ == '__main__':
     unittest.main()

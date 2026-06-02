@@ -415,7 +415,7 @@ class Parser:
         if kind == 'CYCLE':
             self.pos += 1
             return CycleStmt()
-        if kind == 'INTEGER_LITERAL' and self.next_kind() == 'COLON':
+        if kind in {'INTEGER_LITERAL', 'IDENTIFIER'} and self.next_kind() == 'COLON':
             return self.parse_label_statement()
         if kind == 'IDENTIFIER':
             return self.parse_assignment_or_proc_call()
