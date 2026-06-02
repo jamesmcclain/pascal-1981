@@ -77,7 +77,7 @@ These are worse than missing features because they fail late or silently.
   can be declared, defined, and jumped to using the same identifier form. The
   parser test suite covers the identifier-label path.
 
-- [ ] **1.5 — Non-`INCLUDE` brace directives are silently swallowed.** `[OBSERVED]` **S**
+- [x] **1.5 — Non-`INCLUDE` brace directives are silently swallowed.** `[OBSERVED]` **S**
   Moved to item 9.5 for the full metacommand list. `$INCLUDE` stays working for
   now; the remaining brace directives need an explicit policy later.
 
