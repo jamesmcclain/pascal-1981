@@ -22,7 +22,7 @@ class TestParserAccept(unittest.TestCase):
         """Load all should_pass fixtures."""
         fixtures_dir = Path(__file__).parent / "fixtures" / "parser" / "should_pass"
         self.files = sorted(fixtures_dir.glob("*.pas"))
-        self.assertEqual(len(self.files), 15, f"Expected 15 should_pass fixtures, found {len(self.files)}")
+        self.assertEqual(len(self.files), 16, f"Expected 16 should_pass fixtures, found {len(self.files)}")
 
     def test_parser_accepts_all_should_pass(self):
         """Each should_pass/ file must parse without raising."""
@@ -149,6 +149,14 @@ class TestParserJudgmentCalls(unittest.TestCase):
         self.assertEqual(type(assign.target).__name__, "Designator")
         self.assertEqual(len(assign.target.selectors), 2)
         self.assertEqual([s.kind for s in assign.target.selectors], ["INDEX", "INDEX"])
+
+    def test_for_static_passes(self):
+        """The manual permits an optional STATIC after FOR."""
+        fixture = Path(__file__).parent / "fixtures" / "parser" / "should_pass" / "16_for_static.pas"
+        try:
+            parse_source(fixture.read_text())
+        except (LexerError, ParserError) as e:
+            self.fail(f"{fixture.name} should pass but raised {type(e).__name__}: {e}")
 
     def test_dollar_hex_is_rejected(self):
         """The '$FF' hex form is not part of the IBM Pascal 2.0 dialect (the

@@ -114,9 +114,12 @@ full reimplementation.
     the parser; `a[i,j]` now parses as `a[i][j]`. Proven by
     `python -m unittest tests.test_parser`.
 
-- [ ] **2.3 — `FOR {STATIC} ident`.** `[OBSERVED]` **S**
+- [x] **2.3 — `FOR {STATIC} ident`.** `[OBSERVED]` **S**
   Manual allows an optional `STATIC` after `FOR`; parser rejects it
   (`expected IDENTIFIER, got STATIC`). `STATIC` already exists as a token.
+  - Done: parser now accepts an optional `STATIC` between `FOR` and the loop
+    control variable; added a parser judgment fixture for `FOR STATIC ...`.
+    Proven by `python -m unittest tests.test_parser`.
 
 - [ ] **2.4 — Labeled `BREAK` / `CYCLE`.** `[OBSERVED]` **S**
   Manual `{BREAK | CYCL}{getlabl}-` allows an optional target label; parser only

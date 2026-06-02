@@ -489,6 +489,8 @@ class Parser:
 
     def parse_for_statement(self) -> ForStmt:
         self.expect('FOR')
+        if self.match('STATIC'):
+            pass
         var = self.expect('IDENTIFIER').lexeme
         self.expect('ASSIGN')
         start = self.parse_expression()
