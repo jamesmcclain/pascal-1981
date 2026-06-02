@@ -45,14 +45,13 @@ manual specifies is in scope.
 
 These are worse than missing features because they fail late or silently.
 
-- [ ] **1.1 — `ABS` / `SQRT` / `LENGTH` typecheck but have no codegen.** `[OBSERVED]` **S**
-  Registered in `type_checker._setup_builtins` but absent from `codegen_func_call`,
-  so a program using them passes type-checking and dies with "Undefined function"
-  in codegen. Either implement (see 5.x / 6.x) or remove the registrations until
-  implemented. Short-term: remove or stub so the failure is honest; long-term:
-  implement properly and re-add.
-  - Audit: `LENGTH` is *not* in the manual's predeclared list at all — confirm
-    whether it should exist before reinstating it.
+- [x] **1.1 — `ABS` / `SQRT` / `LENGTH` typecheck but have no codegen.** `[OBSERVED]` **S**
+  ABS/SQRT now have real type-check and codegen paths; `LENGTH` was removed from
+  builtin registration because it is not in the manual's predeclared list.
+  - Done: ABS is handled inline for INTEGER/REAL, SQRT lowers to `llvm.sqrt.f64`,
+    and the type checker now special-cases both while leaving LENGTH unregistered.
+    Proven by `python -m unittest tests.test_typecheck` and
+    `python -m unittest tests.test_codegen`.
 
 - [ ] **1.2 — Set-type base is parsed then discarded.** `[READ]` **M**
   `parse_set_base` parses a range/identifier and then returns

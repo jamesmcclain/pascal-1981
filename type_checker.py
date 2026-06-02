@@ -86,17 +86,9 @@ class PascalTypeChecker(TypeChecker):
         readln_type = ProcedureType('READLN', [])
         self.symbol_table.define('READLN', Symbol(name='READLN', type=readln_type, kind='procedure', is_mutable=False))
 
-        # ABS function (argument can be INTEGER or REAL)
-        abs_type = FunctionType('ABS', [('n', INTEGER_TYPE)], INTEGER_TYPE)
-        self.symbol_table.define('ABS', Symbol(name='ABS', type=abs_type, kind='function', is_mutable=False))
-
-        # SQRT function (returns REAL)
-        sqrt_type = FunctionType('SQRT', [('n', REAL_TYPE)], REAL_TYPE)
-        self.symbol_table.define('SQRT', Symbol(name='SQRT', type=sqrt_type, kind='function', is_mutable=False))
-
-        # LENGTH function (for strings/arrays - returns INTEGER)
-        length_type = FunctionType('LENGTH', [('s', CHAR_TYPE)], INTEGER_TYPE)
-        self.symbol_table.define('LENGTH', Symbol(name='LENGTH', type=length_type, kind='function', is_mutable=False))
+        # ABS and SQRT are handled as special built-ins in type inference/codegen.
+        # LENGTH is not part of the manual's predeclared list; keep it out until
+        # a dialect decision puts it back in.
 
         # CHR function (returns CHAR)
         chr_type = FunctionType('CHR', [('n', INTEGER_TYPE)], CHAR_TYPE)
@@ -955,6 +947,26 @@ class PascalTypeChecker(TypeChecker):
             return None
         elif isinstance(expr, FuncCall):
             lookup_name = expr.name.upper()
+            if lookup_name == 'ABS':
+                if len(expr.args) != 1:
+                    self.error(f"Function 'ABS' expects 1 argument, got {len(expr.args)}", expr)
+                    return None
+                arg_type = self.infer_expression_type(expr.args[0])
+                if arg_type in (INTEGER_TYPE, REAL_TYPE):
+                    return arg_type
+                if arg_type:
+                    self.error(f"Argument 1 type mismatch: expected INTEGER or REAL, got {arg_type}", expr)
+                return None
+            if lookup_name == 'SQRT':
+                if len(expr.args) != 1:
+                    self.error(f"Function 'SQRT' expects 1 argument, got {len(expr.args)}", expr)
+                    return None
+                arg_type = self.infer_expression_type(expr.args[0])
+                if arg_type in (INTEGER_TYPE, REAL_TYPE):
+                    return REAL_TYPE
+                if arg_type:
+                    self.error(f"Argument 1 type mismatch: expected INTEGER or REAL, got {arg_type}", expr)
+                return None
             sym = self.symbol_table.lookup(lookup_name) or self.symbol_table.lookup(expr.name)
             if not sym:
                 self.error(f"Undefined function: {expr.name}", expr)

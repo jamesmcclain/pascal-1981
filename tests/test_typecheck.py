@@ -82,6 +82,11 @@ class TestTypeCompatibility(unittest.TestCase):
         result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := 1; x := 2; x := 3 END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
+    def test_abs_and_sqrt_typecheck(self):
+        """ABS accepts INTEGER/REAL and SQRT returns REAL."""
+        result = typecheck_source("PROGRAM P; VAR x: REAL; BEGIN x := SQRT(ABS(-5)) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
 
 class TestControlFlow(unittest.TestCase):
     """Control flow type validation (IF, WHILE, FOR, REPEAT, CASE)."""

@@ -178,6 +178,18 @@ class TestCodegenIR(unittest.TestCase):
         self.assertIn("double", ir)
         self.assertIn("Twice", ir)
 
+    def test_abs_and_sqrt_generate_valid_ir(self):
+        """ABS and SQRT generate valid IR for integer/real operands."""
+        src = (
+            "PROGRAM P; VAR x: REAL; BEGIN "
+            "WRITELN(ABS(-5)); "
+            "x := SQRT(9); "
+            "WRITELN(x) END."
+        )
+        ir = compile_to_ir(src)
+        self.assertIn("sqrt", ir)
+        self.assertIn("double", ir)
+
 
 @requires_exe
 class TestCodegenBuildRun(unittest.TestCase):
@@ -207,6 +219,19 @@ class TestCodegenBuildRun(unittest.TestCase):
         )
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
+        self.assertIn("3", stdout)
+
+    def test_abs_and_sqrt_run(self):
+        """ABS and SQRT run and produce correct output."""
+        src = (
+            "PROGRAM P; VAR x: REAL; BEGIN "
+            "WRITELN(ABS(-5)); "
+            "x := SQRT(9); "
+            "WRITELN(x) END."
+        )
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertIn("5", stdout)
         self.assertIn("3", stdout)
 
     def test_simple_arithmetic(self):

@@ -948,17 +948,35 @@ class Codegen:
             return self.builder.zext(val, ir.IntType(32))
         elif lookup_name == 'ODD':
             val = self.codegen_expr(expr.args[0])
-            # ODD(n) = (n & 1) != 0
             one = ir.Constant(ir.IntType(32), 1)
             result = self.builder.and_(val, one)
-            # Convert to i1 (boolean): result != 0
             zero = ir.Constant(ir.IntType(32), 0)
             return self.builder.icmp_signed('!=', result, zero)
         elif lookup_name == 'SUCC':
             val = self.codegen_expr(expr.args[0])
-            # SUCC(n) = n + 1
             one = ir.Constant(ir.IntType(32), 1)
             return self.builder.add(val, one)
+        elif lookup_name == 'ABS':
+            val = self.codegen_expr(expr.args[0])
+            if isinstance(val.type, ir.DoubleType):
+                zero = ir.Constant(ir.DoubleType(), 0.0)
+                is_neg = self.builder.fcmp_ordered('<', val, zero)
+                neg = self.builder.fsub(zero, val)
+                return self.builder.select(is_neg, neg, val)
+            if isinstance(val.type, ir.IntType):
+                zero = ir.Constant(val.type, 0)
+                is_neg = self.builder.icmp_signed('<', val, zero)
+                neg = self.builder.sub(zero, val)
+                return self.builder.select(is_neg, neg, val)
+            raise CodegenError(f'ABS not supported for type {val.type}')
+        elif lookup_name == 'SQRT':
+            val = self.codegen_expr(expr.args[0])
+            if isinstance(val.type, ir.IntType):
+                val = self.builder.sitofp(val, ir.DoubleType())
+            elif not isinstance(val.type, ir.DoubleType):
+                raise CodegenError(f'SQRT not supported for type {val.type}')
+            sqrt_fn = self.module.declare_intrinsic('llvm.sqrt', [ir.DoubleType()])
+            return self.builder.call(sqrt_fn, [val])
 
         symbol = self.scope.lookup(lookup_name) or self.scope.lookup(expr.name)
         if not symbol:
@@ -977,6 +995,12 @@ class Codegen:
     # ========================================================================
     # Built-in Functions
     # ========================================================================
+
+    def _declare_libm_func(self, name: str, ret_type: ir.Type, arg_types: List[ir.Type]) -> ir.Function:
+        if name not in [f.name for f in self.module.functions]:
+            fn_type = ir.FunctionType(ret_type, arg_types)
+            ir.Function(self.module, fn_type, name=name)
+        return next(f for f in self.module.functions if f.name == name)
 
     def printf_func(self) -> ir.Function:
         """Declare or fetch printf."""
