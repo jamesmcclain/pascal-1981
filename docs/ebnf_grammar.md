@@ -288,8 +288,8 @@ goto_stmt  = "GOTO" label_id ;
 label_stmt = label_id ":" statement ;
 
 (* [OBSERVED] IBM Pascal control-flow extensions. *)
-break_stmt  = "BREAK" ;   (* exit enclosing loop *)
-cycle_stmt  = "CYCLE" ;   (* continue to next loop iteration *)
+break_stmt  = "BREAK" [ label_id ] ;   (* exit enclosing loop; optional labeled target *)
+cycle_stmt  = "CYCLE" [ label_id ] ;   (* continue to next loop iteration; optional labeled target *)
 
 (* [OBSERVED] RETURN is a pure control-flow jump to the exit point of
    the current procedure, function, or program. It does NOT accept an

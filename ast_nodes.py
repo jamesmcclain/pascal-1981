@@ -216,12 +216,12 @@ class ReturnStmt(ASTNode):
 
 @dataclass
 class BreakStmt(ASTNode):
-    pass
+    label: Optional[Union[int, str]] = None
 
 
 @dataclass
 class CycleStmt(ASTNode):
-    pass
+    label: Optional[Union[int, str]] = None
 
 
 @dataclass

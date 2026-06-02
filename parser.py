@@ -411,10 +411,12 @@ class Parser:
             return ReturnStmt()
         if kind == 'BREAK':
             self.pos += 1
-            return BreakStmt()
+            label = self.parse_optional_label_id()
+            return BreakStmt(label)
         if kind == 'CYCLE':
             self.pos += 1
-            return CycleStmt()
+            label = self.parse_optional_label_id()
+            return CycleStmt(label)
         if kind in {'INTEGER_LITERAL', 'IDENTIFIER'} and self.next_kind() == 'COLON':
             return self.parse_label_statement()
         if kind == 'IDENTIFIER':
@@ -925,6 +927,11 @@ class Parser:
         while self.match('COMMA'):
             names.append(self.expect('IDENTIFIER').lexeme)
         return names
+
+    def parse_optional_label_id(self) -> Optional[Union[int, str]]:
+        if self.current().kind in {'INTEGER_LITERAL', 'IDENTIFIER'}:
+            return self.parse_label_id()
+        return None
 
     def parse_label_id(self) -> Union[int, str]:
         if self.current().kind == 'INTEGER_LITERAL':

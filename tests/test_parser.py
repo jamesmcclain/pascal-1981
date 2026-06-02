@@ -123,6 +123,33 @@ class TestParserJudgmentCalls(unittest.TestCase):
         self.assertEqual(type(ast.block.body[0]).__name__, 'LabelStmt')
         self.assertEqual(ast.block.body[0].label, 'start')
 
+    def test_labeled_break_and_cycle_parse_identifier_labels(self):
+        """BREAK/CYCLE should accept an optional identifier label target."""
+        ast = parse_source(
+            "PROGRAM P; LABEL done, again; BEGIN WHILE TRUE DO BEGIN BREAK done; CYCLE again END; done: END."
+        )
+        loop_body = ast.block.body[0].body
+        self.assertEqual(type(loop_body.stmts[0]).__name__, 'BreakStmt')
+        self.assertEqual(loop_body.stmts[0].label, 'done')
+        self.assertEqual(type(loop_body.stmts[1]).__name__, 'CycleStmt')
+        self.assertEqual(loop_body.stmts[1].label, 'again')
+
+    def test_labeled_break_and_cycle_parse_numeric_labels(self):
+        """BREAK/CYCLE should also accept numeric labels."""
+        ast = parse_source(
+            "PROGRAM P; LABEL 10, 20; BEGIN WHILE TRUE DO BEGIN BREAK 10; CYCLE 20 END; 10: END."
+        )
+        loop_body = ast.block.body[0].body
+        self.assertEqual(loop_body.stmts[0].label, 10)
+        self.assertEqual(loop_body.stmts[1].label, 20)
+
+    def test_bare_break_and_cycle_still_parse(self):
+        """Bare BREAK/CYCLE remain valid and carry no label target."""
+        ast = parse_source("PROGRAM P; BEGIN WHILE TRUE DO BEGIN BREAK; CYCLE END END.")
+        loop_body = ast.block.body[0].body
+        self.assertIsNone(loop_body.stmts[0].label)
+        self.assertIsNone(loop_body.stmts[1].label)
+
     def test_manual_radix_integer_constant(self):
         """The manual radix form n#digits should lex and parse as an integer constant."""
         ast = parse_source("PROGRAM P; CONST MASK = 16#FF; BEGIN END.")
