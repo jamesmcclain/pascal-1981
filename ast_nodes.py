@@ -332,7 +332,7 @@ class RangeExpr(ASTNode):
 # Types
 # ============================================================================
 
-Type = Union['NamedType', 'ArrayType', 'RecordType', 'SetType', 'FileType', 'EnumType', 'PointerType', 'LStringType', 'BuiltinType']
+Type = Union['NamedType', 'ArrayType', 'RecordType', 'SetType', 'FileType', 'EnumType', 'PointerType', 'LStringType', 'BuiltinType', 'SubrangeType']
 
 
 @dataclass
@@ -389,6 +389,18 @@ class BuiltinType(ASTNode):
 class IndexRange(ASTNode):
     low: Expression
     high: Optional[Expression]  # None for super arrays (star)
+
+
+@dataclass
+class SubrangeType(ASTNode):
+    """An ordinal subrange type, e.g. `1..10` or `'A'..'Z'`. Used as a set base
+    (`SET OF 1..10`) and anywhere a subrange may appear. Preserves both bounds;
+    `host` records the underlying ordinal type the bounds belong to
+    ('INTEGER', 'CHAR', 'BOOLEAN', or a named/enum type) when it can be
+    determined from the bound literals, else None."""
+    low: Expression
+    high: Expression
+    host: Optional[str] = None
 
 
 @dataclass

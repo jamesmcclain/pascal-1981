@@ -87,6 +87,35 @@ class TestParserJudgmentCalls(unittest.TestCase):
         self.assertEqual(type(decl.type_expr.base).__name__, "NamedType")
         self.assertEqual(decl.type_expr.base.name, "CHAR")
 
+    def test_set_base_subrange_preserves_bounds(self):
+        """A subrange set base (SET OF lo..hi) must keep both bounds rather than
+        collapsing to the bare host type and discarding the range."""
+        ast = parse_source("PROGRAM P; VAR s: SET OF 1..10; BEGIN END.")
+        base = ast.block.decls[0].type_expr.base
+        self.assertEqual(type(base).__name__, "SubrangeType")
+        self.assertEqual(base.low.value, 1)
+        self.assertEqual(base.high.value, 10)
+        self.assertEqual(base.host, "INTEGER")
+
+    def test_set_base_char_subrange_preserves_bounds(self):
+        """A character subrange set base keeps its bounds and infers CHAR host."""
+        ast = parse_source("PROGRAM P; VAR s: SET OF 'A'..'Z'; BEGIN END.")
+        base = ast.block.decls[0].type_expr.base
+        self.assertEqual(type(base).__name__, "SubrangeType")
+        self.assertEqual(base.low.value, "'A'")
+        self.assertEqual(base.high.value, "'Z'")
+        self.assertEqual(base.host, "CHAR")
+
+    def test_set_base_named_const_subrange_preserves_bounds(self):
+        """A subrange with named-constant bounds keeps the identifiers; the host
+        type is left unresolved (None) for the type checker to determine."""
+        ast = parse_source("PROGRAM P; CONST lo = 1; hi = 9; VAR s: SET OF lo..hi; BEGIN END.")
+        base = ast.block.decls[-1].type_expr.base
+        self.assertEqual(type(base).__name__, "SubrangeType")
+        self.assertEqual(base.low.name, "lo")
+        self.assertEqual(base.high.name, "hi")
+        self.assertIsNone(base.host)
+
     def test_identifier_labels_parse_as_labels(self):
         """Identifier labels should be legal in both LABEL declarations and label statements."""
         ast = parse_source("PROGRAM P; LABEL start; BEGIN start: END.")

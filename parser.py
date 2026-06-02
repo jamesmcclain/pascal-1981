@@ -7,7 +7,7 @@ from typing import List, Optional, Sequence, Union
 from ast_nodes import (AdrExpr, ArrayType, AssignStmt, ASTNode, BinOp, Block, BoolLiteral, BreakStmt, BuiltinType, CaseElement, CaseStmt, CharLiteral, CompoundStmt, ConstDecl,
                        CycleStmt, Declaration, Designator, EmptyStmt, EnumType, Expression, FileType, ForStmt, FuncCall, FuncDecl, GotoStmt, Identifier, IfStmt, ImplementationUnit,
                        IndexRange, InterfaceUnit, IntLiteral, LabelDecl, LabelStmt, LStringType, ModuleUnit, NamedType, NilLiteral, Param, PointerType, ProcCallStmt, ProcDecl, ProgramUnit,
-                       RangeExpr, RealLiteral, RecordType, RepeatStmt, ReturnStmt, Selector, SetConstructor, SetType, SizeofExpr, Statement, StringLiteral, Type, TypeDecl, UnaryOp,
+                       RangeExpr, RealLiteral, RecordType, RepeatStmt, ReturnStmt, Selector, SetConstructor, SetType, SizeofExpr, Statement, StringLiteral, SubrangeType, Type, TypeDecl, UnaryOp,
                        UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt, WriteArg)
 from lexer import ALL_CODES, KEYWORD_CODES, LexerError, Token, lex_file
 
@@ -867,46 +867,47 @@ class Parser:
         return IndexRange(low, high)
 
     def parse_set_base(self) -> Type:
-        """Parse a set base type, which can be a simple type or a range."""
+        """Parse a set base type: a named/builtin ordinal type, or a subrange.
+
+        Subranges (`SET OF 1..10`, `SET OF 'A'..'Z'`, `SET OF lo..hi`) preserve
+        both bounds in a SubrangeType rather than collapsing to the host type,
+        so the declared range survives into the AST.
+        """
+        # Named type, possibly the low end of a subrange (`color` or `red..blue`).
         if self.current().kind == 'IDENTIFIER':
             if self.next_kind() == 'RANGE':
                 low_expr = self.parse_constant()
                 self.expect('RANGE')
                 high_expr = self.parse_constant()
-                if isinstance(low_expr, IntLiteral) and isinstance(high_expr, IntLiteral):
-                    return BuiltinType('INTEGER')
-                if isinstance(low_expr, CharLiteral) and isinstance(high_expr, CharLiteral):
-                    return BuiltinType('CHAR')
-                if isinstance(low_expr, BoolLiteral) and isinstance(high_expr, BoolLiteral):
-                    return BuiltinType('BOOLEAN')
-                return NamedType('INTEGER', None)
+                return SubrangeType(low_expr, high_expr, self._subrange_host(low_expr, high_expr))
             name = self.current().lexeme
             self.pos += 1
             return NamedType(name, None)
+        # Literal, possibly the low end of a subrange (`1..10`, `'A'..'Z'`).
         if self.current().kind in {'INTEGER_LITERAL', 'REAL_LITERAL', 'CHAR_LITERAL', 'STRING_LITERAL', 'BOOLEAN_LITERAL'}:
             expr = self.parse_constant()
             if self.match('RANGE'):
                 high_expr = self.parse_constant()
-                if isinstance(expr, IntLiteral) and isinstance(high_expr, IntLiteral):
-                    return BuiltinType('INTEGER')
-                if isinstance(expr, CharLiteral) and isinstance(high_expr, CharLiteral):
-                    return BuiltinType('CHAR')
-                if isinstance(expr, BoolLiteral) and isinstance(high_expr, BoolLiteral):
-                    return BuiltinType('BOOLEAN')
-            if isinstance(expr, IntLiteral):
-                return BuiltinType('INTEGER')
-            if isinstance(expr, RealLiteral):
-                return BuiltinType('REAL')
-            if isinstance(expr, CharLiteral):
-                return BuiltinType('CHAR')
-            if isinstance(expr, BoolLiteral):
-                return BuiltinType('BOOLEAN')
-            return BuiltinType('INTEGER')
+                return SubrangeType(expr, high_expr, self._subrange_host(expr, high_expr))
+            # A bare literal as a set base is unusual; treat it as the host type.
+            host = self._subrange_host(expr, expr)
+            return BuiltinType(host if host else 'INTEGER')
         if self.current().kind in {'INTEGER', 'REAL', 'BOOLEAN', 'CHAR', 'WORD', 'ADRMEM'}:
             name = self.current().kind
             self.pos += 1
             return BuiltinType(name)
         self.error('expected set base type or range')
+
+    @staticmethod
+    def _subrange_host(low: Expression, high: Expression) -> Optional[str]:
+        """Best-effort host ordinal type for a subrange, inferred from its bound
+        literals. Returns None when the bounds are named constants/identifiers
+        whose type can't be known at parse time (resolved later by the type
+        checker)."""
+        for ordinal, literal in (('INTEGER', IntLiteral), ('CHAR', CharLiteral), ('BOOLEAN', BoolLiteral)):
+            if isinstance(low, literal) and isinstance(high, literal):
+                return ordinal
+        return None
 
     def parse_set_element(self) -> Expression:
         expr = self.parse_expression()
