@@ -60,6 +60,7 @@ KEYWORD_CODES = {
     'OVERLAY': 0x0030,
     'FORTRAN': 0x0031,
     'ADR': 0x0032,
+    'ADS': 0x005C,
     'SIZEOF': 0x0033,
     'UPPER': 0x0034,
     'IN': 0x0035,

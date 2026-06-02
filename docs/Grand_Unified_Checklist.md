@@ -134,11 +134,12 @@ full reimplementation.
   short-circuit branching, distinct from bitwise `AND`/`OR`).
   - Done: added `boolexp` parsing for condition contexts, boolean-only type rules for `AND_THEN`/`OR_ELSE`, and LLVM branch/PHI lowering that skips unnecessary RHS evaluation. Proven by `python -m unittest tests.test_parser tests.test_typecheck tests.test_codegen`.
 
-- [ ] **2.6 — `ADS ident` factor and `ADR OF` / `ADS OF` pointer types.** `[OBSERVED]` **M**
+- [x] **2.6 — `ADS ident` factor and `ADR OF` / `ADS OF` pointer types.** `[OBSERVED]` **M**
   Manual `factor` has `ADS ident` (alongside `ADR ident`, which exists); manual
   `typedec` has `{^ | ADR OF | ADS OF}`. Parser supports only `ADR ident` (the
   near pointer) and the `^` type; `ADS` (far/segmented) is absent at both the
   expression and type level. Tie this to the segmented-memory model (see 2.7).
+  - Done: added `ADS` as an address-of factor and `ADR OF` / `ADS OF` type prefixes. `ADR OF` lowers to a plain LLVM pointer; `ADS OF` lowers to `{R pointer, S WORD}` with `S = 0` for the LLVM target. Proven by `python -m unittest tests.test_parser tests.test_typecheck tests.test_codegen`.
 
 - [ ] **2.7 — `VARS`/`CONSTS` far-reference semantics.** `[READ]` **M**
   Tokens and parameter modes exist; the manual distinguishes near (`VAR`/`CONST`,

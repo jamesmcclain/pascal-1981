@@ -264,6 +264,13 @@ class TestCodegenBuildRun(unittest.TestCase):
         ir = compile_to_ir(src)
         self.assertIn("null", ir)
 
+    def test_ads_codegen_uses_pointer_plus_zero_segment(self):
+        """ADS lowers as an address pair: R is the LLVM pointer, S is zero."""
+        src = "PROGRAM P; VAR x: INTEGER; s: ADS OF INTEGER; BEGIN s := ADS x END."
+        ir = compile_to_ir(src)
+        self.assertIn("{i32*,i16}", ir.replace(" ", ""))
+        self.assertIn("i16 0", ir)
+
     def test_short_circuit_skips_rhs_runtime(self):
         """Short-circuit operators must not evaluate an unnecessary RHS call."""
         src = (

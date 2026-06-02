@@ -6,6 +6,7 @@ from typing import List, Optional, Sequence, Union
 
 from ast_nodes import (AdrExpr, ArrayType, AssignStmt, ASTNode, BinOp, Block, BoolLiteral, BreakStmt, BuiltinType, CaseElement, CaseStmt, CharLiteral, CompoundStmt, ConstDecl,
                        CycleStmt, Declaration, Designator, EmptyStmt, EnumType, Expression, FileType, ForStmt, FuncCall, FuncDecl, GotoStmt, Identifier, IfStmt, ImplementationUnit,
+                       AdsExpr,
                        IndexRange, InterfaceUnit, IntLiteral, LabelDecl, LabelStmt, LStringType, ModuleUnit, NamedType, NilLiteral, Param, PointerType, ProcCallStmt, ProcDecl, ProgramUnit,
                        RangeExpr, RealLiteral, RecordType, RepeatStmt, ReturnStmt, Selector, SetConstructor, SetType, SizeofExpr, Statement, StringLiteral, SubrangeType, Type, TypeDecl, UnaryOp,
                        UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt, WriteArg)
@@ -708,6 +709,10 @@ class Parser:
             self.pos += 1
             name = self.expect('IDENTIFIER').lexeme
             return AdrExpr(name)
+        if kind == 'ADS':
+            self.pos += 1
+            name = self.expect('IDENTIFIER').lexeme
+            return AdsExpr(name)
         if kind == 'SIZEOF':
             self.pos += 1
             self.expect('LPAREN')
@@ -859,7 +864,17 @@ class Parser:
         if kind == 'POINTER':
             self.pos += 1
             base = self.parse_type()
-            return PointerType(base)
+            return PointerType(base, 'POINTER')
+        if kind == 'ADR':
+            self.pos += 1
+            self.expect('OF')
+            base = self.parse_type()
+            return PointerType(base, 'ADR')
+        if kind == 'ADS':
+            self.pos += 1
+            self.expect('OF')
+            base = self.parse_type()
+            return PointerType(base, 'ADS')
         if kind == 'IDENTIFIER':
             name = self.current().lexeme
             self.pos += 1

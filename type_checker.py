@@ -14,7 +14,7 @@ from parser import parse_file
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ast_nodes import AdrExpr
+from ast_nodes import AdrExpr, AdsExpr
 from ast_nodes import ArrayType as ASTArrayType
 from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, ConstDecl, Designator, Expression, ForStmt, FuncCall, FuncDecl, Identifier, IfStmt,
                        ImplementationUnit, InterfaceUnit, IntLiteral, ModuleUnit, NamedType, NilLiteral, PointerType as ASTPointerType, ProcCallStmt, ProcDecl, ProgramUnit, RealLiteral, WriteArg)
@@ -920,7 +920,14 @@ class PascalTypeChecker(TypeChecker):
             if not sym:
                 self.error(f"Undefined variable: {expr.name}", expr)
                 return None
-            return PointerType(sym.type)
+            return PointerType(sym.type, flavor='ADR')
+        elif isinstance(expr, AdsExpr):
+            # Segmented address-of operator (ads var_name)
+            sym = self.symbol_table.lookup(expr.name)
+            if not sym:
+                self.error(f"Undefined variable: {expr.name}", expr)
+                return None
+            return PointerType(sym.type, flavor='ADS')
         elif isinstance(expr, SizeofExpr):
             # Sizeof operator (sizeof var_name or type)
             return INTEGER_TYPE
@@ -1099,7 +1106,8 @@ class PascalTypeChecker(TypeChecker):
             return RecordType(type_expr.name, fields)
         elif isinstance(type_expr, ASTPointerType):
             base_type = self.resolve_type(type_expr.base)
-            return PointerType(base_type) if base_type else PointerType(CHAR_TYPE)
+            flavor = getattr(type_expr, 'flavor', 'POINTER')
+            return PointerType(base_type, flavor=flavor) if base_type else PointerType(CHAR_TYPE, flavor=flavor)
         else:
             return None
 

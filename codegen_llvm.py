@@ -124,6 +124,8 @@ class Codegen:
             return ir.IntType(32)
         elif isinstance(type_expr, PointerType):
             base_type = self.llvm_type(type_expr.base)
+            if getattr(type_expr, 'flavor', 'POINTER') == 'ADS':
+                return ir.LiteralStructType([ir.PointerType(base_type), ir.IntType(16)])
             return ir.PointerType(base_type)
         elif isinstance(type_expr, ArrayType):
             elem_type = self.llvm_type(type_expr.element_type)
@@ -846,6 +848,11 @@ class Codegen:
                 raise CodegenError(f'Undefined variable: {expr.name}')
             # Local/global variables are represented as pointers in LLVM, so symbol.llvm_value is the address
             return symbol.llvm_value
+        elif isinstance(expr, AdsExpr):
+            symbol = self.scope.lookup(expr.name)
+            if not symbol:
+                raise CodegenError(f'Undefined variable: {expr.name}')
+            return ir.Constant.literal_struct([symbol.llvm_value, ir.Constant(ir.IntType(16), 0)])
         elif isinstance(expr, SizeofExpr):
             # Sizeof operator (sizeof var_name or sizeof type)
             if isinstance(expr.target, str):

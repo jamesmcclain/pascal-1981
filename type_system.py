@@ -135,18 +135,19 @@ class SetType(Type):
 
 @dataclass
 class PointerType(Type):
-    """Pointer type: ^target_type."""
+    """Pointer/address type."""
 
     target_type: Type
+    flavor: str = 'POINTER'  # POINTER, ADR, ADS
 
     def __str__(self) -> str:
-        return f"^{self.target_type}"
+        prefix = {'ADR': 'ADR OF ', 'ADS': 'ADS OF '}.get(self.flavor, '^')
+        return f"{prefix}{self.target_type}"
 
     def equivalent_to(self, other: Type) -> bool:
         if not isinstance(other, PointerType):
             return False
-        # In vintage systems programming, any pointer is equivalent/compatible with any other pointer (like adrmem)
-        return True
+        return self.flavor == other.flavor or self.flavor == 'POINTER' or other.flavor == 'POINTER'
 
 
 @dataclass

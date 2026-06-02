@@ -158,6 +158,18 @@ class TestParserJudgmentCalls(unittest.TestCase):
         self.assertEqual(ast.block.body[0].cond.op, 'AND_THEN')
         self.assertEqual(ast.block.body[1].cond.op, 'OR_ELSE')
 
+    def test_ads_factor_and_address_pointer_types_parse(self):
+        """ADS expression and ADR OF / ADS OF type prefixes are manual address forms."""
+        ast = parse_source(
+            "PROGRAM P; VAR x: INTEGER; a: ADR OF INTEGER; s: ADS OF INTEGER; BEGIN a := ADR x; s := ADS x END."
+        )
+        adr_decl = ast.block.decls[1]
+        ads_decl = ast.block.decls[2]
+        self.assertEqual(adr_decl.type_expr.flavor, 'ADR')
+        self.assertEqual(ads_decl.type_expr.flavor, 'ADS')
+        self.assertEqual(type(ast.block.body[0].expr).__name__, 'AdrExpr')
+        self.assertEqual(type(ast.block.body[1].expr).__name__, 'AdsExpr')
+
     def test_manual_radix_integer_constant(self):
         """The manual radix form n#digits should lex and parse as an integer constant."""
         ast = parse_source("PROGRAM P; CONST MASK = 16#FF; BEGIN END.")

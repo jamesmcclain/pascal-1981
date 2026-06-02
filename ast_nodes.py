@@ -314,6 +314,11 @@ class AdrExpr(ASTNode):
 
 
 @dataclass
+class AdsExpr(ASTNode):
+    name: str
+
+
+@dataclass
 class SizeofExpr(ASTNode):
     target: Union[str, Type]  # identifier name or type
 
@@ -374,6 +379,7 @@ class EnumType(ASTNode):
 @dataclass
 class PointerType(ASTNode):
     base: Type
+    flavor: str = 'POINTER'  # POINTER, ADR, ADS
 
 
 @dataclass

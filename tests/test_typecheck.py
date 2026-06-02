@@ -92,6 +92,13 @@ class TestTypeCompatibility(unittest.TestCase):
         result = typecheck_source("PROGRAM P; VAR p: ^INTEGER; BEGIN p := NIL END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
+    def test_adr_ads_address_types_typecheck(self):
+        """ADR OF and ADS OF variables accept matching address-of expressions."""
+        result = typecheck_source(
+            "PROGRAM P; VAR x: INTEGER; a: ADR OF INTEGER; s: ADS OF INTEGER; BEGIN a := ADR x; s := ADS x END."
+        )
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
 
 class TestControlFlow(unittest.TestCase):
     """Control flow type validation (IF, WHILE, FOR, REPEAT, CASE)."""

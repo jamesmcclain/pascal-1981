@@ -322,6 +322,7 @@ factor =
     | "(" expression ")"
     | "NOT" factor                              (* unary boolean negation            *)
     | "ADR" identifier                        (* 16-bit near offset of identifier *)
+    | "ADS" identifier                        (* segmented address; LLVM lowers segment to 0 *)
     | "SIZEOF" "(" ( identifier | type ) ")"  (* byte size of identifier or type  *)
     | "UPPER" "(" identifier ")"              (* upper bound of super array        *)
     | set_constructor ;
@@ -393,7 +394,9 @@ record_type = [ "PACKED" ] "RECORD" field_list "END" ;
 field_list  = field_decl { ";" field_decl } [ ";" ] ;
 field_decl  = identifier_list ":" type ;
 
-pointer_type = "^" type ;
+pointer_type = "^" type
+             | "ADR" "OF" type
+             | "ADS" "OF" type ;
 
 (* [OBSERVED] SET OF is fully implemented. Small sets (ordinal values
    0..15) are generated inline; larger sets (up to 0..255) use runtime
