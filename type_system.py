@@ -207,10 +207,14 @@ def can_assign(from_type: Type, to_type: Type) -> bool:
     """
     Check if a value of from_type can be assigned to a variable of to_type.
 
-    Pascal has strict typing: no implicit coercion.
-    Both types must be equivalent.
+    We keep the rule narrow: exact matches are allowed, plus the common
+    INTEGER-to-REAL widening used by assignments, parameters, and returns.
     """
-    return from_type.equivalent_to(to_type)
+    if from_type.equivalent_to(to_type):
+        return True
+    if isinstance(from_type, IntegerType) and isinstance(to_type, RealType):
+        return True
+    return False
 
 
 def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optional[Type]:

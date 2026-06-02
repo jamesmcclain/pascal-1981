@@ -149,6 +149,13 @@ class TestCallValidation(unittest.TestCase):
         )
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
+    def test_integer_to_real_procedure_parameter(self):
+        """INTEGER actual may flow to REAL formal parameter."""
+        result = typecheck_source(
+            "PROGRAM P; PROCEDURE P1(x: REAL); BEGIN END; BEGIN P1(42) END."
+        )
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
     def test_undefined_function_error(self):
         """Call to undefined function is an error."""
         result = typecheck_source("PROGRAM P; BEGIN WRITELN(UNDEFINED_FUNC()) END.")

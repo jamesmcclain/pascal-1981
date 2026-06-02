@@ -394,6 +394,7 @@ class Codegen:
         # Allocate space for return value
         return_alloca = self.builder.alloca(return_type, name='return_value')
         self.scope.define(decl.name, return_alloca, decl.return_type)
+        self.builder.store(ir.Constant(return_type, 0.0) if isinstance(return_type, ir.DoubleType) else ir.Constant(return_type, 0), return_alloca)
 
         # Codegen body
         for inner_decl in decl.body.decls:
@@ -402,8 +403,9 @@ class Codegen:
         for stmt in decl.body.body:
             self.codegen_stmt(stmt)
 
-        # Default return
-        self.builder.ret(ir.Constant(return_type, 0))
+        # Default return / function result
+        result = self.builder.load(return_alloca)
+        self.builder.ret(result)
 
         # Restore context
         self.builder = prev_builder
@@ -766,6 +768,10 @@ class Codegen:
                 return self.builder.trunc(value, target_type)
             elif vt.width < target_type.width:
                 return self.builder.zext(value, target_type)
+        if isinstance(target_type, ir.DoubleType) and isinstance(vt, ir.IntType):
+            return self.builder.sitofp(value, target_type)
+        if isinstance(target_type, ir.IntType) and isinstance(vt, ir.DoubleType):
+            return self.builder.fptosi(value, target_type)
         return value
 
     def to_bool(self, cond: ir.Value) -> ir.Value:
