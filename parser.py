@@ -652,12 +652,9 @@ class Parser:
                 designator = self.parse_designator_rest(name)
                 return designator
         if kind == 'INTEGER_LITERAL':
-            lexeme = self.current().lexeme
-            # Handle hex literals ($FF form)
-            if lexeme.startswith('$'):
-                value = int(lexeme[1:], 16)
-            else:
-                value = int(lexeme)
+            # The lexer already computed the integer value, handling decimal
+            # and radix (n#digits) forms uniformly.
+            value = self.current().value
             self.pos += 1
             return IntLiteral(value)
         if kind == 'REAL_LITERAL':
@@ -766,11 +763,7 @@ class Parser:
             sign = self.current().kind
             self.pos += 1
             if self.current().kind == 'INTEGER_LITERAL':
-                lexeme = self.current().lexeme
-                if lexeme.startswith('$'):
-                    value = int(lexeme[1:], 16)
-                else:
-                    value = int(lexeme)
+                value = self.current().value
                 if sign == 'MINUS':
                     value = -value
                 self.pos += 1

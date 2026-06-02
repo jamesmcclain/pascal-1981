@@ -150,17 +150,17 @@ re-run-time dependency detection. The suite is organized by **pipeline layer**:
 
 ```bash
 # All tests; codegen tests auto-skip if llvmlite/clang are unavailable
-python -m unittest discover -s tests -v
+python3 -m unittest discover -s tests -v
 ```
 
 ### Run by layer
 
 ```bash
 # Parser accept/reject corpus + type rules (no llvmlite needed)
-python -m unittest tests.test_parser tests.test_typecheck
+python3 -m unittest tests.test_parser tests.test_typecheck
 
 # Codegen only (requires llvmlite [+ clang])
-python -m unittest tests.test_codegen
+python3 -m unittest tests.test_codegen
 ```
 
 ### How it works

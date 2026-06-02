@@ -42,7 +42,7 @@ class TestParserReject(unittest.TestCase):
         """Load all should_fail fixtures."""
         fixtures_dir = Path(__file__).parent / "fixtures" / "parser" / "should_fail"
         self.files = sorted(fixtures_dir.glob("*.pas"))
-        self.assertEqual(len(self.files), 14, f"Expected 14 should_fail fixtures, found {len(self.files)}")
+        self.assertEqual(len(self.files), 15, f"Expected 15 should_fail fixtures, found {len(self.files)}")
 
     def test_parser_rejects_all_should_fail(self):
         """Each should_fail/ file must raise LexerError or ParserError (not any other exception)."""
@@ -99,6 +99,30 @@ class TestParserJudgmentCalls(unittest.TestCase):
         ast = parse_source("PROGRAM P; CONST MASK = 16#FF; BEGIN END.")
         const = ast.block.decls[0]
         self.assertEqual(const.value.value, 255)
+
+    def test_manual_radix_integer_in_expression(self):
+        """Radix literals must also work in expression/factor position, not just
+        in constant declarations (regression: the factor path used to re-parse the
+        lexeme and crash on '16#FF')."""
+        for src, expected in [
+            ("PROGRAM P; VAR x: INTEGER; BEGIN x := 16#FF END.", 255),
+            ("PROGRAM P; VAR x: INTEGER; BEGIN x := 2#1010 END.", 10),
+            ("PROGRAM P; VAR x: INTEGER; BEGIN x := 8#17 END.", 15),
+        ]:
+            ast = parse_source(src)
+            assign = ast.block.body[0]
+            self.assertEqual(assign.expr.value, expected)
+
+    def test_dollar_hex_is_rejected(self):
+        """The '$FF' hex form is not part of the IBM Pascal 2.0 dialect (the
+        manual's only hex notation is the n#digits radix form). It must be
+        rejected in both constant and expression position."""
+        for src in [
+            "PROGRAM P; CONST MASK = $FF; BEGIN END.",
+            "PROGRAM P; VAR x: INTEGER; BEGIN x := $FF END.",
+        ]:
+            with self.assertRaises((LexerError, ParserError)):
+                parse_source(src)
 
 
 if __name__ == '__main__':

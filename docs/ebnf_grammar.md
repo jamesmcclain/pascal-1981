@@ -468,13 +468,14 @@ constant =
     | "NIL"
     | identifier ;
 
-(* [ADDED] Decimal, radix, and hexadecimal integer forms.
-   Radix uses the manual n#digits form, e.g. 16#FF. Hex via $FF remains
-   accepted as a compatibility extension. hex_digit is case-insensitive. *)
-integer_constant = decimal_integer | radix_integer | hex_integer ;
+(* Decimal and radix integer forms. Radix uses the manual n#digits form,
+   e.g. 16#FF; radix_digits is case-insensitive.
+   NOTE: the `$FF` hex form was previously accepted as an implementer-added
+   compatibility extension but has been removed — it is not attested in the
+   IBM Pascal 2.0 manual, whose only hexadecimal notation is the radix form. *)
+integer_constant = decimal_integer | radix_integer ;
 decimal_integer  = digit { digit } ;
 radix_integer    = digit { digit } "#" radix_digits ;
-hex_integer      = "$" hex_digit { hex_digit } ;
 radix_digits     = hex_digit { hex_digit } ;
 hex_digit        = digit | "A" | "B" | "C" | "D" | "E" | "F" ;
 
@@ -527,6 +528,8 @@ character = (* any printable ASCII character in the range 0x20–0x7E,
 | `constant` — `"NIL"` alternative added as null-pointer constant | ADDED (Pillar 1) | Required for any pointer-type code |
 | `constant` — `identifier` alternative added for named constants and enum values | ADDED (Pillar 1) | Standard Pascal `CONST`-declared names; enum member names |
 | `integer_constant` — split into `decimal_integer` and `hex_integer` (`$FF` form) | ADDED (Pillar 1) | Required for systems-level and hardware-address literals |
+| `integer_constant` — `radix_integer` (`n#digits`) added as the manual's hex/radix notation | DOCUMENTED | Manual `number` production (appendix F-4) |
+| `integer_constant` — `hex_integer` (`$FF`) **removed**; not attested in the manual, superseded by radix form | OBSERVED | Manual shows only the `#`-radix form; `$` notation absent |
 | `real_constant` — `exponent` suffix added for scientific notation (`1.5E10`) | ADDED (Pillar 1) | Standard Pascal requirement |
 | `factor` — `"NOT" factor` alternative added for unary boolean negation | ADDED (Pillar 1) | `NOT` was entirely absent from grammar |
 | Lexical Rules section added: case-insensitivity, whitespace, comment forms, directive disambiguation | ADDED (Pillar 1) | Unspecified in original grammar |
