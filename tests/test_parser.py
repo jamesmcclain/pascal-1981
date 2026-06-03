@@ -170,6 +170,12 @@ class TestParserJudgmentCalls(unittest.TestCase):
         self.assertEqual(type(ast.block.body[0].expr).__name__, 'AdrExpr')
         self.assertEqual(type(ast.block.body[1].expr).__name__, 'AdsExpr')
 
+    def test_parameter_modes_parse_var_const_and_far_forms(self):
+        """Parameter modes should preserve VAR/CONST and VARS/CONS spelling."""
+        ast = parse_source("PROGRAM P; PROCEDURE Q(VAR a: INTEGER; VARS b: INTEGER; CONST c: INTEGER; CONS d: INTEGER); BEGIN END; BEGIN END.")
+        modes = [p.mode for p in ast.block.decls[0].params]
+        self.assertEqual(modes, ['VAR', 'VARS', 'CONST', 'CONS'])
+
     def test_manual_radix_integer_constant(self):
         """The manual radix form n#digits should lex and parse as an integer constant."""
         ast = parse_source("PROGRAM P; CONST MASK = 16#FF; BEGIN END.")

@@ -119,7 +119,7 @@ class FuncDecl(ASTNode):
 
 @dataclass
 class Param(ASTNode):
-    mode: Optional[str]  # 'VAR', 'CONST', 'VARS', 'CONSTS', or None
+    mode: Optional[str]  # 'VAR', 'CONST', 'VARS', 'CONS', or None
     names: List[str]
     type_expr: Type
 

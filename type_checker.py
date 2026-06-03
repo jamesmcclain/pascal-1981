@@ -637,7 +637,7 @@ class PascalTypeChecker(TypeChecker):
             param_type = self.resolve_type(param.type_expr)
             if param_type:
                 for name in param.names:
-                    param_symbol = Symbol(name=name, type=param_type, kind='parameter', location=self.make_location(param), is_mutable=False)
+                    param_symbol = Symbol(name=name, type=param_type, kind='parameter', location=self.make_location(param), is_mutable=param.mode not in {'CONST', 'CONS'})
                     self.symbol_table.define(name, param_symbol)
 
         # Check body
@@ -690,7 +690,7 @@ class PascalTypeChecker(TypeChecker):
             param_type = self.resolve_type(param.type_expr)
             if param_type:
                 for name in param.names:
-                    param_symbol = Symbol(name=name, type=param_type, kind='parameter', location=self.make_location(param), is_mutable=False)
+                    param_symbol = Symbol(name=name, type=param_type, kind='parameter', location=self.make_location(param), is_mutable=param.mode not in {'CONST', 'CONS'})
                     self.symbol_table.define(name, param_symbol)
 
         # Check body
@@ -823,6 +823,9 @@ class PascalTypeChecker(TypeChecker):
                 target_type = sym.type
         elif isinstance(stmt.target, Designator):
             # Designator with selectors (array/record/pointer access)
+            sym = self.symbol_table.lookup(stmt.target.name)
+            if sym and not sym.is_mutable:
+                self.error(f"Cannot assign to immutable {sym.kind}: {stmt.target.name}", stmt)
             target_type = self.infer_designator_type(stmt.target)
             if target_type:
                 # Type check successful - target_type is now the element/field type

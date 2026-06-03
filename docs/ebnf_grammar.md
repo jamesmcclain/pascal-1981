@@ -208,10 +208,10 @@ func_decl_header =
     ":" type
     [ attribute_section ] ;
 
-(* [OBSERVED] VAR/CONST pass near 16-bit references (same segment).
-   VARS/CONSTS pass far 32-bit (segment:offset) references. *)
+(* [OBSERVED] Parameter modes: VAR/CONST are near references; VARS/CONS are
+   far/segmented reference forms. *)
 parameter_list  = parameter_group { ";" parameter_group } ;
-parameter_group = [ "VAR" | "CONST" | "VARS" | "CONSTS" ] identifier_list ":" type ;
+parameter_group = [ "VAR" | "CONST" | "VARS" | "CONS" ] identifier_list ":" type ;
 
 
 (* ═══════════════════════════════════════════════════════════════════

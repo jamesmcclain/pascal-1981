@@ -438,6 +438,47 @@ class TestCodegenBuildRun(unittest.TestCase):
         self.assertEqual(returncode, 0)
         self.assertEqual(stdout.strip(), "63")
 
+    def test_var_and_vars_parameters_runtime(self):
+        """VAR and VARS parameters are writable by-reference aliases."""
+        src = """
+        PROGRAM P;
+        VAR a, b: INTEGER;
+        PROCEDURE Bump(VAR x: INTEGER; VARS y: INTEGER);
+        BEGIN
+            x := x + 1;
+            y := y + 10
+        END;
+        BEGIN
+            a := 1;
+            b := 2;
+            Bump(a, b);
+            WRITELN(a);
+            WRITELN(b)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "2\n12")
+
+    def test_const_and_cons_parameters_runtime(self):
+        """CONST and CONS parameters are readable by-reference aliases."""
+        src = """
+        PROGRAM P;
+        VAR a, b: INTEGER;
+        PROCEDURE Show(CONST x: INTEGER; CONS y: INTEGER);
+        BEGIN
+            WRITELN(x + y)
+        END;
+        BEGIN
+            a := 7;
+            b := 8;
+            Show(a, b)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "15")
+
 
 if __name__ == '__main__':
     unittest.main()

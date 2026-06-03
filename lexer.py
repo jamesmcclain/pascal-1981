@@ -14,7 +14,7 @@ KEYWORD_CODES = {
     'UNIT': 0x0058,
     'USES': 0x0005,
     'CONST': 0x0006,
-    'CONSTS': 0x005A,
+    'CONS': 0x005A,
     'TYPE': 0x0007,
     'VAR': 0x0008,
     'VARS': 0x0059,

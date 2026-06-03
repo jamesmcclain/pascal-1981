@@ -86,6 +86,7 @@ class Codegen:
         self.current_return_block: Optional[ir.BasicBlock] = None
         self.constants: Dict[str, int] = {}  # compile-time constant values, keyed UPPER
         self.current_interface_decls: Dict[str, Declaration] = {}
+        self.proc_param_modes: Dict[str, List[Optional[str]]] = {}
         self.loop_stack: List[LoopContext] = []
         self.verbose = verbose
 
@@ -148,6 +149,15 @@ class Codegen:
             return ir.ArrayType(elem_type, size)
         else:
             raise CodegenError(f'Type {type(type_expr).__name__} not yet supported')
+
+    def param_llvm_type(self, param: Param) -> ir.Type:
+        base = self.llvm_type(param.type_expr)
+        if param.mode in {'VAR', 'VARS', 'CONST', 'CONS'}:
+            # LLVM lowering: near and far reference parameters both use ordinary
+            # pointers on this target. Far modes preserve source-level mode
+            # metadata; the segment component is degenerate, as with ADS.
+            return ir.PointerType(base)
+        return base
 
     # ========================================================================
     # Main Entry Point
@@ -311,16 +321,19 @@ class Codegen:
         if iface_decl and not decl.params:
             effective_decl = iface_decl
 
-        # Flatten parameter types: one per name in each Param group
+        # Flatten parameter types: reference modes are passed as LLVM pointers.
         param_types = []
+        flat_modes = []
         for param in effective_decl.params:
-            param_type = self.llvm_type(param.type_expr)
+            param_type = self.param_llvm_type(param)
             for _ in param.names:
                 param_types.append(param_type)
+                flat_modes.append(param.mode)
         func_type = ir.FunctionType(ir.IntType(32), param_types)
 
         # Create function
         func = ir.Function(self.module, func_type, name=decl.name)
+        self.proc_param_modes[decl.name.lower()] = flat_modes
         self.scope.define(decl.name, func, None)
 
         # If no body, it's extern/forward
@@ -343,7 +356,7 @@ class Codegen:
             for name in param.names:
                 arg = next(args_iter)
                 arg.name = name
-                self.scope.define(name, arg, param.type_expr, is_parameter=True)
+                self.scope.define(name, arg, param.type_expr, is_parameter=param.mode not in {'VAR', 'VARS', 'CONST', 'CONS'})
 
         # Codegen body
         for inner_decl in decl.body.decls:
@@ -367,17 +380,20 @@ class Codegen:
         if iface_decl and not decl.params:
             effective_decl = iface_decl
 
-        # Flatten parameter types: one per name in each Param group
+        # Flatten parameter types: reference modes are passed as LLVM pointers.
         param_types = []
+        flat_modes = []
         for param in effective_decl.params:
-            param_type = self.llvm_type(param.type_expr)
+            param_type = self.param_llvm_type(param)
             for _ in param.names:
                 param_types.append(param_type)
+                flat_modes.append(param.mode)
         return_type = self.llvm_type(decl.return_type)
         func_type = ir.FunctionType(return_type, param_types)
 
         # Create function
         func = ir.Function(self.module, func_type, name=decl.name)
+        self.proc_param_modes[decl.name.lower()] = flat_modes
         self.scope.define(decl.name, func, decl.return_type)
 
         # If no body, it's extern/forward
@@ -400,7 +416,7 @@ class Codegen:
             for name in param.names:
                 arg = next(args_iter)
                 arg.name = name
-                self.scope.define(name, arg, param.type_expr, is_parameter=True)
+                self.scope.define(name, arg, param.type_expr, is_parameter=param.mode not in {'VAR', 'VARS', 'CONST', 'CONS'})
 
         # Allocate space for return value
         return_alloca = self.builder.alloca(return_type, name='return_value')
@@ -524,13 +540,24 @@ class Codegen:
             # User-defined procedure
             fn = symbol.llvm_value
             param_types = fn.function_type.args
+            param_modes = self.proc_param_modes.get(stmt.name.lower(), [])
             args = []
             for i, arg in enumerate(stmt.args):
-                v = self.codegen_expr(arg)
+                mode = param_modes[i] if i < len(param_modes) else None
+                v = self.codegen_actual_arg(arg, mode)
                 if i < len(param_types):
                     v = self.coerce_arg(v, param_types[i])
                 args.append(v)
             self.builder.call(fn, args)
+
+    def codegen_actual_arg(self, arg: Expression, mode: Optional[str]) -> ir.Value:
+        if mode in {'VAR', 'VARS', 'CONST', 'CONS'}:
+            if isinstance(arg, Identifier):
+                return self.resolve_designator_ptr(Designator(arg.name, []))
+            if isinstance(arg, Designator):
+                return self.resolve_designator_ptr(arg)
+            raise CodegenError(f'{mode} parameter requires a designator argument')
+        return self.codegen_expr(arg)
 
     def codegen_if_stmt(self, stmt: IfStmt) -> None:
         """Codegen for IF statement."""
@@ -1065,9 +1092,11 @@ class Codegen:
 
         fn = symbol.llvm_value
         param_types = fn.function_type.args
+        param_modes = self.proc_param_modes.get(expr.name.lower(), [])
         args = []
         for i, arg in enumerate(expr.args):
-            v = self.codegen_expr(arg)
+            mode = param_modes[i] if i < len(param_modes) else None
+            v = self.codegen_actual_arg(arg, mode)
             if i < len(param_types):
                 v = self.coerce_arg(v, param_types[i])
             args.append(v)

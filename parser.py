@@ -343,7 +343,7 @@ class Parser:
 
     def parse_parameter_group(self) -> Param:
         mode: Optional[str] = None
-        if self.current().kind in {'VAR', 'CONST', 'VARS', 'CONSTS'}:
+        if self.current().kind in {'VAR', 'VARS', 'CONST', 'CONS'}:
             mode = self.current().kind
             self.pos += 1
         names = self.parse_identifier_list()

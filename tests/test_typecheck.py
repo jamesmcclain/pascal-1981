@@ -99,6 +99,18 @@ class TestTypeCompatibility(unittest.TestCase):
         )
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
+    def test_parameter_modes_typecheck(self):
+        """VAR/VARS are writable references; CONST/CONS are read-only references."""
+        ok = typecheck_source(
+            "PROGRAM P; PROCEDURE Q(VAR a: INTEGER; VARS b: INTEGER; CONST c: INTEGER; CONS d: INTEGER); BEGIN a := 1; b := 2; WRITELN(c); WRITELN(d) END; BEGIN END."
+        )
+        self.assertTrue(ok.success, msg=" ".join(str(e) for e in ok.errors))
+        bad = typecheck_source(
+            "PROGRAM P; PROCEDURE Q(CONST c: INTEGER; CONS d: INTEGER); BEGIN c := 1; d := 2 END; BEGIN END."
+        )
+        self.assertFalse(bad.success)
+        self.assertTrue(any("Cannot assign" in e.message for e in bad.errors))
+
 
 class TestControlFlow(unittest.TestCase):
     """Control flow type validation (IF, WHILE, FOR, REPEAT, CASE)."""
