@@ -85,6 +85,7 @@ class Codegen:
         self.current_function: Optional[ir.Function] = None
         self.current_return_block: Optional[ir.BasicBlock] = None
         self.constants: Dict[str, int] = {}  # compile-time constant values, keyed UPPER
+        self.type_aliases: Dict[str, Type] = {}  # compile-time type aliases, keyed UPPER
         self.current_interface_decls: Dict[str, Declaration] = {}
         self.proc_param_modes: Dict[str, List[Optional[str]]] = {}
         self.loop_stack: List[LoopContext] = []
@@ -131,6 +132,14 @@ class Codegen:
                 return ir.DoubleType()
             elif name_up == 'CHAR':
                 return ir.IntType(8)
+            if name_up in self.type_aliases:
+                return self.llvm_type(self.type_aliases[name_up])
+            return ir.IntType(32)
+        elif isinstance(type_expr, SetType):
+            return self.set_llvm_type()
+        elif isinstance(type_expr, SubrangeType):
+            if type_expr.host:
+                return self.llvm_type(NamedType(type_expr.host, None))
             return ir.IntType(32)
         elif isinstance(type_expr, PointerType):
             base_type = self.llvm_type(type_expr.base)
@@ -276,8 +285,7 @@ class Codegen:
         elif isinstance(decl, VarDecl):
             self.codegen_var_decl(decl)
         elif isinstance(decl, TypeDecl):
-            # Type definitions don't generate code in MVP
-            pass
+            self.codegen_type_decl(decl)
         elif isinstance(decl, ValueDecl):
             # VALUE declarations don't generate code
             pass
@@ -297,6 +305,10 @@ class Codegen:
         # uses (array bounds, sizeof, and plain value references) can resolve it.
         value = self.eval_const_expr(decl.value)
         self.constants[decl.name.upper()] = value
+
+    def codegen_type_decl(self, decl: TypeDecl) -> None:
+        """Record a type declaration for later codegen lookups."""
+        self.type_aliases[decl.name.upper()] = decl.type_expr
 
     def codegen_var_decl(self, decl: VarDecl) -> None:
         """Codegen for VAR declaration."""
@@ -796,6 +808,10 @@ class Codegen:
         """Size in bytes of a scalar/built-in type, by name."""
         return _SCALAR_SIZES.get(name.upper(), 4)
 
+    def set_llvm_type(self) -> ir.Type:
+        """LLVM representation for all Pascal sets: 256 bits as four i64 words."""
+        return ir.ArrayType(ir.IntType(64), 4)
+
     def zero_initializer(self, llvm_type: ir.Type) -> ir.Value:
         """Produce a valid zero initializer for any LLVM type.
 
@@ -814,6 +830,10 @@ class Codegen:
             return self._scalar_size(t.name)
         elif isinstance(t, NamedType):
             return self._scalar_size(t.name)
+        elif isinstance(t, SetType):
+            return 32
+        elif isinstance(t, SubrangeType):
+            return self._scalar_size(t.host) if t.host else 4
         elif isinstance(t, ArrayType):
             low = self.eval_const_expr(t.index_range.low)
             high = self.eval_const_expr(t.index_range.high) if t.index_range.high else low
@@ -937,6 +957,8 @@ class Codegen:
             if symbol.is_parameter:
                 return symbol.llvm_value
             return self.builder.load(symbol.llvm_value)
+        elif isinstance(expr, SetConstructor):
+            return self.codegen_set_constructor(expr)
         elif isinstance(expr, Designator):
             symbol = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
             if not symbol:
@@ -958,6 +980,32 @@ class Codegen:
             return self.codegen_func_call(expr)
         else:
             raise CodegenError(f'Expression type {type(expr).__name__} not yet supported')
+
+    def codegen_set_constructor(self, expr: SetConstructor) -> ir.Value:
+        """Codegen a set constructor as a 256-bit constant bitvector.
+
+        Dynamic set construction is intentionally deferred; this phase gives the
+        backend a concrete representation and handles constant constructors and
+        ranges, including reversed ranges as empty ranges.
+        """
+        words = [0, 0, 0, 0]
+        for element in expr.elements:
+            if isinstance(element, RangeExpr):
+                low = self.eval_const_expr(element.low)
+                high = self.eval_const_expr(element.high)
+                if low > high:
+                    continue
+                for value in range(low, high + 1):
+                    self._set_constant_bit(words, value)
+            else:
+                self._set_constant_bit(words, self.eval_const_expr(element))
+        return ir.Constant(self.set_llvm_type(), [ir.Constant(ir.IntType(64), word) for word in words])
+
+    def _set_constant_bit(self, words: List[int], value: int) -> None:
+        """Set one ordinal bit in a four-word set constant."""
+        if value < 0 or value > 255:
+            raise CodegenError(f'Set element ordinal out of range 0..255: {value}')
+        words[value // 64] |= 1 << (value % 64)
 
     def codegen_binop(self, expr: BinOp) -> ir.Value:
         """Codegen binary operation."""

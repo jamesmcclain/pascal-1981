@@ -100,6 +100,18 @@ class TestCodegenIR(unittest.TestCase):
         self.assertIsInstance(ir, str)
         self.assertGreater(len(ir), 0)
 
+    def test_set_variable_uses_bitvector_storage(self):
+        """SET variables lower to a fixed 256-bit bitvector."""
+        src = "PROGRAM P; VAR x: SET OF 1..10; BEGIN END."
+        ir = compile_to_ir(src)
+        self.assertIn("global [4 x i64] zeroinitializer", ir)
+
+    def test_set_constructor_constant_lowers_to_bitvector(self):
+        """Constant set constructors fold into four-word set constants."""
+        src = "PROGRAM P; TYPE S = SET OF 1..10; VAR x: S; BEGIN x := [1, 2..4] END."
+        ir = compile_to_ir(src)
+        self.assertIn("store [4 x i64] [i64 30, i64 0, i64 0, i64 0]", ir)
+
     def test_real_literal_and_assignment(self):
         """REAL literals and assignment generate valid IR."""
         src = "PROGRAM P; VAR x: REAL; BEGIN x := 1.5; WRITELN(x) END."
