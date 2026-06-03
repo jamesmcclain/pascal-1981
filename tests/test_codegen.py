@@ -112,6 +112,30 @@ class TestCodegenIR(unittest.TestCase):
         ir = compile_to_ir(src)
         self.assertIn("store [4 x i64] [i64 30, i64 0, i64 0, i64 0]", ir)
 
+    def test_set_arithmetic_ops_lower_to_bitwise_ops(self):
+        """Set +, -, and * lower to bitwise operations on set words."""
+        src = "PROGRAM P; VAR a, b, c: SET OF 1..10; BEGIN a := [1]; b := [2]; c := a + b; c := c * a; c := c - b END."
+        ir = compile_to_ir(src)
+        self.assertIn(" or ", ir)
+        self.assertIn(" and ", ir)
+        self.assertIn(" xor ", ir)
+
+    def test_set_membership_lowers_to_bit_test(self):
+        """IN lowers to word selection, shift, mask, and compare."""
+        src = "PROGRAM P; VAR a: SET OF 1..10; VAR ok: BOOLEAN; BEGIN a := [1, 3]; ok := 3 IN a END."
+        ir = compile_to_ir(src)
+        self.assertIn("udiv", ir)
+        self.assertIn("urem", ir)
+        self.assertIn("shl", ir)
+        self.assertIn("icmp ne", ir)
+
+    def test_set_comparisons_lower_to_boolean_logic(self):
+        """Set comparisons lower to aggregate word comparisons."""
+        src = "PROGRAM P; VAR a, b: SET OF 1..10; VAR ok: BOOLEAN; BEGIN a := [1]; b := [1, 2]; ok := a <= b; ok := a <> b END."
+        ir = compile_to_ir(src)
+        self.assertIn("icmp eq", ir)
+        self.assertIn(" and ", ir)
+
     def test_real_literal_and_assignment(self):
         """REAL literals and assignment generate valid IR."""
         src = "PROGRAM P; VAR x: REAL; BEGIN x := 1.5; WRITELN(x) END."
