@@ -341,6 +341,44 @@ class TestCodegenBuildRun(unittest.TestCase):
         self.assertEqual(returncode, 0)
         self.assertIn("5", stdout)
 
+    def test_set_operations_runtime(self):
+        """Set union/intersection/difference and IN produce correct runtime results."""
+        src = """
+        PROGRAM P;
+        VAR a, b, c: SET OF 1..10;
+        BEGIN
+            a := [1, 3];
+            b := [3, 4];
+            c := a + b;
+            IF 4 IN c THEN WRITELN(1);
+            c := a * b;
+            IF 3 IN c THEN WRITELN(2);
+            c := a - b;
+            IF 3 IN c THEN WRITELN(9);
+            IF 1 IN c THEN WRITELN(3)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "1\n2\n3")
+
+    def test_typed_set_constructor_runtime(self):
+        """Type-prefixed set constants execute through the set backend."""
+        src = """
+        PROGRAM P;
+        TYPE S = SET OF 1..10;
+        VAR a: S;
+        BEGIN
+            a := S[2..4];
+            IF 2 IN a THEN WRITELN(2);
+            IF 5 IN a THEN WRITELN(5);
+            IF a = S[2..4] THEN WRITELN(4)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "2\n4")
+
     def test_variable_assignment_and_output(self):
         """Assign to variable and output."""
         src = (
