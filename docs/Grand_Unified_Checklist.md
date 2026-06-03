@@ -141,12 +141,22 @@ full reimplementation.
   expression and type level. Tie this to the segmented-memory model (see 2.7).
   - Done: added `ADS` as an address-of factor and `ADR OF` / `ADS OF` type prefixes. `ADR OF` lowers to a plain LLVM pointer; `ADS OF` lowers to `{R pointer, S WORD}` with `S = 0` for the LLVM target. Proven by `python -m unittest tests.test_parser tests.test_typecheck tests.test_codegen`.
 
-- [x] **2.7 — `VARS`/`CONS` far-reference semantics.** `[READ]` **M**
+- [x] **2.7 — `VARS`/`CONSTS` far-reference semantics.** `[READ]` **M**
   Tokens and parameter modes exist; the manual distinguishes near (`VAR`/`CONST`,
-  same-segment) from far (`VARS`/`CONS`, segment:offset-style) parameter
+  same-segment) from far (`VARS`/`CONSTS`, segment:offset-style) parameter
   references. Confirm whether the implementation actually treats them differently
   in codegen or only parses them. Pairs naturally with `ADS` (2.6).
-  - Done: parameter-mode parsing now preserves `VAR`, `VARS`, `CONST`, and `CONS`; type checking treats `CONST`/`CONS` as read-only parameter aliases while `VAR`/`VARS` remain assignable. Codegen passes all four as by-reference aliases; on LLVM, the far forms (`VARS`/`CONS`) use the same ordinary-pointer lowering as near forms, matching the project's `ADS` segment-zero approximation rather than emulating segmented memory. Proven by `python -m unittest tests.test_parser tests.test_typecheck tests.test_codegen`.  Note that `CONS` in the manual was a typo, so it has been changed to `CONSTS` throughout the code.
+  - Done: parameter-mode parsing preserves all four modes — `VAR`, `VARS`,
+    `CONST`, `CONSTS` — as distinct tokens (`CONSTS` = `0x005A`, `VARS` =
+    `0x0059` in the lexer). Type checking treats `CONST`/`CONSTS` as read-only
+    aliases (assignment to them is rejected) and `VAR`/`VARS` as assignable; a
+    `PURE` routine is forbidden from taking `VAR`/`VARS` parameters. Codegen
+    passes all four as by-reference aliases. On the LLVM target the far forms
+    (`VARS`/`CONSTS`) use the same ordinary-pointer lowering as the near forms —
+    the same segment-zero approximation used for `ADS` (2.6) — rather than
+    emulating segmented memory; true far/segmented behavior is out of scope here.
+    Proven by `python -m unittest tests.test_parser tests.test_typecheck
+    tests.test_codegen`.
 
 - [x] **2.8 — Attribute argument forms beyond `ORIGIN(c)`.** `[READ]` **M**
   Manual `getattr` shows attributes carrying arguments and a `:ordcons` form;
