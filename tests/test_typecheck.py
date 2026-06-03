@@ -92,6 +92,22 @@ class TestTypeCompatibility(unittest.TestCase):
         result = typecheck_source("PROGRAM P; VAR a, b: SET OF 1..10; VAR x: INTEGER; VAR ok: BOOLEAN; BEGIN ok := (x IN a) AND (a = b) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
+    def test_typed_set_constructor_constant_range(self):
+        """Type-prefixed set constructors are valid when all elements are constant."""
+        result = typecheck_source("PROGRAM P; TYPE S = SET OF 1..10; VAR x: S; BEGIN x := S[1..3] END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_typed_set_constructor_rejects_variable_range(self):
+        """Type-prefixed set constructors reject variable elements per the manual."""
+        result = typecheck_source("PROGRAM P; TYPE S = SET OF 1..10; VAR x: S; VAR i, j: INTEGER; BEGIN x := S[i..j] END.")
+        self.assertFalse(result.success)
+        self.assertTrue(any("constant elements" in e.message for e in result.errors))
+
+    def test_typed_set_constructor_prefix_must_be_set_type(self):
+        """Typed set constructor prefixes must resolve to set types."""
+        result = typecheck_source("PROGRAM P; TYPE N = INTEGER; VAR x: SET OF 1..10; BEGIN x := N[1..3] END.")
+        self.assertFalse(result.success)
+        self.assertTrue(any("must name a set type" in e.message for e in result.errors))
 
     def test_abs_and_sqrt_typecheck(self):
         """ABS accepts INTEGER/REAL and SQRT returns REAL."""

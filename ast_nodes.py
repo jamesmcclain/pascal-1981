@@ -306,6 +306,7 @@ class FuncCall(ASTNode):
 @dataclass
 class SetConstructor(ASTNode):
     elements: List[Expression]  # can include RangeExpr for ranges
+    type_name: Optional[str] = None  # typed set constant, e.g. ColorSet[Red..Blue]
 
 
 @dataclass

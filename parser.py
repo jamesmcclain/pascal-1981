@@ -668,6 +668,16 @@ class Parser:
                     args = self.parse_actual_parameter_list()
                 self.expect('RPAREN')
                 return FuncCall(name, args)
+            elif self.next_kind() == 'LBRACKET' and self.bracket_payload_contains_range(self.pos + 1):
+                self.pos += 1  # consume type identifier
+                self.expect('LBRACKET')
+                elements: List[Expression] = []
+                if self.current().kind != 'RBRACKET':
+                    elements.append(self.parse_set_element())
+                    while self.match('COMMA'):
+                        elements.append(self.parse_set_element())
+                self.expect('RBRACKET')
+                return SetConstructor(elements, name)
             else:
                 self.pos += 1  # consume IDENTIFIER
                 designator = self.parse_designator_rest(name)
@@ -737,6 +747,25 @@ class Parser:
             self.expect('RBRACKET')
             return SetConstructor(elements)
         self.error('expected factor')
+
+    def bracket_payload_contains_range(self, lbracket_pos: int) -> bool:
+        """Return True when a bracketed IDENTIFIER[...] payload contains '..'.
+
+        This conservatively disambiguates typed set constants from array
+        indexing without symbol information in the parser.
+        """
+        depth = 0
+        for i in range(lbracket_pos, len(self.tokens)):
+            kind = self.tokens[i].kind
+            if kind == 'LBRACKET':
+                depth += 1
+            elif kind == 'RBRACKET':
+                depth -= 1
+                if depth == 0:
+                    return False
+            elif kind == 'RANGE' and depth == 1:
+                return True
+        return False
 
     def parse_designator_rest(self, name: str) -> Expression:
         """Continue parsing a designator or return as identifier."""

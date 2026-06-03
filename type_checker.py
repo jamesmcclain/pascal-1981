@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from ast_nodes import AdrExpr, AdsExpr
 from ast_nodes import ArrayType as ASTArrayType
-from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, ConstDecl, Designator, Expression, ForStmt, FuncCall, FuncDecl, Identifier, IfStmt,
+from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, CharLiteral, ConstDecl, Designator, Expression, ForStmt, FuncCall, FuncDecl, Identifier, IfStmt,
                        ImplementationUnit, InterfaceUnit, IntLiteral, LabelStmt, ModuleUnit, NamedType, NilLiteral, PointerType as ASTPointerType, ProcCallStmt, ProcDecl, ProgramUnit, RealLiteral, WriteArg)
 from ast_nodes import RecordType as ASTRecordType, SetType as ASTSetType, SubrangeType as ASTSubrangeType
 from ast_nodes import (RangeExpr, RepeatStmt, ReturnStmt, Selector, SetConstructor, SizeofExpr, Statement, StringLiteral, TypeDecl, UnaryOp, UseClause, VarDecl, WhileStmt)
@@ -939,13 +939,28 @@ class PascalTypeChecker(TypeChecker):
             return REAL_TYPE
         elif isinstance(expr, BoolLiteral):
             return BOOLEAN_TYPE
+        elif isinstance(expr, CharLiteral):
+            return CHAR_TYPE
         elif isinstance(expr, NilLiteral):
             return PointerType(CHAR_TYPE)
         elif isinstance(expr, StringLiteral):
             return PointerType(CHAR_TYPE)
         elif isinstance(expr, SetConstructor):
+            declared_set_type: Optional[SetType] = None
+            if expr.type_name:
+                sym = self.symbol_table.lookup(expr.type_name)
+                if not sym or sym.kind != 'type':
+                    self.error(f"Unknown set type: {expr.type_name}", expr)
+                    return None
+                if not isinstance(sym.type, SetType):
+                    self.error(f"Typed set constructor prefix must name a set type, got {sym.type}", expr)
+                    return None
+                declared_set_type = sym.type
+                if not all(self.is_constant_set_element(el) for el in expr.elements):
+                    self.error("Typed set constructors require constant elements", expr)
+                    return None
             if not expr.elements:
-                return SetType(INTEGER_TYPE)
+                return declared_set_type or SetType(INTEGER_TYPE)
             element_type: Optional[Type] = None
             for el in expr.elements:
                 if isinstance(el, RangeExpr):
@@ -961,12 +976,15 @@ class PascalTypeChecker(TypeChecker):
                     cur_type = self.infer_expression_type(el)
                 if not cur_type:
                     return None
+                if declared_set_type and not can_assign(cur_type, declared_set_type.element_type) and not can_assign(declared_set_type.element_type, cur_type):
+                    self.error(f"Set element type mismatch: expected {declared_set_type.element_type}, got {cur_type}", el)
+                    return None
                 if element_type is None:
                     element_type = cur_type
                 elif not cur_type.equivalent_to(element_type):
                     self.error(f"Set element type mismatch: expected {element_type}, got {cur_type}", el)
                     return None
-            return SetType(element_type or INTEGER_TYPE)
+            return declared_set_type or SetType(element_type or INTEGER_TYPE)
         elif isinstance(expr, AdrExpr):
             # Address-of operator (adr var_name)
             sym = self.symbol_table.lookup(expr.name)
@@ -1052,6 +1070,21 @@ class PascalTypeChecker(TypeChecker):
         else:
             # Unknown expression type
             return None
+
+    def is_constant_set_element(self, expr: Expression) -> bool:
+        """Return True when a set element/range endpoint is compile-time constant."""
+        if isinstance(expr, RangeExpr):
+            return self.is_constant_set_element(expr.low) and self.is_constant_set_element(expr.high)
+        if isinstance(expr, (IntLiteral, RealLiteral, BoolLiteral, CharLiteral, StringLiteral)):
+            return True
+        if isinstance(expr, Identifier):
+            sym = self.symbol_table.lookup(expr.name)
+            return bool(sym and sym.kind == 'const')
+        if isinstance(expr, UnaryOp):
+            return self.is_constant_set_element(expr.operand)
+        if isinstance(expr, BinOp):
+            return self.is_constant_set_element(expr.left) and self.is_constant_set_element(expr.right)
+        return False
 
     def infer_designator_type(self, designator: Designator) -> Optional[Type]:
         """Infer the type of a designator (with selectors for array/record access)."""

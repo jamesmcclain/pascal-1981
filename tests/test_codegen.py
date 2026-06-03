@@ -112,6 +112,12 @@ class TestCodegenIR(unittest.TestCase):
         ir = compile_to_ir(src)
         self.assertIn("store [4 x i64] [i64 30, i64 0, i64 0, i64 0]", ir)
 
+    def test_typed_set_constructor_lowers_to_bitvector(self):
+        """Type-prefixed constant set constructors fold to set constants."""
+        src = "PROGRAM P; TYPE S = SET OF 1..10; VAR x: S; BEGIN x := S[1..3] END."
+        ir = compile_to_ir(src)
+        self.assertIn("store [4 x i64] [i64 14, i64 0, i64 0, i64 0]", ir)
+
     def test_set_arithmetic_ops_lower_to_bitwise_ops(self):
         """Set +, -, and * lower to bitwise operations on set words."""
         src = "PROGRAM P; VAR a, b, c: SET OF 1..10; BEGIN a := [1]; b := [2]; c := a + b; c := c * a; c := c - b END."

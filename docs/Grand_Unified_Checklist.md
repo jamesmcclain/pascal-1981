@@ -159,10 +159,11 @@ full reimplementation.
     `PUBLIC`/`EXTERN`/`EXTERNAL` linkage behavior. Proven by
     `python -m unittest tests.test_parser tests.test_typecheck tests.test_codegen`.
 
-- [ ] **2.9 — Type-prefixed set constructor `ident setcons`.** `[INFERRED]` **M**
-  Manual `factor` lists `ident setcons` (a set constructor qualified by a set
-  type name). Not handled. Depends on real set typing (1.2). Confirm exact
-  semantics from the manual body before implementing.
+- [x] **2.9 — Type-prefixed set constructor `ident setcons`.** `[INFERRED]` **M**
+  Implemented `TypeName[constant..constant]` typed set constructors with the
+  manual restriction that typed set constructors require constant elements;
+  variable-element forms such as `NumberSet[i..j]` are rejected. Backed by real
+  set typing/lowering and tests in parser, type checker, and LLVM codegen.
 
 ---
 

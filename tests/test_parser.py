@@ -116,6 +116,20 @@ class TestParserJudgmentCalls(unittest.TestCase):
         self.assertEqual(base.high.name, "hi")
         self.assertIsNone(base.host)
 
+    def test_typed_set_constructor_with_range_parses(self):
+        """Type-prefixed set constructors preserve the type identifier."""
+        ast = parse_source("PROGRAM P; TYPE S = SET OF 1..10; VAR x: S; BEGIN x := S[1..3] END.")
+        expr = ast.block.body[0].expr
+        self.assertEqual(type(expr).__name__, "SetConstructor")
+        self.assertEqual(expr.type_name, "S")
+        self.assertEqual(type(expr.elements[0]).__name__, "RangeExpr")
+
+    def test_array_indexing_still_parses_as_designator(self):
+        """Plain IDENTIFIER[...] without '..' remains array indexing."""
+        ast = parse_source("PROGRAM P; VAR a: ARRAY[1..3] OF INTEGER; x: INTEGER; BEGIN x := a[1] END.")
+        expr = ast.block.body[0].expr
+        self.assertEqual(type(expr).__name__, "Designator")
+
     def test_identifier_labels_parse_as_labels(self):
         """Identifier labels should be legal in both LABEL declarations and label statements."""
         ast = parse_source("PROGRAM P; LABEL start; BEGIN start: END.")
