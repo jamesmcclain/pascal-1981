@@ -18,8 +18,8 @@ from ast_nodes import AdrExpr, AdsExpr
 from ast_nodes import ArrayType as ASTArrayType
 from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, ConstDecl, Designator, Expression, ForStmt, FuncCall, FuncDecl, Identifier, IfStmt,
                        ImplementationUnit, InterfaceUnit, IntLiteral, LabelStmt, ModuleUnit, NamedType, NilLiteral, PointerType as ASTPointerType, ProcCallStmt, ProcDecl, ProgramUnit, RealLiteral, WriteArg)
-from ast_nodes import RecordType as ASTRecordType
-from ast_nodes import (RepeatStmt, ReturnStmt, Selector, SizeofExpr, Statement, StringLiteral, TypeDecl, UnaryOp, UseClause, VarDecl, WhileStmt)
+from ast_nodes import RecordType as ASTRecordType, SetType as ASTSetType, SubrangeType as ASTSubrangeType
+from ast_nodes import (RangeExpr, RepeatStmt, ReturnStmt, Selector, SetConstructor, SizeofExpr, Statement, StringLiteral, TypeDecl, UnaryOp, UseClause, VarDecl, WhileStmt)
 from symbol_table import SourceLocation, Symbol, SymbolTable
 from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, FunctionType, PointerType, ProcedureType, RecordType, SetType, Type,
                          binary_op_result_type, can_assign, unary_op_result_type)
@@ -583,8 +583,20 @@ class PascalTypeChecker(TypeChecker):
 
     def check_type_decl(self, decl: TypeDecl) -> None:
         """Type check a type declaration."""
-        # TODO: Handle type aliases
-        pass
+        if not decl.name or not decl.type_expr:
+            return
+
+        existing = self.symbol_table.lookup_local(decl.name)
+        if existing:
+            self.error(f"Type '{decl.name}' already declared at {existing.location}", decl)
+            return
+
+        resolved_type = self.resolve_type(decl.type_expr)
+        if not resolved_type:
+            self.error(f"Unknown type: {decl.type_expr}", decl)
+            return
+
+        self.symbol_table.define(decl.name, Symbol(name=decl.name, type=resolved_type, kind='type', location=self.get_node_location(decl), is_mutable=False))
 
     def check_func_decl(self, decl: FuncDecl) -> None:
         """Type check a function declaration."""
@@ -931,6 +943,30 @@ class PascalTypeChecker(TypeChecker):
             return PointerType(CHAR_TYPE)
         elif isinstance(expr, StringLiteral):
             return PointerType(CHAR_TYPE)
+        elif isinstance(expr, SetConstructor):
+            if not expr.elements:
+                return SetType(INTEGER_TYPE)
+            element_type: Optional[Type] = None
+            for el in expr.elements:
+                if isinstance(el, RangeExpr):
+                    low_type = self.infer_expression_type(el.low)
+                    high_type = self.infer_expression_type(el.high)
+                    if not low_type or not high_type:
+                        return None
+                    if not low_type.equivalent_to(high_type):
+                        self.error(f"Set range bounds must have the same ordinal type, got {low_type} and {high_type}", el)
+                        return None
+                    cur_type = low_type
+                else:
+                    cur_type = self.infer_expression_type(el)
+                if not cur_type:
+                    return None
+                if element_type is None:
+                    element_type = cur_type
+                elif not cur_type.equivalent_to(element_type):
+                    self.error(f"Set element type mismatch: expected {element_type}, got {cur_type}", el)
+                    return None
+            return SetType(element_type or INTEGER_TYPE)
         elif isinstance(expr, AdrExpr):
             # Address-of operator (adr var_name)
             sym = self.symbol_table.lookup(expr.name)
@@ -1085,8 +1121,23 @@ class PascalTypeChecker(TypeChecker):
             elif name == 'ADRMEM':
                 return PointerType(CHAR_TYPE)
             else:
-                # Could be a user-defined type
+                sym = self.symbol_table.lookup(type_expr.name)
+                if sym and sym.kind == 'type':
+                    return sym.type
                 return None
+        elif isinstance(type_expr, ASTSetType):
+            base_type = self.resolve_type(type_expr.base)
+            return SetType(base_type) if base_type else None
+        elif isinstance(type_expr, ASTSubrangeType):
+            if type_expr.host:
+                host = self.resolve_type(NamedType(type_expr.host, None))
+                if host:
+                    return host
+            low_type = self.infer_expression_type(type_expr.low)
+            high_type = self.infer_expression_type(type_expr.high)
+            if low_type and high_type and low_type.equivalent_to(high_type):
+                return low_type
+            return None
         elif isinstance(type_expr, ASTArrayType):
             # Resolve the element type
             if isinstance(type_expr.element_type, Type):
