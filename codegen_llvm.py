@@ -161,7 +161,7 @@ class Codegen:
 
     def param_llvm_type(self, param: Param) -> ir.Type:
         base = self.llvm_type(param.type_expr)
-        if param.mode in {'VAR', 'VARS', 'CONST', 'CONS'}:
+        if param.mode in {'VAR', 'VARS', 'CONST', 'CONSTS'}:
             # LLVM lowering: near and far reference parameters both use ordinary
             # pointers on this target. Far modes preserve source-level mode
             # metadata; the segment component is degenerate, as with ADS.
@@ -375,7 +375,7 @@ class Codegen:
             for name in param.names:
                 arg = next(args_iter)
                 arg.name = name
-                self.scope.define(name, arg, param.type_expr, is_parameter=param.mode not in {'VAR', 'VARS', 'CONST', 'CONS'})
+                self.scope.define(name, arg, param.type_expr, is_parameter=param.mode not in {'VAR', 'VARS', 'CONST', 'CONSTS'})
 
         # Codegen body
         for inner_decl in decl.body.decls:
@@ -438,7 +438,7 @@ class Codegen:
             for name in param.names:
                 arg = next(args_iter)
                 arg.name = name
-                self.scope.define(name, arg, param.type_expr, is_parameter=param.mode not in {'VAR', 'VARS', 'CONST', 'CONS'})
+                self.scope.define(name, arg, param.type_expr, is_parameter=param.mode not in {'VAR', 'VARS', 'CONST', 'CONSTS'})
 
         # Allocate space for return value
         return_alloca = self.builder.alloca(return_type, name='return_value')
@@ -573,7 +573,7 @@ class Codegen:
             self.builder.call(fn, args)
 
     def codegen_actual_arg(self, arg: Expression, mode: Optional[str]) -> ir.Value:
-        if mode in {'VAR', 'VARS', 'CONST', 'CONS'}:
+        if mode in {'VAR', 'VARS', 'CONST', 'CONSTS'}:
             if isinstance(arg, Identifier):
                 return self.resolve_designator_ptr(Designator(arg.name, []))
             if isinstance(arg, Designator):

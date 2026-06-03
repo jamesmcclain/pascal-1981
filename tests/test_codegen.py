@@ -546,11 +546,11 @@ class TestCodegenBuildRun(unittest.TestCase):
         self.assertEqual(stdout.strip(), "2\n12")
 
     def test_const_and_cons_parameters_runtime(self):
-        """CONST and CONS parameters are readable by-reference aliases."""
+        """CONST and CONSTS parameters are readable by-reference aliases."""
         src = """
         PROGRAM P;
         VAR a, b: INTEGER;
-        PROCEDURE Show(CONST x: INTEGER; CONS y: INTEGER);
+        PROCEDURE Show(CONST x: INTEGER; CONSTS y: INTEGER);
         BEGIN
             WRITELN(x + y)
         END;

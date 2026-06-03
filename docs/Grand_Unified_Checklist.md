@@ -146,7 +146,7 @@ full reimplementation.
   same-segment) from far (`VARS`/`CONS`, segment:offset-style) parameter
   references. Confirm whether the implementation actually treats them differently
   in codegen or only parses them. Pairs naturally with `ADS` (2.6).
-  - Done: parameter-mode parsing now preserves `VAR`, `VARS`, `CONST`, and `CONS`; type checking treats `CONST`/`CONS` as read-only parameter aliases while `VAR`/`VARS` remain assignable. Codegen passes all four as by-reference aliases; on LLVM, the far forms (`VARS`/`CONS`) use the same ordinary-pointer lowering as near forms, matching the project's `ADS` segment-zero approximation rather than emulating segmented memory. Proven by `python -m unittest tests.test_parser tests.test_typecheck tests.test_codegen`.
+  - Done: parameter-mode parsing now preserves `VAR`, `VARS`, `CONST`, and `CONS`; type checking treats `CONST`/`CONS` as read-only parameter aliases while `VAR`/`VARS` remain assignable. Codegen passes all four as by-reference aliases; on LLVM, the far forms (`VARS`/`CONS`) use the same ordinary-pointer lowering as near forms, matching the project's `ADS` segment-zero approximation rather than emulating segmented memory. Proven by `python -m unittest tests.test_parser tests.test_typecheck tests.test_codegen`.  Note that `CONS` in the manual was a typo, so it has been changed to `CONSTS` throughout the code.
 
 - [x] **2.8 — Attribute argument forms beyond `ORIGIN(c)`.** `[READ]` **M**
   Manual `getattr` shows attributes carrying arguments and a `:ordcons` form;

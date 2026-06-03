@@ -208,10 +208,10 @@ func_decl_header =
     ":" type
     [ attribute_section ] ;
 
-(* [OBSERVED] Parameter modes: VAR/CONST are near references; VARS/CONS are
+(* [OBSERVED] Parameter modes: VAR/CONST are near references; VARS/CONSTS are
    far/segmented reference forms. *)
 parameter_list  = parameter_group { ";" parameter_group } ;
-parameter_group = [ "VAR" | "CONST" | "VARS" | "CONS" ] identifier_list ":" type ;
+parameter_group = [ "VAR" | "CONST" | "VARS" | "CONSTS" ] identifier_list ":" type ;
 
 
 (* ═══════════════════════════════════════════════════════════════════

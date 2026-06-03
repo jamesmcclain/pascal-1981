@@ -185,10 +185,10 @@ class TestParserJudgmentCalls(unittest.TestCase):
         self.assertEqual(type(ast.block.body[1].expr).__name__, 'AdsExpr')
 
     def test_parameter_modes_parse_var_const_and_far_forms(self):
-        """Parameter modes should preserve VAR/CONST and VARS/CONS spelling."""
-        ast = parse_source("PROGRAM P; PROCEDURE Q(VAR a: INTEGER; VARS b: INTEGER; CONST c: INTEGER; CONS d: INTEGER); BEGIN END; BEGIN END.")
+        """Parameter modes should preserve VAR/CONST and VARS/CONSTS spelling."""
+        ast = parse_source("PROGRAM P; PROCEDURE Q(VAR a: INTEGER; VARS b: INTEGER; CONST c: INTEGER; CONSTS d: INTEGER); BEGIN END; BEGIN END.")
         modes = [p.mode for p in ast.block.decls[0].params]
-        self.assertEqual(modes, ['VAR', 'VARS', 'CONST', 'CONS'])
+        self.assertEqual(modes, ['VAR', 'VARS', 'CONST', 'CONSTS'])
 
     def test_confirmed_attributes_parse(self):
         """The six confirmed attributes should parse in bracketed lists."""
