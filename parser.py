@@ -6,8 +6,9 @@ from typing import List, Optional, Sequence, Union
 
 from ast_nodes import (AdrExpr, ArrayType, AssignStmt, ASTNode, BinOp, Block, BoolLiteral, BreakStmt, BuiltinType, CaseElement, CaseStmt, CharLiteral, CompoundStmt, ConstDecl,
                        CycleStmt, Declaration, Designator, EmptyStmt, EnumType, Expression, FileType, ForStmt, FuncCall, FuncDecl, GotoStmt, Identifier, IfStmt, ImplementationUnit,
+                       AdsExpr,
                        IndexRange, InterfaceUnit, IntLiteral, LabelDecl, LabelStmt, LStringType, ModuleUnit, NamedType, NilLiteral, Param, PointerType, ProcCallStmt, ProcDecl, ProgramUnit,
-                       RangeExpr, RealLiteral, RecordType, RepeatStmt, ReturnStmt, Selector, SetConstructor, SetType, SizeofExpr, Statement, StringLiteral, Type, TypeDecl, UnaryOp,
+                       RangeExpr, RealLiteral, RecordType, RepeatStmt, ReturnStmt, Selector, SetConstructor, SetType, SizeofExpr, Statement, StringLiteral, SubrangeType, Type, TypeDecl, UnaryOp,
                        UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt, WriteArg)
 from lexer import ALL_CODES, KEYWORD_CODES, LexerError, Token, lex_file
 
@@ -342,7 +343,7 @@ class Parser:
 
     def parse_parameter_group(self) -> Param:
         mode: Optional[str] = None
-        if self.current().kind in {'VAR', 'CONST', 'VARS', 'CONSTS'}:
+        if self.current().kind in {'VAR', 'VARS', 'CONST', 'CONSTS'}:
             mode = self.current().kind
             self.pos += 1
         names = self.parse_identifier_list()
@@ -362,13 +363,10 @@ class Parser:
         return attributes
 
     def parse_attribute_item(self) -> str:
-        if self.current().kind == 'ORIGIN':
-            self.pos += 1
-            self.expect('LPAREN')
-            self.parse_constant()
-            self.expect('RPAREN')
-            return 'ORIGIN'
-        if self.current().kind in {'READONLY', 'PUBLIC', 'STATIC', 'EXTERNAL', 'EXTERN', 'PURE', 'OVERLAY', 'FORTRAN'}:
+        # The current implementation intentionally handles the six confirmed
+        # attribute keywords only. ORIGIN/PORT are documented elsewhere or
+        # unverified, and will be added in a separate pass if needed.
+        if self.current().kind in {'READONLY', 'PUBLIC', 'STATIC', 'EXTERNAL', 'EXTERN', 'PURE'}:
             attr = self.current().kind
             self.pos += 1
             return attr
@@ -411,10 +409,12 @@ class Parser:
             return ReturnStmt()
         if kind == 'BREAK':
             self.pos += 1
-            return BreakStmt()
+            label = self.parse_optional_label_id()
+            return BreakStmt(label)
         if kind == 'CYCLE':
             self.pos += 1
-            return CycleStmt()
+            label = self.parse_optional_label_id()
+            return CycleStmt(label)
         if kind in {'INTEGER_LITERAL', 'IDENTIFIER'} and self.next_kind() == 'COLON':
             return self.parse_label_statement()
         if kind == 'IDENTIFIER':
@@ -427,7 +427,7 @@ class Parser:
         name = self.expect('IDENTIFIER').lexeme
         selectors: List[Selector] = []
         while self.current().kind in {'LBRACKET', 'DOT', 'POINTER'}:
-            selectors.append(self.parse_selector())
+            selectors.extend(self.parse_selector())
 
         if self.current().kind == 'ASSIGN':
             self.pos += 1
@@ -479,7 +479,7 @@ class Parser:
 
     def parse_if_statement(self) -> IfStmt:
         self.expect('IF')
-        cond = self.parse_expression()
+        cond = self.parse_boolean_expression()
         self.expect('THEN')
         then_branch = self.parse_statement()
         else_branch: Optional[Statement] = None
@@ -489,6 +489,7 @@ class Parser:
 
     def parse_for_statement(self) -> ForStmt:
         self.expect('FOR')
+        static = self.match('STATIC')
         var = self.expect('IDENTIFIER').lexeme
         self.expect('ASSIGN')
         start = self.parse_expression()
@@ -500,7 +501,7 @@ class Parser:
         end = self.parse_expression()
         self.expect('DO')
         body = self.parse_statement()
-        return ForStmt(var, start, end, direction, body)
+        return ForStmt(var, start, end, direction, body, static)
 
     def parse_repeat_statement(self) -> RepeatStmt:
         self.expect('REPEAT')
@@ -512,12 +513,12 @@ class Parser:
                     break
                 stmts.append(self.parse_statement())
         self.expect('UNTIL')
-        cond = self.parse_expression()
+        cond = self.parse_boolean_expression()
         return RepeatStmt(stmts, cond)
 
     def parse_while_statement(self) -> WhileStmt:
         self.expect('WHILE')
-        cond = self.parse_expression()
+        cond = self.parse_boolean_expression()
         self.expect('DO')
         body = self.parse_statement()
         return WhileStmt(cond, body)
@@ -573,7 +574,7 @@ class Parser:
         name = self.expect('IDENTIFIER').lexeme
         selectors: List[Selector] = []
         while self.current().kind in {'LBRACKET', 'DOT', 'POINTER'}:
-            selectors.append(self.parse_selector())
+            selectors.extend(self.parse_selector())
         return Designator(name, selectors)
 
     def parse_label_statement(self) -> LabelStmt:
@@ -582,21 +583,37 @@ class Parser:
         stmt = self.parse_statement()
         return LabelStmt(label, stmt)
 
-    def parse_selector(self) -> Selector:
+    def parse_selector(self) -> List[Selector]:
         kind = self.current().kind
         if kind == 'LBRACKET':
             self.pos += 1
-            index = self.parse_expression()
+            selectors: List[Selector] = [Selector('INDEX', self.parse_expression())]
+            while self.match('COMMA'):
+                selectors.append(Selector('INDEX', self.parse_expression()))
             self.expect('RBRACKET')
-            return Selector('INDEX', index)
+            return selectors
         if kind == 'DOT':
             self.pos += 1
             field = self.expect('IDENTIFIER').lexeme
-            return Selector('FIELD', field)
+            return [Selector('FIELD', field)]
         if kind == 'POINTER':
             self.pos += 1
-            return Selector('DEREF', None)
+            return [Selector('DEREF', None)]
         self.error('expected selector')
+
+    def parse_boolean_expression(self) -> Expression:
+        left = self.parse_expression()
+        while (self.current().kind == 'AND' and self.next_kind() == 'THEN') or \
+              (self.current().kind == 'OR' and self.next_kind() == 'ELSE'):
+            if self.current().kind == 'AND':
+                op = 'AND_THEN'
+                self.pos += 2
+            else:
+                op = 'OR_ELSE'
+                self.pos += 2
+            right = self.parse_expression()
+            left = BinOp(op, left, right)
+        return left
 
     def parse_expression(self) -> Expression:
         left = self.parse_simple_expression()
@@ -616,6 +633,8 @@ class Parser:
         if sign == 'MINUS':
             left = UnaryOp('MINUS', left)
         while self.current().kind in {'PLUS', 'MINUS', 'OR', 'XOR'}:
+            if self.current().kind == 'OR' and self.next_kind() == 'ELSE':
+                break
             op = self.current().kind
             self.pos += 1
             right = self.parse_term()
@@ -625,6 +644,8 @@ class Parser:
     def parse_term(self) -> Expression:
         left = self.parse_factor()
         while self.current().kind in {'MUL', 'SLASH', 'DIV', 'MOD', 'AND'}:
+            if self.current().kind == 'AND' and self.next_kind() == 'THEN':
+                break
             op = self.current().kind
             self.pos += 1
             right = self.parse_factor()
@@ -647,17 +668,24 @@ class Parser:
                     args = self.parse_actual_parameter_list()
                 self.expect('RPAREN')
                 return FuncCall(name, args)
+            elif self.next_kind() == 'LBRACKET' and self.bracket_payload_contains_range(self.pos + 1):
+                self.pos += 1  # consume type identifier
+                self.expect('LBRACKET')
+                elements: List[Expression] = []
+                if self.current().kind != 'RBRACKET':
+                    elements.append(self.parse_set_element())
+                    while self.match('COMMA'):
+                        elements.append(self.parse_set_element())
+                self.expect('RBRACKET')
+                return SetConstructor(elements, name)
             else:
                 self.pos += 1  # consume IDENTIFIER
                 designator = self.parse_designator_rest(name)
                 return designator
         if kind == 'INTEGER_LITERAL':
-            lexeme = self.current().lexeme
-            # Handle hex literals ($FF form)
-            if lexeme.startswith('$'):
-                value = int(lexeme[1:], 16)
-            else:
-                value = int(lexeme)
+            # The lexer already computed the integer value, handling decimal
+            # and radix (n#digits) forms uniformly.
+            value = self.current().value
             self.pos += 1
             return IntLiteral(value)
         if kind == 'REAL_LITERAL':
@@ -688,6 +716,10 @@ class Parser:
             self.pos += 1
             name = self.expect('IDENTIFIER').lexeme
             return AdrExpr(name)
+        if kind == 'ADS':
+            self.pos += 1
+            name = self.expect('IDENTIFIER').lexeme
+            return AdsExpr(name)
         if kind == 'SIZEOF':
             self.pos += 1
             self.expect('LPAREN')
@@ -716,11 +748,30 @@ class Parser:
             return SetConstructor(elements)
         self.error('expected factor')
 
+    def bracket_payload_contains_range(self, lbracket_pos: int) -> bool:
+        """Return True when a bracketed IDENTIFIER[...] payload contains '..'.
+
+        This conservatively disambiguates typed set constants from array
+        indexing without symbol information in the parser.
+        """
+        depth = 0
+        for i in range(lbracket_pos, len(self.tokens)):
+            kind = self.tokens[i].kind
+            if kind == 'LBRACKET':
+                depth += 1
+            elif kind == 'RBRACKET':
+                depth -= 1
+                if depth == 0:
+                    return False
+            elif kind == 'RANGE' and depth == 1:
+                return True
+        return False
+
     def parse_designator_rest(self, name: str) -> Expression:
         """Continue parsing a designator or return as identifier."""
         selectors: List[Selector] = []
         while self.current().kind in {'LBRACKET', 'DOT', 'POINTER'}:
-            selectors.append(self.parse_selector())
+            selectors.extend(self.parse_selector())
         if selectors:
             return Designator(name, selectors)
         else:
@@ -730,7 +781,7 @@ class Parser:
         name = self.expect('IDENTIFIER').lexeme
         selectors: List[Selector] = []
         while self.current().kind in {'LBRACKET', 'DOT', 'POINTER'}:
-            selectors.append(self.parse_selector())
+            selectors.extend(self.parse_selector())
         return Designator(name, selectors)
 
     def parse_constant(self) -> Expression:
@@ -766,11 +817,7 @@ class Parser:
             sign = self.current().kind
             self.pos += 1
             if self.current().kind == 'INTEGER_LITERAL':
-                lexeme = self.current().lexeme
-                if lexeme.startswith('$'):
-                    value = int(lexeme[1:], 16)
-                else:
-                    value = int(lexeme)
+                value = self.current().value
                 if sign == 'MINUS':
                     value = -value
                 self.pos += 1
@@ -843,7 +890,17 @@ class Parser:
         if kind == 'POINTER':
             self.pos += 1
             base = self.parse_type()
-            return PointerType(base)
+            return PointerType(base, 'POINTER')
+        if kind == 'ADR':
+            self.pos += 1
+            self.expect('OF')
+            base = self.parse_type()
+            return PointerType(base, 'ADR')
+        if kind == 'ADS':
+            self.pos += 1
+            self.expect('OF')
+            base = self.parse_type()
+            return PointerType(base, 'ADS')
         if kind == 'IDENTIFIER':
             name = self.current().lexeme
             self.pos += 1
@@ -874,46 +931,47 @@ class Parser:
         return IndexRange(low, high)
 
     def parse_set_base(self) -> Type:
-        """Parse a set base type, which can be a simple type or a range."""
+        """Parse a set base type: a named/builtin ordinal type, or a subrange.
+
+        Subranges (`SET OF 1..10`, `SET OF 'A'..'Z'`, `SET OF lo..hi`) preserve
+        both bounds in a SubrangeType rather than collapsing to the host type,
+        so the declared range survives into the AST.
+        """
+        # Named type, possibly the low end of a subrange (`color` or `red..blue`).
         if self.current().kind == 'IDENTIFIER':
             if self.next_kind() == 'RANGE':
                 low_expr = self.parse_constant()
                 self.expect('RANGE')
                 high_expr = self.parse_constant()
-                if isinstance(low_expr, IntLiteral) and isinstance(high_expr, IntLiteral):
-                    return BuiltinType('INTEGER')
-                if isinstance(low_expr, CharLiteral) and isinstance(high_expr, CharLiteral):
-                    return BuiltinType('CHAR')
-                if isinstance(low_expr, BoolLiteral) and isinstance(high_expr, BoolLiteral):
-                    return BuiltinType('BOOLEAN')
-                return NamedType('INTEGER', None)
+                return SubrangeType(low_expr, high_expr, self._subrange_host(low_expr, high_expr))
             name = self.current().lexeme
             self.pos += 1
             return NamedType(name, None)
+        # Literal, possibly the low end of a subrange (`1..10`, `'A'..'Z'`).
         if self.current().kind in {'INTEGER_LITERAL', 'REAL_LITERAL', 'CHAR_LITERAL', 'STRING_LITERAL', 'BOOLEAN_LITERAL'}:
             expr = self.parse_constant()
             if self.match('RANGE'):
                 high_expr = self.parse_constant()
-                if isinstance(expr, IntLiteral) and isinstance(high_expr, IntLiteral):
-                    return BuiltinType('INTEGER')
-                if isinstance(expr, CharLiteral) and isinstance(high_expr, CharLiteral):
-                    return BuiltinType('CHAR')
-                if isinstance(expr, BoolLiteral) and isinstance(high_expr, BoolLiteral):
-                    return BuiltinType('BOOLEAN')
-            if isinstance(expr, IntLiteral):
-                return BuiltinType('INTEGER')
-            if isinstance(expr, RealLiteral):
-                return BuiltinType('REAL')
-            if isinstance(expr, CharLiteral):
-                return BuiltinType('CHAR')
-            if isinstance(expr, BoolLiteral):
-                return BuiltinType('BOOLEAN')
-            return BuiltinType('INTEGER')
+                return SubrangeType(expr, high_expr, self._subrange_host(expr, high_expr))
+            # A bare literal as a set base is unusual; treat it as the host type.
+            host = self._subrange_host(expr, expr)
+            return BuiltinType(host if host else 'INTEGER')
         if self.current().kind in {'INTEGER', 'REAL', 'BOOLEAN', 'CHAR', 'WORD', 'ADRMEM'}:
             name = self.current().kind
             self.pos += 1
             return BuiltinType(name)
         self.error('expected set base type or range')
+
+    @staticmethod
+    def _subrange_host(low: Expression, high: Expression) -> Optional[str]:
+        """Best-effort host ordinal type for a subrange, inferred from its bound
+        literals. Returns None when the bounds are named constants/identifiers
+        whose type can't be known at parse time (resolved later by the type
+        checker)."""
+        for ordinal, literal in (('INTEGER', IntLiteral), ('CHAR', CharLiteral), ('BOOLEAN', BoolLiteral)):
+            if isinstance(low, literal) and isinstance(high, literal):
+                return ordinal
+        return None
 
     def parse_set_element(self) -> Expression:
         expr = self.parse_expression()
@@ -928,6 +986,11 @@ class Parser:
         while self.match('COMMA'):
             names.append(self.expect('IDENTIFIER').lexeme)
         return names
+
+    def parse_optional_label_id(self) -> Optional[Union[int, str]]:
+        if self.current().kind in {'INTEGER_LITERAL', 'IDENTIFIER'}:
+            return self.parse_label_id()
+        return None
 
     def parse_label_id(self) -> Union[int, str]:
         if self.current().kind == 'INTEGER_LITERAL':

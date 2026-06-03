@@ -11,6 +11,7 @@ Walks the AST and emits LLVM IR. Supports:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 
 import llvmlite.ir as ir
@@ -32,6 +33,13 @@ class Symbol:
         self.llvm_value = llvm_value  # ir.Value or ir.Function or ir.GlobalVariable
         self.type_expr = type_expr
         self.is_parameter = is_parameter  # True if this is a function parameter (passed by value)
+
+
+@dataclass
+class LoopContext:
+    label: Optional[Union[int, str]]
+    break_block: ir.Block
+    cycle_block: ir.Block
 
 
 class Scope:
@@ -77,7 +85,10 @@ class Codegen:
         self.current_function: Optional[ir.Function] = None
         self.current_return_block: Optional[ir.BasicBlock] = None
         self.constants: Dict[str, int] = {}  # compile-time constant values, keyed UPPER
+        self.type_aliases: Dict[str, Type] = {}  # compile-time type aliases, keyed UPPER
         self.current_interface_decls: Dict[str, Declaration] = {}
+        self.proc_param_modes: Dict[str, List[Optional[str]]] = {}
+        self.loop_stack: List[LoopContext] = []
         self.verbose = verbose
 
     def _log(self, msg: str) -> None:
@@ -121,9 +132,19 @@ class Codegen:
                 return ir.DoubleType()
             elif name_up == 'CHAR':
                 return ir.IntType(8)
+            if name_up in self.type_aliases:
+                return self.llvm_type(self.type_aliases[name_up])
+            return ir.IntType(32)
+        elif isinstance(type_expr, SetType):
+            return self.set_llvm_type()
+        elif isinstance(type_expr, SubrangeType):
+            if type_expr.host:
+                return self.llvm_type(NamedType(type_expr.host, None))
             return ir.IntType(32)
         elif isinstance(type_expr, PointerType):
             base_type = self.llvm_type(type_expr.base)
+            if getattr(type_expr, 'flavor', 'POINTER') == 'ADS':
+                return ir.LiteralStructType([ir.PointerType(base_type), ir.IntType(16)])
             return ir.PointerType(base_type)
         elif isinstance(type_expr, ArrayType):
             elem_type = self.llvm_type(type_expr.element_type)
@@ -137,6 +158,15 @@ class Codegen:
             return ir.ArrayType(elem_type, size)
         else:
             raise CodegenError(f'Type {type(type_expr).__name__} not yet supported')
+
+    def param_llvm_type(self, param: Param) -> ir.Type:
+        base = self.llvm_type(param.type_expr)
+        if param.mode in {'VAR', 'VARS', 'CONST', 'CONSTS'}:
+            # LLVM lowering: near and far reference parameters both use ordinary
+            # pointers on this target. Far modes preserve source-level mode
+            # metadata; the segment component is degenerate, as with ADS.
+            return ir.PointerType(base)
+        return base
 
     # ========================================================================
     # Main Entry Point
@@ -174,11 +204,11 @@ class Codegen:
             self.current_function = main_func
 
             # Execute the program body
-            for stmt in unit.block.body:
-                self.codegen_stmt(stmt)
+            self.codegen_stmt_list(unit.block.body)
 
             # Default return 0
-            self.builder.ret(ir.Constant(ir.IntType(32), 0))
+            if not self.builder.block.is_terminated:
+                self.builder.ret(ir.Constant(ir.IntType(32), 0))
 
         return self.module
 
@@ -235,10 +265,10 @@ class Codegen:
             self.builder = IRBuilder(entry_block)
             self.current_function = init_func
 
-            for stmt in unit.init_body:
-                self.codegen_stmt(stmt)
+            self.codegen_stmt_list(unit.init_body)
 
-            self.builder.ret(ir.Constant(ir.IntType(32), 0))
+            if not self.builder.block.is_terminated:
+                self.builder.ret(ir.Constant(ir.IntType(32), 0))
 
         return self.module
 
@@ -255,8 +285,7 @@ class Codegen:
         elif isinstance(decl, VarDecl):
             self.codegen_var_decl(decl)
         elif isinstance(decl, TypeDecl):
-            # Type definitions don't generate code in MVP
-            pass
+            self.codegen_type_decl(decl)
         elif isinstance(decl, ValueDecl):
             # VALUE declarations don't generate code
             pass
@@ -277,19 +306,27 @@ class Codegen:
         value = self.eval_const_expr(decl.value)
         self.constants[decl.name.upper()] = value
 
+    def codegen_type_decl(self, decl: TypeDecl) -> None:
+        """Record a type declaration for later codegen lookups."""
+        self.type_aliases[decl.name.upper()] = decl.type_expr
+
     def codegen_var_decl(self, decl: VarDecl) -> None:
         """Codegen for VAR declaration."""
         llvm_type = self.llvm_type(decl.type_expr)
+        attrs = {attr.upper() for attr in getattr(decl, 'attributes', [])}
+        is_static = 'STATIC' in attrs
 
-        if self.builder:
+        if self.builder and not is_static:
             # Local variable (inside a function)
             for name in decl.names:
                 alloca = self.builder.alloca(llvm_type, name=name)
                 self.scope.define(name, alloca, decl.type_expr)
         else:
-            # Global variable - define with a zero initializer
+            # Static or global variable - define with a zero initializer
+            prefix = self.current_function.name if self.current_function else 'global'
             for name in decl.names:
-                global_var = ir.GlobalVariable(self.module, llvm_type, name=name)
+                gv_name = name if not self.builder else f'{prefix}.{name}'
+                global_var = ir.GlobalVariable(self.module, llvm_type, name=gv_name)
                 global_var.initializer = self.zero_initializer(llvm_type)
                 self.scope.define(name, global_var, decl.type_expr)
 
@@ -300,16 +337,22 @@ class Codegen:
         if iface_decl and not decl.params:
             effective_decl = iface_decl
 
-        # Flatten parameter types: one per name in each Param group
+        # Flatten parameter types: reference modes are passed as LLVM pointers.
         param_types = []
+        flat_modes = []
         for param in effective_decl.params:
-            param_type = self.llvm_type(param.type_expr)
+            param_type = self.param_llvm_type(param)
             for _ in param.names:
                 param_types.append(param_type)
+                flat_modes.append(param.mode)
         func_type = ir.FunctionType(ir.IntType(32), param_types)
 
         # Create function
         func = ir.Function(self.module, func_type, name=decl.name)
+        attrs = {attr.upper() for attr in getattr(decl, 'attributes', [])}
+        if attrs.intersection({'PUBLIC', 'EXTERN', 'EXTERNAL'}):
+            func.linkage = 'external'
+        self.proc_param_modes[decl.name.lower()] = flat_modes
         self.scope.define(decl.name, func, None)
 
         # If no body, it's extern/forward
@@ -332,7 +375,7 @@ class Codegen:
             for name in param.names:
                 arg = next(args_iter)
                 arg.name = name
-                self.scope.define(name, arg, param.type_expr, is_parameter=True)
+                self.scope.define(name, arg, param.type_expr, is_parameter=param.mode not in {'VAR', 'VARS', 'CONST', 'CONSTS'})
 
         # Codegen body
         for inner_decl in decl.body.decls:
@@ -356,17 +399,23 @@ class Codegen:
         if iface_decl and not decl.params:
             effective_decl = iface_decl
 
-        # Flatten parameter types: one per name in each Param group
+        # Flatten parameter types: reference modes are passed as LLVM pointers.
         param_types = []
+        flat_modes = []
         for param in effective_decl.params:
-            param_type = self.llvm_type(param.type_expr)
+            param_type = self.param_llvm_type(param)
             for _ in param.names:
                 param_types.append(param_type)
+                flat_modes.append(param.mode)
         return_type = self.llvm_type(decl.return_type)
         func_type = ir.FunctionType(return_type, param_types)
 
         # Create function
         func = ir.Function(self.module, func_type, name=decl.name)
+        attrs = {attr.upper() for attr in getattr(decl, 'attributes', [])}
+        if attrs.intersection({'PUBLIC', 'EXTERN', 'EXTERNAL'}):
+            func.linkage = 'external'
+        self.proc_param_modes[decl.name.lower()] = flat_modes
         self.scope.define(decl.name, func, decl.return_type)
 
         # If no body, it's extern/forward
@@ -389,7 +438,7 @@ class Codegen:
             for name in param.names:
                 arg = next(args_iter)
                 arg.name = name
-                self.scope.define(name, arg, param.type_expr, is_parameter=True)
+                self.scope.define(name, arg, param.type_expr, is_parameter=param.mode not in {'VAR', 'VARS', 'CONST', 'CONSTS'})
 
         # Allocate space for return value
         return_alloca = self.builder.alloca(return_type, name='return_value')
@@ -400,12 +449,12 @@ class Codegen:
         for inner_decl in decl.body.decls:
             self.codegen_decl(inner_decl)
 
-        for stmt in decl.body.body:
-            self.codegen_stmt(stmt)
+        self.codegen_stmt_list(decl.body.body)
 
         # Default return / function result
-        result = self.builder.load(return_alloca)
-        self.builder.ret(result)
+        if not self.builder.block.is_terminated:
+            result = self.builder.load(return_alloca)
+            self.builder.ret(result)
 
         # Restore context
         self.builder = prev_builder
@@ -416,12 +465,17 @@ class Codegen:
     # Statements
     # ========================================================================
 
+    def codegen_stmt_list(self, stmts: List[Statement]) -> None:
+        for stmt in stmts:
+            if self.builder.block.is_terminated:
+                break
+            self.codegen_stmt(stmt)
+
     def codegen_stmt(self, stmt: Statement) -> None:
         """Codegen a statement."""
         self._log(f'stmt  {type(stmt).__name__}')
         if isinstance(stmt, CompoundStmt):
-            for s in stmt.stmts:
-                self.codegen_stmt(s)
+            self.codegen_stmt_list(stmt.stmts)
         elif isinstance(stmt, AssignStmt):
             self.codegen_assign_stmt(stmt)
         elif isinstance(stmt, ProcCallStmt):
@@ -442,16 +496,14 @@ class Codegen:
         elif isinstance(stmt, ReturnStmt):
             self.codegen_return_stmt(stmt)
         elif isinstance(stmt, BreakStmt):
-            # TODO: handle BREAK
-            pass
+            self.codegen_break_stmt(stmt)
         elif isinstance(stmt, CycleStmt):
-            # TODO: handle CYCLE
-            pass
+            self.codegen_cycle_stmt(stmt)
         elif isinstance(stmt, WithStmt):
             # TODO: handle WITH
             pass
         elif isinstance(stmt, LabelStmt):
-            self.codegen_stmt(stmt.stmt)
+            self.codegen_label_stmt(stmt)
         elif isinstance(stmt, EmptyStmt):
             pass
         else:
@@ -510,21 +562,30 @@ class Codegen:
             # User-defined procedure
             fn = symbol.llvm_value
             param_types = fn.function_type.args
+            param_modes = self.proc_param_modes.get(stmt.name.lower(), [])
             args = []
             for i, arg in enumerate(stmt.args):
-                v = self.codegen_expr(arg)
+                mode = param_modes[i] if i < len(param_modes) else None
+                v = self.codegen_actual_arg(arg, mode)
                 if i < len(param_types):
                     v = self.coerce_arg(v, param_types[i])
                 args.append(v)
             self.builder.call(fn, args)
 
+    def codegen_actual_arg(self, arg: Expression, mode: Optional[str]) -> ir.Value:
+        if mode in {'VAR', 'VARS', 'CONST', 'CONSTS'}:
+            if isinstance(arg, Identifier):
+                return self.resolve_designator_ptr(Designator(arg.name, []))
+            if isinstance(arg, Designator):
+                return self.resolve_designator_ptr(arg)
+            raise CodegenError(f'{mode} parameter requires a designator argument')
+        return self.codegen_expr(arg)
+
     def codegen_if_stmt(self, stmt: IfStmt) -> None:
         """Codegen for IF statement."""
         cond = self.codegen_expr(stmt.cond)
-        # Reduce to i1 (handles boolean loads as well as integer conditions)
         cond_bit = self.to_bool(cond)
 
-        # Create basic blocks
         then_block = self.current_function.append_basic_block(name='if_then')
         end_block = self.current_function.append_basic_block(name='if_end')
 
@@ -532,32 +593,43 @@ class Codegen:
             else_block = self.current_function.append_basic_block(name='if_else')
             self.builder.cbranch(cond_bit, then_block, else_block)
 
-            # Then branch
             self.builder.position_at_end(then_block)
             self.codegen_stmt(stmt.then_branch)
-            self.builder.branch(end_block)
+            if not self.builder.block.is_terminated:
+                self.builder.branch(end_block)
 
-            # Else branch
             self.builder.position_at_end(else_block)
             self.codegen_stmt(stmt.else_branch)
-            self.builder.branch(end_block)
+            if not self.builder.block.is_terminated:
+                self.builder.branch(end_block)
         else:
-            # No else branch
             self.builder.cbranch(cond_bit, then_block, end_block)
 
-            # Then branch
             self.builder.position_at_end(then_block)
             self.codegen_stmt(stmt.then_branch)
-            self.builder.branch(end_block)
+            if not self.builder.block.is_terminated:
+                self.builder.branch(end_block)
 
-        # Continue after if
         self.builder.position_at_end(end_block)
 
     def codegen_for_stmt(self, stmt: ForStmt) -> None:
         """Codegen for FOR loop."""
-        # Allocate loop variable (or reuse if already exists)
+        # Allocate loop variable (or reuse if already exists).  IBM Pascal's
+        # ``FOR STATIC i := ...`` treats the control variable as STATIC: it has
+        # fixed storage instead of normal stack storage.
         symbol = self.scope.lookup(stmt.var)
-        if not symbol:
+        if stmt.static:
+            loop_type = self.llvm_type(symbol.type_expr) if symbol else ir.IntType(32)
+            owner = self.current_function.name if self.current_function else 'global'
+            global_name = f"__for_static_{owner}_{stmt.var}"
+            if global_name in self.module.globals:
+                loop_var = self.module.globals[global_name]
+            else:
+                loop_var = ir.GlobalVariable(self.module, loop_type, name=global_name)
+                loop_var.linkage = 'internal'
+                loop_var.initializer = self.zero_initializer(loop_type)
+            self.scope.define(stmt.var, loop_var, symbol.type_expr if symbol else BuiltinType('INTEGER'))
+        elif not symbol:
             loop_var = self.builder.alloca(ir.IntType(32), name=stmt.var)
             self.scope.define(stmt.var, loop_var, BuiltinType('INTEGER'))
         else:
@@ -570,37 +642,29 @@ class Codegen:
         # Create loop blocks
         loop_block = self.current_function.append_basic_block(name='for_loop')
         end_block = self.current_function.append_basic_block(name='for_end')
+        step_block = self.current_function.append_basic_block(name='for_step')
+        body_block = self.current_function.append_basic_block(name='for_body')
+        self.loop_stack.append(LoopContext(self.normalize_label(getattr(stmt, 'label', None)), end_block, step_block))
 
         self.builder.branch(loop_block)
-
-        # Loop condition
         self.builder.position_at_end(loop_block)
         current_val = self.builder.load(loop_var)
         end_val = self.codegen_expr(stmt.end)
-
-        if stmt.direction == 'TO':
-            cond = self.builder.icmp_signed('<=', current_val, end_val)
-        else:  # DOWNTO
-            cond = self.builder.icmp_signed('>=', current_val, end_val)
-
-        # Loop body block
-        body_block = self.current_function.append_basic_block(name='for_body')
+        cond = self.builder.icmp_signed('<=', current_val, end_val) if stmt.direction == 'TO' else self.builder.icmp_signed('>=', current_val, end_val)
         self.builder.cbranch(cond, body_block, end_block)
 
-        # Loop body
         self.builder.position_at_end(body_block)
         self.codegen_stmt(stmt.body)
+        if not self.builder.block.is_terminated:
+            self.builder.branch(step_block)
 
-        # Increment/decrement
+        self.builder.position_at_end(step_block)
         current_val = self.builder.load(loop_var)
-        if stmt.direction == 'TO':
-            next_val = self.builder.add(current_val, ir.Constant(ir.IntType(32), 1))
-        else:  # DOWNTO
-            next_val = self.builder.sub(current_val, ir.Constant(ir.IntType(32), 1))
+        next_val = self.builder.add(current_val, ir.Constant(ir.IntType(32), 1)) if stmt.direction == 'TO' else self.builder.sub(current_val, ir.Constant(ir.IntType(32), 1))
         self.builder.store(next_val, loop_var)
         self.builder.branch(loop_block)
 
-        # Continue after loop
+        self.loop_stack.pop()
         self.builder.position_at_end(end_block)
 
     def codegen_while_stmt(self, stmt: WhileStmt) -> None:
@@ -608,41 +672,33 @@ class Codegen:
         loop_block = self.current_function.append_basic_block(name='while_loop')
         body_block = self.current_function.append_basic_block(name='while_body')
         end_block = self.current_function.append_basic_block(name='while_end')
+        self.loop_stack.append(LoopContext(self.normalize_label(getattr(stmt, 'label', None)), end_block, loop_block))
 
         self.builder.branch(loop_block)
-
-        # Condition check
         self.builder.position_at_end(loop_block)
         cond = self.codegen_expr(stmt.cond)
-        cond_bit = self.to_bool(cond)
-        self.builder.cbranch(cond_bit, body_block, end_block)
+        self.builder.cbranch(self.to_bool(cond), body_block, end_block)
 
-        # Body
         self.builder.position_at_end(body_block)
         self.codegen_stmt(stmt.body)
-        self.builder.branch(loop_block)
-
-        # After loop
+        if not self.builder.block.is_terminated:
+            self.builder.branch(loop_block)
+        self.loop_stack.pop()
         self.builder.position_at_end(end_block)
 
     def codegen_repeat_stmt(self, stmt: RepeatStmt) -> None:
         """Codegen for REPEAT..UNTIL loop."""
         loop_block = self.current_function.append_basic_block(name='repeat_loop')
         end_block = self.current_function.append_basic_block(name='repeat_end')
+        self.loop_stack.append(LoopContext(self.normalize_label(getattr(stmt, 'label', None)), end_block, loop_block))
 
         self.builder.branch(loop_block)
-
-        # Loop body
         self.builder.position_at_end(loop_block)
-        for s in stmt.body:
-            self.codegen_stmt(s)
-
-        # Condition (until = exit when true)
-        cond = self.codegen_expr(stmt.cond)
-        cond_bit = self.to_bool(cond)
-        self.builder.cbranch(cond_bit, end_block, loop_block)
-
-        # After loop
+        self.codegen_stmt_list(stmt.body)
+        if not self.builder.block.is_terminated:
+            cond = self.codegen_expr(stmt.cond)
+            self.builder.cbranch(self.to_bool(cond), end_block, loop_block)
+        self.loop_stack.pop()
         self.builder.position_at_end(end_block)
 
     def codegen_case_stmt(self, stmt: CaseStmt) -> None:
@@ -687,6 +743,36 @@ class Codegen:
         """Codegen for RETURN statement."""
         self.builder.ret(ir.Constant(ir.IntType(32), 0))
 
+    def codegen_break_stmt(self, stmt: BreakStmt) -> None:
+        ctx = self.resolve_loop_context(stmt.label)
+        self.builder.branch(ctx.break_block)
+
+    def codegen_cycle_stmt(self, stmt: CycleStmt) -> None:
+        ctx = self.resolve_loop_context(stmt.label)
+        self.builder.branch(ctx.cycle_block)
+
+    def codegen_label_stmt(self, stmt: LabelStmt) -> None:
+        inner = stmt.stmt
+        if isinstance(inner, (WhileStmt, ForStmt, RepeatStmt)):
+            setattr(inner, 'label', self.normalize_label(stmt.label))
+        self.codegen_stmt(inner)
+
+    def normalize_label(self, label: Optional[Union[int, str]]) -> Optional[Union[int, str]]:
+        if isinstance(label, str):
+            return label.lower()
+        return label
+
+    def resolve_loop_context(self, label: Optional[Union[int, str]]) -> LoopContext:
+        if not self.loop_stack:
+            raise CodegenError('BREAK/CYCLE outside of loop')
+        label = self.normalize_label(label)
+        if label is None:
+            return self.loop_stack[-1]
+        for ctx in reversed(self.loop_stack):
+            if ctx.label == label:
+                return ctx
+        raise CodegenError(f'Unknown loop label: {label}')
+
     def resolve_designator_ptr(self, designator: Designator) -> ir.Value:
         """Resolve a designator to its LLVM pointer (handles arrays/selectors)."""
         symbol = self.scope.lookup(designator.name)
@@ -722,6 +808,10 @@ class Codegen:
         """Size in bytes of a scalar/built-in type, by name."""
         return _SCALAR_SIZES.get(name.upper(), 4)
 
+    def set_llvm_type(self) -> ir.Type:
+        """LLVM representation for all Pascal sets: 256 bits as four i64 words."""
+        return ir.ArrayType(ir.IntType(64), 4)
+
     def zero_initializer(self, llvm_type: ir.Type) -> ir.Value:
         """Produce a valid zero initializer for any LLVM type.
 
@@ -740,6 +830,10 @@ class Codegen:
             return self._scalar_size(t.name)
         elif isinstance(t, NamedType):
             return self._scalar_size(t.name)
+        elif isinstance(t, SetType):
+            return 32
+        elif isinstance(t, SubrangeType):
+            return self._scalar_size(t.host) if t.host else 4
         elif isinstance(t, ArrayType):
             low = self.eval_const_expr(t.index_range.low)
             high = self.eval_const_expr(t.index_range.high) if t.index_range.high else low
@@ -833,6 +927,11 @@ class Codegen:
                 raise CodegenError(f'Undefined variable: {expr.name}')
             # Local/global variables are represented as pointers in LLVM, so symbol.llvm_value is the address
             return symbol.llvm_value
+        elif isinstance(expr, AdsExpr):
+            symbol = self.scope.lookup(expr.name)
+            if not symbol:
+                raise CodegenError(f'Undefined variable: {expr.name}')
+            return ir.Constant.literal_struct([symbol.llvm_value, ir.Constant(ir.IntType(16), 0)])
         elif isinstance(expr, SizeofExpr):
             # Sizeof operator (sizeof var_name or sizeof type)
             if isinstance(expr.target, str):
@@ -858,6 +957,8 @@ class Codegen:
             if symbol.is_parameter:
                 return symbol.llvm_value
             return self.builder.load(symbol.llvm_value)
+        elif isinstance(expr, SetConstructor):
+            return self.codegen_set_constructor(expr)
         elif isinstance(expr, Designator):
             symbol = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
             if not symbol:
@@ -880,10 +981,42 @@ class Codegen:
         else:
             raise CodegenError(f'Expression type {type(expr).__name__} not yet supported')
 
+    def codegen_set_constructor(self, expr: SetConstructor) -> ir.Value:
+        """Codegen a set constructor as a 256-bit constant bitvector.
+
+        Dynamic set construction is intentionally deferred; this phase gives the
+        backend a concrete representation and handles constant constructors and
+        ranges, including reversed ranges as empty ranges.
+        """
+        words = [0, 0, 0, 0]
+        for element in expr.elements:
+            if isinstance(element, RangeExpr):
+                low = self.eval_const_expr(element.low)
+                high = self.eval_const_expr(element.high)
+                if low > high:
+                    continue
+                for value in range(low, high + 1):
+                    self._set_constant_bit(words, value)
+            else:
+                self._set_constant_bit(words, self.eval_const_expr(element))
+        return ir.Constant(self.set_llvm_type(), [ir.Constant(ir.IntType(64), word) for word in words])
+
+    def _set_constant_bit(self, words: List[int], value: int) -> None:
+        """Set one ordinal bit in a four-word set constant."""
+        if value < 0 or value > 255:
+            raise CodegenError(f'Set element ordinal out of range 0..255: {value}')
+        words[value // 64] |= 1 << (value % 64)
+
     def codegen_binop(self, expr: BinOp) -> ir.Value:
         """Codegen binary operation."""
+        if expr.op in {'AND_THEN', 'OR_ELSE'}:
+            return self.codegen_short_circuit_binop(expr)
+
         left = self.codegen_expr(expr.left)
         right = self.codegen_expr(expr.right)
+
+        if self.is_set_value(left) or self.is_set_value(right):
+            return self.codegen_set_binop(expr.op, left, right)
 
         is_real = isinstance(left.type, ir.DoubleType) or isinstance(right.type, ir.DoubleType)
         if is_real:
@@ -922,6 +1055,110 @@ class Codegen:
             return self.builder.fcmp_ordered('>=', left, right) if is_real else self.builder.icmp_signed('>=', left, right)
         else:
             raise CodegenError(f'Unknown binary operator: {expr.op}')
+
+    def is_set_value(self, value: ir.Value) -> bool:
+        """Return True for the fixed Pascal set aggregate representation."""
+        typ = value.type
+        return isinstance(typ, ir.ArrayType) and typ.count == 4 and isinstance(typ.element, ir.IntType) and typ.element.width == 64
+
+    def set_word(self, value: ir.Value, index: int) -> ir.Value:
+        return self.builder.extract_value(value, index)
+
+    def set_from_words(self, words: List[ir.Value]) -> ir.Value:
+        result: ir.Value = ir.Constant(self.set_llvm_type(), None)
+        for index, word in enumerate(words):
+            result = self.builder.insert_value(result, word, index)
+        return result
+
+    def codegen_set_binop(self, op: str, left: ir.Value, right: ir.Value) -> ir.Value:
+        """Lower Pascal set operators over the fixed [4 x i64] representation."""
+        if op == 'IN':
+            if not self.is_set_value(right):
+                raise CodegenError('Right operand of IN must be a set')
+            return self.codegen_set_member(left, right)
+
+        if not self.is_set_value(left) or not self.is_set_value(right):
+            raise CodegenError(f'Operator {op} requires set operands')
+
+        if op == 'PLUS':
+            return self.set_from_words([self.builder.or_(self.set_word(left, i), self.set_word(right, i)) for i in range(4)])
+        if op == 'MUL':
+            return self.set_from_words([self.builder.and_(self.set_word(left, i), self.set_word(right, i)) for i in range(4)])
+        if op == 'MINUS':
+            all_ones = ir.Constant(ir.IntType(64), (1 << 64) - 1)
+            return self.set_from_words([self.builder.and_(self.set_word(left, i), self.builder.xor(self.set_word(right, i), all_ones)) for i in range(4)])
+        if op in {'EQ', 'NEQ'}:
+            eq = self.codegen_set_equal(left, right)
+            return eq if op == 'EQ' else self.builder.not_(eq)
+        if op in {'LE', 'GE', 'LT', 'GT'}:
+            subset = self.codegen_set_subset(left, right) if op in {'LE', 'LT'} else self.codegen_set_subset(right, left)
+            if op in {'LE', 'GE'}:
+                return subset
+            return self.builder.and_(subset, self.builder.not_(self.codegen_set_equal(left, right)))
+        raise CodegenError(f'Unknown set operator: {op}')
+
+    def codegen_set_member(self, ordinal: ir.Value, set_value: ir.Value) -> ir.Value:
+        """Lower ordinal IN set to a bit test."""
+        if isinstance(ordinal.type, ir.IntType) and ordinal.type.width < 32:
+            ordinal = self.builder.zext(ordinal, ir.IntType(32))
+        elif isinstance(ordinal.type, ir.IntType) and ordinal.type.width > 32:
+            ordinal = self.builder.trunc(ordinal, ir.IntType(32))
+        word_index = self.builder.udiv(ordinal, ir.Constant(ir.IntType(32), 64))
+        bit_index = self.builder.urem(ordinal, ir.Constant(ir.IntType(32), 64))
+        words_ptr = self.builder.alloca(self.set_llvm_type(), name='settmp')
+        self.builder.store(set_value, words_ptr)
+        word_ptr = self.builder.gep(words_ptr, [ir.Constant(ir.IntType(32), 0), word_index])
+        word = self.builder.load(word_ptr)
+        bit_index64 = self.builder.zext(bit_index, ir.IntType(64))
+        mask = self.builder.shl(ir.Constant(ir.IntType(64), 1), bit_index64)
+        masked = self.builder.and_(word, mask)
+        return self.builder.icmp_unsigned('!=', masked, ir.Constant(ir.IntType(64), 0))
+
+    def codegen_set_equal(self, left: ir.Value, right: ir.Value) -> ir.Value:
+        result = self.builder.icmp_unsigned('==', self.set_word(left, 0), self.set_word(right, 0))
+        for i in range(1, 4):
+            eq = self.builder.icmp_unsigned('==', self.set_word(left, i), self.set_word(right, i))
+            result = self.builder.and_(result, eq)
+        return result
+
+    def codegen_set_subset(self, left: ir.Value, right: ir.Value) -> ir.Value:
+        """Return left <= right for sets: every bit in left is also in right."""
+        result: Optional[ir.Value] = None
+        for i in range(4):
+            left_word = self.set_word(left, i)
+            right_word = self.set_word(right, i)
+            included = self.builder.icmp_unsigned('==', self.builder.and_(left_word, right_word), left_word)
+            result = included if result is None else self.builder.and_(result, included)
+        return result if result is not None else ir.Constant(ir.IntType(1), 1)
+
+    def codegen_short_circuit_binop(self, expr: BinOp) -> ir.Value:
+        """Codegen short-circuit boolean AND THEN / OR ELSE."""
+        left = self.to_bool(self.codegen_expr(expr.left))
+
+        rhs_block = self.current_function.append_basic_block(name='sc_rhs')
+        merge_block = self.current_function.append_basic_block(name='sc_merge')
+
+        if expr.op == 'AND_THEN':
+            self.builder.cbranch(left, rhs_block, merge_block)
+            short_value = ir.Constant(ir.IntType(1), 0)
+        elif expr.op == 'OR_ELSE':
+            self.builder.cbranch(left, merge_block, rhs_block)
+            short_value = ir.Constant(ir.IntType(1), 1)
+        else:
+            raise CodegenError(f'Unknown short-circuit operator: {expr.op}')
+
+        left_block = self.builder.block
+
+        self.builder.position_at_end(rhs_block)
+        right = self.to_bool(self.codegen_expr(expr.right))
+        right_block = self.builder.block
+        self.builder.branch(merge_block)
+
+        self.builder.position_at_end(merge_block)
+        result = self.builder.phi(ir.IntType(1), name='sc_result')
+        result.add_incoming(short_value, left_block)
+        result.add_incoming(right, right_block)
+        return result
 
     def codegen_unaryop(self, expr: UnaryOp) -> ir.Value:
         """Codegen unary operation."""
@@ -991,9 +1228,11 @@ class Codegen:
 
         fn = symbol.llvm_value
         param_types = fn.function_type.args
+        param_modes = self.proc_param_modes.get(expr.name.lower(), [])
         args = []
         for i, arg in enumerate(expr.args):
-            v = self.codegen_expr(arg)
+            mode = param_modes[i] if i < len(param_modes) else None
+            v = self.codegen_actual_arg(arg, mode)
             if i < len(param_types):
                 v = self.coerce_arg(v, param_types[i])
             args.append(v)

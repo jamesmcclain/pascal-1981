@@ -60,6 +60,7 @@ KEYWORD_CODES = {
     'OVERLAY': 0x0030,
     'FORTRAN': 0x0031,
     'ADR': 0x0032,
+    'ADS': 0x005C,
     'SIZEOF': 0x0033,
     'UPPER': 0x0034,
     'IN': 0x0035,
@@ -294,17 +295,6 @@ class Lexer:
         while self.current().isdigit():
             self.advance()
 
-    def read_hex_number(self) -> Token:
-        line, column = self.line, self.column
-        start = self.pos
-        self.advance()  # skip $
-        while self.current() and self.current().upper() in '0123456789ABCDEF':
-            self.advance()
-        lexeme = self.source[start:self.pos]
-        if len(lexeme) == 1:
-            raise LexerError(f"Invalid hex constant at line {line}, column {column}")
-        return self.emit('INTEGER_LITERAL', lexeme, int(lexeme[1:], 16), line, column)
-
     def read_string_or_char(self) -> Token:
         line, column = self.line, self.column
         self.advance()  # opening quote
@@ -396,8 +386,6 @@ class Lexer:
                 break
             if ch.isalpha() or ch == '_':
                 tokens.append(self.read_identifier_or_keyword())
-            elif ch == '$':
-                tokens.append(self.read_hex_number())
             elif ch.isdigit():
                 tokens.append(self.read_number())
             elif ch == "'":

@@ -14,12 +14,12 @@ from parser import parse_file
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ast_nodes import AdrExpr
+from ast_nodes import AdrExpr, AdsExpr
 from ast_nodes import ArrayType as ASTArrayType
-from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, ConstDecl, Designator, Expression, ForStmt, FuncCall, FuncDecl, Identifier, IfStmt,
-                       ImplementationUnit, InterfaceUnit, IntLiteral, ModuleUnit, NamedType, NilLiteral, PointerType as ASTPointerType, ProcCallStmt, ProcDecl, ProgramUnit, RealLiteral, WriteArg)
-from ast_nodes import RecordType as ASTRecordType
-from ast_nodes import (RepeatStmt, ReturnStmt, Selector, SizeofExpr, Statement, StringLiteral, TypeDecl, UnaryOp, UseClause, VarDecl, WhileStmt)
+from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, CharLiteral, ConstDecl, Designator, Expression, ForStmt, FuncCall, FuncDecl, Identifier, IfStmt,
+                       ImplementationUnit, InterfaceUnit, IntLiteral, LabelStmt, ModuleUnit, NamedType, NilLiteral, PointerType as ASTPointerType, ProcCallStmt, ProcDecl, ProgramUnit, RealLiteral, WriteArg)
+from ast_nodes import RecordType as ASTRecordType, SetType as ASTSetType, SubrangeType as ASTSubrangeType
+from ast_nodes import (RangeExpr, RepeatStmt, ReturnStmt, Selector, SetConstructor, SizeofExpr, Statement, StringLiteral, TypeDecl, UnaryOp, UseClause, VarDecl, WhileStmt)
 from symbol_table import SourceLocation, Symbol, SymbolTable
 from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, FunctionType, PointerType, ProcedureType, RecordType, SetType, Type,
                          binary_op_result_type, can_assign, unary_op_result_type)
@@ -547,6 +547,8 @@ class PascalTypeChecker(TypeChecker):
             self.error(f"Unknown type: {decl.type_expr}", decl)
             return
 
+        readonly = 'READONLY' in {attr.upper() for attr in getattr(decl, 'attributes', [])}
+
         # Add each variable to the symbol table
         for name in decl.names:
             # Check for redeclaration
@@ -556,7 +558,7 @@ class PascalTypeChecker(TypeChecker):
                 continue
 
             # Create symbol
-            symbol = Symbol(name=name, type=var_type, kind='var', location=self.get_node_location(decl), is_mutable=True)
+            symbol = Symbol(name=name, type=var_type, kind='var', location=self.get_node_location(decl), is_mutable=not readonly)
             self.symbol_table.define(name, symbol)
 
     def check_const_decl(self, decl: ConstDecl) -> None:
@@ -581,13 +583,31 @@ class PascalTypeChecker(TypeChecker):
 
     def check_type_decl(self, decl: TypeDecl) -> None:
         """Type check a type declaration."""
-        # TODO: Handle type aliases
-        pass
+        if not decl.name or not decl.type_expr:
+            return
+
+        existing = self.symbol_table.lookup_local(decl.name)
+        if existing:
+            self.error(f"Type '{decl.name}' already declared at {existing.location}", decl)
+            return
+
+        resolved_type = self.resolve_type(decl.type_expr)
+        if not resolved_type:
+            self.error(f"Unknown type: {decl.type_expr}", decl)
+            return
+
+        self.symbol_table.define(decl.name, Symbol(name=decl.name, type=resolved_type, kind='type', location=self.get_node_location(decl), is_mutable=False))
 
     def check_func_decl(self, decl: FuncDecl) -> None:
         """Type check a function declaration."""
         if not decl.name:
             return
+
+        attrs = {attr.upper() for attr in getattr(decl, 'attributes', [])}
+        if 'PURE' in attrs:
+            for param in getattr(decl, 'params', []):
+                if getattr(param, 'mode', None) in {'VAR', 'VARS'}:
+                    self.error(f"PURE function '{decl.name}' cannot have VAR/VARS parameters", decl)
 
         effective_decl = decl
         iface_decl = self.current_interface_decls.get(decl.name.lower()) if decl.name else None
@@ -637,7 +657,7 @@ class PascalTypeChecker(TypeChecker):
             param_type = self.resolve_type(param.type_expr)
             if param_type:
                 for name in param.names:
-                    param_symbol = Symbol(name=name, type=param_type, kind='parameter', location=self.make_location(param), is_mutable=False)
+                    param_symbol = Symbol(name=name, type=param_type, kind='parameter', location=self.make_location(param), is_mutable=param.mode not in {'CONST', 'CONSTS'})
                     self.symbol_table.define(name, param_symbol)
 
         # Check body
@@ -651,6 +671,10 @@ class PascalTypeChecker(TypeChecker):
         """Type check a procedure declaration."""
         if not decl.name:
             return
+
+        attrs = {attr.upper() for attr in getattr(decl, 'attributes', [])}
+        if 'PURE' in attrs:
+            self.error(f"PURE is only valid on functions, not procedure '{decl.name}'", decl)
 
         effective_decl = decl
         iface_decl = self.current_interface_decls.get(decl.name.lower()) if decl.name else None
@@ -690,7 +714,7 @@ class PascalTypeChecker(TypeChecker):
             param_type = self.resolve_type(param.type_expr)
             if param_type:
                 for name in param.names:
-                    param_symbol = Symbol(name=name, type=param_type, kind='parameter', location=self.make_location(param), is_mutable=False)
+                    param_symbol = Symbol(name=name, type=param_type, kind='parameter', location=self.make_location(param), is_mutable=param.mode not in {'CONST', 'CONSTS'})
                     self.symbol_table.define(name, param_symbol)
 
         # Check body
@@ -717,6 +741,8 @@ class PascalTypeChecker(TypeChecker):
             self.check_proc_call_stmt(stmt)
         elif isinstance(stmt, ReturnStmt):
             self.check_return_stmt(stmt)
+        elif isinstance(stmt, LabelStmt):
+            self.check_statement(stmt.stmt)
 
     def check_if_stmt(self, stmt: IfStmt) -> None:
         """Type check an IF statement."""
@@ -821,6 +847,9 @@ class PascalTypeChecker(TypeChecker):
                 target_type = sym.type
         elif isinstance(stmt.target, Designator):
             # Designator with selectors (array/record/pointer access)
+            sym = self.symbol_table.lookup(stmt.target.name)
+            if sym and not sym.is_mutable:
+                self.error(f"Cannot assign to immutable {sym.kind}: {stmt.target.name}", stmt)
             target_type = self.infer_designator_type(stmt.target)
             if target_type:
                 # Type check successful - target_type is now the element/field type
@@ -910,17 +939,66 @@ class PascalTypeChecker(TypeChecker):
             return REAL_TYPE
         elif isinstance(expr, BoolLiteral):
             return BOOLEAN_TYPE
+        elif isinstance(expr, CharLiteral):
+            return CHAR_TYPE
         elif isinstance(expr, NilLiteral):
             return PointerType(CHAR_TYPE)
         elif isinstance(expr, StringLiteral):
             return PointerType(CHAR_TYPE)
+        elif isinstance(expr, SetConstructor):
+            declared_set_type: Optional[SetType] = None
+            if expr.type_name:
+                sym = self.symbol_table.lookup(expr.type_name)
+                if not sym or sym.kind != 'type':
+                    self.error(f"Unknown set type: {expr.type_name}", expr)
+                    return None
+                if not isinstance(sym.type, SetType):
+                    self.error(f"Typed set constructor prefix must name a set type, got {sym.type}", expr)
+                    return None
+                declared_set_type = sym.type
+                if not all(self.is_constant_set_element(el) for el in expr.elements):
+                    self.error("Typed set constructors require constant elements", expr)
+                    return None
+            if not expr.elements:
+                return declared_set_type or SetType(INTEGER_TYPE)
+            element_type: Optional[Type] = None
+            for el in expr.elements:
+                if isinstance(el, RangeExpr):
+                    low_type = self.infer_expression_type(el.low)
+                    high_type = self.infer_expression_type(el.high)
+                    if not low_type or not high_type:
+                        return None
+                    if not low_type.equivalent_to(high_type):
+                        self.error(f"Set range bounds must have the same ordinal type, got {low_type} and {high_type}", el)
+                        return None
+                    cur_type = low_type
+                else:
+                    cur_type = self.infer_expression_type(el)
+                if not cur_type:
+                    return None
+                if declared_set_type and not can_assign(cur_type, declared_set_type.element_type) and not can_assign(declared_set_type.element_type, cur_type):
+                    self.error(f"Set element type mismatch: expected {declared_set_type.element_type}, got {cur_type}", el)
+                    return None
+                if element_type is None:
+                    element_type = cur_type
+                elif not cur_type.equivalent_to(element_type):
+                    self.error(f"Set element type mismatch: expected {element_type}, got {cur_type}", el)
+                    return None
+            return declared_set_type or SetType(element_type or INTEGER_TYPE)
         elif isinstance(expr, AdrExpr):
             # Address-of operator (adr var_name)
             sym = self.symbol_table.lookup(expr.name)
             if not sym:
                 self.error(f"Undefined variable: {expr.name}", expr)
                 return None
-            return PointerType(sym.type)
+            return PointerType(sym.type, flavor='ADR')
+        elif isinstance(expr, AdsExpr):
+            # Segmented address-of operator (ads var_name)
+            sym = self.symbol_table.lookup(expr.name)
+            if not sym:
+                self.error(f"Undefined variable: {expr.name}", expr)
+                return None
+            return PointerType(sym.type, flavor='ADS')
         elif isinstance(expr, SizeofExpr):
             # Sizeof operator (sizeof var_name or type)
             return INTEGER_TYPE
@@ -993,6 +1071,21 @@ class PascalTypeChecker(TypeChecker):
             # Unknown expression type
             return None
 
+    def is_constant_set_element(self, expr: Expression) -> bool:
+        """Return True when a set element/range endpoint is compile-time constant."""
+        if isinstance(expr, RangeExpr):
+            return self.is_constant_set_element(expr.low) and self.is_constant_set_element(expr.high)
+        if isinstance(expr, (IntLiteral, RealLiteral, BoolLiteral, CharLiteral, StringLiteral)):
+            return True
+        if isinstance(expr, Identifier):
+            sym = self.symbol_table.lookup(expr.name)
+            return bool(sym and sym.kind == 'const')
+        if isinstance(expr, UnaryOp):
+            return self.is_constant_set_element(expr.operand)
+        if isinstance(expr, BinOp):
+            return self.is_constant_set_element(expr.left) and self.is_constant_set_element(expr.right)
+        return False
+
     def infer_designator_type(self, designator: Designator) -> Optional[Type]:
         """Infer the type of a designator (with selectors for array/record access)."""
         # Special case: inside a function, referencing the function name gets the return type
@@ -1061,8 +1154,23 @@ class PascalTypeChecker(TypeChecker):
             elif name == 'ADRMEM':
                 return PointerType(CHAR_TYPE)
             else:
-                # Could be a user-defined type
+                sym = self.symbol_table.lookup(type_expr.name)
+                if sym and sym.kind == 'type':
+                    return sym.type
                 return None
+        elif isinstance(type_expr, ASTSetType):
+            base_type = self.resolve_type(type_expr.base)
+            return SetType(base_type) if base_type else None
+        elif isinstance(type_expr, ASTSubrangeType):
+            if type_expr.host:
+                host = self.resolve_type(NamedType(type_expr.host, None))
+                if host:
+                    return host
+            low_type = self.infer_expression_type(type_expr.low)
+            high_type = self.infer_expression_type(type_expr.high)
+            if low_type and high_type and low_type.equivalent_to(high_type):
+                return low_type
+            return None
         elif isinstance(type_expr, ASTArrayType):
             # Resolve the element type
             if isinstance(type_expr.element_type, Type):
@@ -1099,7 +1207,8 @@ class PascalTypeChecker(TypeChecker):
             return RecordType(type_expr.name, fields)
         elif isinstance(type_expr, ASTPointerType):
             base_type = self.resolve_type(type_expr.base)
-            return PointerType(base_type) if base_type else PointerType(CHAR_TYPE)
+            flavor = getattr(type_expr, 'flavor', 'POINTER')
+            return PointerType(base_type, flavor=flavor) if base_type else PointerType(CHAR_TYPE, flavor=flavor)
         else:
             return None
 

@@ -82,6 +82,33 @@ class TestTypeCompatibility(unittest.TestCase):
         result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := 1; x := 2; x := 3 END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
+    def test_set_type_declaration_and_assignment(self):
+        """SET OF declarations resolve and accept compatible set constructors."""
+        result = typecheck_source("PROGRAM P; TYPE S = SET OF 1..10; VAR x: S; BEGIN x := [1, 2..4] END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_set_membership_and_comparison(self):
+        """Set operators typecheck to set/BOOLEAN as appropriate."""
+        result = typecheck_source("PROGRAM P; VAR a, b: SET OF 1..10; VAR x: INTEGER; VAR ok: BOOLEAN; BEGIN ok := (x IN a) AND (a = b) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_typed_set_constructor_constant_range(self):
+        """Type-prefixed set constructors are valid when all elements are constant."""
+        result = typecheck_source("PROGRAM P; TYPE S = SET OF 1..10; VAR x: S; BEGIN x := S[1..3] END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_typed_set_constructor_rejects_variable_range(self):
+        """Type-prefixed set constructors reject variable elements per the manual."""
+        result = typecheck_source("PROGRAM P; TYPE S = SET OF 1..10; VAR x: S; VAR i, j: INTEGER; BEGIN x := S[i..j] END.")
+        self.assertFalse(result.success)
+        self.assertTrue(any("constant elements" in e.message for e in result.errors))
+
+    def test_typed_set_constructor_prefix_must_be_set_type(self):
+        """Typed set constructor prefixes must resolve to set types."""
+        result = typecheck_source("PROGRAM P; TYPE N = INTEGER; VAR x: SET OF 1..10; BEGIN x := N[1..3] END.")
+        self.assertFalse(result.success)
+        self.assertTrue(any("must name a set type" in e.message for e in result.errors))
+
     def test_abs_and_sqrt_typecheck(self):
         """ABS accepts INTEGER/REAL and SQRT returns REAL."""
         result = typecheck_source("PROGRAM P; VAR x: REAL; BEGIN x := SQRT(ABS(-5)) END.")
@@ -91,6 +118,43 @@ class TestTypeCompatibility(unittest.TestCase):
         """NIL is a typed null pointer constant."""
         result = typecheck_source("PROGRAM P; VAR p: ^INTEGER; BEGIN p := NIL END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_adr_ads_address_types_typecheck(self):
+        """ADR OF and ADS OF variables accept matching address-of expressions."""
+        result = typecheck_source(
+            "PROGRAM P; VAR x: INTEGER; a: ADR OF INTEGER; s: ADS OF INTEGER; BEGIN a := ADR x; s := ADS x END."
+        )
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_parameter_modes_typecheck(self):
+        """VAR/VARS are writable references; CONST/CONSTS are read-only references."""
+        ok = typecheck_source(
+            "PROGRAM P; PROCEDURE Q(VAR a: INTEGER; VARS b: INTEGER; CONST c: INTEGER; CONSTS d: INTEGER); BEGIN a := 1; b := 2; WRITELN(c); WRITELN(d) END; BEGIN END."
+        )
+        self.assertTrue(ok.success, msg=" ".join(str(e) for e in ok.errors))
+        bad = typecheck_source(
+            "PROGRAM P; PROCEDURE Q(CONST c: INTEGER; CONSTS d: INTEGER); BEGIN c := 1; d := 2 END; BEGIN END."
+        )
+        self.assertFalse(bad.success)
+        self.assertTrue(any("Cannot assign" in e.message for e in bad.errors))
+
+    def test_readonly_variable_is_immutable(self):
+        """READONLY variables must reject assignment."""
+        result = typecheck_source("PROGRAM P; VAR [READONLY] x: INTEGER; BEGIN x := 1 END.")
+        self.assertFalse(result.success)
+        self.assertTrue(any("immutable" in e.message.lower() for e in result.errors))
+
+    def test_pure_function_rejects_var_parameters(self):
+        """PURE functions cannot take VAR/VARS parameters."""
+        result = typecheck_source("PROGRAM P; FUNCTION F(VAR x: INTEGER): INTEGER [PURE]; BEGIN F := x END; BEGIN END.")
+        self.assertFalse(result.success)
+        self.assertTrue(any("PURE function" in e.message for e in result.errors))
+
+    def test_pure_procedure_is_rejected(self):
+        """PURE is only valid on functions."""
+        result = typecheck_source("PROGRAM P; PROCEDURE P1 [PURE]; BEGIN END; BEGIN END.")
+        self.assertFalse(result.success)
+        self.assertTrue(any("PURE is only valid on functions" in e.message for e in result.errors))
 
 
 class TestControlFlow(unittest.TestCase):
@@ -106,6 +170,19 @@ class TestControlFlow(unittest.TestCase):
         result = typecheck_source("PROGRAM P; BEGIN IF 42 THEN WRITELN(1) END.")
         self.assertFalse(result.success)
         self.assertIn("must be BOOLEAN", " ".join(str(e) for e in result.errors))
+
+    def test_short_circuit_boolean_operands(self):
+        """AND THEN / OR ELSE are valid for BOOLEAN operands."""
+        result = typecheck_source(
+            "PROGRAM P; VAR a, b: BOOLEAN; BEGIN IF a AND THEN b THEN WRITELN(1); IF a OR ELSE b THEN WRITELN(2) END."
+        )
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_short_circuit_rejects_integer_operands(self):
+        """AND THEN / OR ELSE are boolean-only, unlike ordinary bitwise AND/OR."""
+        result = typecheck_source("PROGRAM P; VAR x, y: INTEGER; BEGIN IF x AND THEN y THEN WRITELN(1) END.")
+        self.assertFalse(result.success)
+        self.assertIn("AND_THEN", " ".join(str(e) for e in result.errors))
 
     def test_while_boolean_condition(self):
         """WHILE with BOOLEAN condition is valid."""

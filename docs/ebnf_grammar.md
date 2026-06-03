@@ -208,8 +208,8 @@ func_decl_header =
     ":" type
     [ attribute_section ] ;
 
-(* [OBSERVED] VAR/CONST pass near 16-bit references (same segment).
-   VARS/CONSTS pass far 32-bit (segment:offset) references. *)
+(* [OBSERVED] Parameter modes: VAR/CONST are near references; VARS/CONSTS are
+   far/segmented reference forms. *)
 parameter_list  = parameter_group { ";" parameter_group } ;
 parameter_group = [ "VAR" | "CONST" | "VARS" | "CONSTS" ] identifier_list ":" type ;
 
@@ -240,10 +240,10 @@ statement =
 empty_stmt  = (* empty *) ;
 
 (* [OBSERVED] *)
-if_stmt     = "IF" expression "THEN" statement [ "ELSE" statement ] ;
-for_stmt    = "FOR" identifier ":=" expression ( "TO" | "DOWNTO" ) expression "DO" statement ;
-repeat_stmt = "REPEAT" [ statement { ";" statement } [ ";" ] ] "UNTIL" expression ;
-while_stmt  = "WHILE" expression "DO" statement ;
+if_stmt     = "IF" boolexp "THEN" statement [ "ELSE" statement ] ;
+for_stmt    = "FOR" [ "STATIC" ] identifier ":=" expression ( "TO" | "DOWNTO" ) expression "DO" statement ;
+repeat_stmt = "REPEAT" [ statement { ";" statement } [ ";" ] ] "UNTIL" boolexp ;
+while_stmt  = "WHILE" boolexp "DO" statement ;
 
 (* ── CASE statement ────────────────────────────────────────────────
    [OBSERVED] The index expression must be an ordinal type (INTEGER,
@@ -288,8 +288,8 @@ goto_stmt  = "GOTO" label_id ;
 label_stmt = label_id ":" statement ;
 
 (* [OBSERVED] IBM Pascal control-flow extensions. *)
-break_stmt  = "BREAK" ;   (* exit enclosing loop *)
-cycle_stmt  = "CYCLE" ;   (* continue to next loop iteration *)
+break_stmt  = "BREAK" [ label_id ] ;   (* exit enclosing loop; optional labeled target *)
+cycle_stmt  = "CYCLE" [ label_id ] ;   (* continue to next loop iteration; optional labeled target *)
 
 (* [OBSERVED] RETURN is a pure control-flow jump to the exit point of
    the current procedure, function, or program. It does NOT accept an
@@ -309,6 +309,7 @@ write_arg      = expression [ ":" expression [ ":" expression ] ] ;
    EXPRESSIONS
    ═══════════════════════════════════════════════════════════════════ *)
 
+boolexp     = expression { ( "AND" "THEN" | "OR" "ELSE" ) expression } ;
 expression  = simple_expr [ rel_op simple_expr ] ;
 simple_expr = [ "+" | "-" ] term { add_op term } ;
 term        = factor { mul_op factor } ;
@@ -321,6 +322,7 @@ factor =
     | "(" expression ")"
     | "NOT" factor                              (* unary boolean negation            *)
     | "ADR" identifier                        (* 16-bit near offset of identifier *)
+    | "ADS" identifier                        (* segmented address; LLVM lowers segment to 0 *)
     | "SIZEOF" "(" ( identifier | type ) ")"  (* byte size of identifier or type  *)
     | "UPPER" "(" identifier ")"              (* upper bound of super array        *)
     | set_constructor ;
@@ -392,7 +394,9 @@ record_type = [ "PACKED" ] "RECORD" field_list "END" ;
 field_list  = field_decl { ";" field_decl } [ ";" ] ;
 field_decl  = identifier_list ":" type ;
 
-pointer_type = "^" type ;
+pointer_type = "^" type
+             | "ADR" "OF" type
+             | "ADS" "OF" type ;
 
 (* [OBSERVED] SET OF is fully implemented. Small sets (ordinal values
    0..15) are generated inline; larger sets (up to 0..255) use runtime
@@ -468,13 +472,14 @@ constant =
     | "NIL"
     | identifier ;
 
-(* [ADDED] Decimal, radix, and hexadecimal integer forms.
-   Radix uses the manual n#digits form, e.g. 16#FF. Hex via $FF remains
-   accepted as a compatibility extension. hex_digit is case-insensitive. *)
-integer_constant = decimal_integer | radix_integer | hex_integer ;
+(* Decimal and radix integer forms. Radix uses the manual n#digits form,
+   e.g. 16#FF; radix_digits is case-insensitive.
+   NOTE: the `$FF` hex form was previously accepted as an implementer-added
+   compatibility extension but has been removed — it is not attested in the
+   IBM Pascal 2.0 manual, whose only hexadecimal notation is the radix form. *)
+integer_constant = decimal_integer | radix_integer ;
 decimal_integer  = digit { digit } ;
 radix_integer    = digit { digit } "#" radix_digits ;
-hex_integer      = "$" hex_digit { hex_digit } ;
 radix_digits     = hex_digit { hex_digit } ;
 hex_digit        = digit | "A" | "B" | "C" | "D" | "E" | "F" ;
 
@@ -527,6 +532,8 @@ character = (* any printable ASCII character in the range 0x20–0x7E,
 | `constant` — `"NIL"` alternative added as null-pointer constant | ADDED (Pillar 1) | Required for any pointer-type code |
 | `constant` — `identifier` alternative added for named constants and enum values | ADDED (Pillar 1) | Standard Pascal `CONST`-declared names; enum member names |
 | `integer_constant` — split into `decimal_integer` and `hex_integer` (`$FF` form) | ADDED (Pillar 1) | Required for systems-level and hardware-address literals |
+| `integer_constant` — `radix_integer` (`n#digits`) added as the manual's hex/radix notation | DOCUMENTED | Manual `number` production (appendix F-4) |
+| `integer_constant` — `hex_integer` (`$FF`) **removed**; not attested in the manual, superseded by radix form | OBSERVED | Manual shows only the `#`-radix form; `$` notation absent |
 | `real_constant` — `exponent` suffix added for scientific notation (`1.5E10`) | ADDED (Pillar 1) | Standard Pascal requirement |
 | `factor` — `"NOT" factor` alternative added for unary boolean negation | ADDED (Pillar 1) | `NOT` was entirely absent from grammar |
 | Lexical Rules section added: case-insensitivity, whitespace, comment forms, directive disambiguation | ADDED (Pillar 1) | Unspecified in original grammar |

@@ -54,12 +54,21 @@ These are worse than missing features because they fail late or silently.
     `python -m unittest tests.test_codegen`.
 
 - [x] **1.2 — Set-type base is parsed then discarded.** `[READ]` **M**
-  `parse_set_base` now preserves the declared base type instead of collapsing to
-  `INTEGER`; set declarations keep their base element type through the AST.
-  - Done: parser now returns the real base type (rather than the old placeholder)
-    and a parser judgment test verifies `SET OF CHAR` retains its base. Proven by
-    `python -m unittest tests.test_parser tests.test_typecheck` and
-    `python -m unittest tests.test_codegen`.
+  `parse_set_base` now preserves the declared set base. Named/enum bases keep
+  their `NamedType`; subrange bases (`SET OF 1..10`, `SET OF 'A'..'Z'`,
+  `SET OF lo..hi`) now parse to a `SubrangeType(low, high, host)` node that
+  retains both bounds instead of collapsing to the bare host type. Scope: this
+  is the **parser-level** data-loss fix only.
+  - Done: added `SubrangeType` AST node, rewrote `parse_set_base`, added three
+    judgment tests (`test_set_base_subrange_preserves_bounds`,
+    `test_set_base_char_subrange_preserves_bounds`,
+    `test_set_base_named_const_subrange_preserves_bounds`). Proven by
+    `python -m unittest tests.test_parser`.
+  - NOTE / does not cover: sets are still not resolved or lowered end-to-end.
+    `type_checker.resolve_type` has no `SetType` branch (a `SET OF ...` decl
+    currently resolves to `None`), and `codegen_llvm.llvm_type` has no `SetType`
+    branch. Named-constant subrange bounds carry `host=None` pending type-checker
+    resolution. Full set typing/codegen tracked in 9.6.
 
 - [x] **1.3 — `NIL` is documented as special but isn't a token.** `[OBSERVED]` **S**
   `NIL` is now a real lexer token and AST literal rather than an identifier
@@ -97,47 +106,74 @@ full reimplementation.
     `python -m unittest tests.test_parser tests.test_typecheck` and
     `python -m unittest tests.test_codegen`.
 
-- [ ] **2.2 — Multi-dimensional subscripts `a[i,j]`.** `[OBSERVED]` **S**
+- [x] **2.2 — Multi-dimensional subscripts `a[i,j]`.** `[OBSERVED]` **S**
   Manual `selectp ::= [ ordexpr \, ]` allows a comma list; the parser's `selector`
   takes a single `[expression]` and rejects the comma. Either desugar `a[i,j]` to
   `a[i][j]` or support comma lists directly.
+  - Done: desugared comma-separated subscripts into chained `INDEX` selectors in
+    the parser; `a[i,j]` now parses as `a[i][j]`. Proven by
+    `python -m unittest tests.test_parser`.
 
-- [ ] **2.3 — `FOR {STATIC} ident`.** `[OBSERVED]` **S**
+- [x] **2.3 — `FOR {STATIC} ident`.** `[OBSERVED]` **S**
   Manual allows an optional `STATIC` after `FOR`; parser rejects it
   (`expected IDENTIFIER, got STATIC`). `STATIC` already exists as a token.
+  - Done: parser now accepts and preserves optional `STATIC` between `FOR` and
+    the loop control variable, and codegen lowers that control variable to fixed
+    internal global storage instead of stack storage. Added parser/codegen tests.
+    Proven by `python -m unittest tests.test_parser tests.test_codegen`.
 
-- [ ] **2.4 — Labeled `BREAK` / `CYCLE`.** `[OBSERVED]` **S**
+- [x] **2.4 — Labeled `BREAK` / `CYCLE`.** `[OBSERVED]` **S**
   Manual `{BREAK | CYCL}{getlabl}-` allows an optional target label; parser only
   accepts the bare keywords and leaves the label unconsumed. (Note: `CYCLE`
   spelling confirmed correct — the manual `CYCL` was a single-page typo.)
+  - Done: BREAK/CYCLE now accept optional integer or identifier labels and preserve them on the AST while bare forms remain valid. Codegen now resolves unlabeled forms to the nearest enclosing loop and labeled forms to statement labels immediately preceding enclosing `WHILE`, `REPEAT`, or `FOR` loops. Proven by `python -m unittest tests.test_parser tests.test_typecheck tests.test_codegen`.
 
-- [ ] **2.5 — Short-circuit `AND THEN` / `OR ELSE`.** `[OBSERVED]` **M**
+- [x] **2.5 — Short-circuit `AND THEN` / `OR ELSE`.** `[OBSERVED]` **M**
   Manual `boolexp ::= expr {{AND THEN | OR ELSE} expr}*`; parser rejects both
   (`expected factor` at `THEN`/`ELSE`). Needs grammar + codegen (true
   short-circuit branching, distinct from bitwise `AND`/`OR`).
+  - Done: added `boolexp` parsing for condition contexts, boolean-only type rules for `AND_THEN`/`OR_ELSE`, and LLVM branch/PHI lowering that skips unnecessary RHS evaluation. Proven by `python -m unittest tests.test_parser tests.test_typecheck tests.test_codegen`.
 
-- [ ] **2.6 — `ADS ident` factor and `ADR OF` / `ADS OF` pointer types.** `[OBSERVED]` **M**
+- [x] **2.6 — `ADS ident` factor and `ADR OF` / `ADS OF` pointer types.** `[OBSERVED]` **M**
   Manual `factor` has `ADS ident` (alongside `ADR ident`, which exists); manual
   `typedec` has `{^ | ADR OF | ADS OF}`. Parser supports only `ADR ident` (the
   near pointer) and the `^` type; `ADS` (far/segmented) is absent at both the
   expression and type level. Tie this to the segmented-memory model (see 2.7).
+  - Done: added `ADS` as an address-of factor and `ADR OF` / `ADS OF` type prefixes. `ADR OF` lowers to a plain LLVM pointer; `ADS OF` lowers to `{R pointer, S WORD}` with `S = 0` for the LLVM target. Proven by `python -m unittest tests.test_parser tests.test_typecheck tests.test_codegen`.
 
-- [ ] **2.7 — `VARS`/`CONSTS` far-reference semantics.** `[READ]` **M**
+- [x] **2.7 — `VARS`/`CONSTS` far-reference semantics.** `[READ]` **M**
   Tokens and parameter modes exist; the manual distinguishes near (`VAR`/`CONST`,
-  16-bit same-segment) from far (`VARS`/`CONSTS`, 32-bit segment:offset). Confirm
-  whether the implementation actually treats them differently in codegen or only
-  parses them. Pairs naturally with `ADS` (2.6).
+  same-segment) from far (`VARS`/`CONSTS`, segment:offset-style) parameter
+  references. Confirm whether the implementation actually treats them differently
+  in codegen or only parses them. Pairs naturally with `ADS` (2.6).
+  - Done: parameter-mode parsing preserves all four modes — `VAR`, `VARS`,
+    `CONST`, `CONSTS` — as distinct tokens (`CONSTS` = `0x005A`, `VARS` =
+    `0x0059` in the lexer). Type checking treats `CONST`/`CONSTS` as read-only
+    aliases (assignment to them is rejected) and `VAR`/`VARS` as assignable; a
+    `PURE` routine is forbidden from taking `VAR`/`VARS` parameters. Codegen
+    passes all four as by-reference aliases. On the LLVM target the far forms
+    (`VARS`/`CONSTS`) use the same ordinary-pointer lowering as the near forms —
+    the same segment-zero approximation used for `ADS` (2.6) — rather than
+    emulating segmented memory; true far/segmented behavior is out of scope here.
+    Proven by `python -m unittest tests.test_parser tests.test_typecheck
+    tests.test_codegen`.
 
-- [ ] **2.8 — Attribute argument forms beyond `ORIGIN(c)`.** `[READ]` **M**
+- [x] **2.8 — Attribute argument forms beyond `ORIGIN(c)`.** `[READ]` **M**
   Manual `getattr` shows attributes carrying arguments and a `:ordcons` form;
   only `ORIGIN(constant)` is parsed. Reconcile the full attribute grammar
-  (`attrs1` set + argument syntax) against the parser's fixed list. Confirm the
-  `PORT(addr)` status (grammar doc marks it UNVERIFIED).
+  (`attrs1` set + argument syntax) against the parser's fixed list.
+  NOTE: `ORIGIN`/`PORT` are intentionally deferred for now; only the six
+  confirmed attribute keywords are in scope here.
+  - Done: accepted the six confirmed attribute keywords in bracketed lists,
+    wired `READONLY` immutability, `PURE` validation, `STATIC` lowering, and
+    `PUBLIC`/`EXTERN`/`EXTERNAL` linkage behavior. Proven by
+    `python -m unittest tests.test_parser tests.test_typecheck tests.test_codegen`.
 
-- [ ] **2.9 — Type-prefixed set constructor `ident setcons`.** `[INFERRED]` **M**
-  Manual `factor` lists `ident setcons` (a set constructor qualified by a set
-  type name). Not handled. Depends on real set typing (1.2). Confirm exact
-  semantics from the manual body before implementing.
+- [x] **2.9 — Type-prefixed set constructor `ident setcons`.** `[INFERRED]` **M**
+  Implemented `TypeName[constant..constant]` typed set constructors with the
+  manual restriction that typed set constructors require constant elements;
+  variable-element forms such as `NumberSet[i..j]` are rejected. Backed by real
+  set typing/lowering and tests in parser, type checker, and LLVM codegen.
 
 ---
 
@@ -274,6 +310,19 @@ the biggest single chunk; expect it to need its own design pass.
   `$SUBTITLE`, `$SYMTAB`, `$TITLE`, `$IF`, `$INCONST`, `$MESSAGE`, `$POP`, and
   `$PUSH`. Decide which are ignored, which affect parser/codegen state, and
   which should error when unsupported.
+
+- [ ] **9.6 — Full set type-checking and codegen.** `[OBSERVED]` **L**
+  Parser preserves set bases incl. subrange bounds (1.2), but sets are not yet
+  resolved or lowered: `type_checker.resolve_type` has no `SetType` branch (set
+  decls resolve to `None`), and `codegen_llvm.llvm_type` has no `SetType` branch.
+  Needs: a `SetType` resolution path (resolving `SubrangeType.host=None` named
+  bounds to their ordinal type), a runtime representation (bitset over the base's
+  ordinal range), and lowering for set constructors, `IN`, union/intersection/
+  difference. Pairs with the type-prefixed set constructor (2.9).
+
+- [ ] **9.7 — Deferred attribute-argument forms.** `[DEFERRED]` **S**
+  `ORIGIN(c)` and any `PORT(addr)`-style attribute syntax remain intentionally
+  out of scope until the manual's prose and grammar are reconciled more fully.
 
 ---
 

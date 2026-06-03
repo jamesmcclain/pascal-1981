@@ -170,6 +170,7 @@ class ForStmt(ASTNode):
     end: Expression
     direction: str  # 'TO' or 'DOWNTO'
     body: Statement
+    static: bool = False
 
 
 @dataclass
@@ -215,12 +216,12 @@ class ReturnStmt(ASTNode):
 
 @dataclass
 class BreakStmt(ASTNode):
-    pass
+    label: Optional[Union[int, str]] = None
 
 
 @dataclass
 class CycleStmt(ASTNode):
-    pass
+    label: Optional[Union[int, str]] = None
 
 
 @dataclass
@@ -305,10 +306,16 @@ class FuncCall(ASTNode):
 @dataclass
 class SetConstructor(ASTNode):
     elements: List[Expression]  # can include RangeExpr for ranges
+    type_name: Optional[str] = None  # typed set constant, e.g. ColorSet[Red..Blue]
 
 
 @dataclass
 class AdrExpr(ASTNode):
+    name: str
+
+
+@dataclass
+class AdsExpr(ASTNode):
     name: str
 
 
@@ -332,7 +339,7 @@ class RangeExpr(ASTNode):
 # Types
 # ============================================================================
 
-Type = Union['NamedType', 'ArrayType', 'RecordType', 'SetType', 'FileType', 'EnumType', 'PointerType', 'LStringType', 'BuiltinType']
+Type = Union['NamedType', 'ArrayType', 'RecordType', 'SetType', 'FileType', 'EnumType', 'PointerType', 'LStringType', 'BuiltinType', 'SubrangeType']
 
 
 @dataclass
@@ -373,6 +380,7 @@ class EnumType(ASTNode):
 @dataclass
 class PointerType(ASTNode):
     base: Type
+    flavor: str = 'POINTER'  # POINTER, ADR, ADS
 
 
 @dataclass
@@ -389,6 +397,18 @@ class BuiltinType(ASTNode):
 class IndexRange(ASTNode):
     low: Expression
     high: Optional[Expression]  # None for super arrays (star)
+
+
+@dataclass
+class SubrangeType(ASTNode):
+    """An ordinal subrange type, e.g. `1..10` or `'A'..'Z'`. Used as a set base
+    (`SET OF 1..10`) and anywhere a subrange may appear. Preserves both bounds;
+    `host` records the underlying ordinal type the bounds belong to
+    ('INTEGER', 'CHAR', 'BOOLEAN', or a named/enum type) when it can be
+    determined from the bound literals, else None."""
+    low: Expression
+    high: Expression
+    host: Optional[str] = None
 
 
 @dataclass

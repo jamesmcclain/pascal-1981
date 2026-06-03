@@ -135,18 +135,19 @@ class SetType(Type):
 
 @dataclass
 class PointerType(Type):
-    """Pointer type: ^target_type."""
+    """Pointer/address type."""
 
     target_type: Type
+    flavor: str = 'POINTER'  # POINTER, ADR, ADS
 
     def __str__(self) -> str:
-        return f"^{self.target_type}"
+        prefix = {'ADR': 'ADR OF ', 'ADS': 'ADS OF '}.get(self.flavor, '^')
+        return f"{prefix}{self.target_type}"
 
     def equivalent_to(self, other: Type) -> bool:
         if not isinstance(other, PointerType):
             return False
-        # In vintage systems programming, any pointer is equivalent/compatible with any other pointer (like adrmem)
-        return True
+        return self.flavor == other.flavor or self.flavor == 'POINTER' or other.flavor == 'POINTER'
 
 
 @dataclass
@@ -209,11 +210,15 @@ def can_assign(from_type: Type, to_type: Type) -> bool:
 
     We keep the rule narrow: exact matches are allowed, plus the common
     INTEGER-to-REAL widening used by assignments, parameters, and returns.
+    Sets follow exact element-type equivalence, with the empty set represented
+    by a compatible SetType.
     """
     if from_type.equivalent_to(to_type):
         return True
     if isinstance(from_type, IntegerType) and isinstance(to_type, RealType):
         return True
+    if isinstance(from_type, SetType) and isinstance(to_type, SetType):
+        return from_type.element_type.equivalent_to(to_type.element_type)
     return False
 
 
@@ -224,11 +229,13 @@ def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optiona
     `op` is the AST/token-kind operator name produced by the parser:
       additive/mul  : PLUS MINUS MUL SLASH DIV MOD
       bitwise/logic : AND OR XOR
+      short-circuit : AND_THEN OR_ELSE
       comparison    : EQ NEQ LT LE GT GE
     Returns None if the operation is invalid for these types.
     """
     ARITH = {'PLUS', 'MINUS', 'MUL', 'DIV', 'MOD'}  # integer-preserving arithmetic
     BITWISE = {'AND', 'OR', 'XOR'}
+    SHORT_CIRCUIT = {'AND_THEN', 'OR_ELSE'}
     COMPARE = {'EQ', 'NEQ', 'LT', 'LE', 'GT', 'GE'}
 
     # Integer arithmetic
@@ -242,7 +249,7 @@ def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optiona
 
     # Boolean logic
     if isinstance(left_type, BooleanType) and isinstance(right_type, BooleanType):
-        if op in BITWISE:
+        if op in BITWISE or op in SHORT_CIRCUIT:
             return BOOLEAN_TYPE
         if op in ('EQ', 'NEQ'):
             return BOOLEAN_TYPE
@@ -280,6 +287,19 @@ def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optiona
     # Character comparison
     if isinstance(left_type, CharType) and isinstance(right_type, CharType):
         if op in COMPARE:
+            return BOOLEAN_TYPE
+
+    # Set operators
+    if isinstance(left_type, SetType) and isinstance(right_type, SetType):
+        if left_type.element_type.equivalent_to(right_type.element_type):
+            if op in {'PLUS', 'MINUS', 'MUL'}:
+                return left_type
+            if op in {'EQ', 'NEQ', 'LE', 'GE', 'LT', 'GT'}:
+                return BOOLEAN_TYPE
+
+    # Membership: ordinal IN set
+    if op == 'IN' and isinstance(right_type, SetType):
+        if can_assign(left_type, right_type.element_type) or can_assign(right_type.element_type, left_type):
             return BOOLEAN_TYPE
 
     return None

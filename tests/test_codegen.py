@@ -100,6 +100,48 @@ class TestCodegenIR(unittest.TestCase):
         self.assertIsInstance(ir, str)
         self.assertGreater(len(ir), 0)
 
+    def test_set_variable_uses_bitvector_storage(self):
+        """SET variables lower to a fixed 256-bit bitvector."""
+        src = "PROGRAM P; VAR x: SET OF 1..10; BEGIN END."
+        ir = compile_to_ir(src)
+        self.assertIn("global [4 x i64] zeroinitializer", ir)
+
+    def test_set_constructor_constant_lowers_to_bitvector(self):
+        """Constant set constructors fold into four-word set constants."""
+        src = "PROGRAM P; TYPE S = SET OF 1..10; VAR x: S; BEGIN x := [1, 2..4] END."
+        ir = compile_to_ir(src)
+        self.assertIn("store [4 x i64] [i64 30, i64 0, i64 0, i64 0]", ir)
+
+    def test_typed_set_constructor_lowers_to_bitvector(self):
+        """Type-prefixed constant set constructors fold to set constants."""
+        src = "PROGRAM P; TYPE S = SET OF 1..10; VAR x: S; BEGIN x := S[1..3] END."
+        ir = compile_to_ir(src)
+        self.assertIn("store [4 x i64] [i64 14, i64 0, i64 0, i64 0]", ir)
+
+    def test_set_arithmetic_ops_lower_to_bitwise_ops(self):
+        """Set +, -, and * lower to bitwise operations on set words."""
+        src = "PROGRAM P; VAR a, b, c: SET OF 1..10; BEGIN a := [1]; b := [2]; c := a + b; c := c * a; c := c - b END."
+        ir = compile_to_ir(src)
+        self.assertIn(" or ", ir)
+        self.assertIn(" and ", ir)
+        self.assertIn(" xor ", ir)
+
+    def test_set_membership_lowers_to_bit_test(self):
+        """IN lowers to word selection, shift, mask, and compare."""
+        src = "PROGRAM P; VAR a: SET OF 1..10; VAR ok: BOOLEAN; BEGIN a := [1, 3]; ok := 3 IN a END."
+        ir = compile_to_ir(src)
+        self.assertIn("udiv", ir)
+        self.assertIn("urem", ir)
+        self.assertIn("shl", ir)
+        self.assertIn("icmp ne", ir)
+
+    def test_set_comparisons_lower_to_boolean_logic(self):
+        """Set comparisons lower to aggregate word comparisons."""
+        src = "PROGRAM P; VAR a, b: SET OF 1..10; VAR ok: BOOLEAN; BEGIN a := [1]; b := [1, 2]; ok := a <= b; ok := a <> b END."
+        ir = compile_to_ir(src)
+        self.assertIn("icmp eq", ir)
+        self.assertIn(" and ", ir)
+
     def test_real_literal_and_assignment(self):
         """REAL literals and assignment generate valid IR."""
         src = "PROGRAM P; VAR x: REAL; BEGIN x := 1.5; WRITELN(x) END."
@@ -142,6 +184,22 @@ class TestCodegenIR(unittest.TestCase):
         ir = compile_to_ir(src)
         self.assertIsInstance(ir, str)
         self.assertGreater(len(ir), 0)
+
+    def test_for_static_loop_variable_uses_fixed_storage(self):
+        """FOR STATIC uses fixed storage for the control variable."""
+        src = (
+            "PROGRAM P; "
+            "VAR i: INTEGER; "
+            "BEGIN FOR STATIC i := 1 TO 5 DO WRITELN(i) END."
+        )
+        ir = compile_to_ir(src)
+        self.assertIn("__for_static", ir)
+        self.assertIn("internal global", ir)
+
+    def test_readonly_local_variable_is_emitted_as_immutable_storage(self):
+        """READONLY variables should still codegen cleanly."""
+        ir = compile_to_ir("PROGRAM P; VAR [READONLY] x: INTEGER; BEGIN WRITELN(x) END.")
+        self.assertIn("x", ir)
 
     def test_procedure_call(self):
         """Procedure call generates valid IR."""
@@ -189,6 +247,19 @@ class TestCodegenIR(unittest.TestCase):
         ir = compile_to_ir(src)
         self.assertIn("sqrt", ir)
         self.assertIn("double", ir)
+
+    def test_short_circuit_generates_branching_ir(self):
+        """AND THEN / OR ELSE lower to branch + PHI, not eager bitwise ops."""
+        src = (
+            "PROGRAM P; VAR a, b: BOOLEAN; BEGIN "
+            "a := TRUE; b := FALSE; "
+            "IF a AND THEN b THEN WRITELN(1); "
+            "IF a OR ELSE b THEN WRITELN(2) END."
+        )
+        ir = compile_to_ir(src)
+        self.assertIn("sc_rhs", ir)
+        self.assertIn("sc_merge", ir)
+        self.assertIn("sc_result", ir)
 
 
 @requires_exe
@@ -240,12 +311,73 @@ class TestCodegenBuildRun(unittest.TestCase):
         ir = compile_to_ir(src)
         self.assertIn("null", ir)
 
+    def test_ads_codegen_uses_pointer_plus_zero_segment(self):
+        """ADS lowers as an address pair: R is the LLVM pointer, S is zero."""
+        src = "PROGRAM P; VAR x: INTEGER; s: ADS OF INTEGER; BEGIN s := ADS x END."
+        ir = compile_to_ir(src)
+        self.assertIn("{i32*,i16}", ir.replace(" ", ""))
+        self.assertIn("i16 0", ir)
+
+    def test_short_circuit_skips_rhs_runtime(self):
+        """Short-circuit operators must not evaluate an unnecessary RHS call."""
+        src = (
+            "PROGRAM P; "
+            "FUNCTION Bad: BOOLEAN; BEGIN WRITELN(99); Bad := TRUE END; "
+            "BEGIN "
+            "IF FALSE AND THEN Bad() THEN WRITELN(1); "
+            "IF TRUE OR ELSE Bad() THEN WRITELN(2) "
+            "END."
+        )
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertNotIn("99", stdout)
+        self.assertNotIn("1", stdout)
+        self.assertIn("2", stdout)
+
     def test_simple_arithmetic(self):
         """Simple arithmetic: 2 + 3 = 5."""
         src = "PROGRAM P; BEGIN WRITELN(2 + 3) END."
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         self.assertIn("5", stdout)
+
+    def test_set_operations_runtime(self):
+        """Set union/intersection/difference and IN produce correct runtime results."""
+        src = """
+        PROGRAM P;
+        VAR a, b, c: SET OF 1..10;
+        BEGIN
+            a := [1, 3];
+            b := [3, 4];
+            c := a + b;
+            IF 4 IN c THEN WRITELN(1);
+            c := a * b;
+            IF 3 IN c THEN WRITELN(2);
+            c := a - b;
+            IF 3 IN c THEN WRITELN(9);
+            IF 1 IN c THEN WRITELN(3)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "1\n2\n3")
+
+    def test_typed_set_constructor_runtime(self):
+        """Type-prefixed set constants execute through the set backend."""
+        src = """
+        PROGRAM P;
+        TYPE S = SET OF 1..10;
+        VAR a: S;
+        BEGIN
+            a := S[2..4];
+            IF 2 IN a THEN WRITELN(2);
+            IF 5 IN a THEN WRITELN(5);
+            IF a = S[2..4] THEN WRITELN(4)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "2\n4")
 
     def test_variable_assignment_and_output(self):
         """Assign to variable and output."""
@@ -303,6 +435,134 @@ class TestCodegenBuildRun(unittest.TestCase):
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         self.assertIn("20", stdout)
+
+    def test_unlabeled_break_runtime(self):
+        """BREAK exits the nearest enclosing loop."""
+        src = """
+        PROGRAM P;
+        VAR i: INTEGER;
+        BEGIN
+            i := 0;
+            WHILE TRUE DO
+            BEGIN
+                i := i + 1;
+                IF i = 3 THEN BREAK
+            END;
+            WRITELN(i)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "3")
+
+    def test_unlabeled_cycle_runtime(self):
+        """CYCLE skips to the next nearest loop iteration."""
+        src = """
+        PROGRAM P;
+        VAR i, sum: INTEGER;
+        BEGIN
+            sum := 0;
+            FOR i := 1 TO 3 DO
+            BEGIN
+                IF i = 2 THEN CYCLE;
+                sum := sum + i
+            END;
+            WRITELN(sum)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "4")
+
+    def test_labeled_break_runtime(self):
+        """BREAK label exits the enclosing loop with that statement label."""
+        src = """
+        PROGRAM P;
+        LABEL OUTER;
+        VAR i, j: INTEGER;
+        BEGIN
+            i := 0;
+            OUTER: WHILE i < 3 DO
+            BEGIN
+                i := i + 1;
+                j := 0;
+                WHILE j < 3 DO
+                BEGIN
+                    j := j + 1;
+                    IF j = 2 THEN BREAK OUTER
+                END
+            END;
+            WRITELN(i);
+            WRITELN(j)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "1\n2")
+
+    def test_labeled_cycle_runtime(self):
+        """CYCLE label continues the enclosing loop with that statement label."""
+        src = """
+        PROGRAM P;
+        LABEL OUTER;
+        VAR i, j, sum: INTEGER;
+        BEGIN
+            sum := 0;
+            OUTER: FOR i := 1 TO 3 DO
+            BEGIN
+                FOR j := 1 TO 3 DO
+                BEGIN
+                    IF j = 2 THEN CYCLE OUTER;
+                    sum := sum + 10 * i + j
+                END
+            END;
+            WRITELN(sum)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "63")
+
+    def test_var_and_vars_parameters_runtime(self):
+        """VAR and VARS parameters are writable by-reference aliases."""
+        src = """
+        PROGRAM P;
+        VAR a, b: INTEGER;
+        PROCEDURE Bump(VAR x: INTEGER; VARS y: INTEGER);
+        BEGIN
+            x := x + 1;
+            y := y + 10
+        END;
+        BEGIN
+            a := 1;
+            b := 2;
+            Bump(a, b);
+            WRITELN(a);
+            WRITELN(b)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "2\n12")
+
+    def test_const_and_cons_parameters_runtime(self):
+        """CONST and CONSTS parameters are readable by-reference aliases."""
+        src = """
+        PROGRAM P;
+        VAR a, b: INTEGER;
+        PROCEDURE Show(CONST x: INTEGER; CONSTS y: INTEGER);
+        BEGIN
+            WRITELN(x + y)
+        END;
+        BEGIN
+            a := 7;
+            b := 8;
+            Show(a, b)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "15")
 
 
 if __name__ == '__main__':
