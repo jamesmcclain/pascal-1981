@@ -82,6 +82,17 @@ class TestTypeCompatibility(unittest.TestCase):
         result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := 1; x := 2; x := 3 END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
+    def test_set_type_declaration_and_assignment(self):
+        """SET OF declarations resolve and accept compatible set constructors."""
+        result = typecheck_source("PROGRAM P; TYPE S = SET OF 1..10; VAR x: S; BEGIN x := [1, 2..4] END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_set_membership_and_comparison(self):
+        """Set operators typecheck to set/BOOLEAN as appropriate."""
+        result = typecheck_source("PROGRAM P; VAR a, b: SET OF 1..10; VAR x: INTEGER; VAR ok: BOOLEAN; BEGIN ok := (x IN a) AND (a = b) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+
     def test_abs_and_sqrt_typecheck(self):
         """ABS accepts INTEGER/REAL and SQRT returns REAL."""
         result = typecheck_source("PROGRAM P; VAR x: REAL; BEGIN x := SQRT(ABS(-5)) END.")

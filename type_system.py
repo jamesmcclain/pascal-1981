@@ -210,11 +210,15 @@ def can_assign(from_type: Type, to_type: Type) -> bool:
 
     We keep the rule narrow: exact matches are allowed, plus the common
     INTEGER-to-REAL widening used by assignments, parameters, and returns.
+    Sets follow exact element-type equivalence, with the empty set represented
+    by a compatible SetType.
     """
     if from_type.equivalent_to(to_type):
         return True
     if isinstance(from_type, IntegerType) and isinstance(to_type, RealType):
         return True
+    if isinstance(from_type, SetType) and isinstance(to_type, SetType):
+        return from_type.element_type.equivalent_to(to_type.element_type)
     return False
 
 
@@ -283,6 +287,19 @@ def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optiona
     # Character comparison
     if isinstance(left_type, CharType) and isinstance(right_type, CharType):
         if op in COMPARE:
+            return BOOLEAN_TYPE
+
+    # Set operators
+    if isinstance(left_type, SetType) and isinstance(right_type, SetType):
+        if left_type.element_type.equivalent_to(right_type.element_type):
+            if op in {'PLUS', 'MINUS', 'MUL'}:
+                return left_type
+            if op in {'EQ', 'NEQ', 'LE', 'GE', 'LT', 'GT'}:
+                return BOOLEAN_TYPE
+
+    # Membership: ordinal IN set
+    if op == 'IN' and isinstance(right_type, SetType):
+        if can_assign(left_type, right_type.element_type) or can_assign(right_type.element_type, left_type):
             return BOOLEAN_TYPE
 
     return None
