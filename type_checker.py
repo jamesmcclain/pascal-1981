@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 from ast_nodes import AdrExpr, AdsExpr
 from ast_nodes import ArrayType as ASTArrayType
 from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, ConstDecl, Designator, Expression, ForStmt, FuncCall, FuncDecl, Identifier, IfStmt,
-                       ImplementationUnit, InterfaceUnit, IntLiteral, ModuleUnit, NamedType, NilLiteral, PointerType as ASTPointerType, ProcCallStmt, ProcDecl, ProgramUnit, RealLiteral, WriteArg)
+                       ImplementationUnit, InterfaceUnit, IntLiteral, LabelStmt, ModuleUnit, NamedType, NilLiteral, PointerType as ASTPointerType, ProcCallStmt, ProcDecl, ProgramUnit, RealLiteral, WriteArg)
 from ast_nodes import RecordType as ASTRecordType
 from ast_nodes import (RepeatStmt, ReturnStmt, Selector, SizeofExpr, Statement, StringLiteral, TypeDecl, UnaryOp, UseClause, VarDecl, WhileStmt)
 from symbol_table import SourceLocation, Symbol, SymbolTable
@@ -717,6 +717,8 @@ class PascalTypeChecker(TypeChecker):
             self.check_proc_call_stmt(stmt)
         elif isinstance(stmt, ReturnStmt):
             self.check_return_stmt(stmt)
+        elif isinstance(stmt, LabelStmt):
+            self.check_statement(stmt.stmt)
 
     def check_if_stmt(self, stmt: IfStmt) -> None:
         """Type check an IF statement."""

@@ -351,6 +351,93 @@ class TestCodegenBuildRun(unittest.TestCase):
         self.assertEqual(returncode, 0)
         self.assertIn("20", stdout)
 
+    def test_unlabeled_break_runtime(self):
+        """BREAK exits the nearest enclosing loop."""
+        src = """
+        PROGRAM P;
+        VAR i: INTEGER;
+        BEGIN
+            i := 0;
+            WHILE TRUE DO
+            BEGIN
+                i := i + 1;
+                IF i = 3 THEN BREAK
+            END;
+            WRITELN(i)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "3")
+
+    def test_unlabeled_cycle_runtime(self):
+        """CYCLE skips to the next nearest loop iteration."""
+        src = """
+        PROGRAM P;
+        VAR i, sum: INTEGER;
+        BEGIN
+            sum := 0;
+            FOR i := 1 TO 3 DO
+            BEGIN
+                IF i = 2 THEN CYCLE;
+                sum := sum + i
+            END;
+            WRITELN(sum)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "4")
+
+    def test_labeled_break_runtime(self):
+        """BREAK label exits the enclosing loop with that statement label."""
+        src = """
+        PROGRAM P;
+        LABEL OUTER;
+        VAR i, j: INTEGER;
+        BEGIN
+            i := 0;
+            OUTER: WHILE i < 3 DO
+            BEGIN
+                i := i + 1;
+                j := 0;
+                WHILE j < 3 DO
+                BEGIN
+                    j := j + 1;
+                    IF j = 2 THEN BREAK OUTER
+                END
+            END;
+            WRITELN(i);
+            WRITELN(j)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "1\n2")
+
+    def test_labeled_cycle_runtime(self):
+        """CYCLE label continues the enclosing loop with that statement label."""
+        src = """
+        PROGRAM P;
+        LABEL OUTER;
+        VAR i, j, sum: INTEGER;
+        BEGIN
+            sum := 0;
+            OUTER: FOR i := 1 TO 3 DO
+            BEGIN
+                FOR j := 1 TO 3 DO
+                BEGIN
+                    IF j = 2 THEN CYCLE OUTER;
+                    sum := sum + 10 * i + j
+                END
+            END;
+            WRITELN(sum)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "63")
+
 
 if __name__ == '__main__':
     unittest.main()

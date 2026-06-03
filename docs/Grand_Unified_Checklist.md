@@ -126,7 +126,7 @@ full reimplementation.
   Manual `{BREAK | CYCL}{getlabl}-` allows an optional target label; parser only
   accepts the bare keywords and leaves the label unconsumed. (Note: `CYCLE`
   spelling confirmed correct — the manual `CYCL` was a single-page typo.)
-  - Done: BREAK/CYCLE now accept optional integer or identifier labels and preserve them on the AST while bare forms remain valid. Proven by `python -m unittest tests.test_parser`.
+  - Done: BREAK/CYCLE now accept optional integer or identifier labels and preserve them on the AST while bare forms remain valid. Codegen now resolves unlabeled forms to the nearest enclosing loop and labeled forms to statement labels immediately preceding enclosing `WHILE`, `REPEAT`, or `FOR` loops. Proven by `python -m unittest tests.test_parser tests.test_typecheck tests.test_codegen`.
 
 - [x] **2.5 — Short-circuit `AND THEN` / `OR ELSE`.** `[OBSERVED]` **M**
   Manual `boolexp ::= expr {{AND THEN | OR ELSE} expr}*`; parser rejects both

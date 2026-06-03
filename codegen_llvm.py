@@ -11,6 +11,7 @@ Walks the AST and emits LLVM IR. Supports:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 
 import llvmlite.ir as ir
@@ -32,6 +33,13 @@ class Symbol:
         self.llvm_value = llvm_value  # ir.Value or ir.Function or ir.GlobalVariable
         self.type_expr = type_expr
         self.is_parameter = is_parameter  # True if this is a function parameter (passed by value)
+
+
+@dataclass
+class LoopContext:
+    label: Optional[Union[int, str]]
+    break_block: ir.Block
+    cycle_block: ir.Block
 
 
 class Scope:
@@ -78,6 +86,7 @@ class Codegen:
         self.current_return_block: Optional[ir.BasicBlock] = None
         self.constants: Dict[str, int] = {}  # compile-time constant values, keyed UPPER
         self.current_interface_decls: Dict[str, Declaration] = {}
+        self.loop_stack: List[LoopContext] = []
         self.verbose = verbose
 
     def _log(self, msg: str) -> None:
@@ -176,11 +185,11 @@ class Codegen:
             self.current_function = main_func
 
             # Execute the program body
-            for stmt in unit.block.body:
-                self.codegen_stmt(stmt)
+            self.codegen_stmt_list(unit.block.body)
 
             # Default return 0
-            self.builder.ret(ir.Constant(ir.IntType(32), 0))
+            if not self.builder.block.is_terminated:
+                self.builder.ret(ir.Constant(ir.IntType(32), 0))
 
         return self.module
 
@@ -237,10 +246,10 @@ class Codegen:
             self.builder = IRBuilder(entry_block)
             self.current_function = init_func
 
-            for stmt in unit.init_body:
-                self.codegen_stmt(stmt)
+            self.codegen_stmt_list(unit.init_body)
 
-            self.builder.ret(ir.Constant(ir.IntType(32), 0))
+            if not self.builder.block.is_terminated:
+                self.builder.ret(ir.Constant(ir.IntType(32), 0))
 
         return self.module
 
@@ -402,12 +411,12 @@ class Codegen:
         for inner_decl in decl.body.decls:
             self.codegen_decl(inner_decl)
 
-        for stmt in decl.body.body:
-            self.codegen_stmt(stmt)
+        self.codegen_stmt_list(decl.body.body)
 
         # Default return / function result
-        result = self.builder.load(return_alloca)
-        self.builder.ret(result)
+        if not self.builder.block.is_terminated:
+            result = self.builder.load(return_alloca)
+            self.builder.ret(result)
 
         # Restore context
         self.builder = prev_builder
@@ -418,12 +427,17 @@ class Codegen:
     # Statements
     # ========================================================================
 
+    def codegen_stmt_list(self, stmts: List[Statement]) -> None:
+        for stmt in stmts:
+            if self.builder.block.is_terminated:
+                break
+            self.codegen_stmt(stmt)
+
     def codegen_stmt(self, stmt: Statement) -> None:
         """Codegen a statement."""
         self._log(f'stmt  {type(stmt).__name__}')
         if isinstance(stmt, CompoundStmt):
-            for s in stmt.stmts:
-                self.codegen_stmt(s)
+            self.codegen_stmt_list(stmt.stmts)
         elif isinstance(stmt, AssignStmt):
             self.codegen_assign_stmt(stmt)
         elif isinstance(stmt, ProcCallStmt):
@@ -444,16 +458,14 @@ class Codegen:
         elif isinstance(stmt, ReturnStmt):
             self.codegen_return_stmt(stmt)
         elif isinstance(stmt, BreakStmt):
-            # TODO: handle BREAK
-            pass
+            self.codegen_break_stmt(stmt)
         elif isinstance(stmt, CycleStmt):
-            # TODO: handle CYCLE
-            pass
+            self.codegen_cycle_stmt(stmt)
         elif isinstance(stmt, WithStmt):
             # TODO: handle WITH
             pass
         elif isinstance(stmt, LabelStmt):
-            self.codegen_stmt(stmt.stmt)
+            self.codegen_label_stmt(stmt)
         elif isinstance(stmt, EmptyStmt):
             pass
         else:
@@ -523,10 +535,8 @@ class Codegen:
     def codegen_if_stmt(self, stmt: IfStmt) -> None:
         """Codegen for IF statement."""
         cond = self.codegen_expr(stmt.cond)
-        # Reduce to i1 (handles boolean loads as well as integer conditions)
         cond_bit = self.to_bool(cond)
 
-        # Create basic blocks
         then_block = self.current_function.append_basic_block(name='if_then')
         end_block = self.current_function.append_basic_block(name='if_end')
 
@@ -534,25 +544,23 @@ class Codegen:
             else_block = self.current_function.append_basic_block(name='if_else')
             self.builder.cbranch(cond_bit, then_block, else_block)
 
-            # Then branch
             self.builder.position_at_end(then_block)
             self.codegen_stmt(stmt.then_branch)
-            self.builder.branch(end_block)
+            if not self.builder.block.is_terminated:
+                self.builder.branch(end_block)
 
-            # Else branch
             self.builder.position_at_end(else_block)
             self.codegen_stmt(stmt.else_branch)
-            self.builder.branch(end_block)
+            if not self.builder.block.is_terminated:
+                self.builder.branch(end_block)
         else:
-            # No else branch
             self.builder.cbranch(cond_bit, then_block, end_block)
 
-            # Then branch
             self.builder.position_at_end(then_block)
             self.codegen_stmt(stmt.then_branch)
-            self.builder.branch(end_block)
+            if not self.builder.block.is_terminated:
+                self.builder.branch(end_block)
 
-        # Continue after if
         self.builder.position_at_end(end_block)
 
     def codegen_for_stmt(self, stmt: ForStmt) -> None:
@@ -585,37 +593,29 @@ class Codegen:
         # Create loop blocks
         loop_block = self.current_function.append_basic_block(name='for_loop')
         end_block = self.current_function.append_basic_block(name='for_end')
+        step_block = self.current_function.append_basic_block(name='for_step')
+        body_block = self.current_function.append_basic_block(name='for_body')
+        self.loop_stack.append(LoopContext(self.normalize_label(getattr(stmt, 'label', None)), end_block, step_block))
 
         self.builder.branch(loop_block)
-
-        # Loop condition
         self.builder.position_at_end(loop_block)
         current_val = self.builder.load(loop_var)
         end_val = self.codegen_expr(stmt.end)
-
-        if stmt.direction == 'TO':
-            cond = self.builder.icmp_signed('<=', current_val, end_val)
-        else:  # DOWNTO
-            cond = self.builder.icmp_signed('>=', current_val, end_val)
-
-        # Loop body block
-        body_block = self.current_function.append_basic_block(name='for_body')
+        cond = self.builder.icmp_signed('<=', current_val, end_val) if stmt.direction == 'TO' else self.builder.icmp_signed('>=', current_val, end_val)
         self.builder.cbranch(cond, body_block, end_block)
 
-        # Loop body
         self.builder.position_at_end(body_block)
         self.codegen_stmt(stmt.body)
+        if not self.builder.block.is_terminated:
+            self.builder.branch(step_block)
 
-        # Increment/decrement
+        self.builder.position_at_end(step_block)
         current_val = self.builder.load(loop_var)
-        if stmt.direction == 'TO':
-            next_val = self.builder.add(current_val, ir.Constant(ir.IntType(32), 1))
-        else:  # DOWNTO
-            next_val = self.builder.sub(current_val, ir.Constant(ir.IntType(32), 1))
+        next_val = self.builder.add(current_val, ir.Constant(ir.IntType(32), 1)) if stmt.direction == 'TO' else self.builder.sub(current_val, ir.Constant(ir.IntType(32), 1))
         self.builder.store(next_val, loop_var)
         self.builder.branch(loop_block)
 
-        # Continue after loop
+        self.loop_stack.pop()
         self.builder.position_at_end(end_block)
 
     def codegen_while_stmt(self, stmt: WhileStmt) -> None:
@@ -623,41 +623,33 @@ class Codegen:
         loop_block = self.current_function.append_basic_block(name='while_loop')
         body_block = self.current_function.append_basic_block(name='while_body')
         end_block = self.current_function.append_basic_block(name='while_end')
+        self.loop_stack.append(LoopContext(self.normalize_label(getattr(stmt, 'label', None)), end_block, loop_block))
 
         self.builder.branch(loop_block)
-
-        # Condition check
         self.builder.position_at_end(loop_block)
         cond = self.codegen_expr(stmt.cond)
-        cond_bit = self.to_bool(cond)
-        self.builder.cbranch(cond_bit, body_block, end_block)
+        self.builder.cbranch(self.to_bool(cond), body_block, end_block)
 
-        # Body
         self.builder.position_at_end(body_block)
         self.codegen_stmt(stmt.body)
-        self.builder.branch(loop_block)
-
-        # After loop
+        if not self.builder.block.is_terminated:
+            self.builder.branch(loop_block)
+        self.loop_stack.pop()
         self.builder.position_at_end(end_block)
 
     def codegen_repeat_stmt(self, stmt: RepeatStmt) -> None:
         """Codegen for REPEAT..UNTIL loop."""
         loop_block = self.current_function.append_basic_block(name='repeat_loop')
         end_block = self.current_function.append_basic_block(name='repeat_end')
+        self.loop_stack.append(LoopContext(self.normalize_label(getattr(stmt, 'label', None)), end_block, loop_block))
 
         self.builder.branch(loop_block)
-
-        # Loop body
         self.builder.position_at_end(loop_block)
-        for s in stmt.body:
-            self.codegen_stmt(s)
-
-        # Condition (until = exit when true)
-        cond = self.codegen_expr(stmt.cond)
-        cond_bit = self.to_bool(cond)
-        self.builder.cbranch(cond_bit, end_block, loop_block)
-
-        # After loop
+        self.codegen_stmt_list(stmt.body)
+        if not self.builder.block.is_terminated:
+            cond = self.codegen_expr(stmt.cond)
+            self.builder.cbranch(self.to_bool(cond), end_block, loop_block)
+        self.loop_stack.pop()
         self.builder.position_at_end(end_block)
 
     def codegen_case_stmt(self, stmt: CaseStmt) -> None:
@@ -701,6 +693,36 @@ class Codegen:
     def codegen_return_stmt(self, stmt: ReturnStmt) -> None:
         """Codegen for RETURN statement."""
         self.builder.ret(ir.Constant(ir.IntType(32), 0))
+
+    def codegen_break_stmt(self, stmt: BreakStmt) -> None:
+        ctx = self.resolve_loop_context(stmt.label)
+        self.builder.branch(ctx.break_block)
+
+    def codegen_cycle_stmt(self, stmt: CycleStmt) -> None:
+        ctx = self.resolve_loop_context(stmt.label)
+        self.builder.branch(ctx.cycle_block)
+
+    def codegen_label_stmt(self, stmt: LabelStmt) -> None:
+        inner = stmt.stmt
+        if isinstance(inner, (WhileStmt, ForStmt, RepeatStmt)):
+            setattr(inner, 'label', self.normalize_label(stmt.label))
+        self.codegen_stmt(inner)
+
+    def normalize_label(self, label: Optional[Union[int, str]]) -> Optional[Union[int, str]]:
+        if isinstance(label, str):
+            return label.lower()
+        return label
+
+    def resolve_loop_context(self, label: Optional[Union[int, str]]) -> LoopContext:
+        if not self.loop_stack:
+            raise CodegenError('BREAK/CYCLE outside of loop')
+        label = self.normalize_label(label)
+        if label is None:
+            return self.loop_stack[-1]
+        for ctx in reversed(self.loop_stack):
+            if ctx.label == label:
+                return ctx
+        raise CodegenError(f'Unknown loop label: {label}')
 
     def resolve_designator_ptr(self, designator: Designator) -> ir.Value:
         """Resolve a designator to its LLVM pointer (handles arrays/selectors)."""
