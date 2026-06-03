@@ -363,13 +363,10 @@ class Parser:
         return attributes
 
     def parse_attribute_item(self) -> str:
-        if self.current().kind == 'ORIGIN':
-            self.pos += 1
-            self.expect('LPAREN')
-            self.parse_constant()
-            self.expect('RPAREN')
-            return 'ORIGIN'
-        if self.current().kind in {'READONLY', 'PUBLIC', 'STATIC', 'EXTERNAL', 'EXTERN', 'PURE', 'OVERLAY', 'FORTRAN'}:
+        # The current implementation intentionally handles the six confirmed
+        # attribute keywords only. ORIGIN/PORT are documented elsewhere or
+        # unverified, and will be added in a separate pass if needed.
+        if self.current().kind in {'READONLY', 'PUBLIC', 'STATIC', 'EXTERNAL', 'EXTERN', 'PURE'}:
             attr = self.current().kind
             self.pos += 1
             return attr

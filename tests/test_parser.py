@@ -176,6 +176,16 @@ class TestParserJudgmentCalls(unittest.TestCase):
         modes = [p.mode for p in ast.block.decls[0].params]
         self.assertEqual(modes, ['VAR', 'VARS', 'CONST', 'CONS'])
 
+    def test_confirmed_attributes_parse(self):
+        """The six confirmed attributes should parse in bracketed lists."""
+        ast = parse_source(
+            "PROGRAM P; VAR [STATIC, READONLY] x: INTEGER; PROCEDURE Q [PUBLIC, EXTERN, PURE]; BEGIN END; BEGIN END."
+        )
+        var_decl = ast.block.decls[0]
+        proc_decl = ast.block.decls[1]
+        self.assertEqual(var_decl.attributes, ['STATIC', 'READONLY'])
+        self.assertEqual(proc_decl.attributes, ['PUBLIC', 'EXTERN', 'PURE'])
+
     def test_manual_radix_integer_constant(self):
         """The manual radix form n#digits should lex and parse as an integer constant."""
         ast = parse_source("PROGRAM P; CONST MASK = 16#FF; BEGIN END.")

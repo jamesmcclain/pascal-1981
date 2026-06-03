@@ -547,6 +547,8 @@ class PascalTypeChecker(TypeChecker):
             self.error(f"Unknown type: {decl.type_expr}", decl)
             return
 
+        readonly = 'READONLY' in {attr.upper() for attr in getattr(decl, 'attributes', [])}
+
         # Add each variable to the symbol table
         for name in decl.names:
             # Check for redeclaration
@@ -556,7 +558,7 @@ class PascalTypeChecker(TypeChecker):
                 continue
 
             # Create symbol
-            symbol = Symbol(name=name, type=var_type, kind='var', location=self.get_node_location(decl), is_mutable=True)
+            symbol = Symbol(name=name, type=var_type, kind='var', location=self.get_node_location(decl), is_mutable=not readonly)
             self.symbol_table.define(name, symbol)
 
     def check_const_decl(self, decl: ConstDecl) -> None:
@@ -588,6 +590,12 @@ class PascalTypeChecker(TypeChecker):
         """Type check a function declaration."""
         if not decl.name:
             return
+
+        attrs = {attr.upper() for attr in getattr(decl, 'attributes', [])}
+        if 'PURE' in attrs:
+            for param in getattr(decl, 'params', []):
+                if getattr(param, 'mode', None) in {'VAR', 'VARS'}:
+                    self.error(f"PURE function '{decl.name}' cannot have VAR/VARS parameters", decl)
 
         effective_decl = decl
         iface_decl = self.current_interface_decls.get(decl.name.lower()) if decl.name else None
@@ -651,6 +659,10 @@ class PascalTypeChecker(TypeChecker):
         """Type check a procedure declaration."""
         if not decl.name:
             return
+
+        attrs = {attr.upper() for attr in getattr(decl, 'attributes', [])}
+        if 'PURE' in attrs:
+            self.error(f"PURE is only valid on functions, not procedure '{decl.name}'", decl)
 
         effective_decl = decl
         iface_decl = self.current_interface_decls.get(decl.name.lower()) if decl.name else None

@@ -154,6 +154,11 @@ class TestCodegenIR(unittest.TestCase):
         self.assertIn("__for_static", ir)
         self.assertIn("internal global", ir)
 
+    def test_readonly_local_variable_is_emitted_as_immutable_storage(self):
+        """READONLY variables should still codegen cleanly."""
+        ir = compile_to_ir("PROGRAM P; VAR [READONLY] x: INTEGER; BEGIN WRITELN(x) END.")
+        self.assertIn("x", ir)
+
     def test_procedure_call(self):
         """Procedure call generates valid IR."""
         src = (

@@ -301,16 +301,20 @@ class Codegen:
     def codegen_var_decl(self, decl: VarDecl) -> None:
         """Codegen for VAR declaration."""
         llvm_type = self.llvm_type(decl.type_expr)
+        attrs = {attr.upper() for attr in getattr(decl, 'attributes', [])}
+        is_static = 'STATIC' in attrs
 
-        if self.builder:
+        if self.builder and not is_static:
             # Local variable (inside a function)
             for name in decl.names:
                 alloca = self.builder.alloca(llvm_type, name=name)
                 self.scope.define(name, alloca, decl.type_expr)
         else:
-            # Global variable - define with a zero initializer
+            # Static or global variable - define with a zero initializer
+            prefix = self.current_function.name if self.current_function else 'global'
             for name in decl.names:
-                global_var = ir.GlobalVariable(self.module, llvm_type, name=name)
+                gv_name = name if not self.builder else f'{prefix}.{name}'
+                global_var = ir.GlobalVariable(self.module, llvm_type, name=gv_name)
                 global_var.initializer = self.zero_initializer(llvm_type)
                 self.scope.define(name, global_var, decl.type_expr)
 
@@ -333,6 +337,9 @@ class Codegen:
 
         # Create function
         func = ir.Function(self.module, func_type, name=decl.name)
+        attrs = {attr.upper() for attr in getattr(decl, 'attributes', [])}
+        if attrs.intersection({'PUBLIC', 'EXTERN', 'EXTERNAL'}):
+            func.linkage = 'external'
         self.proc_param_modes[decl.name.lower()] = flat_modes
         self.scope.define(decl.name, func, None)
 
@@ -393,6 +400,9 @@ class Codegen:
 
         # Create function
         func = ir.Function(self.module, func_type, name=decl.name)
+        attrs = {attr.upper() for attr in getattr(decl, 'attributes', [])}
+        if attrs.intersection({'PUBLIC', 'EXTERN', 'EXTERNAL'}):
+            func.linkage = 'external'
         self.proc_param_modes[decl.name.lower()] = flat_modes
         self.scope.define(decl.name, func, decl.return_type)
 

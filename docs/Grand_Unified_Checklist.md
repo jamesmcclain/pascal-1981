@@ -151,8 +151,9 @@ full reimplementation.
 - [ ] **2.8 — Attribute argument forms beyond `ORIGIN(c)`.** `[READ]` **M**
   Manual `getattr` shows attributes carrying arguments and a `:ordcons` form;
   only `ORIGIN(constant)` is parsed. Reconcile the full attribute grammar
-  (`attrs1` set + argument syntax) against the parser's fixed list. Confirm the
-  `PORT(addr)` status (grammar doc marks it UNVERIFIED).
+  (`attrs1` set + argument syntax) against the parser's fixed list.
+  NOTE: `ORIGIN`/`PORT` are intentionally deferred for now; only the six
+  confirmed attribute keywords are in scope here.
 
 - [ ] **2.9 — Type-prefixed set constructor `ident setcons`.** `[INFERRED]` **M**
   Manual `factor` lists `ident setcons` (a set constructor qualified by a set

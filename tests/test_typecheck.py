@@ -111,6 +111,24 @@ class TestTypeCompatibility(unittest.TestCase):
         self.assertFalse(bad.success)
         self.assertTrue(any("Cannot assign" in e.message for e in bad.errors))
 
+    def test_readonly_variable_is_immutable(self):
+        """READONLY variables must reject assignment."""
+        result = typecheck_source("PROGRAM P; VAR [READONLY] x: INTEGER; BEGIN x := 1 END.")
+        self.assertFalse(result.success)
+        self.assertTrue(any("immutable" in e.message.lower() for e in result.errors))
+
+    def test_pure_function_rejects_var_parameters(self):
+        """PURE functions cannot take VAR/VARS parameters."""
+        result = typecheck_source("PROGRAM P; FUNCTION F(VAR x: INTEGER): INTEGER [PURE]; BEGIN F := x END; BEGIN END.")
+        self.assertFalse(result.success)
+        self.assertTrue(any("PURE function" in e.message for e in result.errors))
+
+    def test_pure_procedure_is_rejected(self):
+        """PURE is only valid on functions."""
+        result = typecheck_source("PROGRAM P; PROCEDURE P1 [PURE]; BEGIN END; BEGIN END.")
+        self.assertFalse(result.success)
+        self.assertTrue(any("PURE is only valid on functions" in e.message for e in result.errors))
+
 
 class TestControlFlow(unittest.TestCase):
     """Control flow type validation (IF, WHILE, FOR, REPEAT, CASE)."""
