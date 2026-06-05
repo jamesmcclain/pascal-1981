@@ -21,7 +21,7 @@ from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt,
 from ast_nodes import LStringType as ASTLStringType, RecordType as ASTRecordType, SetType as ASTSetType, SubrangeType as ASTSubrangeType
 from ast_nodes import (RangeExpr, RepeatStmt, ReturnStmt, Selector, SetConstructor, SizeofExpr, Statement, StringLiteral, TypeDecl, UnaryOp, UseClause, VarDecl, WhileStmt)
 from symbol_table import SourceLocation, Symbol, SymbolTable
-from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, FunctionType, LStringType, PointerType, ProcedureType, RecordType, SetType, StringType, Type,
+from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, FileType, FunctionType, LStringType, PointerType, ProcedureType, RecordType, SetType, StringType, Type,
                          binary_op_result_type, can_assign, unary_op_result_type)
 
 
@@ -89,6 +89,14 @@ class PascalTypeChecker(TypeChecker):
         # Predeclared constants.
         self.symbol_table.define('MAXINT', Symbol(name='MAXINT', type=INTEGER_TYPE, kind='const', is_mutable=False))
         self.symbol_table.define('MAXWORD', Symbol(name='MAXWORD', type=WORD_TYPE, kind='const', is_mutable=False))
+        self.symbol_table.define('NULL', Symbol(name='NULL', type=LStringType(0), kind='const', is_mutable=False))
+
+        # Predeclared file/type names.
+        text_type = FileType(CHAR_TYPE)
+        self.symbol_table.define('TEXT', Symbol(name='TEXT', type=text_type, kind='type', is_mutable=False))
+        self.symbol_table.define('INPUT', Symbol(name='INPUT', type=text_type, kind='var', is_mutable=False))
+        self.symbol_table.define('OUTPUT', Symbol(name='OUTPUT', type=text_type, kind='var', is_mutable=False))
+        self.symbol_table.define('STRING', Symbol(name='STRING', type=StringType(256), kind='type', is_mutable=False))
 
         # ABS and SQRT are handled as special built-ins in type inference/codegen.
         # LENGTH is not part of the manual's predeclared list; keep it out until

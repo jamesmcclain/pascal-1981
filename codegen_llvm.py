@@ -832,6 +832,16 @@ class Codegen:
             return ir.Constant(llvm_type, 0)
         return ir.Constant(llvm_type, None)
 
+    def null_lstring_ptr(self) -> ir.Value:
+        """Return a pointer to the empty LSTRING constant."""
+        if not hasattr(self, '_null_lstring_global'):
+            empty = ir.Constant(ir.ArrayType(ir.IntType(8), 1), bytearray(b'\0'))
+            self._null_lstring_global = ir.GlobalVariable(self.module, empty.type, name=self.unique_name('nullstr'))
+            self._null_lstring_global.initializer = empty
+            self._null_lstring_global.global_constant = True
+        zero = ir.Constant(ir.IntType(32), 0)
+        return self.builder.gep(self._null_lstring_global, [zero, zero])
+
     def get_type_size(self, t: Type) -> int:
         """Size in bytes of an AST type node (consults constants for bounds)."""
         if isinstance(t, BuiltinType):
@@ -962,6 +972,8 @@ class Codegen:
             key = expr.name.upper()
             if key in self.constants:
                 return ir.Constant(ir.IntType(32), self.constants[key])
+            if key == 'NULL':
+                return self.null_lstring_ptr()
             symbol = self.scope.lookup(expr.name) or self.scope.lookup(key)
             if not symbol:
                 raise CodegenError(f'Undefined variable: {expr.name}')

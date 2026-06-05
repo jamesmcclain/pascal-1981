@@ -160,6 +160,19 @@ class SetType(Type):
 
 
 @dataclass
+class FileType(Type):
+    """File type placeholder: FILE OF element_type."""
+
+    element_type: Type
+
+    def __str__(self) -> str:
+        return f"FILE OF {self.element_type}"
+
+    def equivalent_to(self, other: Type) -> bool:
+        return isinstance(other, FileType) and self.element_type.equivalent_to(other.element_type)
+
+
+@dataclass
 class PointerType(Type):
     """Pointer/address type."""
 

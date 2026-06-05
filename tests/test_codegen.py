@@ -100,6 +100,13 @@ class TestCodegenIR(unittest.TestCase):
         self.assertIn("2147483647", ir)
         self.assertIn("65535", ir)
 
+    def test_null_lowers_as_empty_string_pointer(self):
+        """NULL lowers to a pointer to the empty LSTRING constant."""
+        src = "PROGRAM P; VAR s: LSTRING(10); BEGIN s := NULL END."
+        ir = compile_to_ir(src)
+        self.assertIn("nullstr", ir)
+        self.assertIn("i8*", ir)
+
     def test_variable_assignment(self):
         """Variable assignment generates valid IR."""
         src = "PROGRAM P; VAR x: INTEGER; BEGIN x := 42; WRITELN(x) END."

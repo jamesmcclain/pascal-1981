@@ -187,15 +187,11 @@ Cheapest coverage of the manual's predeclared list. Pure registration work.
 - [x] **3.2 — `TRUE` / `FALSE` as predeclared (audit).** `[OBSERVED]` **XS**
   Confirmed the current modeling is intentional: `TRUE`/`FALSE` stay lexer `BOOLEAN_LITERAL`s rather than re-definable identifiers. That matches the parser/typechecker/codegen path already in use, and keeps boolean literals distinct from ordinary names. Proven by the existing parser/typecheck/codegen boolean tests.
 
-- [ ] **3.3 — `NULL` (empty/super-array constant).** `[OBSERVED]` **S**
-  Listed under Super Array Type Feature. Not present. Confirm exact semantics
-  (relationship to `NIL`, to zero-length strings) before wiring. `[INFERRED]`
-  on semantics.
+- [x] **3.3 — `NULL` (empty/super-array constant).** `[OBSERVED]` **S**
+  Implemented `NULL` as the predeclared empty `LSTRING(0)` constant, distinct from pointer `NIL`. Type checking accepts it for compatible string storage, and codegen lowers it to a pointer to a shared empty string constant. Proven by `python -m unittest tests.test_parser tests.test_typecheck tests.test_codegen`.
 
-- [ ] **3.4 — Standard type / file names `TEXT`, `INPUT`, `OUTPUT`, `STRING`.** `[OBSERVED]` **S**
-  None present as predeclared. `TEXT`/`INPUT`/`OUTPUT` only become meaningful with
-  file I/O (section 8); `STRING` ties to the string story (section 7). Register
-  the names now, flesh out behavior later.
+- [x] **3.4 — Standard type / file names `TEXT`, `INPUT`, `OUTPUT`, `STRING`.** `[OBSERVED]` **S**
+  Registered the names in the builtin symbol table so the parser/type checker can resolve them as predeclared identifiers. `TEXT` is modeled as a `TEXT OF CHAR` file type placeholder; `INPUT`/`OUTPUT` alias that placeholder; `STRING` is predeclared as a type name alongside the existing `STRING(n)` syntax. Proven by `python -m unittest tests.test_typecheck tests.test_codegen`.
 
 ---
 

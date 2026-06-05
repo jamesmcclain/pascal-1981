@@ -414,7 +414,9 @@ file_type = "FILE" "OF" type ;
 (* [DOCUMENTED] STRING(n) is fixed string storage; LSTRING(n) is
    length-prefixed string storage. The current backend represents both as
    byte pointers and enforces literal-capacity compatibility in type checking;
-   the string runtime intrinsics remain tracked separately in section 7. *)
+   the string runtime intrinsics remain tracked separately in section 7.
+   The bare identifier STRING is also predeclared as a type name, matching
+   the checklist's registration of the standard names. *)
 string_type  = "STRING"  "(" constant ")" ;
 lstring_type = "LSTRING" "(" constant ")" ;
 

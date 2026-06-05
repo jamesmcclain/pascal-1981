@@ -46,6 +46,17 @@ class TestVariableScope(unittest.TestCase):
         result = typecheck_source("PROGRAM P; VAR a: STRING(10); VAR b: LSTRING(10); BEGIN END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
+    def test_null_is_the_empty_lstring_constant(self):
+        """NULL is the predeclared empty LSTRING constant."""
+        result = typecheck_source("PROGRAM P; VAR s: LSTRING(10); BEGIN s := NULL END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_null_is_not_a_pointer_constant(self):
+        """NULL is a string constant, not a pointer constant."""
+        result = typecheck_source("PROGRAM P; VAR p: ^INTEGER; BEGIN p := NULL END.")
+        self.assertFalse(result.success)
+        self.assertIn("Cannot assign", " ".join(str(e) for e in result.errors))
+
     def test_string_literal_assigns_when_capacity_fits(self):
         """String literals can initialize compatible STRING/LSTRING storage."""
         result = typecheck_source("PROGRAM P; VAR a: STRING(10); VAR b: LSTRING(10); BEGIN a := 'abc'; b := 'abc' END.")
@@ -60,6 +71,11 @@ class TestVariableScope(unittest.TestCase):
     def test_predeclared_maxint_maxword_constants(self):
         """MAXINT and MAXWORD are predeclared constants."""
         result = typecheck_source("PROGRAM P; CONST hi = MAXINT; BEGIN WRITELN(hi); WRITELN(MAXWORD) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_predeclared_text_input_output_string_names(self):
+        """TEXT, INPUT, OUTPUT, and STRING are predeclared names."""
+        result = typecheck_source("PROGRAM P; VAR f: TEXT; BEGIN WRITELN(INPUT); WRITELN(OUTPUT); WRITELN(f) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_shadowing_nested_scope(self):
