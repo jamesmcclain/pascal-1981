@@ -184,10 +184,8 @@ Cheapest coverage of the manual's predeclared list. Pure registration work.
 - [x] **3.1 — Predeclared constants `MAXINT`, `MAXWORD`.** `[OBSERVED]` **XS**
   Added `MAXINT`/`MAXWORD` to the builtin symbol table and codegen constant map as folded immutable constants. Proven by `python -m unittest tests.test_typecheck tests.test_codegen`.
 
-- [ ] **3.2 — `TRUE` / `FALSE` as predeclared (audit).** `[OBSERVED]` **XS**
-  Already lexer `BOOLEAN_LITERAL`s; confirm that's the desired modeling for a
-  faithful reimplementation (manual lists them as predeclared identifiers, i.e.
-  re-definable). Probably fine as-is — just confirm and check off.
+- [x] **3.2 — `TRUE` / `FALSE` as predeclared (audit).** `[OBSERVED]` **XS**
+  Confirmed the current modeling is intentional: `TRUE`/`FALSE` stay lexer `BOOLEAN_LITERAL`s rather than re-definable identifiers. That matches the parser/typechecker/codegen path already in use, and keeps boolean literals distinct from ordinary names. Proven by the existing parser/typecheck/codegen boolean tests.
 
 - [ ] **3.3 — `NULL` (empty/super-array constant).** `[OBSERVED]` **S**
   Listed under Super Array Type Feature. Not present. Confirm exact semantics
