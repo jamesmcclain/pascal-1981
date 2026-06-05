@@ -93,6 +93,13 @@ class TestCodegenIR(unittest.TestCase):
         # IR should contain some basic structure
         self.assertIn("define", ir)
 
+    def test_predeclared_maxint_maxword_constants(self):
+        """MAXINT and MAXWORD lower as folded constants."""
+        src = "PROGRAM P; BEGIN WRITELN(MAXINT); WRITELN(MAXWORD) END."
+        ir = compile_to_ir(src)
+        self.assertIn("2147483647", ir)
+        self.assertIn("65535", ir)
+
     def test_variable_assignment(self):
         """Variable assignment generates valid IR."""
         src = "PROGRAM P; VAR x: INTEGER; BEGIN x := 42; WRITELN(x) END."

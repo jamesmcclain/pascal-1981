@@ -181,8 +181,8 @@ full reimplementation.
 
 Cheapest coverage of the manual's predeclared list. Pure registration work.
 
-- [ ] **3.1 — Predeclared constants `MAXINT`, `MAXWORD`.** `[OBSERVED]` **XS**
-  Absent from lexer/typechecker/codegen. Register as folded constants.
+- [x] **3.1 — Predeclared constants `MAXINT`, `MAXWORD`.** `[OBSERVED]` **XS**
+  Added `MAXINT`/`MAXWORD` to the builtin symbol table and codegen constant map as folded immutable constants. Proven by `python -m unittest tests.test_typecheck tests.test_codegen`.
 
 - [ ] **3.2 — `TRUE` / `FALSE` as predeclared (audit).** `[OBSERVED]` **XS**
   Already lexer `BOOLEAN_LITERAL`s; confirm that's the desired modeling for a

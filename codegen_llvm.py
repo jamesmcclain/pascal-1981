@@ -84,7 +84,10 @@ class Codegen:
         self.scope = Scope()  # global scope
         self.current_function: Optional[ir.Function] = None
         self.current_return_block: Optional[ir.BasicBlock] = None
-        self.constants: Dict[str, int] = {}  # compile-time constant values, keyed UPPER
+        self.constants: Dict[str, int] = {  # compile-time constant values, keyed UPPER
+            'MAXINT': 2147483647,
+            'MAXWORD': 65535,
+        }
         self.type_aliases: Dict[str, Type] = {}  # compile-time type aliases, keyed UPPER
         self.current_interface_decls: Dict[str, Declaration] = {}
         self.proc_param_modes: Dict[str, List[Optional[str]]] = {}

@@ -86,6 +86,10 @@ class PascalTypeChecker(TypeChecker):
         readln_type = ProcedureType('READLN', [])
         self.symbol_table.define('READLN', Symbol(name='READLN', type=readln_type, kind='procedure', is_mutable=False))
 
+        # Predeclared constants.
+        self.symbol_table.define('MAXINT', Symbol(name='MAXINT', type=INTEGER_TYPE, kind='const', is_mutable=False))
+        self.symbol_table.define('MAXWORD', Symbol(name='MAXWORD', type=WORD_TYPE, kind='const', is_mutable=False))
+
         # ABS and SQRT are handled as special built-ins in type inference/codegen.
         # LENGTH is not part of the manual's predeclared list; keep it out until
         # a dialect decision puts it back in.

@@ -41,6 +41,11 @@ class TestVariableScope(unittest.TestCase):
         result = typecheck_source("PROGRAM P; CONST x = 42; BEGIN END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
+    def test_predeclared_maxint_maxword_constants(self):
+        """MAXINT and MAXWORD are predeclared constants."""
+        result = typecheck_source("PROGRAM P; CONST hi = MAXINT; BEGIN WRITELN(hi); WRITELN(MAXWORD) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
     def test_shadowing_nested_scope(self):
         """Variable shadowing in nested scope is allowed."""
         result = typecheck_source(
