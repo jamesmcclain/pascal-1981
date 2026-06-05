@@ -41,6 +41,22 @@ class TestVariableScope(unittest.TestCase):
         result = typecheck_source("PROGRAM P; CONST x = 42; BEGIN END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
+    def test_lstring_and_string_types_resolve(self):
+        """STRING(n) and LSTRING(n) type annotations resolve."""
+        result = typecheck_source("PROGRAM P; VAR a: STRING(10); VAR b: LSTRING(10); BEGIN END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_string_literal_assigns_when_capacity_fits(self):
+        """String literals can initialize compatible STRING/LSTRING storage."""
+        result = typecheck_source("PROGRAM P; VAR a: STRING(10); VAR b: LSTRING(10); BEGIN a := 'abc'; b := 'abc' END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_string_literal_assignment_rejects_overflow(self):
+        """String literal assignment rejects destinations that are too small."""
+        result = typecheck_source("PROGRAM P; VAR a: STRING(2); BEGIN a := 'abc' END.")
+        self.assertFalse(result.success)
+        self.assertIn("Cannot assign", " ".join(str(e) for e in result.errors))
+
     def test_predeclared_maxint_maxword_constants(self):
         """MAXINT and MAXWORD are predeclared constants."""
         result = typecheck_source("PROGRAM P; CONST hi = MAXINT; BEGIN WRITELN(hi); WRITELN(MAXWORD) END.")

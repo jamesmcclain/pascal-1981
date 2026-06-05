@@ -75,6 +75,32 @@ class CharType(Type):
 
 
 @dataclass
+class StringType(Type):
+    """The STRING(n) type: fixed-length string storage."""
+
+    max_len: int
+
+    def __str__(self) -> str:
+        return f"STRING({self.max_len})"
+
+    def equivalent_to(self, other: Type) -> bool:
+        return isinstance(other, StringType) and self.max_len == other.max_len
+
+
+@dataclass
+class LStringType(Type):
+    """The LSTRING(n) type: length-prefixed string storage."""
+
+    max_len: int
+
+    def __str__(self) -> str:
+        return f"LSTRING({self.max_len})"
+
+    def equivalent_to(self, other: Type) -> bool:
+        return isinstance(other, LStringType) and self.max_len == other.max_len
+
+
+@dataclass
 class ArrayType(Type):
     """Array type: ARRAY[lower..upper] OF element_type."""
 
@@ -211,7 +237,8 @@ def can_assign(from_type: Type, to_type: Type) -> bool:
     We keep the rule narrow: exact matches are allowed, plus the common
     INTEGER-to-REAL widening used by assignments, parameters, and returns.
     Sets follow exact element-type equivalence, with the empty set represented
-    by a compatible SetType.
+    by a compatible SetType. String values may flow between STRING(n) and
+    LSTRING(n) when the source fits in the destination capacity.
     """
     if from_type.equivalent_to(to_type):
         return True
@@ -219,6 +246,8 @@ def can_assign(from_type: Type, to_type: Type) -> bool:
         return True
     if isinstance(from_type, SetType) and isinstance(to_type, SetType):
         return from_type.element_type.equivalent_to(to_type.element_type)
+    if isinstance(from_type, (StringType, LStringType)) and isinstance(to_type, (StringType, LStringType)):
+        return from_type.max_len <= to_type.max_len
     return False
 
 

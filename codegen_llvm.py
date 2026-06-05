@@ -19,6 +19,7 @@ from llvmlite.ir import IRBuilder
 
 from ast_nodes import *
 from parser import parse_file
+from type_system import LStringType as ResolvedLStringType, StringType as ResolvedStringType
 
 
 class CodegenError(Exception):
@@ -123,6 +124,8 @@ class Codegen:
                 raise CodegenError(f'Unknown built-in type: {type_expr.name}')
         elif isinstance(type_expr, NamedType):
             name_up = type_expr.name.upper()
+            if name_up in {'STRING', 'LSTRING'}:
+                return ir.PointerType(ir.IntType(8))
             if name_up == 'ADRMEM':
                 return ir.PointerType(ir.IntType(8))
             elif name_up == 'INTEGER':
@@ -140,6 +143,8 @@ class Codegen:
             return ir.IntType(32)
         elif isinstance(type_expr, SetType):
             return self.set_llvm_type()
+        elif isinstance(type_expr, (LStringType, ResolvedStringType, ResolvedLStringType)):
+            return ir.PointerType(ir.IntType(8))
         elif isinstance(type_expr, SubrangeType):
             if type_expr.host:
                 return self.llvm_type(NamedType(type_expr.host, None))
@@ -832,9 +837,13 @@ class Codegen:
         if isinstance(t, BuiltinType):
             return self._scalar_size(t.name)
         elif isinstance(t, NamedType):
+            if t.name.upper() in {'STRING', 'LSTRING'}:
+                return (int(t.param) if isinstance(t.param, int) else 256) + 1
             return self._scalar_size(t.name)
         elif isinstance(t, SetType):
             return 32
+        elif isinstance(t, (LStringType, ResolvedStringType, ResolvedLStringType)):
+            return max(1, getattr(t, 'max_len', 256)) + 1
         elif isinstance(t, SubrangeType):
             return self._scalar_size(t.host) if t.host else 4
         elif isinstance(t, ArrayType):

@@ -18,10 +18,10 @@ from ast_nodes import AdrExpr, AdsExpr
 from ast_nodes import ArrayType as ASTArrayType
 from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, CharLiteral, ConstDecl, Designator, Expression, ForStmt, FuncCall, FuncDecl, Identifier, IfStmt,
                        ImplementationUnit, InterfaceUnit, IntLiteral, LabelStmt, ModuleUnit, NamedType, NilLiteral, PointerType as ASTPointerType, ProcCallStmt, ProcDecl, ProgramUnit, RealLiteral, WriteArg)
-from ast_nodes import RecordType as ASTRecordType, SetType as ASTSetType, SubrangeType as ASTSubrangeType
+from ast_nodes import LStringType as ASTLStringType, RecordType as ASTRecordType, SetType as ASTSetType, SubrangeType as ASTSubrangeType
 from ast_nodes import (RangeExpr, RepeatStmt, ReturnStmt, Selector, SetConstructor, SizeofExpr, Statement, StringLiteral, TypeDecl, UnaryOp, UseClause, VarDecl, WhileStmt)
 from symbol_table import SourceLocation, Symbol, SymbolTable
-from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, FunctionType, PointerType, ProcedureType, RecordType, SetType, Type,
+from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, FunctionType, LStringType, PointerType, ProcedureType, RecordType, SetType, StringType, Type,
                          binary_op_result_type, can_assign, unary_op_result_type)
 
 
@@ -935,6 +935,12 @@ class PascalTypeChecker(TypeChecker):
                             self.error(f"Argument {i+1} type mismatch: expected {param_type}, got {arg_type}", stmt)
             return
 
+    def _decode_pascal_string(self, value: str) -> str:
+        """Return the runtime contents represented by a Pascal string token."""
+        if value.startswith("'") and value.endswith("'"):
+            value = value[1:-1]
+        return value.replace("''", "'")
+
     def infer_expression_type(self, expr: Expression) -> Optional[Type]:
         """Infer the type of an expression."""
         if isinstance(expr, IntLiteral):
@@ -948,7 +954,7 @@ class PascalTypeChecker(TypeChecker):
         elif isinstance(expr, NilLiteral):
             return PointerType(CHAR_TYPE)
         elif isinstance(expr, StringLiteral):
-            return PointerType(CHAR_TYPE)
+            return LStringType(len(self._decode_pascal_string(expr.value)))
         elif isinstance(expr, SetConstructor):
             declared_set_type: Optional[SetType] = None
             if expr.type_name:
@@ -1157,11 +1163,19 @@ class PascalTypeChecker(TypeChecker):
                 return CHAR_TYPE
             elif name == 'ADRMEM':
                 return PointerType(CHAR_TYPE)
+            elif name == 'STRING':
+                max_len = int(type_expr.param) if isinstance(type_expr.param, int) else 256
+                return StringType(max_len)
+            elif name == 'LSTRING':
+                max_len = int(type_expr.param) if isinstance(type_expr.param, int) else 256
+                return LStringType(max_len)
             else:
                 sym = self.symbol_table.lookup(type_expr.name)
                 if sym and sym.kind == 'type':
                     return sym.type
                 return None
+        elif isinstance(type_expr, ASTLStringType):
+            return LStringType(type_expr.max_len)
         elif isinstance(type_expr, ASTSetType):
             base_type = self.resolve_type(type_expr.base)
             return SetType(base_type) if base_type else None

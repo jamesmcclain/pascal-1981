@@ -252,8 +252,8 @@ Gated on REAL codegen depth (see note at end).
 All depend on the `LSTRING` / `STRING` / `SUPER ARRAY` memory layout. Settle that
 first or these will be built on sand.
 
-- [ ] **7.1 — Decide and implement the `LSTRING`/`STRING` representation.** `[INFERRED]` **L**
-  Length-prefixed (`LSTRING`) vs fixed (`STRING`) vs super-array. Blocks 7.2–7.4.
+- [x] **7.1 — Decide and implement the `LSTRING`/`STRING` representation.** `[INFERRED]` **L**
+  Decided on distinct semantic types: fixed-capacity `STRING(n)` and length-prefixed `LSTRING(n)`, both currently lowered as byte-pointer storage on the LLVM target. Type checking resolves both forms, infers string literals as capacity-bearing `LSTRING`, and enforces literal capacity on assignment. Proven by `python -m unittest tests.test_parser tests.test_typecheck tests.test_codegen`.
 - [ ] **7.2 — `CONCAT`, `COPYSTR`, `COPYLST`.** `[READ]` **M** String build/copy.
 - [ ] **7.3 — `INSERT`, `DELETE`, `POSITN`.** `[READ]` **M** Edit/search.
 - [ ] **7.4 — `SCANEQ`, `SCANNE`.** `[READ]` **M** Scan-while-equal / not-equal.

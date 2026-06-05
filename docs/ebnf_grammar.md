@@ -361,6 +361,7 @@ type =
     | pointer_type
     | set_type
     | file_type
+    | string_type
     | lstring_type
     | type_designator   (* super array instantiation, e.g. VECT(10) *)
     | identifier ;      (* named type *)
@@ -410,6 +411,11 @@ set_type = "SET" "OF" ( index_range | identifier ) ;
    Runtime I/O is unverified due to linker library path issue. *)
 file_type = "FILE" "OF" type ;
 
+(* [DOCUMENTED] STRING(n) is fixed string storage; LSTRING(n) is
+   length-prefixed string storage. The current backend represents both as
+   byte pointers and enforces literal-capacity compatibility in type checking;
+   the string runtime intrinsics remain tracked separately in section 7. *)
+string_type  = "STRING"  "(" constant ")" ;
 lstring_type = "LSTRING" "(" constant ")" ;
 
 
