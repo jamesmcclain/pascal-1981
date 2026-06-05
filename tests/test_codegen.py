@@ -107,6 +107,32 @@ class TestCodegenIR(unittest.TestCase):
         self.assertIn("nullstr", ir)
         self.assertIn("i8*", ir)
 
+    def test_pred_lowers_to_subtraction(self):
+        """PRED lowers to integer subtraction by one."""
+        src = "PROGRAM P; BEGIN WRITELN(PRED(3)) END."
+        ir = compile_to_ir(src)
+        self.assertIn("sub i32", ir)
+
+    def test_sqr_lowers_to_multiply(self):
+        """SQR lowers to multiplication of the operand by itself."""
+        src = "PROGRAM P; BEGIN WRITELN(SQR(3)) END."
+        ir = compile_to_ir(src)
+        self.assertIn("mul i32", ir)
+
+    def test_upper_lower_lowers_to_array_bounds(self):
+        """UPPER and LOWER lower to constant array bound values."""
+        src = "PROGRAM P; VAR a: ARRAY[1..10] OF INTEGER; BEGIN WRITELN(UPPER(a)); WRITELN(LOWER(a)) END."
+        ir = compile_to_ir(src)
+        self.assertIn("10", ir)
+        self.assertIn("1", ir)
+
+    def test_hibyte_lobyte_lowers_to_byte_extraction(self):
+        """HIBYTE and LOBYTE lower to shifts and truncation."""
+        src = "PROGRAM P; BEGIN WRITELN(HIBYTE(4660)); WRITELN(LOBYTE(4660)) END."
+        ir = compile_to_ir(src)
+        self.assertIn("lshr", ir)
+        self.assertIn("trunc", ir)
+
     def test_variable_assignment(self):
         """Variable assignment generates valid IR."""
         src = "PROGRAM P; VAR x: INTEGER; BEGIN x := 42; WRITELN(x) END."

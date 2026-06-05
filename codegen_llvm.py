@@ -967,6 +967,24 @@ class Codegen:
                 # An AST Type node was supplied directly
                 size_val = self.get_type_size(expr.target)
             return ir.Constant(ir.IntType(16), size_val)  # WORD is 16-bit
+        elif isinstance(expr, UpperExpr) or isinstance(expr, LowerExpr):
+            symbol = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
+            if not symbol or symbol.type_expr is None:
+                raise CodegenError(f'Undefined variable: {expr.name}')
+            ty = symbol.type_expr
+            if hasattr(ty, 'index_range'):
+                lower = ty.index_range.low.value if hasattr(ty.index_range.low, 'value') else None
+                upper_expr = ty.index_range.high
+                upper = None if upper_expr is None else (upper_expr.value if hasattr(upper_expr, 'value') else None)
+            elif hasattr(ty, 'lower_bound') and hasattr(ty, 'upper_bound'):
+                lower = ty.lower_bound
+                upper = ty.upper_bound
+            else:
+                raise CodegenError(f"{type(expr).__name__[:-4].upper()} expects an array variable")
+            bound = upper if isinstance(expr, UpperExpr) else lower
+            if bound is None:
+                raise CodegenError(f"{type(expr).__name__[:-4].upper()} could not resolve bound for {expr.name}")
+            return ir.Constant(ir.IntType(32), bound)
         elif isinstance(expr, Identifier):
             # A named constant used as a value (e.g. FOR i := 0 TO size)
             key = expr.name.upper()
@@ -1224,6 +1242,10 @@ class Codegen:
             val = self.codegen_expr(expr.args[0])
             one = ir.Constant(ir.IntType(32), 1)
             return self.builder.add(val, one)
+        elif lookup_name == 'PRED':
+            val = self.codegen_expr(expr.args[0])
+            one = ir.Constant(ir.IntType(32), 1)
+            return self.builder.sub(val, one)
         elif lookup_name == 'ABS':
             val = self.codegen_expr(expr.args[0])
             if isinstance(val.type, ir.DoubleType):
@@ -1237,6 +1259,19 @@ class Codegen:
                 neg = self.builder.sub(zero, val)
                 return self.builder.select(is_neg, neg, val)
             raise CodegenError(f'ABS not supported for type {val.type}')
+        elif lookup_name == 'SQR':
+            val = self.codegen_expr(expr.args[0])
+            if isinstance(val.type, ir.DoubleType):
+                return self.builder.fmul(val, val)
+            if isinstance(val.type, ir.IntType):
+                return self.builder.mul(val, val)
+            raise CodegenError(f'SQR not supported for type {val.type}')
+        elif lookup_name in {'HIBYTE', 'LOBYTE'}:
+            val = self.codegen_expr(expr.args[0])
+            if not isinstance(val.type, ir.IntType):
+                raise CodegenError(f'{lookup_name} not supported for type {val.type}')
+            shifted = self.builder.lshr(val, ir.Constant(val.type, 8)) if lookup_name == 'HIBYTE' else val
+            return self.builder.trunc(shifted, ir.IntType(8))
         elif lookup_name == 'SQRT':
             val = self.codegen_expr(expr.args[0])
             if isinstance(val.type, ir.IntType):

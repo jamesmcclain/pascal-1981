@@ -240,7 +240,7 @@ class EmptyStmt(ASTNode):
 # ============================================================================
 
 Expression = Union['BinOp', 'UnaryOp', 'IntLiteral', 'RealLiteral', 'CharLiteral', 'StringLiteral', 'BoolLiteral', 'NilLiteral', 'Identifier', 'Designator', 'FuncCall', 'SetConstructor',
-                   'AdrExpr', 'SizeofExpr', 'UpperExpr', 'RangeExpr']
+                   'AdrExpr', 'SizeofExpr', 'UpperExpr', 'LowerExpr', 'RangeExpr']
 
 
 @dataclass
@@ -326,6 +326,11 @@ class SizeofExpr(ASTNode):
 
 @dataclass
 class UpperExpr(ASTNode):
+    name: str
+
+
+@dataclass
+class LowerExpr(ASTNode):
     name: str
 
 

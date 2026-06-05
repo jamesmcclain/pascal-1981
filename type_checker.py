@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 from ast_nodes import AdrExpr, AdsExpr
 from ast_nodes import ArrayType as ASTArrayType
 from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, CharLiteral, ConstDecl, Designator, Expression, ForStmt, FuncCall, FuncDecl, Identifier, IfStmt,
-                       ImplementationUnit, InterfaceUnit, IntLiteral, LabelStmt, ModuleUnit, NamedType, NilLiteral, PointerType as ASTPointerType, ProcCallStmt, ProcDecl, ProgramUnit, RealLiteral, WriteArg)
+                       ImplementationUnit, InterfaceUnit, IntLiteral, LabelStmt, LowerExpr, ModuleUnit, NamedType, NilLiteral, PointerType as ASTPointerType, ProcCallStmt, ProcDecl, ProgramUnit, RealLiteral, UpperExpr, WriteArg)
 from ast_nodes import LStringType as ASTLStringType, RecordType as ASTRecordType, SetType as ASTSetType, SubrangeType as ASTSubrangeType
 from ast_nodes import (RangeExpr, RepeatStmt, ReturnStmt, Selector, SetConstructor, SizeofExpr, Statement, StringLiteral, TypeDecl, UnaryOp, UseClause, VarDecl, WhileStmt)
 from symbol_table import SourceLocation, Symbol, SymbolTable
@@ -114,9 +114,17 @@ class PascalTypeChecker(TypeChecker):
         odd_type = FunctionType('ODD', [('n', INTEGER_TYPE)], BOOLEAN_TYPE)
         self.symbol_table.define('ODD', Symbol(name='ODD', type=odd_type, kind='function', is_mutable=False))
 
-        # SUCC function (returns INTEGER)
+        # SUCC / PRED functions (returns INTEGER)
         succ_type = FunctionType('SUCC', [('n', INTEGER_TYPE)], INTEGER_TYPE)
         self.symbol_table.define('SUCC', Symbol(name='SUCC', type=succ_type, kind='function', is_mutable=False))
+        pred_type = FunctionType('PRED', [('n', INTEGER_TYPE)], INTEGER_TYPE)
+        self.symbol_table.define('PRED', Symbol(name='PRED', type=pred_type, kind='function', is_mutable=False))
+
+        # HIBYTE / LOBYTE functions (return CHAR)
+        hibyte_type = FunctionType('HIBYTE', [('n', INTEGER_TYPE)], CHAR_TYPE)
+        self.symbol_table.define('HIBYTE', Symbol(name='HIBYTE', type=hibyte_type, kind='function', is_mutable=False))
+        lobyte_type = FunctionType('LOBYTE', [('n', INTEGER_TYPE)], CHAR_TYPE)
+        self.symbol_table.define('LOBYTE', Symbol(name='LOBYTE', type=lobyte_type, kind='function', is_mutable=False))
 
     def check(self, ast: ASTNode) -> TypeCheckResult:
         """Main entry point for type checking."""
@@ -1020,6 +1028,16 @@ class PascalTypeChecker(TypeChecker):
         elif isinstance(expr, SizeofExpr):
             # Sizeof operator (sizeof var_name or type)
             return INTEGER_TYPE
+        elif isinstance(expr, UpperExpr) or isinstance(expr, LowerExpr):
+            sym = self.symbol_table.lookup(expr.name)
+            if not sym:
+                self.error(f"Undefined variable: {expr.name}", expr)
+                return None
+            ty = sym.type
+            if isinstance(ty, ArrayType):
+                return INTEGER_TYPE
+            self.error(f"Function '{type(expr).__name__[:-4].upper()}' expects an array variable", expr)
+            return None
         elif isinstance(expr, Identifier):
             sym = self.symbol_table.lookup(expr.name)
             if not sym:
@@ -1064,6 +1082,36 @@ class PascalTypeChecker(TypeChecker):
                     return REAL_TYPE
                 if arg_type:
                     self.error(f"Argument 1 type mismatch: expected INTEGER or REAL, got {arg_type}", expr)
+                return None
+            if lookup_name == 'SQR':
+                if len(expr.args) != 1:
+                    self.error(f"Function 'SQR' expects 1 argument, got {len(expr.args)}", expr)
+                    return None
+                arg_type = self.infer_expression_type(expr.args[0])
+                if arg_type in (INTEGER_TYPE, REAL_TYPE):
+                    return arg_type
+                if arg_type:
+                    self.error(f"Argument 1 type mismatch: expected INTEGER or REAL, got {arg_type}", expr)
+                return None
+            if lookup_name in {'SUCC', 'PRED'}:
+                if len(expr.args) != 1:
+                    self.error(f"Function '{lookup_name}' expects 1 argument, got {len(expr.args)}", expr)
+                    return None
+                arg_type = self.infer_expression_type(expr.args[0])
+                if arg_type == INTEGER_TYPE:
+                    return INTEGER_TYPE
+                if arg_type:
+                    self.error(f"Argument 1 type mismatch: expected INTEGER, got {arg_type}", expr)
+                return None
+            if lookup_name in {'HIBYTE', 'LOBYTE'}:
+                if len(expr.args) != 1:
+                    self.error(f"Function '{lookup_name}' expects 1 argument, got {len(expr.args)}", expr)
+                    return None
+                arg_type = self.infer_expression_type(expr.args[0])
+                if arg_type == INTEGER_TYPE:
+                    return CHAR_TYPE
+                if arg_type:
+                    self.error(f"Argument 1 type mismatch: expected INTEGER, got {arg_type}", expr)
                 return None
             sym = self.symbol_table.lookup(lookup_name) or self.symbol_table.lookup(expr.name)
             if not sym:

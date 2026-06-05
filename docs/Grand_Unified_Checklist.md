@@ -200,12 +200,16 @@ Cheapest coverage of the manual's predeclared list. Pure registration work.
 Single instruction or tiny fixed sequence; no allocation, no libc. Cheap, optimize
 well. This is where `CHR`/`ORD`/`ODD`/`SUCC`/`SIZEOF`/`UPPER`/`ADR` already live.
 
-- [ ] **4.1 — `PRED`.** `[READ]` **XS** Mirror of existing `SUCC` (`n-1`).
-- [ ] **4.2 — `SQR`.** `[READ]` **XS** `x*x`. Distinct from `SQRT` (6.x).
+- [x] **4.1 — `PRED`.** `[READ]` **XS** Mirror of existing `SUCC` (`n-1`).
+  - Done: registered `PRED` as a predeclared integer function and lowered it to integer subtraction in codegen. Proven by `python3 -m unittest tests.test_typecheck tests.test_codegen`.
+- [x] **4.2 — `SQR`.** `[READ]` **XS** `x*x`. Distinct from `SQRT` (6.x).
+  - Done: registered `SQR` as a predeclared integer/real intrinsic and lowered it to self-multiplication in codegen. Proven by `python3 -m unittest tests.test_typecheck tests.test_codegen`.
 - [ ] **4.3 — `FLOAT`.** `[READ]` **S** INTEGER→REAL (`sitofp`). Needs REAL codegen (see note).
 - [ ] **4.4 — `TRUNC` / `ROUND`.** `[READ]` **M** REAL→INTEGER (`fptosi`; `ROUND` adds rounding). Needs REAL codegen.
-- [ ] **4.5 — `LOWER`.** `[READ]` **S** Mirror of existing `UPPER` (super-array lower bound).
-- [ ] **4.6 — `HIBYTE` / `LOBYTE`.** `[READ]` **S** Shift + truncate to byte.
+- [x] **4.5 — `LOWER`.** `[READ]` **S** Mirror of existing `UPPER` (super-array lower bound).
+  - Done: added `LOWER` parsing, type checking, and codegen alongside `UPPER` so array bounds can be queried symmetrically. Proven by `python3 -m unittest tests.test_typecheck tests.test_codegen`.
+- [x] **4.6 — `HIBYTE` / `LOBYTE`.** `[READ]` **S** Shift + truncate to byte.
+  - Done: registered `HIBYTE`/`LOBYTE` as byte-extraction intrinsics and lowered them to shift/truncate codegen. Proven by `python3 -m unittest tests.test_typecheck tests.test_codegen`.
 - [ ] **4.7 — `WRD` / `BYWORD`.** `[INFERRED]` **M** Word conversions; confirm exact semantics from manual body first.
 - [ ] **4.8 — `RETYPE`.** `[INFERRED]` **M** Reinterpret cast (LLVM `bitcast`); needs care with type-checker rules. Confirm semantics.
 - [ ] **4.9 — `PACK` / `UNPACK`.** `[INFERRED]` **M** Packed-array (un)packing; inline for small, runtime loop for large. Depends on `PACKED` representation.

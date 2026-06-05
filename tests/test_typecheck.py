@@ -146,6 +146,28 @@ class TestTypeCompatibility(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertTrue(any("must name a set type" in e.message for e in result.errors))
 
+    def test_pred_typecheck(self):
+        """PRED accepts one INTEGER argument and returns INTEGER."""
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := PRED(3) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_sqr_typecheck(self):
+        """SQR accepts INTEGER/REAL and returns the same type."""
+        int_result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := SQR(3) END.")
+        self.assertTrue(int_result.success, msg=" ".join(str(e) for e in int_result.errors))
+        real_result = typecheck_source("PROGRAM P; VAR x: REAL; BEGIN x := SQR(1.5) END.")
+        self.assertTrue(real_result.success, msg=" ".join(str(e) for e in real_result.errors))
+
+    def test_upper_lower_typecheck(self):
+        """UPPER and LOWER accept array variables and return INTEGER bounds."""
+        result = typecheck_source("PROGRAM P; VAR a: ARRAY[1..10] OF INTEGER; BEGIN WRITELN(UPPER(a)); WRITELN(LOWER(a)) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_hibyte_lobyte_typecheck(self):
+        """HIBYTE and LOBYTE accept INTEGER arguments and return CHAR."""
+        result = typecheck_source("PROGRAM P; VAR x: CHAR; BEGIN x := HIBYTE(4660); x := LOBYTE(4660) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
     def test_abs_and_sqrt_typecheck(self):
         """ABS accepts INTEGER/REAL and SQRT returns REAL."""
         result = typecheck_source("PROGRAM P; VAR x: REAL; BEGIN x := SQRT(ABS(-5)) END.")
