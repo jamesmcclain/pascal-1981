@@ -1666,7 +1666,11 @@ class Codegen:
                               else ir.Constant(ir.IntType(32), string_max_len))
                 if not precision:  # Only add length if not already in precision
                     prefix += '.*'
-                    printf_args.insert(len(printf_args) - (1 if width else 0), length_arg)
+                    # printf consumes dynamic args as width, then precision,
+                    # then value. The implicit length IS the precision, so it
+                    # must follow any width arg already appended for this item
+                    # (appending puts it immediately before the value below).
+                    printf_args.append(length_arg)
                 suffix = 's'
             elif 'i32' in val_type_str:
                 suffix = 'd'

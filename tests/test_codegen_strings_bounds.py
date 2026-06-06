@@ -151,5 +151,33 @@ class TestLStringLengthSemantics(unittest.TestCase):
         self.assertEqual(out, "hi")
 
 
+@requires_exe
+class TestWriteFieldWidthOrdering(unittest.TestCase):
+    """printf dynamic args must be emitted width-then-precision.
+
+    Regression for the %*.*s arg-ordering bug: WRITE(s:w) for a string built a
+    %*.*s format but pushed the implicit length (which is the *precision*)
+    ahead of the field width, so width and precision were swapped at runtime.
+    A right-justified field-width write is the clean discriminator: with the
+    bug the value was unpadded; fixed, it is right-justified in the field.
+    """
+
+    def test_lstring_field_width_right_justifies(self):
+        # 'hi' in a field of width 6 -> 4 leading spaces. Under the old swap
+        # the args were [length=2, width=6], so printf saw width 2 / precision
+        # 6 and emitted "hi" with no padding.
+        src = "PROGRAM P; VAR s: LSTRING(10); BEGIN s := 'hi'; WRITE(s:6) END."
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "    hi")
+
+    def test_integer_field_width_unaffected(self):
+        # Guard: the common (non-string) width path must keep working.
+        src = "PROGRAM P; VAR x: INTEGER; BEGIN x := 42; WRITE(x:5) END."
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "   42")
+
+
 if __name__ == "__main__":
     unittest.main()
