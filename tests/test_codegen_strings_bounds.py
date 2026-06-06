@@ -179,5 +179,69 @@ class TestWriteFieldWidthOrdering(unittest.TestCase):
         self.assertEqual(out, "   42")
 
 
+@requires_llvm
+class TestStringIntrinsicCapacityIR(unittest.TestCase):
+    """CONCAT/COPYLST/COPYSTR must emit a capacity range check (manual 11-20).
+
+    These only need IR generation (no clang): the guard lowers to a call to
+    the runtime error handler (abort), so its presence in the IR is the signal.
+    """
+
+    def test_concat_emits_range_check(self):
+        src = "PROGRAM P; VAR d: LSTRING(5); BEGIN d := 'ab'; CONCAT(d, 'cd') END."
+        self.assertIn("abort", compile_to_ir(src))
+
+    def test_copylst_emits_range_check(self):
+        src = "PROGRAM P; VAR d: LSTRING(5); BEGIN COPYLST('abc', d) END."
+        self.assertIn("abort", compile_to_ir(src))
+
+    def test_copystr_emits_range_check(self):
+        src = "PROGRAM P; VAR d: STRING(5); BEGIN COPYSTR('abc', d) END."
+        self.assertIn("abort", compile_to_ir(src))
+
+
+@requires_exe
+class TestStringIntrinsicCapacityRuntime(unittest.TestCase):
+    """End-to-end: in-capacity calls succeed; over-capacity calls abort."""
+
+    def test_concat_within_capacity(self):
+        src = ("PROGRAM P; VAR d: LSTRING(5); "
+               "BEGIN d := 'ab'; CONCAT(d, 'cd'); WRITE(d) END.")
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "abcd")
+
+    def test_concat_overflow_aborts(self):
+        # 2 + 2 = 4 > capacity 3 -> manual range error (abort).
+        src = "PROGRAM P; VAR d: LSTRING(3); BEGIN d := 'ab'; CONCAT(d, 'cd') END."
+        rc, _ = build_and_run(src)
+        self.assertNotEqual(rc, 0)
+
+    def test_copylst_within_capacity(self):
+        src = ("PROGRAM P; VAR d: LSTRING(5); "
+               "BEGIN COPYLST('abc', d); WRITE(d) END.")
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "abc")
+
+    def test_copylst_overflow_aborts(self):
+        src = "PROGRAM P; VAR d: LSTRING(2); BEGIN COPYLST('abc', d) END."
+        rc, _ = build_and_run(src)
+        self.assertNotEqual(rc, 0)
+
+    def test_copystr_within_capacity_blank_pads(self):
+        # STRING(5) keeps all its characters: 'abc' + two blanks.
+        src = ("PROGRAM P; VAR d: STRING(5); "
+               "BEGIN COPYSTR('abc', d); WRITE(d) END.")
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "abc  ")
+
+    def test_copystr_overflow_aborts(self):
+        src = "PROGRAM P; VAR d: STRING(2); BEGIN COPYSTR('abc', d) END."
+        rc, _ = build_and_run(src)
+        self.assertNotEqual(rc, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

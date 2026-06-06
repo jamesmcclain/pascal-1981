@@ -1835,60 +1835,112 @@ class Codegen:
             
         return chars_ptr, length
 
+    def _dest_string_max_len(self, arg: Expression) -> int:
+        """Resolve the declared capacity (max length) of a string destination."""
+        t = None
+        if isinstance(arg, (Identifier, Designator)):
+            symbol = self.scope.lookup(arg.name) or self.scope.lookup(arg.name.upper())
+            if symbol:
+                t = symbol.type_expr
+        _is_str, max_len, _is_lstring = self.get_string_type_info(t)
+        return max_len
+
+    def _guard_string_capacity(self, need_len: ir.Value, max_len: int, label: str):
+        """Emit the manual's string range check (errors if upper(D) < need_len).
+
+        If `need_len` exceeds `max_len`, call the runtime error handler (abort)
+        and mark the block unreachable; otherwise fall through. Mirrors the
+        LSTRING assignment path. Returns the post-check block, which the caller
+        must branch to once the guarded work is done.
+        """
+        cond = self.builder.icmp_signed(
+            '<=', need_len, ir.Constant(ir.IntType(32), max_len))
+        parent = self.builder.block.parent
+        ok_block = parent.append_basic_block(label + '_ok')
+        err_block = parent.append_basic_block(label + '_overflow')
+        end_block = parent.append_basic_block(label + '_end')
+        self.builder.cbranch(cond, ok_block, err_block)
+        self.builder.position_at_end(err_block)
+        self.builder.call(self.runtime_error_func(), [])
+        self.builder.unreachable()
+        self.builder.position_at_end(ok_block)
+        return end_block
+
     def builtin_concat(self, args: List[Expression]) -> None:
-        """CONCAT(VAR D: LSTRING; CONST S: STRING)"""
+        """CONCAT(VAR D: LSTRING; CONST S: STRING).
+
+        S is appended to D; D's length grows by length(S). Manual 11-20:
+        error if upper(D) < length(D) + upper(S).
+        """
         D_arg = args[0]
         if isinstance(D_arg, Identifier):
             D_arg = Designator(D_arg.name, [])
         D_ptr = self.resolve_designator_ptr(D_arg)
         # D_ptr is now directly the aggregate pointer [n+1 x i8]
-        
+
         src_chars, src_len = self.get_string_chars_and_len(args[1])
         src_len_64 = self.builder.zext(src_len, ir.IntType(64))
-        
+
         zero = ir.Constant(ir.IntType(32), 0)
         one = ir.Constant(ir.IntType(32), 1)
-        
-        # Load length from byte [0]
+
+        # Load current length from byte [0]
         len_ptr = self.builder.gep(D_ptr, [zero, zero])
         dest_len_byte = self.builder.load(len_ptr)
         dest_len = self.builder.zext(dest_len_byte, ir.IntType(32))
-        
-        # Chars start at byte [1]
+
+        # Range check BEFORE writing: length(D) + length(S) must fit in upper(D).
+        new_len = self.builder.add(dest_len, src_len)
+        max_len = self._dest_string_max_len(args[0])
+        end_block = self._guard_string_capacity(new_len, max_len, 'concat')
+
+        # Append S at [1 + dest_len ..]
         dest_chars = self.builder.gep(D_ptr, [zero, one])
         append_ptr = self.builder.gep(dest_chars, [dest_len])
-        
         self.builder.call(self.memcpy_func(), [append_ptr, src_chars, src_len_64])
-        
-        # Update length byte [0]
-        new_len = self.builder.add(dest_len, src_len)
+
+        # Update length byte [0]. LSTRING is length-prefixed (manual 6-18),
+        # not null-terminated.
         new_len_byte = self.builder.trunc(new_len, ir.IntType(8))
         self.builder.store(new_len_byte, len_ptr)
-        # LSTRING is length-prefixed (manual 6-18), not null-terminated.
+
+        self.builder.branch(end_block)
+        self.builder.position_at_end(end_block)
 
     def builtin_copylst(self, args: List[Expression]) -> None:
-        """COPYLST(CONST S: STRING; VAR D: LSTRING)"""
+        """COPYLST(CONST S: STRING; VAR D: LSTRING).
+
+        Copies S to D; D's length is set to length(S). Manual 11-20:
+        error if upper(D) < upper(S).
+        """
         src_chars, src_len = self.get_string_chars_and_len(args[0])
         src_len_64 = self.builder.zext(src_len, ir.IntType(64))
-        
+
         D_arg = args[1]
         if isinstance(D_arg, Identifier):
             D_arg = Designator(D_arg.name, [])
         D_ptr = self.resolve_designator_ptr(D_arg)
         # D_ptr is now directly the aggregate pointer [n+1 x i8]
-        
+
         zero = ir.Constant(ir.IntType(32), 0)
         one = ir.Constant(ir.IntType(32), 1)
-        
+
+        # Range check BEFORE writing: length(S) must fit in upper(D).
+        max_len = self._dest_string_max_len(args[1])
+        end_block = self._guard_string_capacity(src_len, max_len, 'copylst')
+
         # Copy to bytes [1..n]
         dest_chars = self.builder.gep(D_ptr, [zero, one])
         self.builder.call(self.memcpy_func(), [dest_chars, src_chars, src_len_64])
-        
-        # Store length in byte [0]
+
+        # Store length in byte [0]. LSTRING is length-prefixed (manual 6-18),
+        # not null-terminated.
         len_ptr = self.builder.gep(D_ptr, [zero, zero])
         src_len_byte = self.builder.trunc(src_len, ir.IntType(8))
         self.builder.store(src_len_byte, len_ptr)
-        # LSTRING is length-prefixed (manual 6-18), not null-terminated.
+
+        self.builder.branch(end_block)
+        self.builder.position_at_end(end_block)
 
     def builtin_copystr(self, args: List[Expression]) -> None:
         """COPYSTR(CONST S: STRING; VAR D: STRING)"""
@@ -1915,7 +1967,11 @@ class Codegen:
         is_str, max_len, is_lstring = self.get_string_type_info(t)
 
         zero = ir.Constant(ir.IntType(32), 0)
-        
+
+        # Range check BEFORE writing (manual 11-20: error if upper(D) < upper(S)).
+        # This also guarantees pad_len below is non-negative.
+        end_block = self._guard_string_capacity(src_len, max_len, 'copystr')
+
         # STRING has no length byte; copy to [0]
         dest_chars = self.builder.gep(D_ptr, [zero, zero])
         self.builder.call(self.memcpy_func(), [dest_chars, src_chars, src_len_64])
@@ -1925,6 +1981,9 @@ class Codegen:
         pad_len = self.builder.sub(ir.Constant(ir.IntType(32), max_len), src_len)
         pad_len_64 = self.builder.zext(pad_len, ir.IntType(64))
         self.builder.call(self.memset_func(), [pad_ptr, ir.Constant(ir.IntType(32), 0x20), pad_len_64])
+
+        self.builder.branch(end_block)
+        self.builder.position_at_end(end_block)
 
     # ========================================================================
     # Utilities

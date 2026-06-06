@@ -256,11 +256,46 @@ first or these will be built on sand.
   Distinct semantic types: fixed-capacity `STRING(n)` and length-prefixed `LSTRING(n)`. Type checking resolves both forms, infers string literals as capacity-bearing `LSTRING`, and enforces literal capacity on assignment. Proven by `python -m unittest tests.test_parser tests.test_typecheck`.
 - [x] **7.2 — Implement the `LSTRING`/`STRING` storage representation.** `[OBSERVED]` **L**
   Done: Replaced placeholder byte-pointer lowering with proper inline aggregate representation. LSTRING(n) → `[n+1 x i8]` with byte [0] = length (0..n, max n=255). STRING(n) → `[n x i8]` with no length prefix. Both stored inline (not pointer-to-side-buffer), supporting direct ADR/SIZEOF semantics. Assignment implements range checks (overflow = error), null-terminates LSTRING, blank-pads STRING (0x20). Updated `llvm_type`, `codegen_var_decl`, `get_string_chars_and_len`, assignment path, and WRITE/WRITELN output for inline aggregates. Re-tested all 7.3 string intrinsics (CONCAT/COPYSTR/COPYLST) and full codegen suite (170 tests). Proven by `python -m unittest tests.test_codegen tests.test_codegen_strings_bounds`.
+  - CORRECTION (see 7.7): the "null-terminates LSTRING" behavior noted above
+    was non-spec and is removed. LSTRING is length-prefixed only (manual 6-18);
+    the terminator also overflowed by one byte at exact capacity.
 - [x] **7.3 — `CONCAT`, `COPYSTR`, `COPYLST`.** `[READ]` **M** String build/copy.
   - Done: Added global and local buffer allocation for string variables in `codegen_var_decl`. Registered three procedures in type checker and added comprehensive type checking logic. Implemented branchless inline LLVM lowering (using `memcpy` and `memset`) for string copying, concatenating, space-padding, and dynamic null-termination in code generator. Added 10 type-checking tests and 3 compile-and-run tests. Proven by `python -m unittest tests.test_typecheck.TestStringProcedures` and `python -m unittest tests.test_codegen` (including `test_string_concat_runtime`, `test_string_copylst_runtime`, `test_string_copystr_runtime`).
+  - CORRECTION (see 7.7): the "dynamic null-termination" noted above is removed
+    (non-spec), and the manual's capacity error (11-20) is now enforced on all
+    three procedures, which 7.3 omitted.
 - [ ] **7.4 — `INSERT`, `DELETE`, `POSITN`.** `[READ]` **M** Edit/search.
 - [ ] **7.5 — `SCANEQ`, `SCANNE`.** `[READ]` **M** Scan-while-equal / not-equal.
 - [ ] **7.6 — `ENCODE` / `DECODE`.** `[READ]` **L** Number↔string formatting (libc `sprintf`/`sscanf` under the hood).
+- [x] **7.7 — String-correctness hardening (post-7.2/7.3 follow-ups).** `[OBSERVED]` **M**
+  Three defects in the shipped LSTRING/STRING codegen, found reviewing 7.2/7.3
+  against the manual, are fixed:
+  (1) **LSTRING is length-prefixed, not null-terminated.** 7.2/7.3 wrote a NUL
+  at byte `[current_len + 1]`. The manual (6-18/6-19) defines `LSTRING(n)` as
+  `PACKED ARRAY [0..n] OF CHAR` — byte `[0]` = length, no terminator — and
+  `WRITE` emits "the current length string." At exact capacity (`len == n`) the
+  NUL landed at index `n+1`, one past the `[n+1 x i8]` aggregate (a one-byte
+  overflow). Removed the terminator stores from the assignment path, `CONCAT`,
+  and `COPYLST`; `WRITE` of an LSTRING now uses `%.*s` driven by the `[0]`
+  length byte instead of `%s`.
+  (2) **`CONCAT`/`COPYLST`/`COPYSTR` had no capacity check.** The manual (11-20)
+  requires an error when `upper(D) < length(D)+upper(S)` (CONCAT) or
+  `upper(D) < upper(S)` (COPYLST/COPYSTR). Added a shared guard
+  (`_guard_string_capacity`) that aborts before any write; this also makes
+  `COPYSTR`'s blank-pad length provably non-negative.
+  (3) **`WRITE` field-width arg ordering.** `WRITE(s:w)` lowered to `%*.*s` but
+  emitted the implicit length (the precision) ahead of the width arg, swapping
+  the two; the length is now appended after the width.
+  - Proven (confirmed here): front end green via `python3 -m unittest
+    tests.test_parser tests.test_typecheck` (100), and the IR-level guard/format
+    checks in `tests.test_codegen_strings_bounds`
+    (`TestStringIntrinsicCapacityIR`, `TestLStringLengthSemantics`).
+  - Build/run coverage (`TestStringIntrinsicCapacityRuntime`,
+    `TestWriteFieldWidthOrdering`, exact-capacity round-trip) is in the same
+    file under `@requires_exe`; runs where llvmlite+clang are present.
+  - Open coupling: per the manual these range errors are gated on `$RANGECK`,
+    still unhandled (see 9.5). The checks are currently unconditional; revisit
+    when the metacommand machinery lands.
 
 ---
 
