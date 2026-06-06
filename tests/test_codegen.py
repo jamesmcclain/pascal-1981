@@ -472,6 +472,97 @@ class TestCodegenBuildRun(unittest.TestCase):
         self.assertEqual(returncode, 0)
         self.assertIn("7", stdout)
 
+    # ------------------------------------------------------------------
+    # 9.1 REAL hardening tests
+    # ------------------------------------------------------------------
+
+    def test_integer_slash_produces_real(self):
+        """INTEGER / INTEGER (SLASH) always yields a REAL result (not truncated int div)."""
+        src = "PROGRAM P; VAR i: INTEGER; BEGIN i := 7; WRITELN(i / 2) END."
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        # 7 / 2 must be 3.5, not 3
+        self.assertIn("3.5", stdout)
+
+    def test_integer_literal_slash_produces_real(self):
+        """Literal INTEGER / INTEGER yields REAL at compile time."""
+        src = "PROGRAM P; BEGIN WRITELN(1 / 4) END."
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertIn("0.25", stdout)
+
+    def test_real_const_declaration_and_use(self):
+        """REAL CONST can be declared and used in expressions without crashing."""
+        src = (
+            "PROGRAM P; "
+            "CONST PI = 3.14159; "
+            "VAR r: REAL; "
+            "BEGIN r := PI; WRITELN(r) END."
+        )
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertIn("3.14", stdout)
+
+    def test_negative_real_const(self):
+        """Unary minus applied to a REAL constant generates valid IR and correct output."""
+        src = (
+            "PROGRAM P; "
+            "CONST NEGPI = -3.14159; "
+            "VAR r: REAL; "
+            "BEGIN r := NEGPI; WRITELN(r) END."
+        )
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertIn("-3.14", stdout)
+
+    def test_real_const_in_expression(self):
+        """REAL constant participates in arithmetic expressions correctly."""
+        src = (
+            "PROGRAM P; "
+            "CONST TWO = 2.0; NEGPI = -3.14159; "
+            "FUNCTION Scale(x: REAL): REAL; "
+            "BEGIN Scale := x * TWO + NEGPI END; "
+            "BEGIN WRITELN(Scale(1.0) : 10 : 4) END."
+        )
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        # 1.0 * 2.0 + (-3.14159) = -1.14159
+        self.assertIn("-1.1416", stdout)
+
+    def test_unary_minus_real_variable(self):
+        """Unary minus on a REAL variable generates valid IR (not integer neg)."""
+        src = (
+            "PROGRAM P; VAR x: REAL; "
+            "BEGIN x := 2.5; WRITELN(-x) END."
+        )
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertIn("-2.5", stdout)
+
+    def test_real_comparison_produces_boolean(self):
+        """REAL comparisons evaluate and branch correctly."""
+        src = (
+            "PROGRAM P; CONST NEGPI = -3.14159; "
+            "BEGIN "
+            "IF NEGPI < 0.0 THEN WRITELN(1) ELSE WRITELN(0); "
+            "IF 0.5 = 0.5 THEN WRITELN(1) ELSE WRITELN(0) "
+            "END."
+        )
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        lines = stdout.strip().split()
+        self.assertEqual(lines, ['1', '1'])
+
+    def test_mixed_int_real_arithmetic(self):
+        """Mixed INTEGER and REAL operands widen to REAL correctly."""
+        src = (
+            "PROGRAM P; VAR x: REAL; i: INTEGER; "
+            "BEGIN x := 3.0; i := 7; WRITELN(x + i : 8 : 2) END."
+        )
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertIn("10.00", stdout)
+
     def test_nested_arithmetic(self):
         """Nested arithmetic expressions."""
         src = (

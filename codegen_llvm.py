@@ -85,7 +85,10 @@ class Codegen:
         self.scope = Scope()  # global scope
         self.current_function: Optional[ir.Function] = None
         self.current_return_block: Optional[ir.BasicBlock] = None
-        self.constants: Dict[str, int] = {  # compile-time constant values, keyed UPPER
+        # Compile-time constants keyed UPPER.  Values are int for INTEGER/BOOL/CHAR
+        # constants, or float for REAL constants.  Use _const_ir() to emit the
+        # appropriate LLVM constant at reference sites.
+        self.constants: Dict[str, object] = {
             'MAXINT': 2147483647,
             'MAXWORD': 65535,
         }
@@ -313,6 +316,13 @@ class Codegen:
         # uses (array bounds, sizeof, and plain value references) can resolve it.
         value = self.eval_const_expr(decl.value)
         self.constants[decl.name.upper()] = value
+
+    def _const_ir(self, name_upper: str) -> ir.Constant:
+        """Emit the appropriate LLVM constant for a named compile-time constant."""
+        v = self.constants[name_upper]
+        if isinstance(v, float):
+            return ir.Constant(ir.DoubleType(), v)
+        return ir.Constant(ir.IntType(32), int(v))
 
     def codegen_type_decl(self, decl: TypeDecl) -> None:
         """Record a type declaration for later codegen lookups."""
@@ -1078,7 +1088,7 @@ class Codegen:
             # A named constant used as a value (e.g. FOR i := 0 TO size)
             key = expr.name.upper()
             if key in self.constants:
-                return ir.Constant(ir.IntType(32), self.constants[key])
+                return self._const_ir(key)
             if key == 'NULL':
                 return self.null_lstring_ptr()
             symbol = self.scope.lookup(expr.name) or self.scope.lookup(key)
@@ -1149,7 +1159,10 @@ class Codegen:
         if self.is_set_value(left) or self.is_set_value(right):
             return self.codegen_set_binop(expr.op, left, right)
 
-        is_real = isinstance(left.type, ir.DoubleType) or isinstance(right.type, ir.DoubleType)
+        # SLASH is always real division in Pascal (7/2 = 3.5), so force double
+        # even when both operands are integer-typed.
+        is_real = (isinstance(left.type, ir.DoubleType) or isinstance(right.type, ir.DoubleType)
+                   or expr.op == 'SLASH')
         if is_real:
             if isinstance(left.type, ir.IntType):
                 left = self.builder.sitofp(left, ir.DoubleType())
@@ -1163,7 +1176,7 @@ class Codegen:
         elif expr.op == 'MUL':
             return self.builder.fmul(left, right) if is_real else self.builder.mul(left, right)
         elif expr.op == 'SLASH' or expr.op == 'DIV':
-            return self.builder.fdiv(left, right) if is_real or expr.op == 'SLASH' else self.builder.sdiv(left, right)
+            return self.builder.fdiv(left, right) if is_real else self.builder.sdiv(left, right)
         elif expr.op == 'MOD':
             return self.builder.frem(left, right) if is_real else self.builder.srem(left, right)
         elif expr.op == 'AND':
@@ -1296,6 +1309,8 @@ class Codegen:
         operand = self.codegen_expr(expr.operand)
 
         if expr.op == 'MINUS':
+            if isinstance(operand.type, ir.DoubleType):
+                return self.builder.fsub(ir.Constant(ir.DoubleType(), 0.0), operand)
             return self.builder.neg(operand)
         elif expr.op == 'NOT':
             # Logical NOT: invert the boolean
@@ -1700,12 +1715,21 @@ class Codegen:
     # Utilities
     # ========================================================================
 
-    def eval_const_expr(self, expr: Expression) -> int:
-        """Evaluate a constant expression at compile time."""
+    def eval_const_expr(self, expr: Expression):
+        """Evaluate a constant expression at compile time.
+
+        Returns int for INTEGER/BOOLEAN/CHAR constants and float for REAL
+        constants.  Arithmetic automatically promotes to float when either
+        operand is real (mirrors type_system.binary_op_result_type).
+        """
         if isinstance(expr, IntLiteral):
             return expr.value
+        elif isinstance(expr, RealLiteral):
+            return float(expr.value)
         elif isinstance(expr, BoolLiteral):
             return 1 if expr.value else 0
+        elif isinstance(expr, CharLiteral):
+            return ord(expr.value) if len(expr.value) == 1 else 0
         elif isinstance(expr, Identifier):
             key = expr.name.upper()
             if key in self.constants:
@@ -1720,21 +1744,37 @@ class Codegen:
             val = self.eval_const_expr(expr.operand)
             if expr.op == 'MINUS':
                 return -val
+            elif expr.op == 'PLUS':
+                return val
             elif expr.op == 'NOT':
                 return 0 if val else 1
         elif isinstance(expr, BinOp):
             left = self.eval_const_expr(expr.left)
             right = self.eval_const_expr(expr.right)
-            if expr.op == 'PLUS':
-                return left + right
-            elif expr.op == 'MINUS':
-                return left - right
-            elif expr.op == 'MUL':
-                return left * right
-            elif expr.op == 'DIV' or expr.op == 'SLASH':
-                return left // right if right != 0 else 0
-            elif expr.op == 'MOD':
-                return left % right if right != 0 else 0
+            # SLASH always produces float; any float operand widens the result
+            if expr.op == 'SLASH' or isinstance(left, float) or isinstance(right, float):
+                lf, rf = float(left), float(right)
+                if expr.op in ('PLUS', 'SLASH'):
+                    return lf + rf if expr.op == 'PLUS' else (lf / rf if rf != 0.0 else 0.0)
+                elif expr.op == 'MINUS':
+                    return lf - rf
+                elif expr.op == 'MUL':
+                    return lf * rf
+                elif expr.op == 'DIV':
+                    return float(int(lf) // int(rf)) if rf != 0.0 else 0.0
+                elif expr.op == 'MOD':
+                    return float(int(lf) % int(rf)) if rf != 0.0 else 0.0
+            else:
+                if expr.op == 'PLUS':
+                    return left + right
+                elif expr.op == 'MINUS':
+                    return left - right
+                elif expr.op == 'MUL':
+                    return left * right
+                elif expr.op == 'DIV':
+                    return left // right if right != 0 else 0
+                elif expr.op == 'MOD':
+                    return left % right if right != 0 else 0
         raise CodegenError(f'Cannot evaluate constant expression: {type(expr).__name__}')
 
     def unique_name(self, prefix: str) -> str:

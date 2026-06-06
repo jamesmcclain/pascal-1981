@@ -283,9 +283,26 @@ the biggest single chunk; expect it to need its own design pass.
 
 ## 9. Cross-cutting / infrastructure
 
-- [ ] **9.1 — REAL codegen depth.** `[READ]` **M**
+- [x] **9.1 — REAL codegen depth.** `[READ]` **M**
   README calls REAL "limited codegen support." Sections 4.3/4.4 and all of 6 hang
   off this. Audit and harden REAL before (or alongside) the math intrinsics.
+  - Done: three bugs found and fixed.
+    (1) `SLASH` always produces REAL in Pascal, but codegen checked `is_real` by
+    inspecting LLVM operand types — two `i32`s produced `fdiv i32` (invalid IR).
+    Fixed by setting `is_real = True` unconditionally when `op == 'SLASH'` before
+    the operand-promotion block. (2) REAL constants (`CONST PI = 3.14159`) crashed
+    with "Cannot evaluate constant expression: RealLiteral" because `eval_const_expr`
+    was int-only and `self.constants` was typed `Dict[str,int]`. Fixed by widening
+    both to carry `float` values, adding `RealLiteral`/`CharLiteral` cases and
+    float-aware arithmetic folding, and emitting `ir.Constant(ir.DoubleType(), v)`
+    at use sites via a new `_const_ir()` helper. (3) Unary minus on a `double`
+    operand emitted integer `sub`; fixed by checking operand type in
+    `codegen_unaryop` and using `fsub(0.0, operand)` for doubles. Output format
+    note: WRITE/WRITELN emits `%f` (six decimals by default); IBM Pascal’s
+    free-format / exponential default differs — tracked as a future cosmetic fix,
+    not a correctness blocker. Proven by `python -m unittest tests.test_parser
+    tests.test_typecheck tests.test_codegen` (157 tests, 8 new REAL-hardening
+    run tests in `TestCodegenBuildRun`).
 - [ ] **9.2 — Predeclared-identifier registration mechanism.** `[INFERRED]` **S**
   Today builtins are scattered (some in `_setup_builtins`, some as dedicated AST
   nodes `AdrExpr`/`SizeofExpr`/`UpperExpr`, some hand-declared `extern`). Consider
