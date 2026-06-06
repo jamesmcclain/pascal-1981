@@ -358,6 +358,10 @@ the biggest single chunk; expect it to need its own design pass.
     `test_named_const_subrange_set_base_resolves` (typecheck). EBNF `set_type`
     note refreshed to match the real implementation.
 
+- [ ] **9.7 — Deferred attribute-argument forms.** `[DEFERRED]` **S**
+  `ORIGIN(c)` and any `PORT(addr)`-style attribute syntax remain intentionally
+  out of scope until the manual's prose and grammar are reconciled more fully.
+
 - [ ] **9.8 — Full Enum support.** `[INFERRED]` **M**
   Enum-based sets (9.6) now work because they resolve to `i32` ordinals, but
   the compiler lacks first-class enum support: `SUCC`/`PRED` on enums, `CASE`
