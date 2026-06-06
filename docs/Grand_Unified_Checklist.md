@@ -252,13 +252,15 @@ Gated on REAL codegen depth (see note at end).
 All depend on the `LSTRING` / `STRING` / `SUPER ARRAY` memory layout. Settle that
 first or these will be built on sand.
 
-- [x] **7.1 — Decide and implement the `LSTRING`/`STRING` representation.** `[INFERRED]` **L**
-  Decided on distinct semantic types: fixed-capacity `STRING(n)` and length-prefixed `LSTRING(n)`, both currently lowered as byte-pointer storage on the LLVM target. Type checking resolves both forms, infers string literals as capacity-bearing `LSTRING`, and enforces literal capacity on assignment. Proven by `python -m unittest tests.test_parser tests.test_typecheck tests.test_codegen`.
-- [x] **7.2 — `CONCAT`, `COPYSTR`, `COPYLST`.** `[READ]` **M** String build/copy.
+- [x] **7.1 — Decide the `LSTRING`/`STRING` representation.** `[INFERRED]` **S**
+  Distinct semantic types: fixed-capacity `STRING(n)` and length-prefixed `LSTRING(n)`. Type checking resolves both forms, infers string literals as capacity-bearing `LSTRING`, and enforces literal capacity on assignment. Proven by `python -m unittest tests.test_parser tests.test_typecheck`.
+- [ ] **7.2 — Implement the `LSTRING`/`STRING` storage representation.** `[INFERRED]` **L**
+  Currently a placeholder: both forms lower to byte pointers, so `LSTRING`'s length prefix and `STRING`'s inline capacity don't exist yet. Settle where length/capacity actually live before the string intrinsics build on it. Placeholder lowering (declaration + pointer-store assignment) is covered by `tests.test_codegen`.
+- [x] **7.3 — `CONCAT`, `COPYSTR`, `COPYLST`.** `[READ]` **M** String build/copy.
   - Done: Added global and local buffer allocation for string variables in `codegen_var_decl`. Registered three procedures in type checker and added comprehensive type checking logic. Implemented branchless inline LLVM lowering (using `memcpy` and `memset`) for string copying, concatenating, space-padding, and dynamic null-termination in code generator. Added 10 type-checking tests and 3 compile-and-run tests. Proven by `python -m unittest tests.test_typecheck.TestStringProcedures` and `python -m unittest tests.test_codegen` (including `test_string_concat_runtime`, `test_string_copylst_runtime`, `test_string_copystr_runtime`).
-- [ ] **7.3 — `INSERT`, `DELETE`, `POSITN`.** `[READ]` **M** Edit/search.
-- [ ] **7.4 — `SCANEQ`, `SCANNE`.** `[READ]` **M** Scan-while-equal / not-equal.
-- [ ] **7.5 — `ENCODE` / `DECODE`.** `[READ]` **L** Number↔string formatting (libc `sprintf`/`sscanf` under the hood).
+- [ ] **7.4 — `INSERT`, `DELETE`, `POSITN`.** `[READ]` **M** Edit/search.
+- [ ] **7.5 — `SCANEQ`, `SCANNE`.** `[READ]` **M** Scan-while-equal / not-equal.
+- [ ] **7.6 — `ENCODE` / `DECODE`.** `[READ]` **L** Number↔string formatting (libc `sprintf`/`sscanf` under the hood).
 
 ---
 

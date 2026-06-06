@@ -1078,9 +1078,8 @@ class Codegen:
                 raise CodegenError(f'Undefined variable: {expr.name}')
             ty = symbol.type_expr
             if hasattr(ty, 'index_range'):
-                lower = ty.index_range.low.value if hasattr(ty.index_range.low, 'value') else None
-                upper_expr = ty.index_range.high
-                upper = None if upper_expr is None else (upper_expr.value if hasattr(upper_expr, 'value') else None)
+                lower = self.eval_const_expr(ty.index_range.low)
+                upper = None if ty.index_range.high is None else self.eval_const_expr(ty.index_range.high)
             elif hasattr(ty, 'lower_bound') and hasattr(ty, 'upper_bound'):
                 lower = ty.lower_bound
                 upper = ty.upper_bound
