@@ -670,20 +670,18 @@ class Codegen:
                 src_len_64 = self.builder.zext(src_len, ir.IntType(64))
                 
                 if is_dest_lstring:
-                    # LSTRING [n+1 x i8]: byte [0] = length, bytes [1..n] = chars
-                    # Copy characters to [0,1]
+                    # LSTRING(n) is PACKED ARRAY [0..n] OF CHAR (manual 6-18):
+                    # byte [0] = current length (0..n), bytes [1..n] = chars.
+                    # It is length-prefixed, NOT null-terminated, so the whole
+                    # [n+1 x i8] is usable at full capacity (src_len == n).
+                    # Copy characters to [1..]
                     dest_chars = self.builder.gep(ptr, [zero, one])
                     self.builder.call(self.memcpy_func(), [dest_chars, src_chars, src_len_64])
-                    
+
                     # Store length in byte [0]
                     len_ptr = self.builder.gep(ptr, [zero, zero])
                     src_len_8 = self.builder.trunc(src_len, ir.IntType(8))
                     self.builder.store(src_len_8, len_ptr)
-                    
-                    # Null terminate at byte [src_len + 1]
-                    null_idx = self.builder.add(src_len, one)
-                    null_char_ptr = self.builder.gep(ptr, [zero, null_idx])
-                    self.builder.store(ir.Constant(ir.IntType(8), 0), null_char_ptr)
                 else:
                     # STRING [n x i8]: bytes [0..n-1] = chars, blank-padded
                     # Copy characters to [0,0]
@@ -1590,6 +1588,7 @@ class Codegen:
             # Check if it is a string variable (non-literal)
             is_string_var = False
             is_lstring_var = False
+            lstring_len = None
             string_max_len = 0
             from type_system import StringType, LStringType
             from ast_nodes import LStringType as ASTLStringType
@@ -1639,7 +1638,11 @@ class Codegen:
                 zero = ir.Constant(ir.IntType(32), 0)
                 one = ir.Constant(ir.IntType(32), 1)
                 if is_lstring_var:
-                    # LSTRING: chars at [0, 1], null-terminated, use %s
+                    # LSTRING (manual 6-19): WRITE emits the *current length*
+                    # string. Length is byte [0]; characters are [1..]. No null
+                    # terminator exists, so use %.*s with the runtime length.
+                    len_byte = self.builder.load(self.builder.gep(val, [zero, zero]))
+                    lstring_len = self.builder.zext(len_byte, ir.IntType(32))
                     val = self.builder.gep(val, [zero, one])
                 else:
                     # STRING: chars at [0, 0], not null-terminated, use %.*s with length
@@ -1655,11 +1658,15 @@ class Codegen:
 
             # Determine format based on LLVM type
             val_type_str = str(val.type)
-            if is_string_var and not is_lstring_var:
-                # STRING (not null-terminated): use %.*s with max_len
+            if is_string_var:
+                # Both STRING and LSTRING write with %.*s. STRING uses its
+                # (blank-padded) compile-time max length; LSTRING uses the
+                # runtime length read from byte [0] above.
+                length_arg = (lstring_len if is_lstring_var
+                              else ir.Constant(ir.IntType(32), string_max_len))
                 if not precision:  # Only add length if not already in precision
                     prefix += '.*'
-                    printf_args.insert(len(printf_args) - (1 if width else 0), ir.Constant(ir.IntType(32), string_max_len))
+                    printf_args.insert(len(printf_args) - (1 if width else 0), length_arg)
                 suffix = 's'
             elif 'i32' in val_type_str:
                 suffix = 'd'
@@ -1853,11 +1860,7 @@ class Codegen:
         new_len = self.builder.add(dest_len, src_len)
         new_len_byte = self.builder.trunc(new_len, ir.IntType(8))
         self.builder.store(new_len_byte, len_ptr)
-        
-        # Null-terminate at index [new_len + 1]
-        null_idx = self.builder.add(new_len, one)
-        null_char_ptr = self.builder.gep(D_ptr, [zero, null_idx])
-        self.builder.store(ir.Constant(ir.IntType(8), 0), null_char_ptr)
+        # LSTRING is length-prefixed (manual 6-18), not null-terminated.
 
     def builtin_copylst(self, args: List[Expression]) -> None:
         """COPYLST(CONST S: STRING; VAR D: LSTRING)"""
@@ -1881,11 +1884,7 @@ class Codegen:
         len_ptr = self.builder.gep(D_ptr, [zero, zero])
         src_len_byte = self.builder.trunc(src_len, ir.IntType(8))
         self.builder.store(src_len_byte, len_ptr)
-        
-        # Null-terminate at index [src_len + 1]
-        null_idx = self.builder.add(src_len, one)
-        null_char_ptr = self.builder.gep(D_ptr, [zero, null_idx])
-        self.builder.store(ir.Constant(ir.IntType(8), 0), null_char_ptr)
+        # LSTRING is length-prefixed (manual 6-18), not null-terminated.
 
     def builtin_copystr(self, args: List[Expression]) -> None:
         """COPYSTR(CONST S: STRING; VAR D: STRING)"""

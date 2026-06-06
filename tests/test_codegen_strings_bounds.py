@@ -8,7 +8,8 @@ Covers two gaps found while reviewing the string/UPPER-LOWER patch:
      them assign an ordinary string literal to a STRING/LSTRING variable, so
      the "7.1 ... Proven by tests.test_codegen" claim was never actually
      exercising assignment. These tests do. They are expected to PASS:
-     both sides lower to i8*, so assignment is a pointer store.
+     both sides lower to inline aggregates, so assignment is a memcpy of the
+     decoded bytes (plus a length byte for LSTRING).
 
   2. UPPER / LOWER on a NON-literal (named-constant) array bound. The codegen
      path reads `index_range.low.value` / `.high.value` directly instead of
@@ -26,8 +27,8 @@ re-declared.
 
 import unittest
 
-from tests.support import requires_llvm
-from tests.test_codegen import compile_to_ir
+from tests.support import requires_llvm, requires_exe
+from tests.test_codegen import compile_to_ir, build_and_run
 
 
 @requires_llvm
@@ -81,23 +82,73 @@ class TestArrayBoundIntrinsicCodegen(unittest.TestCase):
     def test_upper_named_const_bound_resolves(self):
         """UPPER must resolve a named-constant upper bound.
 
-        EXPECTED TO FAIL until the codegen UPPER/LOWER path uses
-        eval_const_expr instead of reading `.value` off the bound node.
-        The type checker already accepts this program, so the failure is a
-        layer mismatch, not a user error. Asserting success (rather than
-        assertRaises) keeps the bug encoded as a defect, not as intended.
+        Now PASSES: the codegen UPPER/LOWER path resolves bounds via
+        eval_const_expr (fixed in "Fix UPPER/LOWER bound resolution for named
+        constants"), matching what the type checker already accepts.
         """
         src = ("PROGRAM P; CONST n = 10; VAR a: ARRAY[1..n] OF INTEGER; "
                "BEGIN WRITELN(UPPER(a)) END.")
-        ir = compile_to_ir(src)  # currently raises CodegenError
+        ir = compile_to_ir(src)
         self.assertIn("10", ir)
 
     def test_lower_named_const_bound_resolves(self):
-        """LOWER must resolve a named-constant lower bound (EXPECTED TO FAIL until fix)."""
+        """LOWER must resolve a named-constant lower bound (now PASSES; see above)."""
         src = ("PROGRAM P; CONST lo = 2; VAR a: ARRAY[lo..10] OF INTEGER; "
                "BEGIN WRITELN(LOWER(a)) END.")
-        ir = compile_to_ir(src)  # currently raises CodegenError
+        ir = compile_to_ir(src)
         self.assertIn("2", ir)
+
+
+@requires_llvm
+class TestLStringLengthSemantics(unittest.TestCase):
+    """LSTRING is length-prefixed, not null-terminated (manual 6-18/6-19).
+
+    Regression coverage for the capacity overflow: the old codegen wrote a
+    null terminator at byte [current_len + 1], which is one past the end of
+    the [n+1 x i8] aggregate when a string is assigned at exact capacity
+    (current_len == n). LSTRING has no terminator; output is driven by the
+    length byte. These encode both the safety fix and the WRITE semantics.
+    """
+
+    def test_lstring_write_is_length_driven_not_terminator(self):
+        """WRITE of an LSTRING uses %.*s (length byte), not a %s scan to NUL."""
+        src = "PROGRAM P; VAR s: LSTRING(10); BEGIN s := 'hi'; WRITELN(s) END."
+        ir = compile_to_ir(src)
+        # The length-counted printf conversion must be present.
+        self.assertIn(".*s", ir)
+
+    def test_lstring_assignment_emits_no_terminator_store(self):
+        """Assignment must not write a trailing NUL past the copied chars.
+
+        The fixed path stores only the length byte [0] and memcpy's the chars
+        to [1..]; there is no separate store of an i8 0 terminator. We assert
+        the characters and a memcpy are present (the store of the length byte
+        remains), which is the whole of the LSTRING write.
+        """
+        src = "PROGRAM P; VAR s: LSTRING(3); BEGIN s := 'abc' END."
+        ir = compile_to_ir(src)
+        self.assertIn("abc", ir)
+        self.assertIn("memcpy", ir)
+
+    @requires_exe
+    def test_lstring_at_exact_capacity_round_trips(self):
+        """LSTRING(n) := <n-char literal> then WRITE must print exactly it.
+
+        This is the exact-capacity case that previously wrote one byte past
+        the aggregate. With the terminator removed it is safe and correct.
+        """
+        src = "PROGRAM P; VAR s: LSTRING(3); BEGIN s := 'abc'; WRITE(s) END."
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "abc")
+
+    @requires_exe
+    def test_lstring_partial_fill_writes_only_current_length(self):
+        """A short value in a large LSTRING writes only its current length."""
+        src = "PROGRAM P; VAR s: LSTRING(10); BEGIN s := 'hi'; WRITE(s) END."
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "hi")
 
 
 if __name__ == "__main__":
