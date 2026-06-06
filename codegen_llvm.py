@@ -127,8 +127,14 @@ class Codegen:
                 raise CodegenError(f'Unknown built-in type: {type_expr.name}')
         elif isinstance(type_expr, NamedType):
             name_up = type_expr.name.upper()
-            if name_up in {'STRING', 'LSTRING'}:
-                return ir.PointerType(ir.IntType(8))
+            if name_up == 'LSTRING':
+                # LSTRING without explicit param: use default 256
+                param_val = int(type_expr.param) if type_expr.param else 256
+                return ir.ArrayType(ir.IntType(8), param_val + 1)
+            elif name_up == 'STRING':
+                # STRING without explicit param: use default 256
+                param_val = int(type_expr.param) if type_expr.param else 256
+                return ir.ArrayType(ir.IntType(8), param_val)
             if name_up == 'ADRMEM':
                 return ir.PointerType(ir.IntType(8))
             elif name_up == 'INTEGER':
@@ -148,8 +154,15 @@ class Codegen:
             return ir.IntType(32)
         elif isinstance(type_expr, SetType):
             return self.set_llvm_type()
-        elif isinstance(type_expr, (LStringType, ResolvedStringType, ResolvedLStringType)):
-            return ir.PointerType(ir.IntType(8))
+        elif isinstance(type_expr, LStringType):
+            # LSTRING(n) is PACKED ARRAY [0..n] OF CHAR = [n+1 x i8]
+            return ir.ArrayType(ir.IntType(8), type_expr.max_len + 1)
+        elif isinstance(type_expr, ResolvedLStringType):
+            # LSTRING(n) is PACKED ARRAY [0..n] OF CHAR = [n+1 x i8]
+            return ir.ArrayType(ir.IntType(8), type_expr.max_len + 1)
+        elif isinstance(type_expr, ResolvedStringType):
+            # STRING(n) is PACKED ARRAY [1..n] OF CHAR = [n x i8]
+            return ir.ArrayType(ir.IntType(8), type_expr.max_len)
         elif isinstance(type_expr, SubrangeType):
             if type_expr.host:
                 return self.llvm_type(NamedType(type_expr.host, None))
@@ -367,42 +380,39 @@ class Codegen:
         is_str, max_len, is_lstring = self.get_string_type_info(decl.type_expr)
 
         if self.builder and not is_static:
-            # Local variable (inside a function)
+            # Local variable (inside a function) — allocate the aggregate inline
             for name in decl.names:
                 alloca = self.builder.alloca(llvm_type, name=name)
                 self.scope.define(name, alloca, decl.type_expr)
                 
                 if is_str:
-                    # Allocate stack buffer: [max_len + 1 x i8]
-                    buf_type = ir.ArrayType(ir.IntType(8), max_len + 1)
-                    buf_alloca = self.builder.alloca(buf_type, name=f"{name}_buf")
-                    # Store GEP [0, 0] of buffer into the alloca
-                    zero = ir.Constant(ir.IntType(32), 0)
-                    buf_ptr = self.builder.gep(buf_alloca, [zero, zero])
-                    self.builder.store(buf_ptr, alloca)
-                    # Initialize first byte (length metadata) to 0
-                    self.builder.store(ir.Constant(ir.IntType(8), 0), buf_ptr)
+                    # Initialize length byte to 0 for LSTRING
+                    if is_lstring:
+                        zero = ir.Constant(ir.IntType(32), 0)
+                        len_ptr = self.builder.gep(alloca, [zero, zero])
+                        self.builder.store(ir.Constant(ir.IntType(8), 0), len_ptr)
+                    # STRING: no initialization needed (chars are undefined until assigned)
         else:
-            # Static or global variable - define with a zero initializer
+            # Static or global variable — allocate aggregate with zero init
             prefix = self.current_function.name if self.current_function else 'global'
             for name in decl.names:
                 gv_name = name if not self.builder else f'{prefix}.{name}'
                 
+                # Create global variable with the aggregate type
+                global_var = ir.GlobalVariable(self.module, llvm_type, name=gv_name)
+                
                 if is_str:
-                    # Allocate a global buffer
-                    buf_type = ir.ArrayType(ir.IntType(8), max_len + 1)
-                    buf_gv = ir.GlobalVariable(self.module, buf_type, name=f"{gv_name}_buf")
-                    buf_gv.initializer = ir.Constant(buf_type, bytearray(buf_type.count))
-                    
-                    # Store pointer to global buffer in global pointer variable
-                    global_var = ir.GlobalVariable(self.module, llvm_type, name=gv_name)
-                    zero = ir.Constant(ir.IntType(32), 0)
-                    global_var.initializer = buf_gv.gep([zero, zero])
-                    self.scope.define(name, global_var, decl.type_expr)
+                    if is_lstring:
+                        # Initialize with zero (length 0, rest undefined)
+                        global_var.initializer = ir.Constant(llvm_type, bytearray(llvm_type.count))
+                    else:
+                        # STRING: initialize with blanks (0x20)
+                        init_bytes = bytearray([0x20] * llvm_type.count)
+                        global_var.initializer = ir.Constant(llvm_type, init_bytes)
                 else:
-                    global_var = ir.GlobalVariable(self.module, llvm_type, name=gv_name)
                     global_var.initializer = self.zero_initializer(llvm_type)
-                    self.scope.define(name, global_var, decl.type_expr)
+                
+                self.scope.define(name, global_var, decl.type_expr)
 
     def codegen_proc_decl(self, decl: ProcDecl) -> None:
         """Codegen for PROCEDURE declaration."""
@@ -620,34 +630,77 @@ class Codegen:
                     value = self.builder.bitcast(value, target_type)
 
         if is_str:
-            dest_ptr = self.builder.load(ptr)
+            # ptr is now directly the aggregate pointer [n+1 x i8] or [n x i8]
             if isinstance(stmt.expr, NilLiteral) or (isinstance(stmt.expr, Identifier) and stmt.expr.name.upper() == 'NULL'):
-                # Store 0 as length/metadata
-                self.builder.store(ir.Constant(ir.IntType(8), 0), dest_ptr)
-                dest_chars = self.builder.gep(dest_ptr, [ir.Constant(ir.IntType(32), 1)])
-                self.builder.store(ir.Constant(ir.IntType(8), 0), dest_chars)
+                if is_dest_lstring:
+                    # LSTRING: set length to 0
+                    zero = ir.Constant(ir.IntType(32), 0)
+                    len_ptr = self.builder.gep(ptr, [zero, zero])
+                    self.builder.store(ir.Constant(ir.IntType(8), 0), len_ptr)
+                else:
+                    # STRING: fill with blanks (0x20)
+                    zero = ir.Constant(ir.IntType(32), 0)
+                    chars_ptr = self.builder.gep(ptr, [zero, zero])
+                    size_64 = self.builder.zext(
+                        ir.Constant(ir.IntType(32), max_len), ir.IntType(64)
+                    )
+                    self.builder.call(
+                        self.memset_func(),
+                        [chars_ptr, ir.Constant(ir.IntType(32), 0x20), size_64]
+                    )
             else:
                 src_chars, src_len = self.get_string_chars_and_len(stmt.expr)
+                
+                # Range check: src_len <= max_len
+                cond = self.builder.icmp_signed('<=', src_len, ir.Constant(ir.IntType(32), max_len))
+                success_block = self.builder.block.parent.append_basic_block('str_assign_ok')
+                error_block = self.builder.block.parent.append_basic_block('str_assign_overflow')
+                end_block = self.builder.block.parent.append_basic_block('str_assign_end')
+                self.builder.cbranch(cond, success_block, error_block)
+                
+                # Error block: emit range-check failure
+                self.builder.position_at_end(error_block)
+                self.builder.call(self.runtime_error_func(), [])
+                self.builder.unreachable()
+                
+                # Success block: perform assignment
+                self.builder.position_at_end(success_block)
+                zero = ir.Constant(ir.IntType(32), 0)
+                one = ir.Constant(ir.IntType(32), 1)
                 src_len_64 = self.builder.zext(src_len, ir.IntType(64))
                 
-                # Copy characters
-                dest_chars = self.builder.gep(dest_ptr, [ir.Constant(ir.IntType(32), 1)])
-                self.builder.call(self.memcpy_func(), [dest_chars, src_chars, src_len_64])
-                
-                # Set metadata byte
                 if is_dest_lstring:
+                    # LSTRING [n+1 x i8]: byte [0] = length, bytes [1..n] = chars
+                    # Copy characters to [0,1]
+                    dest_chars = self.builder.gep(ptr, [zero, one])
+                    self.builder.call(self.memcpy_func(), [dest_chars, src_chars, src_len_64])
+                    
+                    # Store length in byte [0]
+                    len_ptr = self.builder.gep(ptr, [zero, zero])
                     src_len_8 = self.builder.trunc(src_len, ir.IntType(8))
-                    self.builder.store(src_len_8, dest_ptr)
-                    # Null terminate at index src_len
-                    null_char_ptr = self.builder.gep(dest_chars, [src_len])
+                    self.builder.store(src_len_8, len_ptr)
+                    
+                    # Null terminate at byte [src_len + 1]
+                    null_idx = self.builder.add(src_len, one)
+                    null_char_ptr = self.builder.gep(ptr, [zero, null_idx])
                     self.builder.store(ir.Constant(ir.IntType(8), 0), null_char_ptr)
                 else:
-                    self.builder.store(ir.Constant(ir.IntType(8), max_len), dest_ptr)
-                    # Space-pad remaining characters for STRING
-                    pad_ptr = self.builder.gep(dest_chars, [src_len])
+                    # STRING [n x i8]: bytes [0..n-1] = chars, blank-padded
+                    # Copy characters to [0,0]
+                    dest_chars = self.builder.gep(ptr, [zero, zero])
+                    self.builder.call(self.memcpy_func(), [dest_chars, src_chars, src_len_64])
+                    
+                    # Blank-pad from [src_len] to [max_len-1] with 0x20
+                    pad_start = self.builder.gep(ptr, [zero, src_len])
                     pad_len = self.builder.sub(ir.Constant(ir.IntType(32), max_len), src_len)
                     pad_len_64 = self.builder.zext(pad_len, ir.IntType(64))
-                    self.builder.call(self.memset_func(), [pad_ptr, ir.Constant(ir.IntType(32), 0x20), pad_len_64])
+                    self.builder.call(
+                        self.memset_func(),
+                        [pad_start, ir.Constant(ir.IntType(32), 0x20), pad_len_64]
+                    )
+                
+                self.builder.branch(end_block)
+                self.builder.position_at_end(end_block)
         else:
             self.builder.store(value, ptr)
 
@@ -1102,6 +1155,13 @@ class Codegen:
             # Parameters are passed by value, don't load them
             if symbol.is_parameter:
                 return symbol.llvm_value
+            # For string/array variables, return pointer without loading (inline aggregates)
+            # For scalar variables, load the value
+            from ast_nodes import LStringType as ASTLStringType
+            if isinstance(symbol.type_expr, (ResolvedLStringType, ResolvedStringType, ASTLStringType, ArrayType)):
+                return symbol.llvm_value  # Return pointer to aggregate
+            elif isinstance(symbol.type_expr, NamedType) and symbol.type_expr.name.upper() in {'STRING', 'LSTRING'}:
+                return symbol.llvm_value  # Return pointer to aggregate
             return self.builder.load(symbol.llvm_value)
         elif isinstance(expr, SetConstructor):
             return self.codegen_set_constructor(expr)
@@ -1117,6 +1177,12 @@ class Codegen:
             # If the designator is a constant, return its value directly (not a pointer)
             if not isinstance(ptr.type, ir.PointerType):
                 return ptr
+            # For string/array designators, return pointer without loading (inline aggregates)
+            from ast_nodes import LStringType as ASTLStringType
+            if isinstance(symbol.type_expr, (ResolvedLStringType, ResolvedStringType, ASTLStringType, ArrayType)):
+                return ptr  # Return pointer to aggregate
+            elif isinstance(symbol.type_expr, NamedType) and symbol.type_expr.name.upper() in {'STRING', 'LSTRING'}:
+                return ptr  # Return pointer to aggregate
             return self.builder.load(ptr)
         elif isinstance(expr, BinOp):
             return self.codegen_binop(expr)
@@ -1523,7 +1589,10 @@ class Codegen:
 
             # Check if it is a string variable (non-literal)
             is_string_var = False
+            is_lstring_var = False
+            string_max_len = 0
             from type_system import StringType, LStringType
+            from ast_nodes import LStringType as ASTLStringType
             if not isinstance(expr, StringLiteral) and not isinstance(expr, NilLiteral) and not (isinstance(expr, Identifier) and expr.name.upper() == 'NULL'):
                 t = None
                 if isinstance(expr, Identifier):
@@ -1535,19 +1604,46 @@ class Codegen:
                     if symbol:
                         t = symbol.type_expr
                 
-                if isinstance(t, (StringType, LStringType)):
+                if isinstance(t, (LStringType, ASTLStringType)):
                     is_string_var = True
+                    is_lstring_var = True
+                    string_max_len = t.max_len if hasattr(t, 'max_len') else 256
+                elif isinstance(t, StringType):
+                    is_string_var = True
+                    is_lstring_var = False
+                    string_max_len = t.max_len if hasattr(t, 'max_len') else 256
                 elif isinstance(t, NamedType):
                     name_up = t.name.upper()
-                    if name_up in {'STRING', 'LSTRING'}:
+                    if name_up == 'LSTRING':
                         is_string_var = True
+                        is_lstring_var = True
+                        string_max_len = int(t.param) if t.param else 256
+                    elif name_up == 'STRING':
+                        is_string_var = True
+                        is_lstring_var = False
+                        string_max_len = int(t.param) if t.param else 256
                     elif name_up in self.type_aliases:
                         aliased = self.type_aliases[name_up]
-                        if isinstance(aliased, (StringType, LStringType)) or (isinstance(aliased, NamedType) and aliased.name.upper() in {'STRING', 'LSTRING'}):
+                        if isinstance(aliased, (LStringType, ASTLStringType)):
                             is_string_var = True
+                            is_lstring_var = True
+                            string_max_len = aliased.max_len if hasattr(aliased, 'max_len') else 256
+                        elif isinstance(aliased, StringType):
+                            is_string_var = True
+                            is_lstring_var = False
+                            string_max_len = aliased.max_len if hasattr(aliased, 'max_len') else 256
 
             if is_string_var:
-                val = self.builder.gep(val, [ir.Constant(ir.IntType(32), 1)])
+                # val is aggregate pointer [n+1 x i8]* or [n x i8]*
+                # Extract chars pointer: skip length byte for LSTRING, start at 0 for STRING
+                zero = ir.Constant(ir.IntType(32), 0)
+                one = ir.Constant(ir.IntType(32), 1)
+                if is_lstring_var:
+                    # LSTRING: chars at [0, 1], null-terminated, use %s
+                    val = self.builder.gep(val, [zero, one])
+                else:
+                    # STRING: chars at [0, 0], not null-terminated, use %.*s with length
+                    val = self.builder.gep(val, [zero, zero])
 
             prefix = '%'
             if width is not None:
@@ -1559,11 +1655,17 @@ class Codegen:
 
             # Determine format based on LLVM type
             val_type_str = str(val.type)
-            if 'i32' in val_type_str:
+            if is_string_var and not is_lstring_var:
+                # STRING (not null-terminated): use %.*s with max_len
+                if not precision:  # Only add length if not already in precision
+                    prefix += '.*'
+                    printf_args.insert(len(printf_args) - (1 if width else 0), ir.Constant(ir.IntType(32), string_max_len))
+                suffix = 's'
+            elif 'i32' in val_type_str:
                 suffix = 'd'
             elif 'i16' in val_type_str:
                 suffix = 'u'
-            elif 'i8*' in val_type_str or '[' in val_type_str:
+            elif 'i8*' in val_type_str:
                 suffix = 's'
             elif 'i8' in val_type_str:
                 suffix = 'c'
@@ -1659,6 +1761,15 @@ class Codegen:
         ])
         return ir.Function(self.module, memset_type, name='memset')
 
+    def runtime_error_func(self) -> ir.Function:
+        """Declare or fetch a runtime error handler (calls abort)."""
+        for func in self.module.functions:
+            if func.name == 'abort':
+                return func
+        # abort() takes no arguments and returns never (noreturn), but we declare void
+        abort_type = ir.FunctionType(ir.VoidType(), [])
+        return ir.Function(self.module, abort_type, name='abort')
+
     def get_string_chars_and_len(self, expr: Expression) -> tuple[ir.Value, ir.Value]:
         """Returns (chars_ptr: ir.Value, length: ir.Value) for any string expression.
         
@@ -1681,6 +1792,7 @@ class Codegen:
             length = ir.Constant(ir.IntType(32), 0)
             return chars_ptr, length
 
+        # val is now a pointer to the inline aggregate [n+1 x i8] or [n x i8]
         val = self.codegen_expr(expr)
         
         # Determine string type details
@@ -1696,12 +1808,18 @@ class Codegen:
 
         is_str, max_len, is_lstring = self.get_string_type_info(t)
 
-        chars_ptr = self.builder.gep(val, [ir.Constant(ir.IntType(32), 1)])
+        zero = ir.Constant(ir.IntType(32), 0)
+        one = ir.Constant(ir.IntType(32), 1)
         
         if is_lstring:
-            len_byte = self.builder.load(val)
+            # LSTRING [n+1 x i8]: byte [0] = length, bytes [1..n] = chars
+            len_ptr = self.builder.gep(val, [zero, zero])
+            len_byte = self.builder.load(len_ptr)
             length = self.builder.zext(len_byte, ir.IntType(32))
+            chars_ptr = self.builder.gep(val, [zero, one])
         else:
+            # STRING [n x i8]: bytes [0..n-1] = chars, no length prefix
+            chars_ptr = self.builder.gep(val, [zero, zero])
             length = ir.Constant(ir.IntType(32), max_len)
             
         return chars_ptr, length
@@ -1712,25 +1830,33 @@ class Codegen:
         if isinstance(D_arg, Identifier):
             D_arg = Designator(D_arg.name, [])
         D_ptr = self.resolve_designator_ptr(D_arg)
-        D_val = self.builder.load(D_ptr)
+        # D_ptr is now directly the aggregate pointer [n+1 x i8]
         
         src_chars, src_len = self.get_string_chars_and_len(args[1])
         src_len_64 = self.builder.zext(src_len, ir.IntType(64))
         
-        dest_len_byte = self.builder.load(D_val)
+        zero = ir.Constant(ir.IntType(32), 0)
+        one = ir.Constant(ir.IntType(32), 1)
+        
+        # Load length from byte [0]
+        len_ptr = self.builder.gep(D_ptr, [zero, zero])
+        dest_len_byte = self.builder.load(len_ptr)
         dest_len = self.builder.zext(dest_len_byte, ir.IntType(32))
         
-        dest_chars = self.builder.gep(D_val, [ir.Constant(ir.IntType(32), 1)])
+        # Chars start at byte [1]
+        dest_chars = self.builder.gep(D_ptr, [zero, one])
         append_ptr = self.builder.gep(dest_chars, [dest_len])
         
         self.builder.call(self.memcpy_func(), [append_ptr, src_chars, src_len_64])
         
+        # Update length byte [0]
         new_len = self.builder.add(dest_len, src_len)
         new_len_byte = self.builder.trunc(new_len, ir.IntType(8))
-        self.builder.store(new_len_byte, D_val)
+        self.builder.store(new_len_byte, len_ptr)
         
-        # Null-terminate at index new_len
-        null_char_ptr = self.builder.gep(dest_chars, [new_len])
+        # Null-terminate at index [new_len + 1]
+        null_idx = self.builder.add(new_len, one)
+        null_char_ptr = self.builder.gep(D_ptr, [zero, null_idx])
         self.builder.store(ir.Constant(ir.IntType(8), 0), null_char_ptr)
 
     def builtin_copylst(self, args: List[Expression]) -> None:
@@ -1742,16 +1868,23 @@ class Codegen:
         if isinstance(D_arg, Identifier):
             D_arg = Designator(D_arg.name, [])
         D_ptr = self.resolve_designator_ptr(D_arg)
-        D_val = self.builder.load(D_ptr)
+        # D_ptr is now directly the aggregate pointer [n+1 x i8]
         
-        dest_chars = self.builder.gep(D_val, [ir.Constant(ir.IntType(32), 1)])
+        zero = ir.Constant(ir.IntType(32), 0)
+        one = ir.Constant(ir.IntType(32), 1)
+        
+        # Copy to bytes [1..n]
+        dest_chars = self.builder.gep(D_ptr, [zero, one])
         self.builder.call(self.memcpy_func(), [dest_chars, src_chars, src_len_64])
         
+        # Store length in byte [0]
+        len_ptr = self.builder.gep(D_ptr, [zero, zero])
         src_len_byte = self.builder.trunc(src_len, ir.IntType(8))
-        self.builder.store(src_len_byte, D_val)
+        self.builder.store(src_len_byte, len_ptr)
         
-        # Null-terminate at index src_len
-        null_char_ptr = self.builder.gep(dest_chars, [src_len])
+        # Null-terminate at index [src_len + 1]
+        null_idx = self.builder.add(src_len, one)
+        null_char_ptr = self.builder.gep(D_ptr, [zero, null_idx])
         self.builder.store(ir.Constant(ir.IntType(8), 0), null_char_ptr)
 
     def builtin_copystr(self, args: List[Expression]) -> None:
@@ -1763,7 +1896,7 @@ class Codegen:
         if isinstance(D_arg, Identifier):
             D_arg = Designator(D_arg.name, [])
         D_ptr = self.resolve_designator_ptr(D_arg)
-        D_val = self.builder.load(D_ptr)
+        # D_ptr is now directly the aggregate pointer [n x i8]
         
         # Get D's maximum length
         t = None
@@ -1778,14 +1911,14 @@ class Codegen:
 
         is_str, max_len, is_lstring = self.get_string_type_info(t)
 
-        dest_chars = self.builder.gep(D_val, [ir.Constant(ir.IntType(32), 1)])
+        zero = ir.Constant(ir.IntType(32), 0)
+        
+        # STRING has no length byte; copy to [0]
+        dest_chars = self.builder.gep(D_ptr, [zero, zero])
         self.builder.call(self.memcpy_func(), [dest_chars, src_chars, src_len_64])
         
-        # Set D's metadata byte to max_len
-        self.builder.store(ir.Constant(ir.IntType(8), max_len), D_val)
-        
-        # Space-pad remaining characters
-        pad_ptr = self.builder.gep(dest_chars, [src_len])
+        # Blank-pad remaining characters from [src_len] to [max_len-1] with 0x20
+        pad_ptr = self.builder.gep(D_ptr, [zero, src_len])
         pad_len = self.builder.sub(ir.Constant(ir.IntType(32), max_len), src_len)
         pad_len_64 = self.builder.zext(pad_len, ir.IntType(64))
         self.builder.call(self.memset_func(), [pad_ptr, ir.Constant(ir.IntType(32), 0x20), pad_len_64])

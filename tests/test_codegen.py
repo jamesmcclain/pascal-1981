@@ -141,10 +141,12 @@ class TestCodegenIR(unittest.TestCase):
         self.assertGreater(len(ir), 0)
 
     def test_string_types_lower_as_byte_pointers(self):
-        """STRING(n) and LSTRING(n) lower to string-pointer storage."""
+        """STRING(n) and LSTRING(n) lower to inline aggregate storage."""
         src = "PROGRAM P; VAR a: STRING(10); VAR b: LSTRING(10); BEGIN END."
         ir = compile_to_ir(src)
-        self.assertIn("i8*", ir)
+        # STRING(10) lowers to [10 x i8], LSTRING(10) lowers to [11 x i8]
+        self.assertIn("[10 x i8]", ir)
+        self.assertIn("[11 x i8]", ir)
 
     def test_set_variable_uses_bitvector_storage(self):
         """SET variables lower to a fixed 256-bit bitvector."""

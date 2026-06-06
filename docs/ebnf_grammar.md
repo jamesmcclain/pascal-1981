@@ -415,14 +415,24 @@ set_type = "SET" "OF" ( index_range | identifier ) ;
    Runtime I/O is unverified due to linker library path issue. *)
 file_type = "FILE" "OF" type ;
 
-(* [DOCUMENTED] STRING(n) is fixed string storage; LSTRING(n) is
-   length-prefixed string storage. The current backend represents both as
-   byte pointers and enforces literal-capacity compatibility in type checking;
-   the string runtime intrinsics remain tracked separately in section 7.
-   The bare identifier STRING is also predeclared as a type name, matching
-   the checklist's registration of the standard names. *)
-string_type  = "STRING"  "(" constant ")" ;
-lstring_type = "LSTRING" "(" constant ")" ;
+(* [OBSERVED] STRING(n) is fixed-length string storage (PACKED ARRAY [1..n] OF CHAR):
+   - bytes [0..n-1] contain characters, no length prefix
+   - blank-padded (0x20) on assignment; write outputs all n chars
+   - lowered as inline aggregate [n x i8]
+   - ADR points to byte 0; SIZEOF = n
+   
+   LSTRING(n) is length-prefixed string storage (PACKED ARRAY [0..n] OF CHAR):
+   - byte [0] = current length (0..n, max n = 255 per manual §5-11, §6-17)
+   - bytes [1..n] = characters
+   - null-terminated at byte [len+1] for libc convenience
+   - lowered as inline aggregate [n+1 x i8]
+   - ADR points to byte 0 (the length); SIZEOF = n+1
+   
+   Both pass as references (super-array semantics, not pointer-to-side-buffer).
+   Assignment overflow (src_len > n) emits range-check error, not silent truncate.
+   The bare identifier STRING is also predeclared as a type name. *)
+string_type  = "STRING"  "(" constant ")" ;      (* PACKED ARRAY [1..n] OF CHAR, inline [n x i8] *)
+lstring_type = "LSTRING" "(" constant ")" ;    (* PACKED ARRAY [0..n] OF CHAR, inline [n+1 x i8] *)
 
 
 (* ═══════════════════════════════════════════════════════════════════

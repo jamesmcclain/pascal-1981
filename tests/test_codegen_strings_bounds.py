@@ -35,20 +35,20 @@ class TestStringAssignmentCodegen(unittest.TestCase):
     """String literal assignment to STRING/LSTRING storage (expected PASS)."""
 
     def test_string_literal_assignment_lowers_to_store(self):
-        """Assigning a literal to a STRING(n) var emits a store of the bytes."""
+        """Assigning a literal to a STRING(n) var emits a memcpy of the bytes."""
         src = "PROGRAM P; VAR a: STRING(10); BEGIN a := 'abc' END."
         ir = compile_to_ir(src)
         # The literal bytes are emitted as a private global constant ...
         self.assertIn("abc", ir)
-        # ... and the assignment lowers to a store into the string slot.
-        self.assertIn("store", ir)
+        # ... and the assignment lowers to a memcpy into the inline aggregate.
+        self.assertIn("memcpy", ir)
 
     def test_lstring_literal_assignment_lowers_to_store(self):
-        """Assigning a literal to an LSTRING(n) var emits a store of the bytes."""
+        """Assigning a literal to an LSTRING(n) var emits a memcpy of the bytes."""
         src = "PROGRAM P; VAR b: LSTRING(10); BEGIN b := 'hi' END."
         ir = compile_to_ir(src)
         self.assertIn("hi", ir)
-        self.assertIn("store", ir)
+        self.assertIn("memcpy", ir)
 
     def test_string_literal_with_doubled_quote_assignment(self):
         """A doubled-quote literal stores its decoded byte (a'b), not the escape."""
@@ -57,7 +57,7 @@ class TestStringAssignmentCodegen(unittest.TestCase):
         # Decoded content is the three bytes a ' b -- the doubled quote must
         # have collapsed to a single quote in the emitted constant.
         self.assertIn("a'b", ir)
-        self.assertIn("store", ir)
+        self.assertIn("memcpy", ir)
 
 
 @requires_llvm
