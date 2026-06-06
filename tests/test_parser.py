@@ -22,7 +22,7 @@ class TestParserAccept(unittest.TestCase):
         """Load all should_pass fixtures."""
         fixtures_dir = Path(__file__).parent / "fixtures" / "parser" / "should_pass"
         self.files = sorted(fixtures_dir.glob("*.pas"))
-        self.assertEqual(len(self.files), 16, f"Expected 16 should_pass fixtures, found {len(self.files)}")
+        self.assertEqual(len(self.files), 19, f"Expected 19 should_pass fixtures, found {len(self.files)}")
 
     def test_parser_accepts_all_should_pass(self):
         """Each should_pass/ file must parse without raising."""
@@ -102,8 +102,8 @@ class TestParserJudgmentCalls(unittest.TestCase):
         ast = parse_source("PROGRAM P; VAR s: SET OF 'A'..'Z'; BEGIN END.")
         base = ast.block.decls[0].type_expr.base
         self.assertEqual(type(base).__name__, "SubrangeType")
-        self.assertEqual(base.low.value, "'A'")
-        self.assertEqual(base.high.value, "'Z'")
+        self.assertEqual(base.low.value, "A")
+        self.assertEqual(base.high.value, "Z")
         self.assertEqual(base.host, "CHAR")
 
     def test_set_base_named_const_subrange_preserves_bounds(self):

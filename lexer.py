@@ -63,6 +63,7 @@ KEYWORD_CODES = {
     'ADS': 0x005C,
     'SIZEOF': 0x0033,
     'UPPER': 0x0034,
+    'LOWER': 0x005D,
     'IN': 0x0035,
     'DIV': 0x0036,
     'MOD': 0x0037,

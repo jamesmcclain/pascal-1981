@@ -9,7 +9,7 @@ from ast_nodes import (AdrExpr, ArrayType, AssignStmt, ASTNode, BinOp, Block, Bo
                        AdsExpr,
                        IndexRange, InterfaceUnit, IntLiteral, LabelDecl, LabelStmt, LStringType, ModuleUnit, NamedType, NilLiteral, Param, PointerType, ProcCallStmt, ProcDecl, ProgramUnit,
                        RangeExpr, RealLiteral, RecordType, RepeatStmt, ReturnStmt, Selector, SetConstructor, SetType, SizeofExpr, Statement, StringLiteral, SubrangeType, Type, TypeDecl, UnaryOp,
-                       UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt, WriteArg)
+                       UpperExpr, LowerExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt, WriteArg)
 from lexer import ALL_CODES, KEYWORD_CODES, LexerError, Token, lex_file
 
 
@@ -693,7 +693,7 @@ class Parser:
             self.pos += 1
             return RealLiteral(value)
         if kind == 'CHAR_LITERAL':
-            value = self.current().lexeme
+            value = self.current().value
             self.pos += 1
             return CharLiteral(value)
         if kind == 'STRING_LITERAL':
@@ -737,6 +737,12 @@ class Parser:
             name = self.expect('IDENTIFIER').lexeme
             self.expect('RPAREN')
             return UpperExpr(name)
+        if kind == 'LOWER':
+            self.pos += 1
+            self.expect('LPAREN')
+            name = self.expect('IDENTIFIER').lexeme
+            self.expect('RPAREN')
+            return LowerExpr(name)
         if kind == 'LBRACKET':
             self.pos += 1
             elements: List[Expression] = []
@@ -795,7 +801,7 @@ class Parser:
             self.pos += 1
             return RealLiteral(value)
         if kind == 'CHAR_LITERAL':
-            value = self.current().lexeme
+            value = self.current().value
             self.pos += 1
             return CharLiteral(value)
         if kind == 'STRING_LITERAL':

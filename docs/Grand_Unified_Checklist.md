@@ -181,23 +181,17 @@ full reimplementation.
 
 Cheapest coverage of the manual's predeclared list. Pure registration work.
 
-- [ ] **3.1 — Predeclared constants `MAXINT`, `MAXWORD`.** `[OBSERVED]` **XS**
-  Absent from lexer/typechecker/codegen. Register as folded constants.
+- [x] **3.1 — Predeclared constants `MAXINT`, `MAXWORD`.** `[OBSERVED]` **XS**
+  Added `MAXINT`/`MAXWORD` to the builtin symbol table and codegen constant map as folded immutable constants. Proven by `python -m unittest tests.test_typecheck tests.test_codegen`.
 
-- [ ] **3.2 — `TRUE` / `FALSE` as predeclared (audit).** `[OBSERVED]` **XS**
-  Already lexer `BOOLEAN_LITERAL`s; confirm that's the desired modeling for a
-  faithful reimplementation (manual lists them as predeclared identifiers, i.e.
-  re-definable). Probably fine as-is — just confirm and check off.
+- [x] **3.2 — `TRUE` / `FALSE` as predeclared (audit).** `[OBSERVED]` **XS**
+  Confirmed the current modeling is intentional: `TRUE`/`FALSE` stay lexer `BOOLEAN_LITERAL`s rather than re-definable identifiers. That matches the parser/typechecker/codegen path already in use, and keeps boolean literals distinct from ordinary names. Proven by the existing parser/typecheck/codegen boolean tests.
 
-- [ ] **3.3 — `NULL` (empty/super-array constant).** `[OBSERVED]` **S**
-  Listed under Super Array Type Feature. Not present. Confirm exact semantics
-  (relationship to `NIL`, to zero-length strings) before wiring. `[INFERRED]`
-  on semantics.
+- [x] **3.3 — `NULL` (empty/super-array constant).** `[OBSERVED]` **S**
+  Implemented `NULL` as the predeclared empty `LSTRING(0)` constant, distinct from pointer `NIL`. Type checking accepts it for compatible string storage, and codegen lowers it to a pointer to a shared empty string constant. Proven by `python -m unittest tests.test_parser tests.test_typecheck tests.test_codegen`.
 
-- [ ] **3.4 — Standard type / file names `TEXT`, `INPUT`, `OUTPUT`, `STRING`.** `[OBSERVED]` **S**
-  None present as predeclared. `TEXT`/`INPUT`/`OUTPUT` only become meaningful with
-  file I/O (section 8); `STRING` ties to the string story (section 7). Register
-  the names now, flesh out behavior later.
+- [x] **3.4 — Standard type / file names `TEXT`, `INPUT`, `OUTPUT`, `STRING`.** `[OBSERVED]` **S**
+  Registered the names in the builtin symbol table so the parser/type checker can resolve them as predeclared identifiers. `TEXT` is modeled as a `TEXT OF CHAR` file type placeholder; `INPUT`/`OUTPUT` alias that placeholder; `STRING` is predeclared as a type name alongside the existing `STRING(n)` syntax. Proven by `python -m unittest tests.test_typecheck tests.test_codegen`.
 
 ---
 
@@ -206,12 +200,16 @@ Cheapest coverage of the manual's predeclared list. Pure registration work.
 Single instruction or tiny fixed sequence; no allocation, no libc. Cheap, optimize
 well. This is where `CHR`/`ORD`/`ODD`/`SUCC`/`SIZEOF`/`UPPER`/`ADR` already live.
 
-- [ ] **4.1 — `PRED`.** `[READ]` **XS** Mirror of existing `SUCC` (`n-1`).
-- [ ] **4.2 — `SQR`.** `[READ]` **XS** `x*x`. Distinct from `SQRT` (6.x).
+- [x] **4.1 — `PRED`.** `[READ]` **XS** Mirror of existing `SUCC` (`n-1`).
+  - Done: registered `PRED` as a predeclared integer function and lowered it to integer subtraction in codegen. Proven by `python3 -m unittest tests.test_typecheck tests.test_codegen`.
+- [x] **4.2 — `SQR`.** `[READ]` **XS** `x*x`. Distinct from `SQRT` (6.x).
+  - Done: registered `SQR` as a predeclared integer/real intrinsic and lowered it to self-multiplication in codegen. Proven by `python3 -m unittest tests.test_typecheck tests.test_codegen`.
 - [ ] **4.3 — `FLOAT`.** `[READ]` **S** INTEGER→REAL (`sitofp`). Needs REAL codegen (see note).
 - [ ] **4.4 — `TRUNC` / `ROUND`.** `[READ]` **M** REAL→INTEGER (`fptosi`; `ROUND` adds rounding). Needs REAL codegen.
-- [ ] **4.5 — `LOWER`.** `[READ]` **S** Mirror of existing `UPPER` (super-array lower bound).
-- [ ] **4.6 — `HIBYTE` / `LOBYTE`.** `[READ]` **S** Shift + truncate to byte.
+- [x] **4.5 — `LOWER`.** `[READ]` **S** Mirror of existing `UPPER` (super-array lower bound).
+  - Done: added `LOWER` parsing, type checking, and codegen alongside `UPPER` so array bounds can be queried symmetrically. Proven by `python3 -m unittest tests.test_typecheck tests.test_codegen`.
+- [x] **4.6 — `HIBYTE` / `LOBYTE`.** `[READ]` **S** Shift + truncate to byte.
+  - Done: registered `HIBYTE`/`LOBYTE` as byte-extraction intrinsics and lowered them to shift/truncate codegen. Proven by `python3 -m unittest tests.test_typecheck tests.test_codegen`.
 - [ ] **4.7 — `WRD` / `BYWORD`.** `[INFERRED]` **M** Word conversions; confirm exact semantics from manual body first.
 - [ ] **4.8 — `RETYPE`.** `[INFERRED]` **M** Reinterpret cast (LLVM `bitcast`); needs care with type-checker rules. Confirm semantics.
 - [ ] **4.9 — `PACK` / `UNPACK`.** `[INFERRED]` **M** Packed-array (un)packing; inline for small, runtime loop for large. Depends on `PACKED` representation.
@@ -254,12 +252,50 @@ Gated on REAL codegen depth (see note at end).
 All depend on the `LSTRING` / `STRING` / `SUPER ARRAY` memory layout. Settle that
 first or these will be built on sand.
 
-- [ ] **7.1 — Decide and implement the `LSTRING`/`STRING` representation.** `[INFERRED]` **L**
-  Length-prefixed (`LSTRING`) vs fixed (`STRING`) vs super-array. Blocks 7.2–7.4.
-- [ ] **7.2 — `CONCAT`, `COPYSTR`, `COPYLST`.** `[READ]` **M** String build/copy.
-- [ ] **7.3 — `INSERT`, `DELETE`, `POSITN`.** `[READ]` **M** Edit/search.
-- [ ] **7.4 — `SCANEQ`, `SCANNE`.** `[READ]` **M** Scan-while-equal / not-equal.
-- [ ] **7.5 — `ENCODE` / `DECODE`.** `[READ]` **L** Number↔string formatting (libc `sprintf`/`sscanf` under the hood).
+- [x] **7.1 — Decide the `LSTRING`/`STRING` representation.** `[INFERRED]` **S**
+  Distinct semantic types: fixed-capacity `STRING(n)` and length-prefixed `LSTRING(n)`. Type checking resolves both forms, infers string literals as capacity-bearing `LSTRING`, and enforces literal capacity on assignment. Proven by `python -m unittest tests.test_parser tests.test_typecheck`.
+- [x] **7.2 — Implement the `LSTRING`/`STRING` storage representation.** `[OBSERVED]` **L**
+  Done: Replaced placeholder byte-pointer lowering with proper inline aggregate representation. LSTRING(n) → `[n+1 x i8]` with byte [0] = length (0..n, max n=255). STRING(n) → `[n x i8]` with no length prefix. Both stored inline (not pointer-to-side-buffer), supporting direct ADR/SIZEOF semantics. Assignment implements range checks (overflow = error), null-terminates LSTRING, blank-pads STRING (0x20). Updated `llvm_type`, `codegen_var_decl`, `get_string_chars_and_len`, assignment path, and WRITE/WRITELN output for inline aggregates. Re-tested all 7.3 string intrinsics (CONCAT/COPYSTR/COPYLST) and full codegen suite (170 tests). Proven by `python -m unittest tests.test_codegen tests.test_codegen_strings_bounds`.
+  - CORRECTION (see 7.7): the "null-terminates LSTRING" behavior noted above
+    was non-spec and is removed. LSTRING is length-prefixed only (manual 6-18);
+    the terminator also overflowed by one byte at exact capacity.
+- [x] **7.3 — `CONCAT`, `COPYSTR`, `COPYLST`.** `[READ]` **M** String build/copy.
+  - Done: Added global and local buffer allocation for string variables in `codegen_var_decl`. Registered three procedures in type checker and added comprehensive type checking logic. Implemented branchless inline LLVM lowering (using `memcpy` and `memset`) for string copying, concatenating, space-padding, and dynamic null-termination in code generator. Added 10 type-checking tests and 3 compile-and-run tests. Proven by `python -m unittest tests.test_typecheck.TestStringProcedures` and `python -m unittest tests.test_codegen` (including `test_string_concat_runtime`, `test_string_copylst_runtime`, `test_string_copystr_runtime`).
+  - CORRECTION (see 7.7): the "dynamic null-termination" noted above is removed
+    (non-spec), and the manual's capacity error (11-20) is now enforced on all
+    three procedures, which 7.3 omitted.
+- [ ] **7.4 — `INSERT`, `DELETE`, `POSITN`.** `[READ]` **M** Edit/search.
+- [ ] **7.5 — `SCANEQ`, `SCANNE`.** `[READ]` **M** Scan-while-equal / not-equal.
+- [ ] **7.6 — `ENCODE` / `DECODE`.** `[READ]` **L** Number↔string formatting (libc `sprintf`/`sscanf` under the hood).
+- [x] **7.7 — String-correctness hardening (post-7.2/7.3 follow-ups).** `[OBSERVED]` **M**
+  Three defects in the shipped LSTRING/STRING codegen, found reviewing 7.2/7.3
+  against the manual, are fixed:
+  (1) **LSTRING is length-prefixed, not null-terminated.** 7.2/7.3 wrote a NUL
+  at byte `[current_len + 1]`. The manual (6-18/6-19) defines `LSTRING(n)` as
+  `PACKED ARRAY [0..n] OF CHAR` — byte `[0]` = length, no terminator — and
+  `WRITE` emits "the current length string." At exact capacity (`len == n`) the
+  NUL landed at index `n+1`, one past the `[n+1 x i8]` aggregate (a one-byte
+  overflow). Removed the terminator stores from the assignment path, `CONCAT`,
+  and `COPYLST`; `WRITE` of an LSTRING now uses `%.*s` driven by the `[0]`
+  length byte instead of `%s`.
+  (2) **`CONCAT`/`COPYLST`/`COPYSTR` had no capacity check.** The manual (11-20)
+  requires an error when `upper(D) < length(D)+upper(S)` (CONCAT) or
+  `upper(D) < upper(S)` (COPYLST/COPYSTR). Added a shared guard
+  (`_guard_string_capacity`) that aborts before any write; this also makes
+  `COPYSTR`'s blank-pad length provably non-negative.
+  (3) **`WRITE` field-width arg ordering.** `WRITE(s:w)` lowered to `%*.*s` but
+  emitted the implicit length (the precision) ahead of the width arg, swapping
+  the two; the length is now appended after the width.
+  - Proven (confirmed here): front end green via `python3 -m unittest
+    tests.test_parser tests.test_typecheck` (100), and the IR-level guard/format
+    checks in `tests.test_codegen_strings_bounds`
+    (`TestStringIntrinsicCapacityIR`, `TestLStringLengthSemantics`).
+  - Build/run coverage (`TestStringIntrinsicCapacityRuntime`,
+    `TestWriteFieldWidthOrdering`, exact-capacity round-trip) is in the same
+    file under `@requires_exe`; runs where llvmlite+clang are present.
+  - Open coupling: per the manual these range errors are gated on `$RANGECK`,
+    still unhandled (see 9.5). The checks are currently unconditional; revisit
+    when the metacommand machinery lands.
 
 ---
 
@@ -284,9 +320,26 @@ the biggest single chunk; expect it to need its own design pass.
 
 ## 9. Cross-cutting / infrastructure
 
-- [ ] **9.1 — REAL codegen depth.** `[READ]` **M**
+- [x] **9.1 — REAL codegen depth.** `[READ]` **M**
   README calls REAL "limited codegen support." Sections 4.3/4.4 and all of 6 hang
   off this. Audit and harden REAL before (or alongside) the math intrinsics.
+  - Done: three bugs found and fixed.
+    (1) `SLASH` always produces REAL in Pascal, but codegen checked `is_real` by
+    inspecting LLVM operand types — two `i32`s produced `fdiv i32` (invalid IR).
+    Fixed by setting `is_real = True` unconditionally when `op == 'SLASH'` before
+    the operand-promotion block. (2) REAL constants (`CONST PI = 3.14159`) crashed
+    with "Cannot evaluate constant expression: RealLiteral" because `eval_const_expr`
+    was int-only and `self.constants` was typed `Dict[str,int]`. Fixed by widening
+    both to carry `float` values, adding `RealLiteral`/`CharLiteral` cases and
+    float-aware arithmetic folding, and emitting `ir.Constant(ir.DoubleType(), v)`
+    at use sites via a new `_const_ir()` helper. (3) Unary minus on a `double`
+    operand emitted integer `sub`; fixed by checking operand type in
+    `codegen_unaryop` and using `fsub(0.0, operand)` for doubles. Output format
+    note: WRITE/WRITELN emits `%f` (six decimals by default); IBM Pascal’s
+    free-format / exponential default differs — tracked as a future cosmetic fix,
+    not a correctness blocker. Proven by `python -m unittest tests.test_parser
+    tests.test_typecheck tests.test_codegen` (157 tests, 8 new REAL-hardening
+    run tests in `TestCodegenBuildRun`).
 - [ ] **9.2 — Predeclared-identifier registration mechanism.** `[INFERRED]` **S**
   Today builtins are scattered (some in `_setup_builtins`, some as dedicated AST
   nodes `AdrExpr`/`SizeofExpr`/`UpperExpr`, some hand-declared `extern`). Consider
@@ -311,18 +364,47 @@ the biggest single chunk; expect it to need its own design pass.
   `$PUSH`. Decide which are ignored, which affect parser/codegen state, and
   which should error when unsupported.
 
-- [ ] **9.6 — Full set type-checking and codegen.** `[OBSERVED]` **L**
-  Parser preserves set bases incl. subrange bounds (1.2), but sets are not yet
-  resolved or lowered: `type_checker.resolve_type` has no `SetType` branch (set
-  decls resolve to `None`), and `codegen_llvm.llvm_type` has no `SetType` branch.
-  Needs: a `SetType` resolution path (resolving `SubrangeType.host=None` named
-  bounds to their ordinal type), a runtime representation (bitset over the base's
-  ordinal range), and lowering for set constructors, `IN`, union/intersection/
-  difference. Pairs with the type-prefixed set constructor (2.9).
+- [x] **9.6 — Full set type-checking and codegen.** `[OBSERVED]` **L**
+  CORRECTION to the original audit note: by the time this item was picked up,
+  item 2.9 had already added the `SetType` resolution path
+  (`type_checker.resolve_type` handles `ASTSetType`/`ASTSubrangeType`), the
+  fixed 256-bit (`[4 x i64]`) runtime representation (`codegen_llvm.set_llvm_type`
+  + `llvm_type` `SetType` branch), and lowering for `IN`, union (`+`),
+  intersection (`*`), difference (`-`), and the set comparisons. So the audit's
+  "resolve_type/llvm_type have no SetType branch" was stale.
+  - Done (the three gaps that actually remained):
+    (1) **Dynamic set constructors.** `codegen_set_constructor` now folds the
+    constant part and emits runtime IR for non-constant elements (single-bit OR)
+    and non-constant ranges (`[lo..hi]` via a counted loop, reversed = empty), so
+    `s := [i, lo..hi, 20]` works. (2) **Enum-based set bases.** Added
+    `type_system.EnumType`, an `ASTEnumType` branch in `resolve_type`,
+    registration of enum members as ordinal constants in both the type checker
+    and codegen, an `EnumType` branch in `codegen_llvm.llvm_type` (i32), and enum
+    comparison in `binary_op_result_type`, so `SET OF Color` / `Green IN s` work.
+    (3) **Named-constant subrange bases.** `SET OF lo..hi` resolves via the
+    bound expressions' ordinal type.
+  - Also fixed a cross-cutting bug found along the way: `CharLiteral` carried the
+    quoted lexeme (`'B'`) instead of the unquoted value, so char ordinals were
+    wrong (membership used `'`=39, constant folding returned 0). The parser now
+    stores `Token.value`; char sets are correct.
+  - Proven by `python -m unittest tests.test_parser tests.test_typecheck
+    tests.test_codegen tests.test_integration` (163 tests). New tests:
+    `test_set_dynamic_element_runtime`, `test_set_dynamic_range_runtime`,
+    `test_char_set_membership_runtime`, `test_enum_set_membership_runtime`
+    (codegen) and `test_enum_set_declaration_and_membership`,
+    `test_named_const_subrange_set_base_resolves` (typecheck). EBNF `set_type`
+    note refreshed to match the real implementation.
 
 - [ ] **9.7 — Deferred attribute-argument forms.** `[DEFERRED]` **S**
   `ORIGIN(c)` and any `PORT(addr)`-style attribute syntax remain intentionally
   out of scope until the manual's prose and grammar are reconciled more fully.
+
+- [ ] **9.8 — Full Enum support.** `[INFERRED]` **M**
+  Enum-based sets (9.6) now work because they resolve to `i32` ordinals, but
+  the compiler lacks first-class enum support: `SUCC`/`PRED` on enums, `CASE`
+  statements over enums, enum-controlled `FOR` loops, and `WRITE` of enum names
+  all need dedicated paths to support the `EnumType` introduced in 9.6.
+
 
 ---
 

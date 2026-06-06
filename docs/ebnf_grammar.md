@@ -361,6 +361,7 @@ type =
     | pointer_type
     | set_type
     | file_type
+    | string_type
     | lstring_type
     | type_designator   (* super array instantiation, e.g. VECT(10) *)
     | identifier ;      (* named type *)
@@ -398,11 +399,15 @@ pointer_type = "^" type
              | "ADR" "OF" type
              | "ADS" "OF" type ;
 
-(* [OBSERVED] SET OF is fully implemented. Small sets (ordinal values
-   0..15) are generated inline; larger sets (up to 0..255) use runtime
-   routines. Sets with maximum ORD value > 255 are not permitted.
-   The base type may be a subrange, a named ordinal type (CHAR,
-   BOOLEAN, user-defined enumerated), or an anonymous subrange. *)
+(* [OBSERVED] SET OF is implemented end-to-end (checklist 9.6). All sets
+   use one fixed representation: a 256-bit bitvector (four i64 words), so
+   element ORD values must be 0..255. Constant constructors fold at compile
+   time; non-constant elements and ranges (e.g. [i, lo..hi]) are built at
+   runtime. IN, union (+), intersection (*), difference (-), and the set
+   comparisons all lower over this representation. The base type may be an
+   anonymous subrange (SET OF 1..10, SET OF 'A'..'Z'), a named-constant
+   subrange (SET OF lo..hi), or a named ordinal type (CHAR, BOOLEAN, or a
+   user-defined enumerated type). *)
 set_type = "SET" "OF" ( index_range | identifier ) ;
 
 (* [DOCUMENTED] FILE OF is fully specified with GET, PUT, READ, WRITE,
@@ -410,7 +415,24 @@ set_type = "SET" "OF" ( index_range | identifier ) ;
    Runtime I/O is unverified due to linker library path issue. *)
 file_type = "FILE" "OF" type ;
 
-lstring_type = "LSTRING" "(" constant ")" ;
+(* [OBSERVED] STRING(n) is fixed-length string storage (PACKED ARRAY [1..n] OF CHAR):
+   - bytes [0..n-1] contain characters, no length prefix
+   - blank-padded (0x20) on assignment; write outputs all n chars
+   - lowered as inline aggregate [n x i8]
+   - ADR points to byte 0; SIZEOF = n
+   
+   LSTRING(n) is length-prefixed string storage (PACKED ARRAY [0..n] OF CHAR):
+   - byte [0] = current length (0..n, max n = 255 per manual §5-11, §6-17)
+   - bytes [1..n] = characters
+   - null-terminated at byte [len+1] for libc convenience
+   - lowered as inline aggregate [n+1 x i8]
+   - ADR points to byte 0 (the length); SIZEOF = n+1
+   
+   Both pass as references (super-array semantics, not pointer-to-side-buffer).
+   Assignment overflow (src_len > n) emits range-check error, not silent truncate.
+   The bare identifier STRING is also predeclared as a type name. *)
+string_type  = "STRING"  "(" constant ")" ;      (* PACKED ARRAY [1..n] OF CHAR, inline [n x i8] *)
+lstring_type = "LSTRING" "(" constant ")" ;    (* PACKED ARRAY [0..n] OF CHAR, inline [n+1 x i8] *)
 
 
 (* ═══════════════════════════════════════════════════════════════════

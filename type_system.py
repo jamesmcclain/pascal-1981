@@ -75,6 +75,32 @@ class CharType(Type):
 
 
 @dataclass
+class StringType(Type):
+    """The STRING(n) type: fixed-length string storage."""
+
+    max_len: int
+
+    def __str__(self) -> str:
+        return f"STRING({self.max_len})"
+
+    def equivalent_to(self, other: Type) -> bool:
+        return isinstance(other, StringType) and self.max_len == other.max_len
+
+
+@dataclass
+class LStringType(Type):
+    """The LSTRING(n) type: length-prefixed string storage."""
+
+    max_len: int
+
+    def __str__(self) -> str:
+        return f"LSTRING({self.max_len})"
+
+    def equivalent_to(self, other: Type) -> bool:
+        return isinstance(other, LStringType) and self.max_len == other.max_len
+
+
+@dataclass
 class ArrayType(Type):
     """Array type: ARRAY[lower..upper] OF element_type."""
 
@@ -119,6 +145,27 @@ class RecordType(Type):
 
 
 @dataclass
+class EnumType(Type):
+    """An enumerated ordinal type, e.g. (Red, Green, Blue).
+
+    Members carry their declaration order as ordinal values (0, 1, 2, ...).
+    ``name`` is the declared type name when known (for readable diagnostics and
+    nominal equivalence); anonymous enums compare by member list.
+    """
+
+    members: List[str]
+    name: Optional[str] = None
+
+    def __str__(self) -> str:
+        return self.name or f"({', '.join(self.members)})"
+
+    def equivalent_to(self, other: Type) -> bool:
+        if not isinstance(other, EnumType):
+            return False
+        return self.members == other.members
+
+
+@dataclass
 class SetType(Type):
     """Set type: SET OF element_type."""
 
@@ -131,6 +178,19 @@ class SetType(Type):
         if not isinstance(other, SetType):
             return False
         return self.element_type.equivalent_to(other.element_type)
+
+
+@dataclass
+class FileType(Type):
+    """File type placeholder: FILE OF element_type."""
+
+    element_type: Type
+
+    def __str__(self) -> str:
+        return f"FILE OF {self.element_type}"
+
+    def equivalent_to(self, other: Type) -> bool:
+        return isinstance(other, FileType) and self.element_type.equivalent_to(other.element_type)
 
 
 @dataclass
@@ -211,7 +271,8 @@ def can_assign(from_type: Type, to_type: Type) -> bool:
     We keep the rule narrow: exact matches are allowed, plus the common
     INTEGER-to-REAL widening used by assignments, parameters, and returns.
     Sets follow exact element-type equivalence, with the empty set represented
-    by a compatible SetType.
+    by a compatible SetType. String values may flow between STRING(n) and
+    LSTRING(n) when the source fits in the destination capacity.
     """
     if from_type.equivalent_to(to_type):
         return True
@@ -219,6 +280,8 @@ def can_assign(from_type: Type, to_type: Type) -> bool:
         return True
     if isinstance(from_type, SetType) and isinstance(to_type, SetType):
         return from_type.element_type.equivalent_to(to_type.element_type)
+    if isinstance(from_type, (StringType, LStringType)) and isinstance(to_type, (StringType, LStringType)):
+        return from_type.max_len <= to_type.max_len
     return False
 
 
@@ -287,6 +350,11 @@ def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optiona
     # Character comparison
     if isinstance(left_type, CharType) and isinstance(right_type, CharType):
         if op in COMPARE:
+            return BOOLEAN_TYPE
+
+    # Enum comparison (same enum type only)
+    if isinstance(left_type, EnumType) and isinstance(right_type, EnumType):
+        if left_type.equivalent_to(right_type) and op in COMPARE:
             return BOOLEAN_TYPE
 
     # Set operators

@@ -93,12 +93,60 @@ class TestCodegenIR(unittest.TestCase):
         # IR should contain some basic structure
         self.assertIn("define", ir)
 
+    def test_predeclared_maxint_maxword_constants(self):
+        """MAXINT and MAXWORD lower as folded constants."""
+        src = "PROGRAM P; BEGIN WRITELN(MAXINT); WRITELN(MAXWORD) END."
+        ir = compile_to_ir(src)
+        self.assertIn("2147483647", ir)
+        self.assertIn("65535", ir)
+
+    def test_null_lowers_as_empty_string_pointer(self):
+        """NULL lowers to a pointer to the empty LSTRING constant."""
+        src = "PROGRAM P; VAR s: LSTRING(10); BEGIN s := NULL END."
+        ir = compile_to_ir(src)
+        self.assertIn("nullstr", ir)
+        self.assertIn("i8*", ir)
+
+    def test_pred_lowers_to_subtraction(self):
+        """PRED lowers to integer subtraction by one."""
+        src = "PROGRAM P; BEGIN WRITELN(PRED(3)) END."
+        ir = compile_to_ir(src)
+        self.assertIn("sub i32", ir)
+
+    def test_sqr_lowers_to_multiply(self):
+        """SQR lowers to multiplication of the operand by itself."""
+        src = "PROGRAM P; BEGIN WRITELN(SQR(3)) END."
+        ir = compile_to_ir(src)
+        self.assertIn("mul i32", ir)
+
+    def test_upper_lower_lowers_to_array_bounds(self):
+        """UPPER and LOWER lower to constant array bound values."""
+        src = "PROGRAM P; VAR a: ARRAY[1..10] OF INTEGER; BEGIN WRITELN(UPPER(a)); WRITELN(LOWER(a)) END."
+        ir = compile_to_ir(src)
+        self.assertIn("10", ir)
+        self.assertIn("1", ir)
+
+    def test_hibyte_lobyte_lowers_to_byte_extraction(self):
+        """HIBYTE and LOBYTE lower to shifts and truncation."""
+        src = "PROGRAM P; BEGIN WRITELN(HIBYTE(4660)); WRITELN(LOBYTE(4660)) END."
+        ir = compile_to_ir(src)
+        self.assertIn("lshr", ir)
+        self.assertIn("trunc", ir)
+
     def test_variable_assignment(self):
         """Variable assignment generates valid IR."""
         src = "PROGRAM P; VAR x: INTEGER; BEGIN x := 42; WRITELN(x) END."
         ir = compile_to_ir(src)
         self.assertIsInstance(ir, str)
         self.assertGreater(len(ir), 0)
+
+    def test_string_types_lower_as_byte_pointers(self):
+        """STRING(n) and LSTRING(n) lower to inline aggregate storage."""
+        src = "PROGRAM P; VAR a: STRING(10); VAR b: LSTRING(10); BEGIN END."
+        ir = compile_to_ir(src)
+        # STRING(10) lowers to [10 x i8], LSTRING(10) lowers to [11 x i8]
+        self.assertIn("[10 x i8]", ir)
+        self.assertIn("[11 x i8]", ir)
 
     def test_set_variable_uses_bitvector_storage(self):
         """SET variables lower to a fixed 256-bit bitvector."""
@@ -379,6 +427,90 @@ class TestCodegenBuildRun(unittest.TestCase):
         self.assertEqual(returncode, 0)
         self.assertEqual(stdout.strip(), "2\n4")
 
+    def test_set_dynamic_element_runtime(self):
+        """Set constructors with runtime element values build the right set."""
+        src = """
+        PROGRAM P;
+        VAR s: SET OF 0..31;
+        VAR i: INTEGER;
+        BEGIN
+            i := 3;
+            s := [i, 5, 10];
+            IF 3 IN s THEN WRITELN(3);
+            IF 5 IN s THEN WRITELN(5);
+            IF 4 IN s THEN WRITELN(99)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "3\n5")
+
+    def test_set_dynamic_range_runtime(self):
+        """Set constructors with runtime range bounds set the whole span; reversed range is empty."""
+        src = """
+        PROGRAM P;
+        VAR s: SET OF 0..31;
+        VAR i, lo, hi, cnt: INTEGER;
+        BEGIN
+            lo := 4; hi := 8;
+            s := [lo..hi, 20];
+            cnt := 0;
+            FOR i := 0 TO 31 DO IF i IN s THEN cnt := cnt + 1;
+            WRITELN(cnt);
+            lo := 9; hi := 2;
+            s := [lo..hi];
+            cnt := 0;
+            FOR i := 0 TO 31 DO IF i IN s THEN cnt := cnt + 1;
+            WRITELN(cnt)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "6\n0")
+
+    def test_char_set_membership_runtime(self):
+        """CHAR-based sets honor element values (regression: char literals kept quotes)."""
+        src = """
+        PROGRAM P;
+        VAR s: SET OF 'A'..'Z';
+        VAR c: CHAR;
+        VAR cnt: INTEGER;
+        BEGIN
+            c := 'B';
+            s := [c, 'D'];
+            cnt := 0;
+            IF 'B' IN s THEN cnt := cnt + 1;
+            IF 'C' IN s THEN cnt := cnt + 100;
+            IF 'D' IN s THEN cnt := cnt + 1000;
+            WRITELN(cnt)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "1001")
+
+    def test_enum_set_membership_runtime(self):
+        """SET OF an enum type lowers members to ordinals and tests membership."""
+        src = """
+        PROGRAM P;
+        TYPE Color = (Red, Green, Blue, Yellow);
+        VAR s: SET OF Color;
+        VAR c: Color;
+        VAR cnt: INTEGER;
+        BEGIN
+            c := Red;
+            s := [c, Blue];
+            cnt := 0;
+            IF Red IN s THEN cnt := cnt + 1;
+            IF Green IN s THEN cnt := cnt + 100;
+            IF Blue IN s THEN cnt := cnt + 1000;
+            WRITELN(cnt)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "1001")
+
     def test_variable_assignment_and_output(self):
         """Assign to variable and output."""
         src = (
@@ -425,6 +557,97 @@ class TestCodegenBuildRun(unittest.TestCase):
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         self.assertIn("7", stdout)
+
+    # ------------------------------------------------------------------
+    # 9.1 REAL hardening tests
+    # ------------------------------------------------------------------
+
+    def test_integer_slash_produces_real(self):
+        """INTEGER / INTEGER (SLASH) always yields a REAL result (not truncated int div)."""
+        src = "PROGRAM P; VAR i: INTEGER; BEGIN i := 7; WRITELN(i / 2) END."
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        # 7 / 2 must be 3.5, not 3
+        self.assertIn("3.5", stdout)
+
+    def test_integer_literal_slash_produces_real(self):
+        """Literal INTEGER / INTEGER yields REAL at compile time."""
+        src = "PROGRAM P; BEGIN WRITELN(1 / 4) END."
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertIn("0.25", stdout)
+
+    def test_real_const_declaration_and_use(self):
+        """REAL CONST can be declared and used in expressions without crashing."""
+        src = (
+            "PROGRAM P; "
+            "CONST PI = 3.14159; "
+            "VAR r: REAL; "
+            "BEGIN r := PI; WRITELN(r) END."
+        )
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertIn("3.14", stdout)
+
+    def test_negative_real_const(self):
+        """Unary minus applied to a REAL constant generates valid IR and correct output."""
+        src = (
+            "PROGRAM P; "
+            "CONST NEGPI = -3.14159; "
+            "VAR r: REAL; "
+            "BEGIN r := NEGPI; WRITELN(r) END."
+        )
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertIn("-3.14", stdout)
+
+    def test_real_const_in_expression(self):
+        """REAL constant participates in arithmetic expressions correctly."""
+        src = (
+            "PROGRAM P; "
+            "CONST TWO = 2.0; NEGPI = -3.14159; "
+            "FUNCTION Scale(x: REAL): REAL; "
+            "BEGIN Scale := x * TWO + NEGPI END; "
+            "BEGIN WRITELN(Scale(1.0) : 10 : 4) END."
+        )
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        # 1.0 * 2.0 + (-3.14159) = -1.14159
+        self.assertIn("-1.1416", stdout)
+
+    def test_unary_minus_real_variable(self):
+        """Unary minus on a REAL variable generates valid IR (not integer neg)."""
+        src = (
+            "PROGRAM P; VAR x: REAL; "
+            "BEGIN x := 2.5; WRITELN(-x) END."
+        )
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertIn("-2.5", stdout)
+
+    def test_real_comparison_produces_boolean(self):
+        """REAL comparisons evaluate and branch correctly."""
+        src = (
+            "PROGRAM P; CONST NEGPI = -3.14159; "
+            "BEGIN "
+            "IF NEGPI < 0.0 THEN WRITELN(1) ELSE WRITELN(0); "
+            "IF 0.5 = 0.5 THEN WRITELN(1) ELSE WRITELN(0) "
+            "END."
+        )
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        lines = stdout.strip().split()
+        self.assertEqual(lines, ['1', '1'])
+
+    def test_mixed_int_real_arithmetic(self):
+        """Mixed INTEGER and REAL operands widen to REAL correctly."""
+        src = (
+            "PROGRAM P; VAR x: REAL; i: INTEGER; "
+            "BEGIN x := 3.0; i := 7; WRITELN(x + i : 8 : 2) END."
+        )
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertIn("10.00", stdout)
 
     def test_nested_arithmetic(self):
         """Nested arithmetic expressions."""
@@ -563,6 +786,57 @@ class TestCodegenBuildRun(unittest.TestCase):
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         self.assertEqual(stdout.strip(), "15")
+
+    def test_string_concat_runtime(self):
+        """CONCAT appends a string to an LSTRING."""
+        src = """
+        PROGRAM P;
+        VAR
+            dest: LSTRING(20);
+        BEGIN
+            dest := 'hello';
+            CONCAT(dest, ' world');
+            WRITELN(dest)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "hello world")
+
+    def test_string_copylst_runtime(self):
+        """COPYLST copies a STRING to an LSTRING."""
+        src = """
+        PROGRAM P;
+        VAR
+            src_str: STRING(10);
+            dest_lstr: LSTRING(20);
+        BEGIN
+            src_str := 'pascal';
+            COPYLST(src_str, dest_lstr);
+            WRITELN(dest_lstr)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "pascal")
+
+    def test_string_copystr_runtime(self):
+        """COPYSTR copies a STRING to a STRING and space-pads it."""
+        src = """
+        PROGRAM P;
+        VAR
+            src_str: STRING(5);
+            dest_str: STRING(10);
+        BEGIN
+            src_str := 'abc';
+            COPYSTR(src_str, dest_str);
+            WRITELN(dest_str)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        # dest_str should be 'abc' followed by 7 spaces
+        self.assertEqual(stdout.rstrip('\r\n'), "abc       ")
 
 
 if __name__ == '__main__':

@@ -41,6 +41,43 @@ class TestVariableScope(unittest.TestCase):
         result = typecheck_source("PROGRAM P; CONST x = 42; BEGIN END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
+    def test_lstring_and_string_types_resolve(self):
+        """STRING(n) and LSTRING(n) type annotations resolve."""
+        result = typecheck_source("PROGRAM P; VAR a: STRING(10); VAR b: LSTRING(10); BEGIN END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_null_is_the_empty_lstring_constant(self):
+        """NULL is the predeclared empty LSTRING constant."""
+        result = typecheck_source("PROGRAM P; VAR s: LSTRING(10); BEGIN s := NULL END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_null_is_not_a_pointer_constant(self):
+        """NULL is a string constant, not a pointer constant."""
+        result = typecheck_source("PROGRAM P; VAR p: ^INTEGER; BEGIN p := NULL END.")
+        self.assertFalse(result.success)
+        self.assertIn("Cannot assign", " ".join(str(e) for e in result.errors))
+
+    def test_string_literal_assigns_when_capacity_fits(self):
+        """String literals can initialize compatible STRING/LSTRING storage."""
+        result = typecheck_source("PROGRAM P; VAR a: STRING(10); VAR b: LSTRING(10); BEGIN a := 'abc'; b := 'abc' END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_string_literal_assignment_rejects_overflow(self):
+        """String literal assignment rejects destinations that are too small."""
+        result = typecheck_source("PROGRAM P; VAR a: STRING(2); BEGIN a := 'abc' END.")
+        self.assertFalse(result.success)
+        self.assertIn("Cannot assign", " ".join(str(e) for e in result.errors))
+
+    def test_predeclared_maxint_maxword_constants(self):
+        """MAXINT and MAXWORD are predeclared constants."""
+        result = typecheck_source("PROGRAM P; CONST hi = MAXINT; BEGIN WRITELN(hi); WRITELN(MAXWORD) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_predeclared_text_input_output_string_names(self):
+        """TEXT, INPUT, OUTPUT, and STRING are predeclared names."""
+        result = typecheck_source("PROGRAM P; VAR f: TEXT; BEGIN WRITELN(INPUT); WRITELN(OUTPUT); WRITELN(f) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
     def test_shadowing_nested_scope(self):
         """Variable shadowing in nested scope is allowed."""
         result = typecheck_source(
@@ -108,6 +145,41 @@ class TestTypeCompatibility(unittest.TestCase):
         result = typecheck_source("PROGRAM P; TYPE N = INTEGER; VAR x: SET OF 1..10; BEGIN x := N[1..3] END.")
         self.assertFalse(result.success)
         self.assertTrue(any("must name a set type" in e.message for e in result.errors))
+
+    def test_enum_set_declaration_and_membership(self):
+        """SET OF an enum type resolves, and members are usable elements/values."""
+        result = typecheck_source(
+            "PROGRAM P; TYPE C = (Red, Green, Blue); VAR s: SET OF C; VAR ok: BOOLEAN; "
+            "BEGIN s := [Red, Blue]; ok := Green IN s END.")
+        self.assertTrue(result.success, [e.message for e in result.errors])
+
+    def test_named_const_subrange_set_base_resolves(self):
+        """A SET OF lo..hi with named integer-constant bounds resolves."""
+        result = typecheck_source(
+            "PROGRAM P; CONST lo = 1; hi = 10; VAR s: SET OF lo..hi; BEGIN s := [2, 3] END.")
+        self.assertTrue(result.success, [e.message for e in result.errors])
+
+    def test_pred_typecheck(self):
+        """PRED accepts one INTEGER argument and returns INTEGER."""
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := PRED(3) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_sqr_typecheck(self):
+        """SQR accepts INTEGER/REAL and returns the same type."""
+        int_result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := SQR(3) END.")
+        self.assertTrue(int_result.success, msg=" ".join(str(e) for e in int_result.errors))
+        real_result = typecheck_source("PROGRAM P; VAR x: REAL; BEGIN x := SQR(1.5) END.")
+        self.assertTrue(real_result.success, msg=" ".join(str(e) for e in real_result.errors))
+
+    def test_upper_lower_typecheck(self):
+        """UPPER and LOWER accept array variables and return INTEGER bounds."""
+        result = typecheck_source("PROGRAM P; VAR a: ARRAY[1..10] OF INTEGER; BEGIN WRITELN(UPPER(a)); WRITELN(LOWER(a)) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_hibyte_lobyte_typecheck(self):
+        """HIBYTE and LOBYTE accept INTEGER arguments and return CHAR."""
+        result = typecheck_source("PROGRAM P; VAR x: CHAR; BEGIN x := HIBYTE(4660); x := LOBYTE(4660) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_abs_and_sqrt_typecheck(self):
         """ABS accepts INTEGER/REAL and SQRT returns REAL."""
@@ -314,6 +386,96 @@ class TestIntegration(unittest.TestCase):
         self.assertTrue(
             not result.success,
             msg="Expected type error on parameter mismatch"
+        )
+
+
+class TestStringProcedures(unittest.TestCase):
+    """Type checking for string manipulation procedures (section 7.2)."""
+
+    def test_concat_valid_types(self):
+        """CONCAT with LSTRING destination and STRING source is valid."""
+        result = typecheck_source(
+            "PROGRAM P; VAR d: LSTRING(256); s: STRING(100); BEGIN CONCAT(d, s) END."
+        )
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_concat_wrong_dest_type(self):
+        """CONCAT requires LSTRING destination, not STRING."""
+        result = typecheck_source(
+            "PROGRAM P; VAR d: STRING(256); s: STRING(100); BEGIN CONCAT(d, s) END."
+        )
+        self.assertFalse(result.success)
+        self.assertTrue(
+            any('LSTRING' in str(e) for e in result.errors),
+            msg="Expected LSTRING type error in: " + " ".join(str(e) for e in result.errors)
+        )
+
+    def test_concat_immutable_dest(self):
+        """CONCAT destination must be mutable (VAR), not a constant."""
+        result = typecheck_source(
+            "PROGRAM P; VAR s: STRING(100); CONST d = 'test'; BEGIN CONCAT(d, s) END."
+        )
+        self.assertFalse(result.success)
+
+    def test_copylst_valid_types(self):
+        """COPYLST with STRING source and LSTRING destination is valid."""
+        result = typecheck_source(
+            "PROGRAM P; VAR s: STRING(100); d: LSTRING(256); BEGIN COPYLST(s, d) END."
+        )
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_copylst_wrong_dest_type(self):
+        """COPYLST requires LSTRING destination, not STRING."""
+        result = typecheck_source(
+            "PROGRAM P; VAR s: STRING(100); d: STRING(256); BEGIN COPYLST(s, d) END."
+        )
+        self.assertFalse(result.success)
+        self.assertTrue(
+            any('LSTRING' in str(e) for e in result.errors),
+            msg="Expected LSTRING type error in: " + " ".join(str(e) for e in result.errors)
+        )
+
+    def test_copylst_immutable_dest(self):
+        """COPYLST destination must be mutable (VAR), not a constant."""
+        result = typecheck_source(
+            "PROGRAM P; VAR s: STRING(100); CONST d = 'test'; BEGIN COPYLST(s, d) END."
+        )
+        self.assertFalse(result.success)
+
+    def test_copystr_valid_types(self):
+        """COPYSTR with STRING source and destination is valid."""
+        result = typecheck_source(
+            "PROGRAM P; VAR s: STRING(100); d: STRING(256); BEGIN COPYSTR(s, d) END."
+        )
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_copystr_wrong_dest_type(self):
+        """COPYSTR requires STRING destination, not LSTRING."""
+        result = typecheck_source(
+            "PROGRAM P; VAR s: STRING(100); d: LSTRING(256); BEGIN COPYSTR(s, d) END."
+        )
+        self.assertFalse(result.success)
+        self.assertTrue(
+            any('STRING' in str(e) for e in result.errors),
+            msg="Expected STRING type error in: " + " ".join(str(e) for e in result.errors)
+        )
+
+    def test_copystr_immutable_dest(self):
+        """COPYSTR destination must be mutable (VAR), not a constant."""
+        result = typecheck_source(
+            "PROGRAM P; VAR s: STRING(100); CONST d = 'test'; BEGIN COPYSTR(s, d) END."
+        )
+        self.assertFalse(result.success)
+
+    def test_concat_wrong_arg_count(self):
+        """CONCAT requires exactly 2 arguments."""
+        result = typecheck_source(
+            "PROGRAM P; VAR d: LSTRING(256); s: STRING(100); i: INTEGER; BEGIN CONCAT(d, s, i) END."
+        )
+        self.assertFalse(result.success)
+        self.assertTrue(
+            any('argument' in str(e).lower() for e in result.errors),
+            msg="Expected argument count error in: " + " ".join(str(e) for e in result.errors)
         )
 
 
