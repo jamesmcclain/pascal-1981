@@ -144,6 +144,8 @@ class Codegen:
             if name_up in self.type_aliases:
                 return self.llvm_type(self.type_aliases[name_up])
             return ir.IntType(32)
+        elif isinstance(type_expr, EnumType):
+            return ir.IntType(32)
         elif isinstance(type_expr, SetType):
             return self.set_llvm_type()
         elif isinstance(type_expr, (LStringType, ResolvedStringType, ResolvedLStringType)):
@@ -327,6 +329,10 @@ class Codegen:
     def codegen_type_decl(self, decl: TypeDecl) -> None:
         """Record a type declaration for later codegen lookups."""
         self.type_aliases[decl.name.upper()] = decl.type_expr
+        # Enum members become ordinal compile-time constants (0, 1, 2, ...).
+        if isinstance(decl.type_expr, EnumType):
+            for ordinal, member in enumerate(decl.type_expr.values):
+                self.constants[member.upper()] = ordinal
 
     def get_string_type_info(self, t: Type) -> tuple[bool, int, bool]:
         """Returns (is_str, max_len, is_lstring) for any AST Type or Resolved Type."""
@@ -1123,24 +1129,98 @@ class Codegen:
             raise CodegenError(f'Expression type {type(expr).__name__} not yet supported')
 
     def codegen_set_constructor(self, expr: SetConstructor) -> ir.Value:
-        """Codegen a set constructor as a 256-bit constant bitvector.
+        """Codegen a set constructor as a 256-bit bitvector.
 
-        Dynamic set construction is intentionally deferred; this phase gives the
-        backend a concrete representation and handles constant constructors and
-        ranges, including reversed ranges as empty ranges.
+        Constant elements and ranges fold into a compile-time set constant;
+        non-constant elements and range bounds are set at runtime (single bits
+        inline, ranges via a small loop). Reversed ranges are treated as empty.
         """
+        # First fold every element we can evaluate at compile time. Collect the
+        # remaining (dynamic) elements for runtime bit-setting.
         words = [0, 0, 0, 0]
+        dynamic: List[Union[Expression, RangeExpr]] = []
         for element in expr.elements:
             if isinstance(element, RangeExpr):
-                low = self.eval_const_expr(element.low)
-                high = self.eval_const_expr(element.high)
-                if low > high:
+                low = self._try_const(element.low)
+                high = self._try_const(element.high)
+                if low is not None and high is not None:
+                    if low <= high:
+                        for value in range(low, high + 1):
+                            self._set_constant_bit(words, value)
                     continue
-                for value in range(low, high + 1):
-                    self._set_constant_bit(words, value)
+                dynamic.append(element)
             else:
-                self._set_constant_bit(words, self.eval_const_expr(element))
-        return ir.Constant(self.set_llvm_type(), [ir.Constant(ir.IntType(64), word) for word in words])
+                value = self._try_const(element)
+                if value is not None:
+                    self._set_constant_bit(words, value)
+                else:
+                    dynamic.append(element)
+
+        const_set = ir.Constant(self.set_llvm_type(),
+                                [ir.Constant(ir.IntType(64), word) for word in words])
+        if not dynamic:
+            return const_set
+
+        # Runtime path: materialize the constant part in a temporary and OR in
+        # the dynamic elements bit by bit.
+        slot = self.builder.alloca(self.set_llvm_type(), name='settmp')
+        self.builder.store(const_set, slot)
+        for element in dynamic:
+            if isinstance(element, RangeExpr):
+                self._set_runtime_range(slot, element.low, element.high)
+            else:
+                self._set_runtime_bit(slot, self.codegen_expr(element))
+        return self.builder.load(slot)
+
+    def _try_const(self, expr: Expression) -> Optional[int]:
+        """Evaluate an expression as a constant ordinal, or None if not constant."""
+        try:
+            return self.eval_const_expr(expr)
+        except CodegenError:
+            return None
+
+    def _normalize_ordinal(self, value: ir.Value) -> ir.Value:
+        """Coerce a set element/ordinal value to i32."""
+        if isinstance(value.type, ir.IntType):
+            if value.type.width < 32:
+                return self.builder.zext(value, ir.IntType(32))
+            if value.type.width > 32:
+                return self.builder.trunc(value, ir.IntType(32))
+        return value
+
+    def _set_runtime_bit(self, slot: ir.Value, ordinal: ir.Value) -> None:
+        """OR one runtime ordinal bit into the set stored at ``slot``."""
+        ordinal = self._normalize_ordinal(ordinal)
+        word_index = self.builder.udiv(ordinal, ir.Constant(ir.IntType(32), 64))
+        bit_index = self.builder.urem(ordinal, ir.Constant(ir.IntType(32), 64))
+        word_ptr = self.builder.gep(slot, [ir.Constant(ir.IntType(32), 0), word_index])
+        word = self.builder.load(word_ptr)
+        bit_index64 = self.builder.zext(bit_index, ir.IntType(64))
+        mask = self.builder.shl(ir.Constant(ir.IntType(64), 1), bit_index64)
+        self.builder.store(self.builder.or_(word, mask), word_ptr)
+
+    def _set_runtime_range(self, slot: ir.Value, low_expr: Expression, high_expr: Expression) -> None:
+        """Set every bit in [low, high] at runtime via a counted loop."""
+        low = self._normalize_ordinal(self.codegen_expr(low_expr))
+        high = self._normalize_ordinal(self.codegen_expr(high_expr))
+        counter = self.builder.alloca(ir.IntType(32), name='setrange')
+        self.builder.store(low, counter)
+        cond_block = self.builder.append_basic_block('setrange.cond')
+        body_block = self.builder.append_basic_block('setrange.body')
+        end_block = self.builder.append_basic_block('setrange.end')
+        self.builder.branch(cond_block)
+
+        self.builder.position_at_end(cond_block)
+        cur = self.builder.load(counter)
+        self.builder.cbranch(self.builder.icmp_signed('<=', cur, high), body_block, end_block)
+
+        self.builder.position_at_end(body_block)
+        self._set_runtime_bit(slot, self.builder.load(counter))
+        nxt = self.builder.add(self.builder.load(counter), ir.Constant(ir.IntType(32), 1))
+        self.builder.store(nxt, counter)
+        self.builder.branch(cond_block)
+
+        self.builder.position_at_end(end_block)
 
     def _set_constant_bit(self, words: List[int], value: int) -> None:
         """Set one ordinal bit in a four-word set constant."""

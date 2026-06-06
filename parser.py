@@ -693,7 +693,7 @@ class Parser:
             self.pos += 1
             return RealLiteral(value)
         if kind == 'CHAR_LITERAL':
-            value = self.current().lexeme
+            value = self.current().value
             self.pos += 1
             return CharLiteral(value)
         if kind == 'STRING_LITERAL':
@@ -801,7 +801,7 @@ class Parser:
             self.pos += 1
             return RealLiteral(value)
         if kind == 'CHAR_LITERAL':
-            value = self.current().lexeme
+            value = self.current().value
             self.pos += 1
             return CharLiteral(value)
         if kind == 'STRING_LITERAL':

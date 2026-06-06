@@ -327,18 +327,43 @@ the biggest single chunk; expect it to need its own design pass.
   `$PUSH`. Decide which are ignored, which affect parser/codegen state, and
   which should error when unsupported.
 
-- [ ] **9.6 — Full set type-checking and codegen.** `[OBSERVED]` **L**
-  Parser preserves set bases incl. subrange bounds (1.2), but sets are not yet
-  resolved or lowered: `type_checker.resolve_type` has no `SetType` branch (set
-  decls resolve to `None`), and `codegen_llvm.llvm_type` has no `SetType` branch.
-  Needs: a `SetType` resolution path (resolving `SubrangeType.host=None` named
-  bounds to their ordinal type), a runtime representation (bitset over the base's
-  ordinal range), and lowering for set constructors, `IN`, union/intersection/
-  difference. Pairs with the type-prefixed set constructor (2.9).
+- [x] **9.6 — Full set type-checking and codegen.** `[OBSERVED]` **L**
+  CORRECTION to the original audit note: by the time this item was picked up,
+  item 2.9 had already added the `SetType` resolution path
+  (`type_checker.resolve_type` handles `ASTSetType`/`ASTSubrangeType`), the
+  fixed 256-bit (`[4 x i64]`) runtime representation (`codegen_llvm.set_llvm_type`
+  + `llvm_type` `SetType` branch), and lowering for `IN`, union (`+`),
+  intersection (`*`), difference (`-`), and the set comparisons. So the audit's
+  "resolve_type/llvm_type have no SetType branch" was stale.
+  - Done (the three gaps that actually remained):
+    (1) **Dynamic set constructors.** `codegen_set_constructor` now folds the
+    constant part and emits runtime IR for non-constant elements (single-bit OR)
+    and non-constant ranges (`[lo..hi]` via a counted loop, reversed = empty), so
+    `s := [i, lo..hi, 20]` works. (2) **Enum-based set bases.** Added
+    `type_system.EnumType`, an `ASTEnumType` branch in `resolve_type`,
+    registration of enum members as ordinal constants in both the type checker
+    and codegen, an `EnumType` branch in `codegen_llvm.llvm_type` (i32), and enum
+    comparison in `binary_op_result_type`, so `SET OF Color` / `Green IN s` work.
+    (3) **Named-constant subrange bases.** `SET OF lo..hi` resolves via the
+    bound expressions' ordinal type.
+  - Also fixed a cross-cutting bug found along the way: `CharLiteral` carried the
+    quoted lexeme (`'B'`) instead of the unquoted value, so char ordinals were
+    wrong (membership used `'`=39, constant folding returned 0). The parser now
+    stores `Token.value`; char sets are correct.
+  - Proven by `python -m unittest tests.test_parser tests.test_typecheck
+    tests.test_codegen tests.test_integration` (163 tests). New tests:
+    `test_set_dynamic_element_runtime`, `test_set_dynamic_range_runtime`,
+    `test_char_set_membership_runtime`, `test_enum_set_membership_runtime`
+    (codegen) and `test_enum_set_declaration_and_membership`,
+    `test_named_const_subrange_set_base_resolves` (typecheck). EBNF `set_type`
+    note refreshed to match the real implementation.
 
-- [ ] **9.7 — Deferred attribute-argument forms.** `[DEFERRED]` **S**
-  `ORIGIN(c)` and any `PORT(addr)`-style attribute syntax remain intentionally
-  out of scope until the manual's prose and grammar are reconciled more fully.
+- [ ] **9.8 — Full Enum support.** `[INFERRED]` **M**
+  Enum-based sets (9.6) now work because they resolve to `i32` ordinals, but
+  the compiler lacks first-class enum support: `SUCC`/`PRED` on enums, `CASE`
+  statements over enums, enum-controlled `FOR` loops, and `WRITE` of enum names
+  all need dedicated paths to support the `EnumType` introduced in 9.6.
+
 
 ---
 

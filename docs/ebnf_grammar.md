@@ -399,11 +399,15 @@ pointer_type = "^" type
              | "ADR" "OF" type
              | "ADS" "OF" type ;
 
-(* [OBSERVED] SET OF is fully implemented. Small sets (ordinal values
-   0..15) are generated inline; larger sets (up to 0..255) use runtime
-   routines. Sets with maximum ORD value > 255 are not permitted.
-   The base type may be a subrange, a named ordinal type (CHAR,
-   BOOLEAN, user-defined enumerated), or an anonymous subrange. *)
+(* [OBSERVED] SET OF is implemented end-to-end (checklist 9.6). All sets
+   use one fixed representation: a 256-bit bitvector (four i64 words), so
+   element ORD values must be 0..255. Constant constructors fold at compile
+   time; non-constant elements and ranges (e.g. [i, lo..hi]) are built at
+   runtime. IN, union (+), intersection (*), difference (-), and the set
+   comparisons all lower over this representation. The base type may be an
+   anonymous subrange (SET OF 1..10, SET OF 'A'..'Z'), a named-constant
+   subrange (SET OF lo..hi), or a named ordinal type (CHAR, BOOLEAN, or a
+   user-defined enumerated type). *)
 set_type = "SET" "OF" ( index_range | identifier ) ;
 
 (* [DOCUMENTED] FILE OF is fully specified with GET, PUT, READ, WRITE,

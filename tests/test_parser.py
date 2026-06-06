@@ -102,8 +102,8 @@ class TestParserJudgmentCalls(unittest.TestCase):
         ast = parse_source("PROGRAM P; VAR s: SET OF 'A'..'Z'; BEGIN END.")
         base = ast.block.decls[0].type_expr.base
         self.assertEqual(type(base).__name__, "SubrangeType")
-        self.assertEqual(base.low.value, "'A'")
-        self.assertEqual(base.high.value, "'Z'")
+        self.assertEqual(base.low.value, "A")
+        self.assertEqual(base.high.value, "Z")
         self.assertEqual(base.host, "CHAR")
 
     def test_set_base_named_const_subrange_preserves_bounds(self):

@@ -425,6 +425,90 @@ class TestCodegenBuildRun(unittest.TestCase):
         self.assertEqual(returncode, 0)
         self.assertEqual(stdout.strip(), "2\n4")
 
+    def test_set_dynamic_element_runtime(self):
+        """Set constructors with runtime element values build the right set."""
+        src = """
+        PROGRAM P;
+        VAR s: SET OF 0..31;
+        VAR i: INTEGER;
+        BEGIN
+            i := 3;
+            s := [i, 5, 10];
+            IF 3 IN s THEN WRITELN(3);
+            IF 5 IN s THEN WRITELN(5);
+            IF 4 IN s THEN WRITELN(99)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "3\n5")
+
+    def test_set_dynamic_range_runtime(self):
+        """Set constructors with runtime range bounds set the whole span; reversed range is empty."""
+        src = """
+        PROGRAM P;
+        VAR s: SET OF 0..31;
+        VAR i, lo, hi, cnt: INTEGER;
+        BEGIN
+            lo := 4; hi := 8;
+            s := [lo..hi, 20];
+            cnt := 0;
+            FOR i := 0 TO 31 DO IF i IN s THEN cnt := cnt + 1;
+            WRITELN(cnt);
+            lo := 9; hi := 2;
+            s := [lo..hi];
+            cnt := 0;
+            FOR i := 0 TO 31 DO IF i IN s THEN cnt := cnt + 1;
+            WRITELN(cnt)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "6\n0")
+
+    def test_char_set_membership_runtime(self):
+        """CHAR-based sets honor element values (regression: char literals kept quotes)."""
+        src = """
+        PROGRAM P;
+        VAR s: SET OF 'A'..'Z';
+        VAR c: CHAR;
+        VAR cnt: INTEGER;
+        BEGIN
+            c := 'B';
+            s := [c, 'D'];
+            cnt := 0;
+            IF 'B' IN s THEN cnt := cnt + 1;
+            IF 'C' IN s THEN cnt := cnt + 100;
+            IF 'D' IN s THEN cnt := cnt + 1000;
+            WRITELN(cnt)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "1001")
+
+    def test_enum_set_membership_runtime(self):
+        """SET OF an enum type lowers members to ordinals and tests membership."""
+        src = """
+        PROGRAM P;
+        TYPE Color = (Red, Green, Blue, Yellow);
+        VAR s: SET OF Color;
+        VAR c: Color;
+        VAR cnt: INTEGER;
+        BEGIN
+            c := Red;
+            s := [c, Blue];
+            cnt := 0;
+            IF Red IN s THEN cnt := cnt + 1;
+            IF Green IN s THEN cnt := cnt + 100;
+            IF Blue IN s THEN cnt := cnt + 1000;
+            WRITELN(cnt)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "1001")
+
     def test_variable_assignment_and_output(self):
         """Assign to variable and output."""
         src = (

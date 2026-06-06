@@ -18,11 +18,11 @@ from ast_nodes import AdrExpr, AdsExpr
 from ast_nodes import ArrayType as ASTArrayType
 from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, CharLiteral, ConstDecl, Designator, Expression, ForStmt, FuncCall, FuncDecl, Identifier, IfStmt,
                        ImplementationUnit, InterfaceUnit, IntLiteral, LabelStmt, LowerExpr, ModuleUnit, NamedType, NilLiteral, PointerType as ASTPointerType, ProcCallStmt, ProcDecl, ProgramUnit, RealLiteral, UpperExpr, WriteArg)
-from ast_nodes import LStringType as ASTLStringType, RecordType as ASTRecordType, SetType as ASTSetType, SubrangeType as ASTSubrangeType
+from ast_nodes import LStringType as ASTLStringType, RecordType as ASTRecordType, SetType as ASTSetType, SubrangeType as ASTSubrangeType, EnumType as ASTEnumType
 from ast_nodes import (RangeExpr, RepeatStmt, ReturnStmt, Selector, SetConstructor, SizeofExpr, Statement, StringLiteral, TypeDecl, UnaryOp, UseClause, VarDecl, WhileStmt)
 from symbol_table import SourceLocation, Symbol, SymbolTable
 from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, FileType, FunctionType, LStringType, PointerType, ProcedureType, RecordType, SetType, StringType, Type,
-                         binary_op_result_type, can_assign, unary_op_result_type)
+                         EnumType, binary_op_result_type, can_assign, unary_op_result_type)
 
 
 @dataclass
@@ -625,6 +625,16 @@ class PascalTypeChecker(TypeChecker):
         if not resolved_type:
             self.error(f"Unknown type: {decl.type_expr}", decl)
             return
+
+        # Tag anonymous enums with their declared name and register each member
+        # as an ordinal constant so they can be used as values and set elements.
+        if isinstance(resolved_type, EnumType):
+            resolved_type.name = decl.name
+            for member in resolved_type.members:
+                self.symbol_table.define(
+                    member,
+                    Symbol(name=member, type=resolved_type, kind='const',
+                           location=self.get_node_location(decl), is_mutable=False))
 
         self.symbol_table.define(decl.name, Symbol(name=decl.name, type=resolved_type, kind='type', location=self.get_node_location(decl), is_mutable=False))
 
@@ -1370,6 +1380,8 @@ class PascalTypeChecker(TypeChecker):
                 return None
         elif isinstance(type_expr, ASTLStringType):
             return LStringType(type_expr.max_len)
+        elif isinstance(type_expr, ASTEnumType):
+            return EnumType(list(type_expr.values))
         elif isinstance(type_expr, ASTSetType):
             base_type = self.resolve_type(type_expr.base)
             return SetType(base_type) if base_type else None

@@ -146,6 +146,19 @@ class TestTypeCompatibility(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertTrue(any("must name a set type" in e.message for e in result.errors))
 
+    def test_enum_set_declaration_and_membership(self):
+        """SET OF an enum type resolves, and members are usable elements/values."""
+        result = typecheck_source(
+            "PROGRAM P; TYPE C = (Red, Green, Blue); VAR s: SET OF C; VAR ok: BOOLEAN; "
+            "BEGIN s := [Red, Blue]; ok := Green IN s END.")
+        self.assertTrue(result.success, [e.message for e in result.errors])
+
+    def test_named_const_subrange_set_base_resolves(self):
+        """A SET OF lo..hi with named integer-constant bounds resolves."""
+        result = typecheck_source(
+            "PROGRAM P; CONST lo = 1; hi = 10; VAR s: SET OF lo..hi; BEGIN s := [2, 3] END.")
+        self.assertTrue(result.success, [e.message for e in result.errors])
+
     def test_pred_typecheck(self):
         """PRED accepts one INTEGER argument and returns INTEGER."""
         result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := PRED(3) END.")

@@ -145,6 +145,27 @@ class RecordType(Type):
 
 
 @dataclass
+class EnumType(Type):
+    """An enumerated ordinal type, e.g. (Red, Green, Blue).
+
+    Members carry their declaration order as ordinal values (0, 1, 2, ...).
+    ``name`` is the declared type name when known (for readable diagnostics and
+    nominal equivalence); anonymous enums compare by member list.
+    """
+
+    members: List[str]
+    name: Optional[str] = None
+
+    def __str__(self) -> str:
+        return self.name or f"({', '.join(self.members)})"
+
+    def equivalent_to(self, other: Type) -> bool:
+        if not isinstance(other, EnumType):
+            return False
+        return self.members == other.members
+
+
+@dataclass
 class SetType(Type):
     """Set type: SET OF element_type."""
 
@@ -329,6 +350,11 @@ def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optiona
     # Character comparison
     if isinstance(left_type, CharType) and isinstance(right_type, CharType):
         if op in COMPARE:
+            return BOOLEAN_TYPE
+
+    # Enum comparison (same enum type only)
+    if isinstance(left_type, EnumType) and isinstance(right_type, EnumType):
+        if left_type.equivalent_to(right_type) and op in COMPARE:
             return BOOLEAN_TYPE
 
     # Set operators
