@@ -86,6 +86,16 @@ class PascalTypeChecker(TypeChecker):
         readln_type = ProcedureType('READLN', [])
         self.symbol_table.define('READLN', Symbol(name='READLN', type=readln_type, kind='procedure', is_mutable=False))
 
+        # String manipulation procedures (section 7.2 of manual)
+        concat_type = ProcedureType('CONCAT', [])
+        self.symbol_table.define('CONCAT', Symbol(name='CONCAT', type=concat_type, kind='procedure', is_mutable=False))
+
+        copylst_type = ProcedureType('COPYLST', [])
+        self.symbol_table.define('COPYLST', Symbol(name='COPYLST', type=copylst_type, kind='procedure', is_mutable=False))
+
+        copystr_type = ProcedureType('COPYSTR', [])
+        self.symbol_table.define('COPYSTR', Symbol(name='COPYSTR', type=copystr_type, kind='procedure', is_mutable=False))
+
         # Predeclared constants.
         self.symbol_table.define('MAXINT', Symbol(name='MAXINT', type=INTEGER_TYPE, kind='const', is_mutable=False))
         self.symbol_table.define('MAXWORD', Symbol(name='MAXWORD', type=WORD_TYPE, kind='const', is_mutable=False))
@@ -924,6 +934,17 @@ class PascalTypeChecker(TypeChecker):
 
         # Check argument types (including built-in procedures)
         if stmt.args:
+            # Special handling for string procedures (section 7.2)
+            if stmt.name.upper() == 'CONCAT':
+                self._check_concat_args(stmt)
+                return
+            elif stmt.name.upper() == 'COPYLST':
+                self._check_copylst_args(stmt)
+                return
+            elif stmt.name.upper() == 'COPYSTR':
+                self._check_copystr_args(stmt)
+                return
+            
             # For built-in procedures like WRITELN/WRITE/READLN, skip count/type checks but still
             # check that the arguments are valid expressions (e.g., defined variables)
             if stmt.name.upper() not in ['WRITELN', 'WRITE', 'READLN']:
@@ -949,6 +970,123 @@ class PascalTypeChecker(TypeChecker):
                         _, param_type = sym.type.params[i]
                         if not can_assign(arg_type, param_type):
                             self.error(f"Argument {i+1} type mismatch: expected {param_type}, got {arg_type}", stmt)
+            return
+
+    def _check_concat_args(self, stmt: ProcCallStmt) -> None:
+        """Type check CONCAT(VAR D: LSTRING; CONST S: STRING).
+        
+        D (destination) must be an LSTRING variable (mutable).
+        S (source) must be a STRING or LSTRING (readable).
+        Error if upper(D) < length(D) + upper(S) (capacity check).
+        """
+        if len(stmt.args) != 2:
+            self.error(f"CONCAT expects 2 arguments, got {len(stmt.args)}", stmt)
+            return
+        
+        # Argument 1: destination (VAR LSTRING)
+        dest_arg = stmt.args[0]
+        if not isinstance(dest_arg, Identifier) and not isinstance(dest_arg, Designator):
+            self.error("CONCAT: first argument must be a designator (variable)", stmt)
+            return
+        
+        dest_name = dest_arg.name if isinstance(dest_arg, Identifier) else dest_arg.name
+        dest_sym = self.symbol_table.lookup(dest_name) or self.symbol_table.lookup(dest_name.upper())
+        if not dest_sym:
+            self.error(f"CONCAT: undefined variable '{dest_name}'", stmt)
+            return
+        
+        dest_type = dest_sym.type if dest_sym else None
+        if not isinstance(dest_type, LStringType):
+            self.error(f"CONCAT: first argument must be LSTRING, got {dest_type}", stmt)
+            return
+        
+        if not dest_sym.is_mutable:
+            self.error(f"CONCAT: first argument must be mutable (VAR parameter)", stmt)
+            return
+        
+        # Argument 2: source (CONST STRING or LSTRING)
+        src_arg = stmt.args[1]
+        src_type = self.infer_expression_type(src_arg)
+        if not isinstance(src_type, (StringType, LStringType)):
+            self.error(f"CONCAT: second argument must be STRING or LSTRING, got {src_type}", stmt)
+            return
+
+    def _check_copylst_args(self, stmt: ProcCallStmt) -> None:
+        """Type check COPYLST(CONST S: STRING; VAR D: LSTRING).
+        
+        S (source) must be a STRING or LSTRING (readable).
+        D (destination) must be an LSTRING variable (mutable).
+        Error if upper(D) < upper(S) (capacity check).
+        """
+        if len(stmt.args) != 2:
+            self.error(f"COPYLST expects 2 arguments, got {len(stmt.args)}", stmt)
+            return
+        
+        # Argument 1: source (CONST STRING or LSTRING)
+        src_arg = stmt.args[0]
+        src_type = self.infer_expression_type(src_arg)
+        if not isinstance(src_type, (StringType, LStringType)):
+            self.error(f"COPYLST: first argument must be STRING or LSTRING, got {src_type}", stmt)
+            return
+        
+        # Argument 2: destination (VAR LSTRING)
+        dest_arg = stmt.args[1]
+        if not isinstance(dest_arg, Identifier) and not isinstance(dest_arg, Designator):
+            self.error("COPYLST: second argument must be a designator (variable)", stmt)
+            return
+        
+        dest_name = dest_arg.name if isinstance(dest_arg, Identifier) else dest_arg.name
+        dest_sym = self.symbol_table.lookup(dest_name) or self.symbol_table.lookup(dest_name.upper())
+        if not dest_sym:
+            self.error(f"COPYLST: undefined variable '{dest_name}'", stmt)
+            return
+        
+        dest_type = dest_sym.type if dest_sym else None
+        if not isinstance(dest_type, LStringType):
+            self.error(f"COPYLST: second argument must be LSTRING, got {dest_type}", stmt)
+            return
+        
+        if not dest_sym.is_mutable:
+            self.error(f"COPYLST: second argument must be mutable (VAR parameter)", stmt)
+            return
+
+    def _check_copystr_args(self, stmt: ProcCallStmt) -> None:
+        """Type check COPYSTR(CONST S: STRING; VAR D: STRING).
+        
+        S (source) must be a STRING or LSTRING (readable).
+        D (destination) must be a STRING variable (mutable).
+        Error if upper(D) < upper(S) (capacity check).
+        """
+        if len(stmt.args) != 2:
+            self.error(f"COPYSTR expects 2 arguments, got {len(stmt.args)}", stmt)
+            return
+        
+        # Argument 1: source (CONST STRING or LSTRING)
+        src_arg = stmt.args[0]
+        src_type = self.infer_expression_type(src_arg)
+        if not isinstance(src_type, (StringType, LStringType)):
+            self.error(f"COPYSTR: first argument must be STRING or LSTRING, got {src_type}", stmt)
+            return
+        
+        # Argument 2: destination (VAR STRING)
+        dest_arg = stmt.args[1]
+        if not isinstance(dest_arg, Identifier) and not isinstance(dest_arg, Designator):
+            self.error("COPYSTR: second argument must be a designator (variable)", stmt)
+            return
+        
+        dest_name = dest_arg.name if isinstance(dest_arg, Identifier) else dest_arg.name
+        dest_sym = self.symbol_table.lookup(dest_name) or self.symbol_table.lookup(dest_name.upper())
+        if not dest_sym:
+            self.error(f"COPYSTR: undefined variable '{dest_name}'", stmt)
+            return
+        
+        dest_type = dest_sym.type if dest_sym else None
+        if not isinstance(dest_type, StringType):
+            self.error(f"COPYSTR: second argument must be STRING, got {dest_type}", stmt)
+            return
+        
+        if not dest_sym.is_mutable:
+            self.error(f"COPYSTR: second argument must be mutable (VAR parameter)", stmt)
             return
 
     def _decode_pascal_string(self, value: str) -> str:

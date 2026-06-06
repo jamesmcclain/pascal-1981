@@ -610,6 +610,57 @@ class TestCodegenBuildRun(unittest.TestCase):
         self.assertEqual(returncode, 0)
         self.assertEqual(stdout.strip(), "15")
 
+    def test_string_concat_runtime(self):
+        """CONCAT appends a string to an LSTRING."""
+        src = """
+        PROGRAM P;
+        VAR
+            dest: LSTRING(20);
+        BEGIN
+            dest := 'hello';
+            CONCAT(dest, ' world');
+            WRITELN(dest)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "hello world")
+
+    def test_string_copylst_runtime(self):
+        """COPYLST copies a STRING to an LSTRING."""
+        src = """
+        PROGRAM P;
+        VAR
+            src_str: STRING(10);
+            dest_lstr: LSTRING(20);
+        BEGIN
+            src_str := 'pascal';
+            COPYLST(src_str, dest_lstr);
+            WRITELN(dest_lstr)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "pascal")
+
+    def test_string_copystr_runtime(self):
+        """COPYSTR copies a STRING to a STRING and space-pads it."""
+        src = """
+        PROGRAM P;
+        VAR
+            src_str: STRING(5);
+            dest_str: STRING(10);
+        BEGIN
+            src_str := 'abc';
+            COPYSTR(src_str, dest_str);
+            WRITELN(dest_str)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        # dest_str should be 'abc' followed by 7 spaces
+        self.assertEqual(stdout.rstrip('\r\n'), "abc       ")
+
 
 if __name__ == '__main__':
     unittest.main()

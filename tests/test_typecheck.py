@@ -376,6 +376,96 @@ class TestIntegration(unittest.TestCase):
         )
 
 
+class TestStringProcedures(unittest.TestCase):
+    """Type checking for string manipulation procedures (section 7.2)."""
+
+    def test_concat_valid_types(self):
+        """CONCAT with LSTRING destination and STRING source is valid."""
+        result = typecheck_source(
+            "PROGRAM P; VAR d: LSTRING(256); s: STRING(100); BEGIN CONCAT(d, s) END."
+        )
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_concat_wrong_dest_type(self):
+        """CONCAT requires LSTRING destination, not STRING."""
+        result = typecheck_source(
+            "PROGRAM P; VAR d: STRING(256); s: STRING(100); BEGIN CONCAT(d, s) END."
+        )
+        self.assertFalse(result.success)
+        self.assertTrue(
+            any('LSTRING' in str(e) for e in result.errors),
+            msg="Expected LSTRING type error in: " + " ".join(str(e) for e in result.errors)
+        )
+
+    def test_concat_immutable_dest(self):
+        """CONCAT destination must be mutable (VAR), not a constant."""
+        result = typecheck_source(
+            "PROGRAM P; VAR s: STRING(100); CONST d = 'test'; BEGIN CONCAT(d, s) END."
+        )
+        self.assertFalse(result.success)
+
+    def test_copylst_valid_types(self):
+        """COPYLST with STRING source and LSTRING destination is valid."""
+        result = typecheck_source(
+            "PROGRAM P; VAR s: STRING(100); d: LSTRING(256); BEGIN COPYLST(s, d) END."
+        )
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_copylst_wrong_dest_type(self):
+        """COPYLST requires LSTRING destination, not STRING."""
+        result = typecheck_source(
+            "PROGRAM P; VAR s: STRING(100); d: STRING(256); BEGIN COPYLST(s, d) END."
+        )
+        self.assertFalse(result.success)
+        self.assertTrue(
+            any('LSTRING' in str(e) for e in result.errors),
+            msg="Expected LSTRING type error in: " + " ".join(str(e) for e in result.errors)
+        )
+
+    def test_copylst_immutable_dest(self):
+        """COPYLST destination must be mutable (VAR), not a constant."""
+        result = typecheck_source(
+            "PROGRAM P; VAR s: STRING(100); CONST d = 'test'; BEGIN COPYLST(s, d) END."
+        )
+        self.assertFalse(result.success)
+
+    def test_copystr_valid_types(self):
+        """COPYSTR with STRING source and destination is valid."""
+        result = typecheck_source(
+            "PROGRAM P; VAR s: STRING(100); d: STRING(256); BEGIN COPYSTR(s, d) END."
+        )
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_copystr_wrong_dest_type(self):
+        """COPYSTR requires STRING destination, not LSTRING."""
+        result = typecheck_source(
+            "PROGRAM P; VAR s: STRING(100); d: LSTRING(256); BEGIN COPYSTR(s, d) END."
+        )
+        self.assertFalse(result.success)
+        self.assertTrue(
+            any('STRING' in str(e) for e in result.errors),
+            msg="Expected STRING type error in: " + " ".join(str(e) for e in result.errors)
+        )
+
+    def test_copystr_immutable_dest(self):
+        """COPYSTR destination must be mutable (VAR), not a constant."""
+        result = typecheck_source(
+            "PROGRAM P; VAR s: STRING(100); CONST d = 'test'; BEGIN COPYSTR(s, d) END."
+        )
+        self.assertFalse(result.success)
+
+    def test_concat_wrong_arg_count(self):
+        """CONCAT requires exactly 2 arguments."""
+        result = typecheck_source(
+            "PROGRAM P; VAR d: LSTRING(256); s: STRING(100); i: INTEGER; BEGIN CONCAT(d, s, i) END."
+        )
+        self.assertFalse(result.success)
+        self.assertTrue(
+            any('argument' in str(e).lower() for e in result.errors),
+            msg="Expected argument count error in: " + " ".join(str(e) for e in result.errors)
+        )
+
+
 class TestModuleSemantics(unittest.TestCase):
     """Interface/implementation/module-level semantics (multi-file module tests)."""
 

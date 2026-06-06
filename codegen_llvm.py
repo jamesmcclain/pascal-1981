@@ -318,25 +318,75 @@ class Codegen:
         """Record a type declaration for later codegen lookups."""
         self.type_aliases[decl.name.upper()] = decl.type_expr
 
+    def get_string_type_info(self, t: Type) -> tuple[bool, int, bool]:
+        """Returns (is_str, max_len, is_lstring) for any AST Type or Resolved Type."""
+        from type_system import LStringType as ResolvedLStringType, StringType as ResolvedStringType
+        
+        if isinstance(t, (ResolvedLStringType, ResolvedStringType)):
+            return True, t.max_len, isinstance(t, ResolvedLStringType)
+            
+        # Check AST LStringType
+        if isinstance(t, LStringType):
+            return True, t.max_len, True
+            
+        # Check NamedType
+        if isinstance(t, NamedType):
+            name_up = t.name.upper()
+            if name_up == 'LSTRING':
+                return True, (int(t.param) if t.param is not None else 256), True
+            elif name_up == 'STRING':
+                return True, (int(t.param) if t.param is not None else 256), False
+            elif name_up in self.type_aliases:
+                return self.get_string_type_info(self.type_aliases[name_up])
+                
+        return False, 256, False
+
     def codegen_var_decl(self, decl: VarDecl) -> None:
         """Codegen for VAR declaration."""
         llvm_type = self.llvm_type(decl.type_expr)
         attrs = {attr.upper() for attr in getattr(decl, 'attributes', [])}
         is_static = 'STATIC' in attrs
 
+        # Check if the type is a string type
+        is_str, max_len, is_lstring = self.get_string_type_info(decl.type_expr)
+
         if self.builder and not is_static:
             # Local variable (inside a function)
             for name in decl.names:
                 alloca = self.builder.alloca(llvm_type, name=name)
                 self.scope.define(name, alloca, decl.type_expr)
+                
+                if is_str:
+                    # Allocate stack buffer: [max_len + 1 x i8]
+                    buf_type = ir.ArrayType(ir.IntType(8), max_len + 1)
+                    buf_alloca = self.builder.alloca(buf_type, name=f"{name}_buf")
+                    # Store GEP [0, 0] of buffer into the alloca
+                    zero = ir.Constant(ir.IntType(32), 0)
+                    buf_ptr = self.builder.gep(buf_alloca, [zero, zero])
+                    self.builder.store(buf_ptr, alloca)
+                    # Initialize first byte (length metadata) to 0
+                    self.builder.store(ir.Constant(ir.IntType(8), 0), buf_ptr)
         else:
             # Static or global variable - define with a zero initializer
             prefix = self.current_function.name if self.current_function else 'global'
             for name in decl.names:
                 gv_name = name if not self.builder else f'{prefix}.{name}'
-                global_var = ir.GlobalVariable(self.module, llvm_type, name=gv_name)
-                global_var.initializer = self.zero_initializer(llvm_type)
-                self.scope.define(name, global_var, decl.type_expr)
+                
+                if is_str:
+                    # Allocate a global buffer
+                    buf_type = ir.ArrayType(ir.IntType(8), max_len + 1)
+                    buf_gv = ir.GlobalVariable(self.module, buf_type, name=f"{gv_name}_buf")
+                    buf_gv.initializer = ir.Constant(buf_type, bytearray(buf_type.count))
+                    
+                    # Store pointer to global buffer in global pointer variable
+                    global_var = ir.GlobalVariable(self.module, llvm_type, name=gv_name)
+                    zero = ir.Constant(ir.IntType(32), 0)
+                    global_var.initializer = buf_gv.gep([zero, zero])
+                    self.scope.define(name, global_var, decl.type_expr)
+                else:
+                    global_var = ir.GlobalVariable(self.module, llvm_type, name=gv_name)
+                    global_var.initializer = self.zero_initializer(llvm_type)
+                    self.scope.define(name, global_var, decl.type_expr)
 
     def codegen_proc_decl(self, decl: ProcDecl) -> None:
         """Codegen for PROCEDURE declaration."""
@@ -528,12 +578,15 @@ class Codegen:
         if symbol.is_parameter:
             raise CodegenError(f'Cannot assign to parameter: {target_name}')
 
+        # Check if the target is a string type
+        is_str, max_len, is_dest_lstring = self.get_string_type_info(symbol.type_expr)
+
         # Resolve the pointer (handles array indexing, etc.)
         ptr = self.resolve_designator_ptr(stmt.target)
         value = self.codegen_expr(stmt.expr)
 
         # Handle simple type conversions
-        if hasattr(ptr.type, 'pointee'):
+        if not is_str and hasattr(ptr.type, 'pointee'):
             target_type = ptr.type.pointee
             if isinstance(target_type, ir.IntType) and isinstance(value.type, ir.IntType):
                 if target_type.width < value.type.width:
@@ -550,7 +603,37 @@ class Codegen:
                 elif value.type != target_type:
                     value = self.builder.bitcast(value, target_type)
 
-        self.builder.store(value, ptr)
+        if is_str:
+            dest_ptr = self.builder.load(ptr)
+            if isinstance(stmt.expr, NilLiteral) or (isinstance(stmt.expr, Identifier) and stmt.expr.name.upper() == 'NULL'):
+                # Store 0 as length/metadata
+                self.builder.store(ir.Constant(ir.IntType(8), 0), dest_ptr)
+                dest_chars = self.builder.gep(dest_ptr, [ir.Constant(ir.IntType(32), 1)])
+                self.builder.store(ir.Constant(ir.IntType(8), 0), dest_chars)
+            else:
+                src_chars, src_len = self.get_string_chars_and_len(stmt.expr)
+                src_len_64 = self.builder.zext(src_len, ir.IntType(64))
+                
+                # Copy characters
+                dest_chars = self.builder.gep(dest_ptr, [ir.Constant(ir.IntType(32), 1)])
+                self.builder.call(self.memcpy_func(), [dest_chars, src_chars, src_len_64])
+                
+                # Set metadata byte
+                if is_dest_lstring:
+                    src_len_8 = self.builder.trunc(src_len, ir.IntType(8))
+                    self.builder.store(src_len_8, dest_ptr)
+                    # Null terminate at index src_len
+                    null_char_ptr = self.builder.gep(dest_chars, [src_len])
+                    self.builder.store(ir.Constant(ir.IntType(8), 0), null_char_ptr)
+                else:
+                    self.builder.store(ir.Constant(ir.IntType(8), max_len), dest_ptr)
+                    # Space-pad remaining characters for STRING
+                    pad_ptr = self.builder.gep(dest_chars, [src_len])
+                    pad_len = self.builder.sub(ir.Constant(ir.IntType(32), max_len), src_len)
+                    pad_len_64 = self.builder.zext(pad_len, ir.IntType(64))
+                    self.builder.call(self.memset_func(), [pad_ptr, ir.Constant(ir.IntType(32), 0x20), pad_len_64])
+        else:
+            self.builder.store(value, ptr)
 
     def codegen_proc_call_stmt(self, stmt: ProcCallStmt) -> None:
         """Codegen for procedure call statement."""
@@ -564,6 +647,12 @@ class Codegen:
                 self.builtin_write(stmt.args)
             elif lookup_name == 'READLN':
                 self.builtin_readln(stmt.args)
+            elif lookup_name == 'CONCAT':
+                self.builtin_concat(stmt.args)
+            elif lookup_name == 'COPYLST':
+                self.builtin_copylst(stmt.args)
+            elif lookup_name == 'COPYSTR':
+                self.builtin_copystr(stmt.args)
             else:
                 raise CodegenError(f'Undefined procedure: {stmt.name}')
         else:
@@ -1338,6 +1427,34 @@ class Codegen:
 
             val = self.codegen_expr(expr)
 
+            # Check if it is a string variable (non-literal)
+            is_string_var = False
+            from type_system import StringType, LStringType
+            if not isinstance(expr, StringLiteral) and not isinstance(expr, NilLiteral) and not (isinstance(expr, Identifier) and expr.name.upper() == 'NULL'):
+                t = None
+                if isinstance(expr, Identifier):
+                    symbol = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
+                    if symbol:
+                        t = symbol.type_expr
+                elif isinstance(expr, Designator):
+                    symbol = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
+                    if symbol:
+                        t = symbol.type_expr
+                
+                if isinstance(t, (StringType, LStringType)):
+                    is_string_var = True
+                elif isinstance(t, NamedType):
+                    name_up = t.name.upper()
+                    if name_up in {'STRING', 'LSTRING'}:
+                        is_string_var = True
+                    elif name_up in self.type_aliases:
+                        aliased = self.type_aliases[name_up]
+                        if isinstance(aliased, (StringType, LStringType)) or (isinstance(aliased, NamedType) and aliased.name.upper() in {'STRING', 'LSTRING'}):
+                            is_string_var = True
+
+            if is_string_var:
+                val = self.builder.gep(val, [ir.Constant(ir.IntType(32), 1)])
+
             prefix = '%'
             if width is not None:
                 prefix += '*'
@@ -1425,6 +1542,159 @@ class Codegen:
                 fmt_ptr = self.builder.bitcast(fmt_global, ir.PointerType(ir.IntType(8)))
 
                 self.builder.call(scanf_func, [fmt_ptr, symbol.llvm_value])
+
+    def memcpy_func(self) -> ir.Function:
+        for func in self.module.functions:
+            if func.name == 'memcpy':
+                return func
+        memcpy_type = ir.FunctionType(ir.PointerType(ir.IntType(8)), [
+            ir.PointerType(ir.IntType(8)),
+            ir.PointerType(ir.IntType(8)),
+            ir.IntType(64)
+        ])
+        return ir.Function(self.module, memcpy_type, name='memcpy')
+
+    def memset_func(self) -> ir.Function:
+        for func in self.module.functions:
+            if func.name == 'memset':
+                return func
+        memset_type = ir.FunctionType(ir.PointerType(ir.IntType(8)), [
+            ir.PointerType(ir.IntType(8)),
+            ir.IntType(32),
+            ir.IntType(64)
+        ])
+        return ir.Function(self.module, memset_type, name='memset')
+
+    def get_string_chars_and_len(self, expr: Expression) -> tuple[ir.Value, ir.Value]:
+        """Returns (chars_ptr: ir.Value, length: ir.Value) for any string expression.
+        
+        The chars_ptr points directly to the first character.
+        The length is an i32 representing the dynamic or static length.
+        """
+        if isinstance(expr, StringLiteral):
+            val_str = expr.value
+            if val_str.startswith("'") and val_str.endswith("'"):
+                val_str = val_str[1:-1]
+            val_str = val_str.replace("''", "'")
+            lit_len = len(val_str)
+            
+            chars_ptr = self.codegen_expr(expr)
+            length = ir.Constant(ir.IntType(32), lit_len)
+            return chars_ptr, length
+            
+        elif isinstance(expr, NilLiteral) or (isinstance(expr, Identifier) and expr.name.upper() == 'NULL'):
+            chars_ptr = self.null_lstring_ptr()
+            length = ir.Constant(ir.IntType(32), 0)
+            return chars_ptr, length
+
+        val = self.codegen_expr(expr)
+        
+        # Determine string type details
+        t = None
+        if isinstance(expr, Identifier):
+            symbol = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
+            if symbol:
+                t = symbol.type_expr
+        elif isinstance(expr, Designator):
+            symbol = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
+            if symbol:
+                t = symbol.type_expr
+
+        is_str, max_len, is_lstring = self.get_string_type_info(t)
+
+        chars_ptr = self.builder.gep(val, [ir.Constant(ir.IntType(32), 1)])
+        
+        if is_lstring:
+            len_byte = self.builder.load(val)
+            length = self.builder.zext(len_byte, ir.IntType(32))
+        else:
+            length = ir.Constant(ir.IntType(32), max_len)
+            
+        return chars_ptr, length
+
+    def builtin_concat(self, args: List[Expression]) -> None:
+        """CONCAT(VAR D: LSTRING; CONST S: STRING)"""
+        D_arg = args[0]
+        if isinstance(D_arg, Identifier):
+            D_arg = Designator(D_arg.name, [])
+        D_ptr = self.resolve_designator_ptr(D_arg)
+        D_val = self.builder.load(D_ptr)
+        
+        src_chars, src_len = self.get_string_chars_and_len(args[1])
+        src_len_64 = self.builder.zext(src_len, ir.IntType(64))
+        
+        dest_len_byte = self.builder.load(D_val)
+        dest_len = self.builder.zext(dest_len_byte, ir.IntType(32))
+        
+        dest_chars = self.builder.gep(D_val, [ir.Constant(ir.IntType(32), 1)])
+        append_ptr = self.builder.gep(dest_chars, [dest_len])
+        
+        self.builder.call(self.memcpy_func(), [append_ptr, src_chars, src_len_64])
+        
+        new_len = self.builder.add(dest_len, src_len)
+        new_len_byte = self.builder.trunc(new_len, ir.IntType(8))
+        self.builder.store(new_len_byte, D_val)
+        
+        # Null-terminate at index new_len
+        null_char_ptr = self.builder.gep(dest_chars, [new_len])
+        self.builder.store(ir.Constant(ir.IntType(8), 0), null_char_ptr)
+
+    def builtin_copylst(self, args: List[Expression]) -> None:
+        """COPYLST(CONST S: STRING; VAR D: LSTRING)"""
+        src_chars, src_len = self.get_string_chars_and_len(args[0])
+        src_len_64 = self.builder.zext(src_len, ir.IntType(64))
+        
+        D_arg = args[1]
+        if isinstance(D_arg, Identifier):
+            D_arg = Designator(D_arg.name, [])
+        D_ptr = self.resolve_designator_ptr(D_arg)
+        D_val = self.builder.load(D_ptr)
+        
+        dest_chars = self.builder.gep(D_val, [ir.Constant(ir.IntType(32), 1)])
+        self.builder.call(self.memcpy_func(), [dest_chars, src_chars, src_len_64])
+        
+        src_len_byte = self.builder.trunc(src_len, ir.IntType(8))
+        self.builder.store(src_len_byte, D_val)
+        
+        # Null-terminate at index src_len
+        null_char_ptr = self.builder.gep(dest_chars, [src_len])
+        self.builder.store(ir.Constant(ir.IntType(8), 0), null_char_ptr)
+
+    def builtin_copystr(self, args: List[Expression]) -> None:
+        """COPYSTR(CONST S: STRING; VAR D: STRING)"""
+        src_chars, src_len = self.get_string_chars_and_len(args[0])
+        src_len_64 = self.builder.zext(src_len, ir.IntType(64))
+        
+        D_arg = args[1]
+        if isinstance(D_arg, Identifier):
+            D_arg = Designator(D_arg.name, [])
+        D_ptr = self.resolve_designator_ptr(D_arg)
+        D_val = self.builder.load(D_ptr)
+        
+        # Get D's maximum length
+        t = None
+        if isinstance(args[1], Identifier):
+            symbol = self.scope.lookup(args[1].name) or self.scope.lookup(args[1].name.upper())
+            if symbol:
+                t = symbol.type_expr
+        elif isinstance(args[1], Designator):
+            symbol = self.scope.lookup(args[1].name) or self.scope.lookup(args[1].name.upper())
+            if symbol:
+                t = symbol.type_expr
+
+        is_str, max_len, is_lstring = self.get_string_type_info(t)
+
+        dest_chars = self.builder.gep(D_val, [ir.Constant(ir.IntType(32), 1)])
+        self.builder.call(self.memcpy_func(), [dest_chars, src_chars, src_len_64])
+        
+        # Set D's metadata byte to max_len
+        self.builder.store(ir.Constant(ir.IntType(8), max_len), D_val)
+        
+        # Space-pad remaining characters
+        pad_ptr = self.builder.gep(dest_chars, [src_len])
+        pad_len = self.builder.sub(ir.Constant(ir.IntType(32), max_len), src_len)
+        pad_len_64 = self.builder.zext(pad_len, ir.IntType(64))
+        self.builder.call(self.memset_func(), [pad_ptr, ir.Constant(ir.IntType(32), 0x20), pad_len_64])
 
     # ========================================================================
     # Utilities
