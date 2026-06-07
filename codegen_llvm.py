@@ -946,22 +946,34 @@ class Codegen:
                 raise CodegenError(f'Undefined variable: {designator.name}')
 
         ptr = symbol.llvm_value
+        cur_type = symbol.type_expr
 
         if designator.selectors:
             for selector in designator.selectors:
                 if selector.kind == 'INDEX':
                     index = self.codegen_expr(selector.index_or_field)
+                    # Pascal array indices are relative to the declared lower
+                    # bound, but storage is allocated as [high-low+1 x elem]
+                    # (0-based). Translate the index to a 0-based slot so that
+                    # e.g. ARRAY[5..7] indexed by 5 lands on slot 0, not slot 5
+                    # (which would read/write outside the allocation).
+                    low, elem_type = self.array_lower_bound(cur_type)
+                    if low is not None and low != 0 and isinstance(index.type, ir.IntType):
+                        index = self.builder.sub(index, ir.Constant(index.type, low))
                     # GEP requires [0, index] for pointers to arrays, or [index] for flat pointers
                     if isinstance(ptr.type.pointee, ir.ArrayType):
                         ptr = self.builder.gep(ptr, [ir.Constant(ir.IntType(32), 0), index])
                     else:
                         ptr = self.builder.gep(ptr, [index])
+                    cur_type = elem_type
                 elif selector.kind == 'FIELD':
                     # Record field access (simplified)
-                    pass
+                    cur_type = None
                 elif selector.kind == 'DEREF':
                     # Pointer dereference
                     ptr = self.builder.load(ptr)
+                    base = self.resolve_type_alias(cur_type) if cur_type is not None else None
+                    cur_type = getattr(base, 'base', None) or getattr(base, 'target_type', None)
         return ptr
 
     # ========================================================================
@@ -2110,7 +2122,44 @@ class Codegen:
         self.builder.branch(end_block)
         self.builder.position_at_end(end_block)
 
+    def resolve_type_alias(self, type_expr):
+        """Unwrap NamedType aliases (e.g. ``TYPE arr = ARRAY[..]``) to the
+        underlying declared type. Built-in names and unknown names are returned
+        unchanged. Cycle-safe."""
+        seen = set()
+        while isinstance(type_expr, NamedType):
+            key = type_expr.name.upper()
+            if key in seen or key not in self.type_aliases:
+                break
+            seen.add(key)
+            type_expr = self.type_aliases[key]
+        return type_expr
+
+    def array_lower_bound(self, type_expr) -> tuple[Optional[int], Any]:
+        """For a (possibly aliased) array type, return ``(lower_bound, element_type)``.
+
+        Returns ``(None, None)`` for anything that is not a genuine indexable
+        array. In particular STRING/LSTRING are deliberately excluded: their
+        element offsets follow a length-prefix convention (LSTRING reserves
+        byte 0 for the length), not array lower-bound subtraction, so they must
+        keep their existing indexing behavior.
+        """
+        t = self.resolve_type_alias(type_expr)
+        # AST ArrayType carries an index_range with constant-foldable bounds.
+        if hasattr(t, 'index_range') and getattr(t, 'index_range', None) is not None:
+            try:
+                low = self.eval_const_expr(t.index_range.low)
+            except Exception:
+                low = None
+            return low, getattr(t, 'element_type', None)
+        # Resolved type_system.ArrayType carries lower_bound + element_type.
+        # (StringType/LStringType expose max_len instead and are excluded.)
+        if hasattr(t, 'lower_bound') and hasattr(t, 'element_type') and not hasattr(t, 'max_len'):
+            return t.lower_bound, t.element_type
+        return None, None
+
     def get_array_bounds(self, type_expr) -> tuple[int, int]:
+        type_expr = self.resolve_type_alias(type_expr)
         if hasattr(type_expr, 'index_range') and type_expr.index_range:
             low = self.eval_const_expr(type_expr.index_range.low)
             high = self.eval_const_expr(type_expr.index_range.high) if type_expr.index_range.high else low
@@ -2120,20 +2169,21 @@ class Codegen:
         return 1, 10
 
     def builtin_pack(self, args: List[Expression]) -> None:
-        """PACK(CONST A: unpacked-array; I: index; VAR Z: packed-array)"""
+        """PACK(CONST A: unpacked-array; I: index; VAR Z: packed-array)
+
+        Semantics (manual / ISO): for j := low(Z) to high(Z),
+        Z[j] := A[I + (j - low(Z))]. Storage for both arrays is 0-based
+        ([high-low+1 x elem]), so every Pascal index is translated to a slot
+        by subtracting that array's lower bound.
+        """
         a_arg, i_arg, z_arg = args[0], args[1], args[2]
 
         a_ptr = self.codegen_expr(a_arg)
         z_ptr = self.codegen_expr(z_arg)
         i_val = self.codegen_expr(i_arg)
 
-        # Look up bounds
-        z_name = z_arg.name if isinstance(z_arg, (Identifier, Designator)) else ""
-        z_sym = self.scope.lookup(z_name) or self.scope.lookup(z_name.upper())
-        if z_sym and z_sym.type_expr:
-            z_low, z_high = self.get_array_bounds(z_sym.type_expr)
-        else:
-            z_low, z_high = 1, 10
+        a_low = self._designator_array_low(a_arg)
+        z_low, z_high = self._designator_array_bounds(z_arg)
 
         j_var = self.builder.alloca(ir.IntType(32), name='pack_j')
         self.builder.store(ir.Constant(ir.IntType(32), z_low), j_var)
@@ -2151,19 +2201,18 @@ class Codegen:
 
         self.builder.position_at_end(body_block)
 
-        # Calculate A index: j_val - z_low + i_val
+        # offset = j - low(Z): 0-based position, which is also Z's storage slot.
         offset = self.builder.sub(j_val, ir.Constant(ir.IntType(32), z_low))
-        a_index = self.builder.add(offset, i_val)
+        # A storage slot = (I + offset) - low(A).
+        a_pascal = self.builder.add(offset, i_val)
+        a_slot = self.builder.sub(a_pascal, ir.Constant(ir.IntType(32), a_low))
 
-        # Load A[a_index]
-        a_elem_ptr = self.builder.gep(a_ptr, [ir.Constant(ir.IntType(32), 0), a_index])
+        a_elem_ptr = self.builder.gep(a_ptr, [ir.Constant(ir.IntType(32), 0), a_slot])
         elem_val = self.builder.load(a_elem_ptr)
 
-        # Store Z[j_val]
-        z_elem_ptr = self.builder.gep(z_ptr, [ir.Constant(ir.IntType(32), 0), j_val])
+        z_elem_ptr = self.builder.gep(z_ptr, [ir.Constant(ir.IntType(32), 0), offset])
         self.builder.store(elem_val, z_elem_ptr)
 
-        # Increment J
         next_j = self.builder.add(j_val, ir.Constant(ir.IntType(32), 1))
         self.builder.store(next_j, j_var)
         self.builder.branch(loop_block)
@@ -2171,19 +2220,20 @@ class Codegen:
         self.builder.position_at_end(end_block)
 
     def builtin_unpack(self, args: List[Expression]) -> None:
-        """UNPACK(CONST Z: packed-array; VAR A: unpacked-array; I: index)"""
+        """UNPACK(CONST Z: packed-array; VAR A: unpacked-array; I: index)
+
+        Semantics (manual / ISO): for j := low(Z) to high(Z),
+        A[I + (j - low(Z))] := Z[j]. As in PACK, every Pascal index is
+        translated to a 0-based storage slot.
+        """
         z_arg, a_arg, i_arg = args[0], args[1], args[2]
 
         z_ptr = self.codegen_expr(z_arg)
         a_ptr = self.codegen_expr(a_arg)
         i_val = self.codegen_expr(i_arg)
 
-        z_name = z_arg.name if isinstance(z_arg, (Identifier, Designator)) else ""
-        z_sym = self.scope.lookup(z_name) or self.scope.lookup(z_name.upper())
-        if z_sym and z_sym.type_expr:
-            z_low, z_high = self.get_array_bounds(z_sym.type_expr)
-        else:
-            z_low, z_high = 1, 10
+        a_low = self._designator_array_low(a_arg)
+        z_low, z_high = self._designator_array_bounds(z_arg)
 
         j_var = self.builder.alloca(ir.IntType(32), name='unpack_j')
         self.builder.store(ir.Constant(ir.IntType(32), z_low), j_var)
@@ -2201,24 +2251,40 @@ class Codegen:
 
         self.builder.position_at_end(body_block)
 
-        # Load Z[j_val]
-        z_elem_ptr = self.builder.gep(z_ptr, [ir.Constant(ir.IntType(32), 0), j_val])
+        # offset = j - low(Z): Z's 0-based storage slot.
+        offset = self.builder.sub(j_val, ir.Constant(ir.IntType(32), z_low))
+        z_elem_ptr = self.builder.gep(z_ptr, [ir.Constant(ir.IntType(32), 0), offset])
         elem_val = self.builder.load(z_elem_ptr)
 
-        # Calculate A index: j_val - z_low + i_val
-        offset = self.builder.sub(j_val, ir.Constant(ir.IntType(32), z_low))
-        a_index = self.builder.add(offset, i_val)
-
-        # Store A[a_index]
-        a_elem_ptr = self.builder.gep(a_ptr, [ir.Constant(ir.IntType(32), 0), a_index])
+        # A storage slot = (I + offset) - low(A).
+        a_pascal = self.builder.add(offset, i_val)
+        a_slot = self.builder.sub(a_pascal, ir.Constant(ir.IntType(32), a_low))
+        a_elem_ptr = self.builder.gep(a_ptr, [ir.Constant(ir.IntType(32), 0), a_slot])
         self.builder.store(elem_val, a_elem_ptr)
 
-        # Increment J
         next_j = self.builder.add(j_val, ir.Constant(ir.IntType(32), 1))
         self.builder.store(next_j, j_var)
         self.builder.branch(loop_block)
 
         self.builder.position_at_end(end_block)
+
+    def _designator_array_bounds(self, arg) -> tuple[int, int]:
+        """(lower, upper) bounds of the array a designator names; (1, 10) fallback."""
+        name = arg.name if isinstance(arg, (Identifier, Designator)) else ""
+        sym = self.scope.lookup(name) or self.scope.lookup(name.upper()) if name else None
+        if sym and sym.type_expr:
+            return self.get_array_bounds(sym.type_expr)
+        return 1, 10
+
+    def _designator_array_low(self, arg) -> int:
+        """Lower bound of the array a designator names; 0 fallback (no shift)."""
+        name = arg.name if isinstance(arg, (Identifier, Designator)) else ""
+        sym = self.scope.lookup(name) or self.scope.lookup(name.upper()) if name else None
+        if sym and sym.type_expr:
+            low, _ = self.array_lower_bound(sym.type_expr)
+            if low is not None:
+                return low
+        return 0
 
     # ========================================================================
     # Utilities

@@ -1056,3 +1056,61 @@ END."""
         lines = [l.strip() for l in out.splitlines() if l.strip()]
         self.assertEqual(lines[0], "40")
         self.assertEqual(lines[1], "999")
+
+class TestArrayLowerBoundIndexing(unittest.TestCase):
+    """Regression tests: Pascal array indices are relative to the declared
+    lower bound, so storage (allocated 0-based as [high-low+1 x elem]) must be
+    addressed by index-minus-lower-bound. Indexing with the raw Pascal index
+    reads/writes outside the allocation for any array whose lower bound != 0,
+    silently corrupting adjacent memory."""
+
+    @requires_exe
+    def test_nonzero_lower_bound_round_trips(self):
+        """ARRAY[5..7] written and read by Pascal index returns what was stored."""
+        src = """PROGRAM P;
+VAR a: ARRAY[5..7] OF INTEGER;
+BEGIN
+    a[5] := 100; a[6] := 200; a[7] := 300;
+    WRITELN(a[5]); WRITELN(a[6]); WRITELN(a[7])
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual([l.strip() for l in out.splitlines() if l.strip()],
+                         ["100", "200", "300"])
+
+    @requires_exe
+    def test_index_does_not_clobber_adjacent_variable(self):
+        """Writing the top element of ARRAY[1..3] must not overflow its storage
+        and overwrite a neighboring scalar (the original off-by-lower-bound bug
+        wrote one slot past the end)."""
+        src = """PROGRAM P;
+VAR a: ARRAY[1..3] OF INTEGER;
+    guard: INTEGER;
+    i: INTEGER;
+BEGIN
+    guard := 777;
+    FOR i := 1 TO 3 DO a[i] := i * 10;
+    WRITELN(guard)
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), "777")
+
+    @requires_exe
+    def test_nested_array_aliased_type_with_nonzero_bounds(self):
+        """A 2-D array via a named ARRAY OF ARRAY type, with non-1 lower bounds
+        on both dimensions, indexes each dimension correctly."""
+        src = """PROGRAM P;
+TYPE Grid = ARRAY[2..3] OF ARRAY[10..12] OF INTEGER;
+VAR m: Grid;
+    r, c: INTEGER;
+BEGIN
+    FOR r := 2 TO 3 DO
+        FOR c := 10 TO 12 DO
+            m[r][c] := r * 100 + c;
+    WRITELN(m[2][10]); WRITELN(m[3][12])
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual([l.strip() for l in out.splitlines() if l.strip()],
+                         ["210", "312"])
