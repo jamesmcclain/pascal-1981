@@ -1214,3 +1214,21 @@ END."""
         rc, out = build_and_run(src)
         self.assertEqual(rc, 0)
         self.assertEqual([l.strip() for l in out.splitlines() if l.strip()], ["5", "5", "50"])
+
+    @requires_exe
+    def test_whole_record_copy_preserves_fields(self):
+        """A whole-record assignment between equivalent (same-order) records
+        copies each field to its counterpart, even when names differ in case."""
+        src = """PROGRAM P;
+TYPE A = RECORD Count: INTEGER; Total: INTEGER END;
+     B = RECORD count: INTEGER; total: INTEGER END;
+VAR a: A;
+    b: B;
+BEGIN
+    b.count := 7; b.total := 8;
+    a := b;
+    WRITELN(a.Count); WRITELN(a.Total)
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual([l.strip() for l in out.splitlines() if l.strip()], ["7", "8"])

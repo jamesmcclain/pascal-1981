@@ -135,14 +135,19 @@ class RecordType(Type):
     def equivalent_to(self, other: Type) -> bool:
         if not isinstance(other, RecordType):
             return False
-        # Pascal identifiers are case-insensitive, so field names compare
-        # without regard to case.
-        self_keys = {k.upper(): k for k in self.fields}
-        other_keys = {k.upper(): k for k in other.fields}
-        if set(self_keys) != set(other_keys):
+        if len(self.fields) != len(other.fields):
             return False
-        for up, sk in self_keys.items():
-            if not self.fields[sk].equivalent_to(other.fields[other_keys[up]]):
+        # Structural equivalence is ORDER-SENSITIVE: a record's field order
+        # determines its physical layout, and whole-record assignment copies
+        # by position, so two records are interchangeable only if they list the
+        # same fields, in the same order, with equivalent types. (Without this,
+        # `RECORD a,b: INTEGER` and `RECORD b,a: INTEGER` would be deemed equal
+        # and a positional copy would silently swap the fields.) Field names
+        # compare case-insensitively, since Pascal identifiers ignore case.
+        for (self_name, self_type), (other_name, other_type) in zip(self.fields.items(), other.fields.items()):
+            if self_name.upper() != other_name.upper():
+                return False
+            if not self_type.equivalent_to(other_type):
                 return False
         return True
 

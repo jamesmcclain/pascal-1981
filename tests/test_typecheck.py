@@ -881,3 +881,23 @@ class TestRecordTypeChecking(unittest.TestCase):
             "PROGRAM P; TYPE R = RECORD Count: INTEGER END; VAR r: R; "
             "BEGIN r.count := 1; r.COUNT := 2; r.cOuNt := 3 END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_record_equivalence_is_order_sensitive(self):
+        """Two records with the same field names but different declaration
+        order have different layouts and must NOT be assignment-compatible
+        (a positional whole-record copy would otherwise swap the fields)."""
+        result = typecheck_source(
+            "PROGRAM P; "
+            "TYPE A = RECORD x, y: INTEGER END; B = RECORD y, x: INTEGER END; "
+            "VAR a: A; b: B; BEGIN a := b END.")
+        self.assertFalse(result.success)
+
+    def test_record_equivalence_same_order_case_only_difference(self):
+        """Records with identical field order/types whose names differ only in
+        case ARE equivalent (Pascal identifiers are case-insensitive)."""
+        result = typecheck_source(
+            "PROGRAM P; "
+            "TYPE A = RECORD Count, Total: INTEGER END; "
+            "B = RECORD count, total: INTEGER END; "
+            "VAR a: A; b: B; BEGIN a := b END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
