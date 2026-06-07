@@ -305,15 +305,20 @@ class TestCodegenIR(unittest.TestCase):
         self.assertIn("Twice", ir)
 
     def test_abs_and_sqrt_generate_valid_ir(self):
-        """ABS and SQRT generate valid IR for integer/real operands."""
+        """ABS, SQRT, and other libm math functions generate valid IR."""
         src = (
             "PROGRAM P; VAR x: REAL; BEGIN "
             "WRITELN(ABS(-5)); "
-            "x := SQRT(9); "
+            "x := SQRT(9) + SIN(1) + COS(1) + LN(2) + EXP(1) + ARCTAN(1); "
             "WRITELN(x) END."
         )
         ir = compile_to_ir(src)
         self.assertIn("sqrt", ir)
+        self.assertIn("sin", ir)
+        self.assertIn("cos", ir)
+        self.assertIn("log", ir)
+        self.assertIn("exp", ir)
+        self.assertIn("atan", ir)
         self.assertIn("double", ir)
 
     def test_short_circuit_generates_branching_ir(self):
@@ -361,17 +366,23 @@ class TestCodegenBuildRun(unittest.TestCase):
         self.assertIn("3", stdout)
 
     def test_abs_and_sqrt_run(self):
-        """ABS and SQRT run and produce correct output."""
+        """ABS, SQRT, and other math functions run and produce correct output."""
         src = (
             "PROGRAM P; VAR x: REAL; BEGIN "
             "WRITELN(ABS(-5)); "
             "x := SQRT(9); "
-            "WRITELN(x) END."
+            "WRITELN(x); "
+            "WRITELN(SIN(0)); "
+            "WRITELN(COS(0)); "
+            "WRITELN(LN(1)); "
+            "WRITELN(EXP(0)) "
+            "END."
         )
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         self.assertIn("5", stdout)
         self.assertIn("3", stdout)
+        self.assertIn("1", stdout) # COS(0) = 1, EXP(0) = 1
 
     def test_trunc_run(self):
         """TRUNC truncates toward zero (not floor) for both positive and negative reals."""

@@ -114,7 +114,7 @@ class PascalTypeChecker(TypeChecker):
         self.symbol_table.define('OUTPUT', Symbol(name='OUTPUT', type=text_type, kind='var', is_mutable=False))
         self.symbol_table.define('STRING', Symbol(name='STRING', type=StringType(256), kind='type', is_mutable=False))
 
-        # ABS and SQRT are handled as special built-ins in type inference/codegen.
+        # ABS, SQRT, SIN, COS, LN, EXP, and ARCTAN are handled as special built-ins in type inference/codegen.
         # LENGTH is not part of the manual's predeclared list; keep it out until
         # a dialect decision puts it back in.
 
@@ -1389,9 +1389,9 @@ class PascalTypeChecker(TypeChecker):
                 if arg_type:
                     self.error(f"Argument 1 type mismatch: expected INTEGER or REAL, got {arg_type}", expr)
                 return None
-            if lookup_name == 'SQRT':
+            if lookup_name in {'SQRT', 'SIN', 'COS', 'LN', 'EXP', 'ARCTAN'}:
                 if len(expr.args) != 1:
-                    self.error(f"Function 'SQRT' expects 1 argument, got {len(expr.args)}", expr)
+                    self.error(f"Function '{lookup_name}' expects 1 argument, got {len(expr.args)}", expr)
                     return None
                 arg_type = self.infer_expression_type(expr.args[0])
                 if arg_type in (INTEGER_TYPE, REAL_TYPE):

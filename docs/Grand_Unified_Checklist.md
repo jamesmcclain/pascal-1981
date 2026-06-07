@@ -261,12 +261,18 @@ Gated on REAL codegen depth (see note at end).
 
 - [x] **6.1 — `SQRT`.** `[OBSERVED]` **M** Currently a trap (1.1). Map to libm `sqrt`.
   - Done: Swapped the temporary LLVM intrinsic `llvm.sqrt` for standard external `libm` call pattern. Added `-lm` to the compilation options in `build_and_run`. Proven by `python -m unittest tests.test_codegen`.
-- [ ] **6.2 — `SIN`.** `[READ]` **S** libm `sin`.
-- [ ] **6.3 — `COS`.** `[READ]` **S** libm `cos`.
-- [ ] **6.4 — `LN`.** `[READ]` **S** libm `log`.
-- [ ] **6.5 — `EXP`.** `[READ]` **S** libm `exp`.
-- [ ] **6.6 — `ARCTAN`.** `[READ]` **S** libm `atan`.
-- [ ] **6.7 — `ABS` (INTEGER + REAL).** `[OBSERVED]` **S** Currently a trap (1.1). Integer path inline, REAL path inline or libm `fabs`.
+- [x] **6.2 — `SIN`.** `[READ]` **S** libm `sin`.
+  - Done: Added `SIN` to the type checker's special math functions list and mapped to libm `sin` in codegen. Proven by `tests.test_typecheck` and `tests.test_codegen`.
+- [x] **6.3 — `COS`.** `[READ]` **S** libm `cos`.
+  - Done: Added `COS` to the type checker's special math functions list and mapped to libm `cos` in codegen. Proven by `tests.test_typecheck` and `tests.test_codegen`.
+- [x] **6.4 — `LN`.** `[READ]` **S** libm `log`.
+  - Done: Added `LN` to the type checker's special math functions list and mapped to libm `log` in codegen. Proven by `tests.test_typecheck` and `tests.test_codegen`.
+- [x] **6.5 — `EXP`.** `[READ]` **S** libm `exp`.
+  - Done: Added `EXP` to the type checker's special math functions list and mapped to libm `exp` in codegen. Proven by `tests.test_typecheck` and `tests.test_codegen`.
+- [x] **6.6 — `ARCTAN`.** `[READ]` **S** libm `atan`.
+  - Done: Added `ARCTAN` to the type checker's special math functions list and mapped to libm `atan` in codegen. Proven by `tests.test_typecheck` and `tests.test_codegen`.
+- [x] **6.7 — `ABS` (INTEGER + REAL).** `[OBSERVED]` **S** Currently a trap (1.1). Integer path inline, REAL path inline or libm `fabs`.
+  - Done: ABS handles INTEGER/REAL inline (via select/sub/fsub). Proven by `tests.test_typecheck` and `tests.test_codegen`.
 
 ---
 

@@ -182,9 +182,13 @@ class TestTypeCompatibility(unittest.TestCase):
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_abs_and_sqrt_typecheck(self):
-        """ABS accepts INTEGER/REAL and SQRT returns REAL."""
+        """ABS accepts INTEGER/REAL and SQRT/SIN/COS/LN/EXP/ARCTAN return REAL."""
         result = typecheck_source("PROGRAM P; VAR x: REAL; BEGIN x := SQRT(ABS(-5)) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+        
+        for name in ["SIN", "COS", "LN", "EXP", "ARCTAN"]:
+            result = typecheck_source(f"PROGRAM P; VAR x: REAL; BEGIN x := {name}(4.2) END.")
+            self.assertTrue(result.success, msg=f"{name} failed: " + " ".join(str(e) for e in result.errors))
 
     def test_trunc_typecheck(self):
         """TRUNC accepts REAL and returns INTEGER."""

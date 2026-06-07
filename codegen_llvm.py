@@ -1622,18 +1622,28 @@ class Codegen:
                 self.builder.shl(hi16, ir.Constant(ir.IntType(16), 8)),
                 lo16
             )
-        elif lookup_name == 'SQRT':
+        elif lookup_name in {'SQRT', 'SIN', 'COS', 'LN', 'EXP', 'ARCTAN'}:
             val = self.codegen_expr(expr.args[0])
             if isinstance(val.type, ir.IntType):
                 val = self.builder.sitofp(val, ir.DoubleType())
             elif not isinstance(val.type, ir.DoubleType):
-                raise CodegenError(f'SQRT not supported for type {val.type}')
+                raise CodegenError(f'{lookup_name} not supported for type {val.type}')
+            
+            libm_names = {
+                'SQRT': 'sqrt',
+                'SIN': 'sin',
+                'COS': 'cos',
+                'LN': 'log',
+                'EXP': 'exp',
+                'ARCTAN': 'atan'
+            }
+            c_name = libm_names[lookup_name]
             double_ty = ir.DoubleType()
             try:
-                sqrt_fn = self.module.get_global('sqrt')
+                fn = self.module.get_global(c_name)
             except KeyError:
-                sqrt_fn = ir.Function(self.module, ir.FunctionType(double_ty, [double_ty]), name='sqrt')
-            return self.builder.call(sqrt_fn, [val])
+                fn = ir.Function(self.module, ir.FunctionType(double_ty, [double_ty]), name=c_name)
+            return self.builder.call(fn, [val])
         elif lookup_name == 'TRUNC':
             # REAL -> INTEGER: truncate toward zero (manual 11-7)
             val = self.codegen_expr(expr.args[0])
