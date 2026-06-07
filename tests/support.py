@@ -22,15 +22,14 @@ HAS_LLVM = HAS_LLVMLITE
 CAN_BUILD_EXE = HAS_LLVMLITE and HAS_CLANG
 
 # Skip decorators
-requires_llvm = unittest.skipUnless(
-    HAS_LLVM, "requires llvmlite (IR generation)")
-requires_exe = unittest.skipUnless(
-    CAN_BUILD_EXE, "requires llvmlite + clang (native build/run)")
+requires_llvm = unittest.skipUnless(HAS_LLVM, "requires llvmlite (IR generation)")
+requires_exe = unittest.skipUnless(CAN_BUILD_EXE, "requires llvmlite + clang (native build/run)")
+
+from parser import ParserError, parse_file
 
 # In-process helpers
-from lexer import lex_file, LexerError
-from parser import parse_file, ParserError
-from type_checker import PascalTypeChecker, TypeCheckResult, TypeCheckError
+from lexer import LexerError, lex_file
+from type_checker import PascalTypeChecker, TypeCheckError, TypeCheckResult
 
 
 def _write_temp(src: str) -> str:
@@ -90,7 +89,7 @@ def typecheck_module(iface_code: str = None, impl_code: str = None, prog_code: s
             iface_path = os.path.join(tmpdir, module_name.lower())
             with open(iface_path, 'w') as f:
                 f.write(iface_code)
-        
+
         # Determine what to type-check
         if impl_code:
             file_to_check = os.path.join(tmpdir, f"{module_name.lower()}.pas")
@@ -103,7 +102,7 @@ def typecheck_module(iface_code: str = None, impl_code: str = None, prog_code: s
         else:
             # No file to check
             return TypeCheckResult(False, [TypeCheckError("No code provided")])
-        
+
         # Parse and type-check
         ast = parse_file(file_to_check)
         checker = PascalTypeChecker(source_file=file_to_check)

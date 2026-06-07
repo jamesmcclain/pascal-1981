@@ -116,7 +116,8 @@ class ArrayType(Type):
     def equivalent_to(self, other: Type) -> bool:
         if not isinstance(other, ArrayType):
             return False
-        return (self.element_type.equivalent_to(other.element_type) and self.lower_bound == other.lower_bound and self.upper_bound == other.upper_bound and self.packed == other.packed)
+        return (self.element_type.equivalent_to(other.element_type) and self.lower_bound == other.lower_bound and self.upper_bound == other.upper_bound
+                and self.packed == other.packed)
 
 
 @dataclass

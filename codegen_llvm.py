@@ -12,14 +12,15 @@ Walks the AST and emits LLVM IR. Supports:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from parser import parse_file
 from typing import Any, Dict, List, Optional, Union
 
 import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
 from ast_nodes import *
-from parser import parse_file
-from type_system import LStringType as ResolvedLStringType, StringType as ResolvedStringType
+from type_system import LStringType as ResolvedLStringType
+from type_system import StringType as ResolvedStringType
 
 
 class CodegenError(Exception):
@@ -264,7 +265,9 @@ class Codegen:
         decls = getattr(ast, 'decls', [])
         for decl in decls:
             if isinstance(decl, (ProcDecl, FuncDecl)) and getattr(decl, 'name', None):
-                self.codegen_decl(ProcDecl(decl.name, decl.params, getattr(decl, 'attributes', []), body=None) if isinstance(decl, ProcDecl) else FuncDecl(decl.name, decl.params, decl.return_type, getattr(decl, 'attributes', []), body=None))
+                self.codegen_decl(
+                    ProcDecl(decl.name, decl.params, getattr(decl, 'attributes', []), body=None
+                             ) if isinstance(decl, ProcDecl) else FuncDecl(decl.name, decl.params, decl.return_type, getattr(decl, 'attributes', []), body=None))
 
     def codegen_interface(self, unit: InterfaceUnit) -> ir.Module:
         """Codegen for INTERFACE unit (declarations only)."""
@@ -349,15 +352,16 @@ class Codegen:
 
     def get_string_type_info(self, t: Type) -> tuple[bool, int, bool]:
         """Returns (is_str, max_len, is_lstring) for any AST Type or Resolved Type."""
-        from type_system import LStringType as ResolvedLStringType, StringType as ResolvedStringType
-        
+        from type_system import LStringType as ResolvedLStringType
+        from type_system import StringType as ResolvedStringType
+
         if isinstance(t, (ResolvedLStringType, ResolvedStringType)):
             return True, t.max_len, isinstance(t, ResolvedLStringType)
-            
+
         # Check AST LStringType
         if isinstance(t, LStringType):
             return True, t.max_len, True
-            
+
         # Check NamedType
         if isinstance(t, NamedType):
             name_up = t.name.upper()
@@ -367,7 +371,7 @@ class Codegen:
                 return True, (int(t.param) if t.param is not None else 256), False
             elif name_up in self.type_aliases:
                 return self.get_string_type_info(self.type_aliases[name_up])
-                
+
         return False, 256, False
 
     def codegen_var_decl(self, decl: VarDecl) -> None:
@@ -384,7 +388,7 @@ class Codegen:
             for name in decl.names:
                 alloca = self.builder.alloca(llvm_type, name=name)
                 self.scope.define(name, alloca, decl.type_expr)
-                
+
                 if is_str:
                     # Initialize length byte to 0 for LSTRING
                     if is_lstring:
@@ -397,10 +401,10 @@ class Codegen:
             prefix = self.current_function.name if self.current_function else 'global'
             for name in decl.names:
                 gv_name = name if not self.builder else f'{prefix}.{name}'
-                
+
                 # Create global variable with the aggregate type
                 global_var = ir.GlobalVariable(self.module, llvm_type, name=gv_name)
-                
+
                 if is_str:
                     if is_lstring:
                         # Initialize with zero (length 0, rest undefined)
@@ -411,7 +415,7 @@ class Codegen:
                         global_var.initializer = ir.Constant(llvm_type, init_bytes)
                 else:
                     global_var.initializer = self.zero_initializer(llvm_type)
-                
+
                 self.scope.define(name, global_var, decl.type_expr)
 
     def codegen_proc_decl(self, decl: ProcDecl) -> None:
@@ -641,34 +645,29 @@ class Codegen:
                     # STRING: fill with blanks (0x20)
                     zero = ir.Constant(ir.IntType(32), 0)
                     chars_ptr = self.builder.gep(ptr, [zero, zero])
-                    size_64 = self.builder.zext(
-                        ir.Constant(ir.IntType(32), max_len), ir.IntType(64)
-                    )
-                    self.builder.call(
-                        self.memset_func(),
-                        [chars_ptr, ir.Constant(ir.IntType(32), 0x20), size_64]
-                    )
+                    size_64 = self.builder.zext(ir.Constant(ir.IntType(32), max_len), ir.IntType(64))
+                    self.builder.call(self.memset_func(), [chars_ptr, ir.Constant(ir.IntType(32), 0x20), size_64])
             else:
                 src_chars, src_len = self.get_string_chars_and_len(stmt.expr)
-                
+
                 # Range check: src_len <= max_len
                 cond = self.builder.icmp_signed('<=', src_len, ir.Constant(ir.IntType(32), max_len))
                 success_block = self.builder.block.parent.append_basic_block('str_assign_ok')
                 error_block = self.builder.block.parent.append_basic_block('str_assign_overflow')
                 end_block = self.builder.block.parent.append_basic_block('str_assign_end')
                 self.builder.cbranch(cond, success_block, error_block)
-                
+
                 # Error block: emit range-check failure
                 self.builder.position_at_end(error_block)
                 self.builder.call(self.runtime_error_func(), [])
                 self.builder.unreachable()
-                
+
                 # Success block: perform assignment
                 self.builder.position_at_end(success_block)
                 zero = ir.Constant(ir.IntType(32), 0)
                 one = ir.Constant(ir.IntType(32), 1)
                 src_len_64 = self.builder.zext(src_len, ir.IntType(64))
-                
+
                 if is_dest_lstring:
                     # LSTRING(n) is PACKED ARRAY [0..n] OF CHAR (manual 6-18):
                     # byte [0] = current length (0..n), bytes [1..n] = chars.
@@ -687,16 +686,13 @@ class Codegen:
                     # Copy characters to [0,0]
                     dest_chars = self.builder.gep(ptr, [zero, zero])
                     self.builder.call(self.memcpy_func(), [dest_chars, src_chars, src_len_64])
-                    
+
                     # Blank-pad from [src_len] to [max_len-1] with 0x20
                     pad_start = self.builder.gep(ptr, [zero, src_len])
                     pad_len = self.builder.sub(ir.Constant(ir.IntType(32), max_len), src_len)
                     pad_len_64 = self.builder.zext(pad_len, ir.IntType(64))
-                    self.builder.call(
-                        self.memset_func(),
-                        [pad_start, ir.Constant(ir.IntType(32), 0x20), pad_len_64]
-                    )
-                
+                    self.builder.call(self.memset_func(), [pad_start, ir.Constant(ir.IntType(32), 0x20), pad_len_64])
+
                 self.builder.branch(end_block)
                 self.builder.position_at_end(end_block)
         else:
@@ -1192,10 +1188,10 @@ class Codegen:
         elif isinstance(expr, RetypeExpr):
             # 1. Generate code for the inner expression
             val = self.codegen_expr(expr.expr)
-            
+
             # 2. Get the target LLVM type
             target_llvm_type = self.llvm_type(NamedType(expr.type_id, None))
-            
+
             # Helper to calculate LLVM type size in bytes
             def llvm_type_size(ty: ir.Type) -> int:
                 if isinstance(ty, ir.IntType):
@@ -1219,7 +1215,7 @@ class Codegen:
             else:
                 source_size = llvm_type_size(val.type)
                 target_size = llvm_type_size(target_llvm_type)
-                
+
                 if source_size >= target_size:
                     # Source is larger or equal. Allocate source type.
                     ptr = self.builder.alloca(val.type)
@@ -1233,7 +1229,7 @@ class Codegen:
                     source_ptr = self.builder.bitcast(ptr, ir.PointerType(val.type))
                     self.builder.store(val, source_ptr)
                     casted_ptr = ptr
-                
+
             # 5. Process any selectors
             if expr.selectors:
                 for selector in expr.selectors:
@@ -1248,7 +1244,7 @@ class Codegen:
                         pass
                     elif selector.kind == 'DEREF':
                         casted_ptr = self.builder.load(casted_ptr)
-            
+
             # 6. If the resulting type is an aggregate, return the pointer. Otherwise load the value.
             if isinstance(casted_ptr.type.pointee, (ir.ArrayType, ir.LiteralStructType, ir.IdentifiedStructType)):
                 return casted_ptr
@@ -1284,8 +1280,7 @@ class Codegen:
                 else:
                     dynamic.append(element)
 
-        const_set = ir.Constant(self.set_llvm_type(),
-                                [ir.Constant(ir.IntType(64), word) for word in words])
+        const_set = ir.Constant(self.set_llvm_type(), [ir.Constant(ir.IntType(64), word) for word in words])
         if not dynamic:
             return const_set
 
@@ -1369,8 +1364,7 @@ class Codegen:
 
         # SLASH is always real division in Pascal (7/2 = 3.5), so force double
         # even when both operands are integer-typed.
-        is_real = (isinstance(left.type, ir.DoubleType) or isinstance(right.type, ir.DoubleType)
-                   or expr.op == 'SLASH')
+        is_real = (isinstance(left.type, ir.DoubleType) or isinstance(right.type, ir.DoubleType) or expr.op == 'SLASH')
         if is_real:
             if isinstance(left.type, ir.IntType):
                 left = self.builder.sitofp(left, ir.DoubleType())
@@ -1608,6 +1602,7 @@ class Codegen:
         elif lookup_name == 'BYWORD':
             hi_val = self.codegen_expr(expr.args[0])
             lo_val = self.codegen_expr(expr.args[1])
+
             def _to_i16(v: ir.Value) -> ir.Value:
                 """Widen or narrow any integer value to i16."""
                 w = v.type.width
@@ -1616,27 +1611,18 @@ class Codegen:
                 if w > 16:
                     return self.builder.trunc(v, ir.IntType(16))
                 return v
+
             hi16 = self.builder.and_(_to_i16(hi_val), ir.Constant(ir.IntType(16), 0x00FF))
             lo16 = self.builder.and_(_to_i16(lo_val), ir.Constant(ir.IntType(16), 0x00FF))
-            return self.builder.or_(
-                self.builder.shl(hi16, ir.Constant(ir.IntType(16), 8)),
-                lo16
-            )
+            return self.builder.or_(self.builder.shl(hi16, ir.Constant(ir.IntType(16), 8)), lo16)
         elif lookup_name in {'SQRT', 'SIN', 'COS', 'LN', 'EXP', 'ARCTAN'}:
             val = self.codegen_expr(expr.args[0])
             if isinstance(val.type, ir.IntType):
                 val = self.builder.sitofp(val, ir.DoubleType())
             elif not isinstance(val.type, ir.DoubleType):
                 raise CodegenError(f'{lookup_name} not supported for type {val.type}')
-            
-            libm_names = {
-                'SQRT': 'sqrt',
-                'SIN': 'sin',
-                'COS': 'cos',
-                'LN': 'log',
-                'EXP': 'exp',
-                'ARCTAN': 'atan'
-            }
+
+            libm_names = {'SQRT': 'sqrt', 'SIN': 'sin', 'COS': 'cos', 'LN': 'log', 'EXP': 'exp', 'ARCTAN': 'atan'}
             c_name = libm_names[lookup_name]
             double_ty = ir.DoubleType()
             try:
@@ -1739,8 +1725,8 @@ class Codegen:
             is_lstring_var = False
             lstring_len = None
             string_max_len = 0
-            from type_system import StringType, LStringType
             from ast_nodes import LStringType as ASTLStringType
+            from type_system import LStringType, StringType
             if not isinstance(expr, StringLiteral) and not isinstance(expr, NilLiteral) and not (isinstance(expr, Identifier) and expr.name.upper() == 'NULL'):
                 t = None
                 if isinstance(expr, Identifier):
@@ -1751,7 +1737,7 @@ class Codegen:
                     symbol = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
                     if symbol:
                         t = symbol.type_expr
-                
+
                 if isinstance(t, (LStringType, ASTLStringType)):
                     is_string_var = True
                     is_lstring_var = True
@@ -1811,8 +1797,7 @@ class Codegen:
                 # Both STRING and LSTRING write with %.*s. STRING uses its
                 # (blank-padded) compile-time max length; LSTRING uses the
                 # runtime length read from byte [0] above.
-                length_arg = (lstring_len if is_lstring_var
-                              else ir.Constant(ir.IntType(32), string_max_len))
+                length_arg = (lstring_len if is_lstring_var else ir.Constant(ir.IntType(32), string_max_len))
                 if not precision:  # Only add length if not already in precision
                     prefix += '.*'
                     # printf consumes dynamic args as width, then precision,
@@ -1903,22 +1888,14 @@ class Codegen:
         for func in self.module.functions:
             if func.name == 'memcpy':
                 return func
-        memcpy_type = ir.FunctionType(ir.PointerType(ir.IntType(8)), [
-            ir.PointerType(ir.IntType(8)),
-            ir.PointerType(ir.IntType(8)),
-            ir.IntType(64)
-        ])
+        memcpy_type = ir.FunctionType(ir.PointerType(ir.IntType(8)), [ir.PointerType(ir.IntType(8)), ir.PointerType(ir.IntType(8)), ir.IntType(64)])
         return ir.Function(self.module, memcpy_type, name='memcpy')
 
     def memset_func(self) -> ir.Function:
         for func in self.module.functions:
             if func.name == 'memset':
                 return func
-        memset_type = ir.FunctionType(ir.PointerType(ir.IntType(8)), [
-            ir.PointerType(ir.IntType(8)),
-            ir.IntType(32),
-            ir.IntType(64)
-        ])
+        memset_type = ir.FunctionType(ir.PointerType(ir.IntType(8)), [ir.PointerType(ir.IntType(8)), ir.IntType(32), ir.IntType(64)])
         return ir.Function(self.module, memset_type, name='memset')
 
     def runtime_error_func(self) -> ir.Function:
@@ -1942,11 +1919,11 @@ class Codegen:
                 val_str = val_str[1:-1]
             val_str = val_str.replace("''", "'")
             lit_len = len(val_str)
-            
+
             chars_ptr = self.codegen_expr(expr)
             length = ir.Constant(ir.IntType(32), lit_len)
             return chars_ptr, length
-            
+
         elif isinstance(expr, NilLiteral) or (isinstance(expr, Identifier) and expr.name.upper() == 'NULL'):
             chars_ptr = self.null_lstring_ptr()
             length = ir.Constant(ir.IntType(32), 0)
@@ -1954,7 +1931,7 @@ class Codegen:
 
         # val is now a pointer to the inline aggregate [n+1 x i8] or [n x i8]
         val = self.codegen_expr(expr)
-        
+
         # Determine string type details
         t = None
         if isinstance(expr, Identifier):
@@ -1970,7 +1947,7 @@ class Codegen:
 
         zero = ir.Constant(ir.IntType(32), 0)
         one = ir.Constant(ir.IntType(32), 1)
-        
+
         if is_lstring:
             # LSTRING [n+1 x i8]: byte [0] = length, bytes [1..n] = chars
             len_ptr = self.builder.gep(val, [zero, zero])
@@ -1981,7 +1958,7 @@ class Codegen:
             # STRING [n x i8]: bytes [0..n-1] = chars, no length prefix
             chars_ptr = self.builder.gep(val, [zero, zero])
             length = ir.Constant(ir.IntType(32), max_len)
-            
+
         return chars_ptr, length
 
     def _dest_string_max_len(self, arg: Expression) -> int:
@@ -2002,8 +1979,7 @@ class Codegen:
         LSTRING assignment path. Returns the post-check block, which the caller
         must branch to once the guarded work is done.
         """
-        cond = self.builder.icmp_signed(
-            '<=', need_len, ir.Constant(ir.IntType(32), max_len))
+        cond = self.builder.icmp_signed('<=', need_len, ir.Constant(ir.IntType(32), max_len))
         parent = self.builder.block.parent
         ok_block = parent.append_basic_block(label + '_ok')
         err_block = parent.append_basic_block(label + '_overflow')
@@ -2095,13 +2071,13 @@ class Codegen:
         """COPYSTR(CONST S: STRING; VAR D: STRING)"""
         src_chars, src_len = self.get_string_chars_and_len(args[0])
         src_len_64 = self.builder.zext(src_len, ir.IntType(64))
-        
+
         D_arg = args[1]
         if isinstance(D_arg, Identifier):
             D_arg = Designator(D_arg.name, [])
         D_ptr = self.resolve_designator_ptr(D_arg)
         # D_ptr is now directly the aggregate pointer [n x i8]
-        
+
         # Get D's maximum length
         t = None
         if isinstance(args[1], Identifier):
@@ -2124,7 +2100,7 @@ class Codegen:
         # STRING has no length byte; copy to [0]
         dest_chars = self.builder.gep(D_ptr, [zero, zero])
         self.builder.call(self.memcpy_func(), [dest_chars, src_chars, src_len_64])
-        
+
         # Blank-pad remaining characters from [src_len] to [max_len-1] with 0x20
         pad_ptr = self.builder.gep(D_ptr, [zero, src_len])
         pad_len = self.builder.sub(ir.Constant(ir.IntType(32), max_len), src_len)
@@ -2146,11 +2122,11 @@ class Codegen:
     def builtin_pack(self, args: List[Expression]) -> None:
         """PACK(CONST A: unpacked-array; I: index; VAR Z: packed-array)"""
         a_arg, i_arg, z_arg = args[0], args[1], args[2]
-        
+
         a_ptr = self.codegen_expr(a_arg)
         z_ptr = self.codegen_expr(z_arg)
         i_val = self.codegen_expr(i_arg)
-        
+
         # Look up bounds
         z_name = z_arg.name if isinstance(z_arg, (Identifier, Designator)) else ""
         z_sym = self.scope.lookup(z_name) or self.scope.lookup(z_name.upper())
@@ -2158,90 +2134,90 @@ class Codegen:
             z_low, z_high = self.get_array_bounds(z_sym.type_expr)
         else:
             z_low, z_high = 1, 10
-            
+
         j_var = self.builder.alloca(ir.IntType(32), name='pack_j')
         self.builder.store(ir.Constant(ir.IntType(32), z_low), j_var)
-        
+
         loop_block = self.current_function.append_basic_block(name='pack_loop')
         body_block = self.current_function.append_basic_block(name='pack_body')
         end_block = self.current_function.append_basic_block(name='pack_end')
-        
+
         self.builder.branch(loop_block)
         self.builder.position_at_end(loop_block)
-        
+
         j_val = self.builder.load(j_var)
         cond = self.builder.icmp_signed('<=', j_val, ir.Constant(ir.IntType(32), z_high))
         self.builder.cbranch(cond, body_block, end_block)
-        
+
         self.builder.position_at_end(body_block)
-        
+
         # Calculate A index: j_val - z_low + i_val
         offset = self.builder.sub(j_val, ir.Constant(ir.IntType(32), z_low))
         a_index = self.builder.add(offset, i_val)
-        
+
         # Load A[a_index]
         a_elem_ptr = self.builder.gep(a_ptr, [ir.Constant(ir.IntType(32), 0), a_index])
         elem_val = self.builder.load(a_elem_ptr)
-        
+
         # Store Z[j_val]
         z_elem_ptr = self.builder.gep(z_ptr, [ir.Constant(ir.IntType(32), 0), j_val])
         self.builder.store(elem_val, z_elem_ptr)
-        
+
         # Increment J
         next_j = self.builder.add(j_val, ir.Constant(ir.IntType(32), 1))
         self.builder.store(next_j, j_var)
         self.builder.branch(loop_block)
-        
+
         self.builder.position_at_end(end_block)
 
     def builtin_unpack(self, args: List[Expression]) -> None:
         """UNPACK(CONST Z: packed-array; VAR A: unpacked-array; I: index)"""
         z_arg, a_arg, i_arg = args[0], args[1], args[2]
-        
+
         z_ptr = self.codegen_expr(z_arg)
         a_ptr = self.codegen_expr(a_arg)
         i_val = self.codegen_expr(i_arg)
-        
+
         z_name = z_arg.name if isinstance(z_arg, (Identifier, Designator)) else ""
         z_sym = self.scope.lookup(z_name) or self.scope.lookup(z_name.upper())
         if z_sym and z_sym.type_expr:
             z_low, z_high = self.get_array_bounds(z_sym.type_expr)
         else:
             z_low, z_high = 1, 10
-            
+
         j_var = self.builder.alloca(ir.IntType(32), name='unpack_j')
         self.builder.store(ir.Constant(ir.IntType(32), z_low), j_var)
-        
+
         loop_block = self.current_function.append_basic_block(name='unpack_loop')
         body_block = self.current_function.append_basic_block(name='unpack_body')
         end_block = self.current_function.append_basic_block(name='unpack_end')
-        
+
         self.builder.branch(loop_block)
         self.builder.position_at_end(loop_block)
-        
+
         j_val = self.builder.load(j_var)
         cond = self.builder.icmp_signed('<=', j_val, ir.Constant(ir.IntType(32), z_high))
         self.builder.cbranch(cond, body_block, end_block)
-        
+
         self.builder.position_at_end(body_block)
-        
+
         # Load Z[j_val]
         z_elem_ptr = self.builder.gep(z_ptr, [ir.Constant(ir.IntType(32), 0), j_val])
         elem_val = self.builder.load(z_elem_ptr)
-        
+
         # Calculate A index: j_val - z_low + i_val
         offset = self.builder.sub(j_val, ir.Constant(ir.IntType(32), z_low))
         a_index = self.builder.add(offset, i_val)
-        
+
         # Store A[a_index]
         a_elem_ptr = self.builder.gep(a_ptr, [ir.Constant(ir.IntType(32), 0), a_index])
         self.builder.store(elem_val, a_elem_ptr)
-        
+
         # Increment J
         next_j = self.builder.add(j_val, ir.Constant(ir.IntType(32), 1))
         self.builder.store(next_j, j_var)
         self.builder.branch(loop_block)
-        
+
         self.builder.position_at_end(end_block)
 
     # ========================================================================

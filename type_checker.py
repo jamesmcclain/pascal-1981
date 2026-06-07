@@ -16,13 +16,22 @@ from typing import Any, Dict, List, Optional
 
 from ast_nodes import AdrExpr, AdsExpr
 from ast_nodes import ArrayType as ASTArrayType
-from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, CharLiteral, ConstDecl, Designator, Expression, ForStmt, FuncCall, FuncDecl, Identifier, IfStmt,
-                       ImplementationUnit, InterfaceUnit, IntLiteral, LabelStmt, LowerExpr, ModuleUnit, NamedType, NilLiteral, PointerType as ASTPointerType, ProcCallStmt, ProcDecl, ProgramUnit, RealLiteral, UpperExpr, WriteArg)
-from ast_nodes import LStringType as ASTLStringType, RecordType as ASTRecordType, SetType as ASTSetType, SubrangeType as ASTSubrangeType, EnumType as ASTEnumType
-from ast_nodes import (RangeExpr, RepeatStmt, RetypeExpr, ReturnStmt, Selector, SetConstructor, SizeofExpr, Statement, StringLiteral, TypeDecl, UnaryOp, UseClause, VarDecl, WhileStmt)
+from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, CharLiteral, ConstDecl, Designator)
+from ast_nodes import EnumType as ASTEnumType
+from ast_nodes import (Expression, ForStmt, FuncCall, FuncDecl, Identifier, IfStmt, ImplementationUnit, InterfaceUnit, IntLiteral, LabelStmt, LowerExpr)
+from ast_nodes import LStringType as ASTLStringType
+from ast_nodes import ModuleUnit, NamedType, NilLiteral
+from ast_nodes import PointerType as ASTPointerType
+from ast_nodes import (ProcCallStmt, ProcDecl, ProgramUnit, RangeExpr, RealLiteral)
+from ast_nodes import RecordType as ASTRecordType
+from ast_nodes import (RepeatStmt, ReturnStmt, RetypeExpr, Selector, SetConstructor)
+from ast_nodes import SetType as ASTSetType
+from ast_nodes import SizeofExpr, Statement, StringLiteral
+from ast_nodes import SubrangeType as ASTSubrangeType
+from ast_nodes import (TypeDecl, UnaryOp, UpperExpr, UseClause, VarDecl, WhileStmt, WriteArg)
 from symbol_table import SourceLocation, Symbol, SymbolTable
-from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, FileType, FunctionType, LStringType, PointerType, ProcedureType, RecordType, SetType, StringType, Type,
-                         EnumType, binary_op_result_type, can_assign, unary_op_result_type)
+from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, EnumType, FileType, FunctionType, LStringType, PointerType, ProcedureType,
+                         RecordType, SetType, StringType, Type, binary_op_result_type, can_assign, unary_op_result_type)
 
 
 @dataclass
@@ -652,10 +661,7 @@ class PascalTypeChecker(TypeChecker):
         if isinstance(resolved_type, EnumType):
             resolved_type.name = decl.name
             for member in resolved_type.members:
-                self.symbol_table.define(
-                    member,
-                    Symbol(name=member, type=resolved_type, kind='const',
-                           location=self.get_node_location(decl), is_mutable=False))
+                self.symbol_table.define(member, Symbol(name=member, type=resolved_type, kind='const', location=self.get_node_location(decl), is_mutable=False))
 
         self.symbol_table.define(decl.name, Symbol(name=decl.name, type=resolved_type, kind='type', location=self.get_node_location(decl), is_mutable=False))
 
@@ -982,7 +988,7 @@ class PascalTypeChecker(TypeChecker):
             elif stmt.name.upper() == 'COPYSTR':
                 self._check_copystr_args(stmt)
                 return
-            
+
             # For built-in procedures like WRITELN/WRITE/READLN, skip count/type checks but still
             # check that the arguments are valid expressions (e.g., defined variables)
             if stmt.name.upper() not in ['WRITELN', 'WRITE', 'READLN']:
@@ -1020,28 +1026,28 @@ class PascalTypeChecker(TypeChecker):
         if len(stmt.args) != 2:
             self.error(f"CONCAT expects 2 arguments, got {len(stmt.args)}", stmt)
             return
-        
+
         # Argument 1: destination (VAR LSTRING)
         dest_arg = stmt.args[0]
         if not isinstance(dest_arg, Identifier) and not isinstance(dest_arg, Designator):
             self.error("CONCAT: first argument must be a designator (variable)", stmt)
             return
-        
+
         dest_name = dest_arg.name if isinstance(dest_arg, Identifier) else dest_arg.name
         dest_sym = self.symbol_table.lookup(dest_name) or self.symbol_table.lookup(dest_name.upper())
         if not dest_sym:
             self.error(f"CONCAT: undefined variable '{dest_name}'", stmt)
             return
-        
+
         dest_type = dest_sym.type if dest_sym else None
         if not isinstance(dest_type, LStringType):
             self.error(f"CONCAT: first argument must be LSTRING, got {dest_type}", stmt)
             return
-        
+
         if not dest_sym.is_mutable:
             self.error(f"CONCAT: first argument must be mutable (VAR parameter)", stmt)
             return
-        
+
         # Argument 2: source (CONST STRING or LSTRING)
         src_arg = stmt.args[1]
         src_type = self.infer_expression_type(src_arg)
@@ -1155,31 +1161,31 @@ class PascalTypeChecker(TypeChecker):
         if len(stmt.args) != 2:
             self.error(f"COPYLST expects 2 arguments, got {len(stmt.args)}", stmt)
             return
-        
+
         # Argument 1: source (CONST STRING or LSTRING)
         src_arg = stmt.args[0]
         src_type = self.infer_expression_type(src_arg)
         if not isinstance(src_type, (StringType, LStringType)):
             self.error(f"COPYLST: first argument must be STRING or LSTRING, got {src_type}", stmt)
             return
-        
+
         # Argument 2: destination (VAR LSTRING)
         dest_arg = stmt.args[1]
         if not isinstance(dest_arg, Identifier) and not isinstance(dest_arg, Designator):
             self.error("COPYLST: second argument must be a designator (variable)", stmt)
             return
-        
+
         dest_name = dest_arg.name if isinstance(dest_arg, Identifier) else dest_arg.name
         dest_sym = self.symbol_table.lookup(dest_name) or self.symbol_table.lookup(dest_name.upper())
         if not dest_sym:
             self.error(f"COPYLST: undefined variable '{dest_name}'", stmt)
             return
-        
+
         dest_type = dest_sym.type if dest_sym else None
         if not isinstance(dest_type, LStringType):
             self.error(f"COPYLST: second argument must be LSTRING, got {dest_type}", stmt)
             return
-        
+
         if not dest_sym.is_mutable:
             self.error(f"COPYLST: second argument must be mutable (VAR parameter)", stmt)
             return
@@ -1194,31 +1200,31 @@ class PascalTypeChecker(TypeChecker):
         if len(stmt.args) != 2:
             self.error(f"COPYSTR expects 2 arguments, got {len(stmt.args)}", stmt)
             return
-        
+
         # Argument 1: source (CONST STRING or LSTRING)
         src_arg = stmt.args[0]
         src_type = self.infer_expression_type(src_arg)
         if not isinstance(src_type, (StringType, LStringType)):
             self.error(f"COPYSTR: first argument must be STRING or LSTRING, got {src_type}", stmt)
             return
-        
+
         # Argument 2: destination (VAR STRING)
         dest_arg = stmt.args[1]
         if not isinstance(dest_arg, Identifier) and not isinstance(dest_arg, Designator):
             self.error("COPYSTR: second argument must be a designator (variable)", stmt)
             return
-        
+
         dest_name = dest_arg.name if isinstance(dest_arg, Identifier) else dest_arg.name
         dest_sym = self.symbol_table.lookup(dest_name) or self.symbol_table.lookup(dest_name.upper())
         if not dest_sym:
             self.error(f"COPYSTR: undefined variable '{dest_name}'", stmt)
             return
-        
+
         dest_type = dest_sym.type if dest_sym else None
         if not isinstance(dest_type, StringType):
             self.error(f"COPYSTR: second argument must be STRING, got {dest_type}", stmt)
             return
-        
+
         if not dest_sym.is_mutable:
             self.error(f"COPYSTR: second argument must be mutable (VAR parameter)", stmt)
             return
@@ -1316,7 +1322,7 @@ class PascalTypeChecker(TypeChecker):
             if not target_type:
                 self.error(f"First parameter of RETYPE must be a type identifier, got {expr.type_id}", expr)
                 return None
-            
+
             # 2. Check inner expression type
             expr_type = self.infer_expression_type(expr.expr)
             if expr_type:
@@ -1325,7 +1331,7 @@ class PascalTypeChecker(TypeChecker):
                 expr_size = self.get_resolved_type_size(expr_type)
                 if target_size != expr_size:
                     self.warning(f"Size Not Identical: RETYPE from {expr_type} ({expr_size} bytes) to {target_type} ({target_size} bytes)", expr)
-            
+
             # 4. Handle any selectors on the target type
             current_type = target_type
             if expr.selectors:
@@ -1455,8 +1461,7 @@ class PascalTypeChecker(TypeChecker):
                     if arg_type == REAL_TYPE:
                         self.error(f"BYWORD: argument {i+1} must be a byte-sized ordinal type, got REAL", expr)
                         return None
-                    if arg_type and not isinstance(arg_type, (EnumType,)) and arg_type not in (
-                            INTEGER_TYPE, WORD_TYPE, CHAR_TYPE, BOOLEAN_TYPE):
+                    if arg_type and not isinstance(arg_type, (EnumType, )) and arg_type not in (INTEGER_TYPE, WORD_TYPE, CHAR_TYPE, BOOLEAN_TYPE):
                         self.error(f"BYWORD: argument {i+1} must be an ordinal type, got {arg_type}", expr)
                         return None
                 return WORD_TYPE
@@ -1657,9 +1662,7 @@ class PascalTypeChecker(TypeChecker):
 
     def get_resolved_type_size(self, t: Type) -> int:
         """Estimate the size of a resolved Type in bytes."""
-        from type_system import (IntegerType, RealType, BooleanType, WordType, CharType,
-                                 EnumType, SetType, StringType, LStringType, PointerType,
-                                 ArrayType, RecordType)
+        from type_system import (ArrayType, BooleanType, CharType, EnumType, IntegerType, LStringType, PointerType, RealType, RecordType, SetType, StringType, WordType)
         if isinstance(t, IntegerType):
             return 4
         elif isinstance(t, RealType):

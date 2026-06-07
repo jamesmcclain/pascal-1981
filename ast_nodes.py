@@ -239,8 +239,8 @@ class EmptyStmt(ASTNode):
 # Expressions
 # ============================================================================
 
-Expression = Union['BinOp', 'UnaryOp', 'IntLiteral', 'RealLiteral', 'CharLiteral', 'StringLiteral', 'BoolLiteral', 'NilLiteral', 'Identifier', 'Designator', 'FuncCall', 'SetConstructor',
-                   'AdrExpr', 'AdsExpr', 'SizeofExpr', 'UpperExpr', 'LowerExpr', 'RangeExpr', 'RetypeExpr']
+Expression = Union['BinOp', 'UnaryOp', 'IntLiteral', 'RealLiteral', 'CharLiteral', 'StringLiteral', 'BoolLiteral', 'NilLiteral', 'Identifier', 'Designator', 'FuncCall',
+                   'SetConstructor', 'AdrExpr', 'AdsExpr', 'SizeofExpr', 'UpperExpr', 'LowerExpr', 'RangeExpr', 'RetypeExpr']
 
 
 @dataclass

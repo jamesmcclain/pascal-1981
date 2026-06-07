@@ -14,7 +14,7 @@ import sys
 import tempfile
 import unittest
 
-from tests.support import requires_llvm, requires_exe, parse_source, typecheck_source
+from tests.support import (parse_source, requires_exe, requires_llvm, typecheck_source)
 
 
 # Codegen helpers (only imported here, not in support.py)
@@ -25,12 +25,12 @@ def compile_to_ir(src: str) -> str:
     Requires llvmlite.
     """
     from codegen_llvm import compile_to_llvm
-    
+
     ast = parse_source(src)
     result = typecheck_source(src)
     if not result.success:
         raise RuntimeError(f"Type check failed: {result.errors}")
-    
+
     return compile_to_llvm(ast)
 
 
@@ -42,38 +42,29 @@ def build_and_run(src: str, stdin: str = "") -> tuple:
     Requires llvmlite + clang.
     """
     from codegen_llvm import compile_to_llvm
-    
+
     ast = parse_source(src)
     result = typecheck_source(src)
     if not result.success:
         raise RuntimeError(f"Type check failed: {result.errors}")
-    
+
     ir = compile_to_llvm(ast)
-    
+
     tmpdir = tempfile.mkdtemp()
     try:
         # Write IR to a temp .ll file
         ll_path = os.path.join(tmpdir, "prog.ll")
         with open(ll_path, 'w') as f:
             f.write(ir)
-        
+
         # Compile to native executable
         exe_path = os.path.join(tmpdir, "prog")
-        result = subprocess.run(
-            ["clang", ll_path, "-o", exe_path, "-lm"],
-            capture_output=True,
-            text=True
-        )
+        result = subprocess.run(["clang", ll_path, "-o", exe_path, "-lm"], capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(f"clang failed: {result.stderr}")
-        
+
         # Run the executable
-        run_result = subprocess.run(
-            [exe_path],
-            input=stdin,
-            capture_output=True,
-            text=True
-        )
+        run_result = subprocess.run([exe_path], input=stdin, capture_output=True, text=True)
         return run_result.returncode, run_result.stdout
     finally:
         import shutil
@@ -233,33 +224,27 @@ class TestCodegenIR(unittest.TestCase):
 
     def test_while_loop(self):
         """WHILE loop generates valid IR."""
-        src = (
-            "PROGRAM P; "
-            "VAR x: INTEGER; "
-            "BEGIN x := 0; WHILE x < 5 DO x := x + 1 END."
-        )
+        src = ("PROGRAM P; "
+               "VAR x: INTEGER; "
+               "BEGIN x := 0; WHILE x < 5 DO x := x + 1 END.")
         ir = compile_to_ir(src)
         self.assertIsInstance(ir, str)
         self.assertGreater(len(ir), 0)
 
     def test_for_loop(self):
         """FOR loop generates valid IR."""
-        src = (
-            "PROGRAM P; "
-            "VAR i: INTEGER; "
-            "BEGIN FOR i := 1 TO 5 DO WRITELN(i) END."
-        )
+        src = ("PROGRAM P; "
+               "VAR i: INTEGER; "
+               "BEGIN FOR i := 1 TO 5 DO WRITELN(i) END.")
         ir = compile_to_ir(src)
         self.assertIsInstance(ir, str)
         self.assertGreater(len(ir), 0)
 
     def test_for_static_loop_variable_uses_fixed_storage(self):
         """FOR STATIC uses fixed storage for the control variable."""
-        src = (
-            "PROGRAM P; "
-            "VAR i: INTEGER; "
-            "BEGIN FOR STATIC i := 1 TO 5 DO WRITELN(i) END."
-        )
+        src = ("PROGRAM P; "
+               "VAR i: INTEGER; "
+               "BEGIN FOR STATIC i := 1 TO 5 DO WRITELN(i) END.")
         ir = compile_to_ir(src)
         self.assertIn("__for_static", ir)
         self.assertIn("internal global", ir)
@@ -271,47 +256,39 @@ class TestCodegenIR(unittest.TestCase):
 
     def test_procedure_call(self):
         """Procedure call generates valid IR."""
-        src = (
-            "PROGRAM P; "
-            "PROCEDURE PrintOne; BEGIN WRITELN(1) END; "
-            "BEGIN PrintOne END."
-        )
+        src = ("PROGRAM P; "
+               "PROCEDURE PrintOne; BEGIN WRITELN(1) END; "
+               "BEGIN PrintOne END.")
         ir = compile_to_ir(src)
         self.assertIsInstance(ir, str)
         self.assertGreater(len(ir), 0)
 
     def test_function_call(self):
         """Function call generates valid IR."""
-        src = (
-            "PROGRAM P; "
-            "FUNCTION Add(x: INTEGER; y: INTEGER): INTEGER; "
-            "BEGIN Add := x + y END; "
-            "BEGIN WRITELN(Add(2, 3)) END."
-        )
+        src = ("PROGRAM P; "
+               "FUNCTION Add(x: INTEGER; y: INTEGER): INTEGER; "
+               "BEGIN Add := x + y END; "
+               "BEGIN WRITELN(Add(2, 3)) END.")
         ir = compile_to_ir(src)
         self.assertIsInstance(ir, str)
         self.assertGreater(len(ir), 0)
 
     def test_real_function_parameter_and_return(self):
         """REAL function parameters and return values generate valid IR."""
-        src = (
-            "PROGRAM P; "
-            "FUNCTION Twice(x: REAL): REAL; "
-            "BEGIN Twice := x + x END; "
-            "BEGIN WRITELN(Twice(1.5)) END."
-        )
+        src = ("PROGRAM P; "
+               "FUNCTION Twice(x: REAL): REAL; "
+               "BEGIN Twice := x + x END; "
+               "BEGIN WRITELN(Twice(1.5)) END.")
         ir = compile_to_ir(src)
         self.assertIn("double", ir)
         self.assertIn("Twice", ir)
 
     def test_abs_and_sqrt_generate_valid_ir(self):
         """ABS, SQRT, and other libm math functions generate valid IR."""
-        src = (
-            "PROGRAM P; VAR x: REAL; BEGIN "
-            "WRITELN(ABS(-5)); "
-            "x := SQRT(9) + SIN(1) + COS(1) + LN(2) + EXP(1) + ARCTAN(1); "
-            "WRITELN(x) END."
-        )
+        src = ("PROGRAM P; VAR x: REAL; BEGIN "
+               "WRITELN(ABS(-5)); "
+               "x := SQRT(9) + SIN(1) + COS(1) + LN(2) + EXP(1) + ARCTAN(1); "
+               "WRITELN(x) END.")
         ir = compile_to_ir(src)
         self.assertIn("sqrt", ir)
         self.assertIn("sin", ir)
@@ -323,12 +300,10 @@ class TestCodegenIR(unittest.TestCase):
 
     def test_short_circuit_generates_branching_ir(self):
         """AND THEN / OR ELSE lower to branch + PHI, not eager bitwise ops."""
-        src = (
-            "PROGRAM P; VAR a, b: BOOLEAN; BEGIN "
-            "a := TRUE; b := FALSE; "
-            "IF a AND THEN b THEN WRITELN(1); "
-            "IF a OR ELSE b THEN WRITELN(2) END."
-        )
+        src = ("PROGRAM P; VAR a, b: BOOLEAN; BEGIN "
+               "a := TRUE; b := FALSE; "
+               "IF a AND THEN b THEN WRITELN(1); "
+               "IF a OR ELSE b THEN WRITELN(2) END.")
         ir = compile_to_ir(src)
         self.assertIn("sc_rhs", ir)
         self.assertIn("sc_merge", ir)
@@ -355,76 +330,66 @@ class TestCodegenBuildRun(unittest.TestCase):
 
     def test_real_function_parameter_and_return(self):
         """REAL function parameter and return values run and produce output."""
-        src = (
-            "PROGRAM P; "
-            "FUNCTION Twice(x: REAL): REAL; "
-            "BEGIN Twice := x + x END; "
-            "BEGIN WRITELN(Twice(1.5)) END."
-        )
+        src = ("PROGRAM P; "
+               "FUNCTION Twice(x: REAL): REAL; "
+               "BEGIN Twice := x + x END; "
+               "BEGIN WRITELN(Twice(1.5)) END.")
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         self.assertIn("3", stdout)
 
     def test_abs_and_sqrt_run(self):
         """ABS, SQRT, and other math functions run and produce correct output."""
-        src = (
-            "PROGRAM P; VAR x: REAL; BEGIN "
-            "WRITELN(ABS(-5)); "
-            "x := SQRT(9); "
-            "WRITELN(x); "
-            "WRITELN(SIN(0)); "
-            "WRITELN(COS(0)); "
-            "WRITELN(LN(1)); "
-            "WRITELN(EXP(0)) "
-            "END."
-        )
+        src = ("PROGRAM P; VAR x: REAL; BEGIN "
+               "WRITELN(ABS(-5)); "
+               "x := SQRT(9); "
+               "WRITELN(x); "
+               "WRITELN(SIN(0)); "
+               "WRITELN(COS(0)); "
+               "WRITELN(LN(1)); "
+               "WRITELN(EXP(0)) "
+               "END.")
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         self.assertIn("5", stdout)
         self.assertIn("3", stdout)
-        self.assertIn("1", stdout) # COS(0) = 1, EXP(0) = 1
+        self.assertIn("1", stdout)  # COS(0) = 1, EXP(0) = 1
 
     def test_trunc_run(self):
         """TRUNC truncates toward zero (not floor) for both positive and negative reals."""
-        src = (
-            "PROGRAM P; VAR i: INTEGER; BEGIN "
-            "i := TRUNC(3.7); WRITELN(i); "
-            "i := TRUNC(-3.7); WRITELN(i) "
-            "END."
-        )
+        src = ("PROGRAM P; VAR i: INTEGER; BEGIN "
+               "i := TRUNC(3.7); WRITELN(i); "
+               "i := TRUNC(-3.7); WRITELN(i) "
+               "END.")
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         lines = stdout.strip().splitlines()
-        self.assertEqual(lines[0].strip(), "3")    # truncate positive
-        self.assertEqual(lines[1].strip(), "-3")   # truncate toward zero, NOT floor (-4)
+        self.assertEqual(lines[0].strip(), "3")  # truncate positive
+        self.assertEqual(lines[1].strip(), "-3")  # truncate toward zero, NOT floor (-4)
 
     def test_round_run(self):
         """ROUND rounds away from zero (IBM Pascal manual 11-7)."""
-        src = (
-            "PROGRAM P; VAR i: INTEGER; BEGIN "
-            "i := ROUND(2.4); WRITELN(i); "
-            "i := ROUND(1.6); WRITELN(i); "
-            "i := ROUND(-1.6); WRITELN(i); "
-            "i := ROUND(3.5); WRITELN(i); "
-            "i := ROUND(-3.5); WRITELN(i) "
-            "END."
-        )
+        src = ("PROGRAM P; VAR i: INTEGER; BEGIN "
+               "i := ROUND(2.4); WRITELN(i); "
+               "i := ROUND(1.6); WRITELN(i); "
+               "i := ROUND(-1.6); WRITELN(i); "
+               "i := ROUND(3.5); WRITELN(i); "
+               "i := ROUND(-3.5); WRITELN(i) "
+               "END.")
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         lines = stdout.strip().splitlines()
-        self.assertEqual(lines[0].strip(), "2")    # round down
-        self.assertEqual(lines[1].strip(), "2")    # round up
-        self.assertEqual(lines[2].strip(), "-2")   # round toward zero (away from zero magnitude)
-        self.assertEqual(lines[3].strip(), "4")    # tie: away from zero
-        self.assertEqual(lines[4].strip(), "-4")   # tie: away from zero
+        self.assertEqual(lines[0].strip(), "2")  # round down
+        self.assertEqual(lines[1].strip(), "2")  # round up
+        self.assertEqual(lines[2].strip(), "-2")  # round toward zero (away from zero magnitude)
+        self.assertEqual(lines[3].strip(), "4")  # tie: away from zero
+        self.assertEqual(lines[4].strip(), "-4")  # tie: away from zero
 
     def test_float_run(self):
         """FLOAT converts integer to real."""
-        src = (
-            "PROGRAM P; VAR r: REAL; BEGIN "
-            "r := FLOAT(42); WRITELN(r) "
-            "END."
-        )
+        src = ("PROGRAM P; VAR r: REAL; BEGIN "
+               "r := FLOAT(42); WRITELN(r) "
+               "END.")
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         self.assertIn("42", stdout)
@@ -444,14 +409,12 @@ class TestCodegenBuildRun(unittest.TestCase):
 
     def test_short_circuit_skips_rhs_runtime(self):
         """Short-circuit operators must not evaluate an unnecessary RHS call."""
-        src = (
-            "PROGRAM P; "
-            "FUNCTION Bad: BOOLEAN; BEGIN WRITELN(99); Bad := TRUE END; "
-            "BEGIN "
-            "IF FALSE AND THEN Bad() THEN WRITELN(1); "
-            "IF TRUE OR ELSE Bad() THEN WRITELN(2) "
-            "END."
-        )
+        src = ("PROGRAM P; "
+               "FUNCTION Bad: BOOLEAN; BEGIN WRITELN(99); Bad := TRUE END; "
+               "BEGIN "
+               "IF FALSE AND THEN Bad() THEN WRITELN(1); "
+               "IF TRUE OR ELSE Bad() THEN WRITELN(2) "
+               "END.")
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         self.assertNotIn("99", stdout)
@@ -589,22 +552,18 @@ class TestCodegenBuildRun(unittest.TestCase):
 
     def test_variable_assignment_and_output(self):
         """Assign to variable and output."""
-        src = (
-            "PROGRAM P; "
-            "VAR x: INTEGER; "
-            "BEGIN x := 10; WRITELN(x) END."
-        )
+        src = ("PROGRAM P; "
+               "VAR x: INTEGER; "
+               "BEGIN x := 10; WRITELN(x) END.")
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         self.assertIn("10", stdout)
 
     def test_for_loop_output(self):
         """FOR loop outputs 1 to 3."""
-        src = (
-            "PROGRAM P; "
-            "VAR i: INTEGER; "
-            "BEGIN FOR i := 1 TO 3 DO WRITELN(i) END."
-        )
+        src = ("PROGRAM P; "
+               "VAR i: INTEGER; "
+               "BEGIN FOR i := 1 TO 3 DO WRITELN(i) END.")
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         # Output should contain 1, 2, 3 (possibly with newlines)
@@ -614,22 +573,18 @@ class TestCodegenBuildRun(unittest.TestCase):
 
     def test_procedure_with_parameter(self):
         """Procedure with parameter compiles and runs."""
-        src = (
-            "PROGRAM P; "
-            "PROCEDURE Print(x: INTEGER); BEGIN WRITELN(x) END; "
-            "BEGIN Print(99) END."
-        )
+        src = ("PROGRAM P; "
+               "PROCEDURE Print(x: INTEGER); BEGIN WRITELN(x) END; "
+               "BEGIN Print(99) END.")
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         self.assertIn("99", stdout)
 
     def test_integer_to_real_procedure_parameter(self):
         """INTEGER actual coerces into REAL procedure parameter at codegen."""
-        src = (
-            "PROGRAM P; "
-            "PROCEDURE PrintReal(x: REAL); BEGIN WRITELN(x) END; "
-            "BEGIN PrintReal(7) END."
-        )
+        src = ("PROGRAM P; "
+               "PROCEDURE PrintReal(x: REAL); BEGIN WRITELN(x) END; "
+               "BEGIN PrintReal(7) END.")
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         self.assertIn("7", stdout)
@@ -655,37 +610,31 @@ class TestCodegenBuildRun(unittest.TestCase):
 
     def test_real_const_declaration_and_use(self):
         """REAL CONST can be declared and used in expressions without crashing."""
-        src = (
-            "PROGRAM P; "
-            "CONST PI = 3.14159; "
-            "VAR r: REAL; "
-            "BEGIN r := PI; WRITELN(r) END."
-        )
+        src = ("PROGRAM P; "
+               "CONST PI = 3.14159; "
+               "VAR r: REAL; "
+               "BEGIN r := PI; WRITELN(r) END.")
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         self.assertIn("3.14", stdout)
 
     def test_negative_real_const(self):
         """Unary minus applied to a REAL constant generates valid IR and correct output."""
-        src = (
-            "PROGRAM P; "
-            "CONST NEGPI = -3.14159; "
-            "VAR r: REAL; "
-            "BEGIN r := NEGPI; WRITELN(r) END."
-        )
+        src = ("PROGRAM P; "
+               "CONST NEGPI = -3.14159; "
+               "VAR r: REAL; "
+               "BEGIN r := NEGPI; WRITELN(r) END.")
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         self.assertIn("-3.14", stdout)
 
     def test_real_const_in_expression(self):
         """REAL constant participates in arithmetic expressions correctly."""
-        src = (
-            "PROGRAM P; "
-            "CONST TWO = 2.0; NEGPI = -3.14159; "
-            "FUNCTION Scale(x: REAL): REAL; "
-            "BEGIN Scale := x * TWO + NEGPI END; "
-            "BEGIN WRITELN(Scale(1.0) : 10 : 4) END."
-        )
+        src = ("PROGRAM P; "
+               "CONST TWO = 2.0; NEGPI = -3.14159; "
+               "FUNCTION Scale(x: REAL): REAL; "
+               "BEGIN Scale := x * TWO + NEGPI END; "
+               "BEGIN WRITELN(Scale(1.0) : 10 : 4) END.")
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         # 1.0 * 2.0 + (-3.14159) = -1.14159
@@ -693,23 +642,19 @@ class TestCodegenBuildRun(unittest.TestCase):
 
     def test_unary_minus_real_variable(self):
         """Unary minus on a REAL variable generates valid IR (not integer neg)."""
-        src = (
-            "PROGRAM P; VAR x: REAL; "
-            "BEGIN x := 2.5; WRITELN(-x) END."
-        )
+        src = ("PROGRAM P; VAR x: REAL; "
+               "BEGIN x := 2.5; WRITELN(-x) END.")
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         self.assertIn("-2.5", stdout)
 
     def test_real_comparison_produces_boolean(self):
         """REAL comparisons evaluate and branch correctly."""
-        src = (
-            "PROGRAM P; CONST NEGPI = -3.14159; "
-            "BEGIN "
-            "IF NEGPI < 0.0 THEN WRITELN(1) ELSE WRITELN(0); "
-            "IF 0.5 = 0.5 THEN WRITELN(1) ELSE WRITELN(0) "
-            "END."
-        )
+        src = ("PROGRAM P; CONST NEGPI = -3.14159; "
+               "BEGIN "
+               "IF NEGPI < 0.0 THEN WRITELN(1) ELSE WRITELN(0); "
+               "IF 0.5 = 0.5 THEN WRITELN(1) ELSE WRITELN(0) "
+               "END.")
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         lines = stdout.strip().split()
@@ -717,20 +662,16 @@ class TestCodegenBuildRun(unittest.TestCase):
 
     def test_mixed_int_real_arithmetic(self):
         """Mixed INTEGER and REAL operands widen to REAL correctly."""
-        src = (
-            "PROGRAM P; VAR x: REAL; i: INTEGER; "
-            "BEGIN x := 3.0; i := 7; WRITELN(x + i : 8 : 2) END."
-        )
+        src = ("PROGRAM P; VAR x: REAL; i: INTEGER; "
+               "BEGIN x := 3.0; i := 7; WRITELN(x + i : 8 : 2) END.")
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         self.assertIn("10.00", stdout)
 
     def test_nested_arithmetic(self):
         """Nested arithmetic expressions."""
-        src = (
-            "PROGRAM P; "
-            "BEGIN WRITELN((2 + 3) * 4) END."
-        )
+        src = ("PROGRAM P; "
+               "BEGIN WRITELN((2 + 3) * 4) END.")
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         self.assertIn("20", stdout)
@@ -1018,8 +959,8 @@ END."""
         rc, out = build_and_run(src)
         self.assertEqual(rc, 0)
         lines = [l for l in out.splitlines() if l.strip()]
-        self.assertEqual(lines[0].strip(), "18")   # 0x12 = 18
-        self.assertEqual(lines[1].strip(), "52")   # 0x34 = 52
+        self.assertEqual(lines[0].strip(), "18")  # 0x12 = 18
+        self.assertEqual(lines[1].strip(), "52")  # 0x34 = 52
 
 
 class TestRetypeCodegen(unittest.TestCase):
@@ -1115,5 +1056,3 @@ END."""
         lines = [l.strip() for l in out.splitlines() if l.strip()]
         self.assertEqual(lines[0], "40")
         self.assertEqual(lines[1], "999")
-
-

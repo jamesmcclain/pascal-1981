@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import sys
 import argparse
+import sys
 from typing import List, Optional, Sequence, Union
 
-from ast_nodes import (AdrExpr, ArrayType, AssignStmt, ASTNode, BinOp, Block, BoolLiteral, BreakStmt, BuiltinType, CaseElement, CaseStmt, CharLiteral, CompoundStmt, ConstDecl,
-                       CycleStmt, Declaration, Designator, EmptyStmt, EnumType, Expression, FileType, ForStmt, FuncCall, FuncDecl, GotoStmt, Identifier, IfStmt, ImplementationUnit,
-                       AdsExpr,
-                       IndexRange, InterfaceUnit, IntLiteral, LabelDecl, LabelStmt, LStringType, ModuleUnit, NamedType, NilLiteral, Param, PointerType, ProcCallStmt, ProcDecl, ProgramUnit,
-                       RangeExpr, RealLiteral, RecordType, RepeatStmt, ReturnStmt, Selector, SetConstructor, SetType, SizeofExpr, Statement, StringLiteral, SubrangeType, Type, TypeDecl, UnaryOp,
-                       UpperExpr, LowerExpr, RetypeExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt, WriteArg)
+from ast_nodes import (AdrExpr, AdsExpr, ArrayType, AssignStmt, ASTNode, BinOp, Block, BoolLiteral, BreakStmt, BuiltinType, CaseElement, CaseStmt, CharLiteral, CompoundStmt,
+                       ConstDecl, CycleStmt, Declaration, Designator, EmptyStmt, EnumType, Expression, FileType, ForStmt, FuncCall, FuncDecl, GotoStmt, Identifier, IfStmt,
+                       ImplementationUnit, IndexRange, InterfaceUnit, IntLiteral, LabelDecl, LabelStmt, LowerExpr, LStringType, ModuleUnit, NamedType, NilLiteral, Param,
+                       PointerType, ProcCallStmt, ProcDecl, ProgramUnit, RangeExpr, RealLiteral, RecordType, RepeatStmt, ReturnStmt, RetypeExpr, Selector, SetConstructor, SetType,
+                       SizeofExpr, Statement, StringLiteral, SubrangeType, Type, TypeDecl, UnaryOp, UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt, WriteArg)
 from lexer import ALL_CODES, KEYWORD_CODES, LexerError, Token, lex_file
 
 

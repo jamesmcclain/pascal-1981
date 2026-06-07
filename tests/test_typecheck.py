@@ -9,7 +9,7 @@ Runs in-process (no subprocess); no llvmlite dependency.
 
 import unittest
 
-from tests.support import typecheck_source, typecheck_module
+from tests.support import typecheck_module, typecheck_source
 
 
 class TestVariableScope(unittest.TestCase):
@@ -28,11 +28,9 @@ class TestVariableScope(unittest.TestCase):
 
     def test_scope_isolation_procedure(self):
         """Procedure scope does not leak to outer scope."""
-        result = typecheck_source(
-            "PROGRAM P; "
-            "PROCEDURE P1; VAR x: INTEGER; BEGIN END; "
-            "BEGIN WRITELN(x) END."
-        )
+        result = typecheck_source("PROGRAM P; "
+                                  "PROCEDURE P1; VAR x: INTEGER; BEGIN END; "
+                                  "BEGIN WRITELN(x) END.")
         self.assertFalse(result.success)
         self.assertIn("Undefined", " ".join(str(e) for e in result.errors))
 
@@ -80,12 +78,10 @@ class TestVariableScope(unittest.TestCase):
 
     def test_shadowing_nested_scope(self):
         """Variable shadowing in nested scope is allowed."""
-        result = typecheck_source(
-            "PROGRAM P; "
-            "VAR x: INTEGER; "
-            "PROCEDURE P1; VAR x: INTEGER; BEGIN x := 1 END; "
-            "BEGIN x := 2 END."
-        )
+        result = typecheck_source("PROGRAM P; "
+                                  "VAR x: INTEGER; "
+                                  "PROCEDURE P1; VAR x: INTEGER; BEGIN x := 1 END; "
+                                  "BEGIN x := 2 END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
 
@@ -148,15 +144,13 @@ class TestTypeCompatibility(unittest.TestCase):
 
     def test_enum_set_declaration_and_membership(self):
         """SET OF an enum type resolves, and members are usable elements/values."""
-        result = typecheck_source(
-            "PROGRAM P; TYPE C = (Red, Green, Blue); VAR s: SET OF C; VAR ok: BOOLEAN; "
-            "BEGIN s := [Red, Blue]; ok := Green IN s END.")
+        result = typecheck_source("PROGRAM P; TYPE C = (Red, Green, Blue); VAR s: SET OF C; VAR ok: BOOLEAN; "
+                                  "BEGIN s := [Red, Blue]; ok := Green IN s END.")
         self.assertTrue(result.success, [e.message for e in result.errors])
 
     def test_named_const_subrange_set_base_resolves(self):
         """A SET OF lo..hi with named integer-constant bounds resolves."""
-        result = typecheck_source(
-            "PROGRAM P; CONST lo = 1; hi = 10; VAR s: SET OF lo..hi; BEGIN s := [2, 3] END.")
+        result = typecheck_source("PROGRAM P; CONST lo = 1; hi = 10; VAR s: SET OF lo..hi; BEGIN s := [2, 3] END.")
         self.assertTrue(result.success, [e.message for e in result.errors])
 
     def test_pred_typecheck(self):
@@ -185,7 +179,7 @@ class TestTypeCompatibility(unittest.TestCase):
         """ABS accepts INTEGER/REAL and SQRT/SIN/COS/LN/EXP/ARCTAN return REAL."""
         result = typecheck_source("PROGRAM P; VAR x: REAL; BEGIN x := SQRT(ABS(-5)) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
-        
+
         for name in ["SIN", "COS", "LN", "EXP", "ARCTAN"]:
             result = typecheck_source(f"PROGRAM P; VAR x: REAL; BEGIN x := {name}(4.2) END.")
             self.assertTrue(result.success, msg=f"{name} failed: " + " ".join(str(e) for e in result.errors))
@@ -232,20 +226,15 @@ class TestTypeCompatibility(unittest.TestCase):
 
     def test_adr_ads_address_types_typecheck(self):
         """ADR OF and ADS OF variables accept matching address-of expressions."""
-        result = typecheck_source(
-            "PROGRAM P; VAR x: INTEGER; a: ADR OF INTEGER; s: ADS OF INTEGER; BEGIN a := ADR x; s := ADS x END."
-        )
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; a: ADR OF INTEGER; s: ADS OF INTEGER; BEGIN a := ADR x; s := ADS x END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_parameter_modes_typecheck(self):
         """VAR/VARS are writable references; CONST/CONSTS are read-only references."""
         ok = typecheck_source(
-            "PROGRAM P; PROCEDURE Q(VAR a: INTEGER; VARS b: INTEGER; CONST c: INTEGER; CONSTS d: INTEGER); BEGIN a := 1; b := 2; WRITELN(c); WRITELN(d) END; BEGIN END."
-        )
+            "PROGRAM P; PROCEDURE Q(VAR a: INTEGER; VARS b: INTEGER; CONST c: INTEGER; CONSTS d: INTEGER); BEGIN a := 1; b := 2; WRITELN(c); WRITELN(d) END; BEGIN END.")
         self.assertTrue(ok.success, msg=" ".join(str(e) for e in ok.errors))
-        bad = typecheck_source(
-            "PROGRAM P; PROCEDURE Q(CONST c: INTEGER; CONSTS d: INTEGER); BEGIN c := 1; d := 2 END; BEGIN END."
-        )
+        bad = typecheck_source("PROGRAM P; PROCEDURE Q(CONST c: INTEGER; CONSTS d: INTEGER); BEGIN c := 1; d := 2 END; BEGIN END.")
         self.assertFalse(bad.success)
         self.assertTrue(any("Cannot assign" in e.message for e in bad.errors))
 
@@ -284,9 +273,7 @@ class TestControlFlow(unittest.TestCase):
 
     def test_short_circuit_boolean_operands(self):
         """AND THEN / OR ELSE are valid for BOOLEAN operands."""
-        result = typecheck_source(
-            "PROGRAM P; VAR a, b: BOOLEAN; BEGIN IF a AND THEN b THEN WRITELN(1); IF a OR ELSE b THEN WRITELN(2) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR a, b: BOOLEAN; BEGIN IF a AND THEN b THEN WRITELN(1); IF a OR ELSE b THEN WRITELN(2) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_short_circuit_rejects_integer_operands(self):
@@ -297,31 +284,23 @@ class TestControlFlow(unittest.TestCase):
 
     def test_while_boolean_condition(self):
         """WHILE with BOOLEAN condition is valid."""
-        result = typecheck_source(
-            "PROGRAM P; VAR x: INTEGER; BEGIN x := 0; WHILE x < 10 DO x := x + 1 END."
-        )
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := 0; WHILE x < 10 DO x := x + 1 END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_while_integer_condition_error(self):
         """WHILE with INTEGER condition is an error."""
-        result = typecheck_source(
-            "PROGRAM P; VAR x: INTEGER; BEGIN WHILE x DO x := x + 1 END."
-        )
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN WHILE x DO x := x + 1 END.")
         self.assertFalse(result.success)
         self.assertIn("must be BOOLEAN", " ".join(str(e) for e in result.errors))
 
     def test_for_loop_integer_variable(self):
         """FOR with INTEGER loop variable is valid."""
-        result = typecheck_source(
-            "PROGRAM P; VAR i: INTEGER; BEGIN FOR i := 1 TO 10 DO WRITELN(i) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR i: INTEGER; BEGIN FOR i := 1 TO 10 DO WRITELN(i) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_for_loop_real_variable_error(self):
         """FOR with REAL loop variable is an error."""
-        result = typecheck_source(
-            "PROGRAM P; VAR r: REAL; BEGIN FOR r := 1.0 TO 10.0 DO WRITELN(r) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR r: REAL; BEGIN FOR r := 1.0 TO 10.0 DO WRITELN(r) END.")
         self.assertFalse(result.success)
         self.assertIn("must be INTEGER", " ".join(str(e) for e in result.errors))
 
@@ -342,16 +321,12 @@ class TestCallValidation(unittest.TestCase):
 
     def test_procedure_with_parameters(self):
         """Procedure call with correct parameters is valid."""
-        result = typecheck_source(
-            "PROGRAM P; PROCEDURE P1(x: INTEGER); BEGIN END; BEGIN P1(42) END."
-        )
+        result = typecheck_source("PROGRAM P; PROCEDURE P1(x: INTEGER); BEGIN END; BEGIN P1(42) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_integer_to_real_procedure_parameter(self):
         """INTEGER actual may flow to REAL formal parameter."""
-        result = typecheck_source(
-            "PROGRAM P; PROCEDURE P1(x: REAL); BEGIN END; BEGIN P1(42) END."
-        )
+        result = typecheck_source("PROGRAM P; PROCEDURE P1(x: REAL); BEGIN END; BEGIN P1(42) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_undefined_function_error(self):
@@ -366,11 +341,9 @@ class TestFunctionReturnTypes(unittest.TestCase):
 
     def test_mismatched_return_type_error(self):
         """Function return with wrong type is an error."""
-        result = typecheck_source(
-            "PROGRAM P; "
-            "FUNCTION F: INTEGER; BEGIN F := 3.14 END; "
-            "BEGIN END."
-        )
+        result = typecheck_source("PROGRAM P; "
+                                  "FUNCTION F: INTEGER; BEGIN F := 3.14 END; "
+                                  "BEGIN END.")
         self.assertFalse(result.success)
         self.assertIn("Cannot assign", " ".join(str(e) for e in result.errors))
 
@@ -380,9 +353,7 @@ class TestArrayTypeChecking(unittest.TestCase):
 
     def test_array_real_index_error(self):
         """Array index with REAL is an error."""
-        result = typecheck_source(
-            "PROGRAM P; VAR a: ARRAY[1..10] OF INTEGER; BEGIN a[1.5] := 42 END."
-        )
+        result = typecheck_source("PROGRAM P; VAR a: ARRAY[1..10] OF INTEGER; BEGIN a[1.5] := 42 END.")
         self.assertFalse(result.success)
         self.assertIn("Array index must be INTEGER", " ".join(str(e) for e in result.errors))
 
@@ -417,15 +388,10 @@ class TestIntegration(unittest.TestCase):
 
     def test_parameter_type_mismatch_error(self):
         """Parameter type mismatch is an error."""
-        result = typecheck_source(
-            "PROGRAM P; PROCEDURE P1(x: INTEGER); BEGIN END; BEGIN P1(1.5) END."
-        )
+        result = typecheck_source("PROGRAM P; PROCEDURE P1(x: INTEGER); BEGIN END; BEGIN P1(1.5) END.")
         self.assertFalse(result.success)
         # Error message may say "type mismatch" or similar
-        self.assertTrue(
-            not result.success,
-            msg="Expected type error on parameter mismatch"
-        )
+        self.assertTrue(not result.success, msg="Expected type error on parameter mismatch")
 
 
 class TestStringProcedures(unittest.TestCase):
@@ -433,89 +399,57 @@ class TestStringProcedures(unittest.TestCase):
 
     def test_concat_valid_types(self):
         """CONCAT with LSTRING destination and STRING source is valid."""
-        result = typecheck_source(
-            "PROGRAM P; VAR d: LSTRING(256); s: STRING(100); BEGIN CONCAT(d, s) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR d: LSTRING(256); s: STRING(100); BEGIN CONCAT(d, s) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_concat_wrong_dest_type(self):
         """CONCAT requires LSTRING destination, not STRING."""
-        result = typecheck_source(
-            "PROGRAM P; VAR d: STRING(256); s: STRING(100); BEGIN CONCAT(d, s) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR d: STRING(256); s: STRING(100); BEGIN CONCAT(d, s) END.")
         self.assertFalse(result.success)
-        self.assertTrue(
-            any('LSTRING' in str(e) for e in result.errors),
-            msg="Expected LSTRING type error in: " + " ".join(str(e) for e in result.errors)
-        )
+        self.assertTrue(any('LSTRING' in str(e) for e in result.errors), msg="Expected LSTRING type error in: " + " ".join(str(e) for e in result.errors))
 
     def test_concat_immutable_dest(self):
         """CONCAT destination must be mutable (VAR), not a constant."""
-        result = typecheck_source(
-            "PROGRAM P; VAR s: STRING(100); CONST d = 'test'; BEGIN CONCAT(d, s) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR s: STRING(100); CONST d = 'test'; BEGIN CONCAT(d, s) END.")
         self.assertFalse(result.success)
 
     def test_copylst_valid_types(self):
         """COPYLST with STRING source and LSTRING destination is valid."""
-        result = typecheck_source(
-            "PROGRAM P; VAR s: STRING(100); d: LSTRING(256); BEGIN COPYLST(s, d) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR s: STRING(100); d: LSTRING(256); BEGIN COPYLST(s, d) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_copylst_wrong_dest_type(self):
         """COPYLST requires LSTRING destination, not STRING."""
-        result = typecheck_source(
-            "PROGRAM P; VAR s: STRING(100); d: STRING(256); BEGIN COPYLST(s, d) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR s: STRING(100); d: STRING(256); BEGIN COPYLST(s, d) END.")
         self.assertFalse(result.success)
-        self.assertTrue(
-            any('LSTRING' in str(e) for e in result.errors),
-            msg="Expected LSTRING type error in: " + " ".join(str(e) for e in result.errors)
-        )
+        self.assertTrue(any('LSTRING' in str(e) for e in result.errors), msg="Expected LSTRING type error in: " + " ".join(str(e) for e in result.errors))
 
     def test_copylst_immutable_dest(self):
         """COPYLST destination must be mutable (VAR), not a constant."""
-        result = typecheck_source(
-            "PROGRAM P; VAR s: STRING(100); CONST d = 'test'; BEGIN COPYLST(s, d) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR s: STRING(100); CONST d = 'test'; BEGIN COPYLST(s, d) END.")
         self.assertFalse(result.success)
 
     def test_copystr_valid_types(self):
         """COPYSTR with STRING source and destination is valid."""
-        result = typecheck_source(
-            "PROGRAM P; VAR s: STRING(100); d: STRING(256); BEGIN COPYSTR(s, d) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR s: STRING(100); d: STRING(256); BEGIN COPYSTR(s, d) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_copystr_wrong_dest_type(self):
         """COPYSTR requires STRING destination, not LSTRING."""
-        result = typecheck_source(
-            "PROGRAM P; VAR s: STRING(100); d: LSTRING(256); BEGIN COPYSTR(s, d) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR s: STRING(100); d: LSTRING(256); BEGIN COPYSTR(s, d) END.")
         self.assertFalse(result.success)
-        self.assertTrue(
-            any('STRING' in str(e) for e in result.errors),
-            msg="Expected STRING type error in: " + " ".join(str(e) for e in result.errors)
-        )
+        self.assertTrue(any('STRING' in str(e) for e in result.errors), msg="Expected STRING type error in: " + " ".join(str(e) for e in result.errors))
 
     def test_copystr_immutable_dest(self):
         """COPYSTR destination must be mutable (VAR), not a constant."""
-        result = typecheck_source(
-            "PROGRAM P; VAR s: STRING(100); CONST d = 'test'; BEGIN COPYSTR(s, d) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR s: STRING(100); CONST d = 'test'; BEGIN COPYSTR(s, d) END.")
         self.assertFalse(result.success)
 
     def test_concat_wrong_arg_count(self):
         """CONCAT requires exactly 2 arguments."""
-        result = typecheck_source(
-            "PROGRAM P; VAR d: LSTRING(256); s: STRING(100); i: INTEGER; BEGIN CONCAT(d, s, i) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR d: LSTRING(256); s: STRING(100); i: INTEGER; BEGIN CONCAT(d, s, i) END.")
         self.assertFalse(result.success)
-        self.assertTrue(
-            any('argument' in str(e).lower() for e in result.errors),
-            msg="Expected argument count error in: " + " ".join(str(e) for e in result.errors)
-        )
+        self.assertTrue(any('argument' in str(e).lower() for e in result.errors), msg="Expected argument count error in: " + " ".join(str(e) for e in result.errors))
 
 
 class TestModuleSemantics(unittest.TestCase):
@@ -913,5 +847,3 @@ BEGIN
 END."""
         r = typecheck_source(src)
         self.assertFalse(r.success)
-
-

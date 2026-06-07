@@ -10,9 +10,9 @@ With -v/--verbose, codegen logs each declaration/statement it processes and
 prints a full traceback if compilation fails.
 """
 
+import argparse
 import sys
 import traceback
-import argparse
 from parser import parse_file
 
 from codegen_llvm import compile_to_llvm
@@ -20,26 +20,14 @@ from type_checker import PascalTypeChecker
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Pascal to LLVM IR compiler driver.",
-        formatter_class=argparse.RawTextHelpFormatter
-    )
+    parser = argparse.ArgumentParser(description="Pascal to LLVM IR compiler driver.", formatter_class=argparse.RawTextHelpFormatter)
+    parser.add_argument('source_file', type=str, help='Source Pascal file (e.g., program.pas)')
     parser.add_argument(
-        'source_file', 
-        type=str, 
-        help='Source Pascal file (e.g., program.pas)'
-    )
-    parser.add_argument(
-        'output_file', 
+        'output_file',
         nargs='?',  # Optional positional argument
-        default=None, 
-        help='Output LLVM IR file to write to.'
-    )
-    parser.add_argument(
-        '-v', '--verbose', 
-        action='store_true', 
-        help='Log each declaration/statement and print a full traceback on failure.'
-    )
+        default=None,
+        help='Output LLVM IR file to write to.')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Log each declaration/statement and print a full traceback on failure.')
     args = parser.parse_args()
 
     source_file = args.source_file
@@ -47,7 +35,7 @@ def main() -> int:
     verbose = args.verbose
 
     if not source_file:
-        # This path should technically be unreachable if argparse is set up correctly, 
+        # This path should technically be unreachable if argparse is set up correctly,
         # but we keep the usage message structure for robustness.
         print('Error: Missing source file.', file=sys.stderr)
         parser.print_help(file=sys.stderr)

@@ -12,7 +12,7 @@ import os
 import unittest
 from pathlib import Path
 
-from tests.support import parse_source, LexerError, ParserError
+from tests.support import LexerError, ParserError, parse_source
 
 
 class TestParserAccept(unittest.TestCase):
@@ -49,8 +49,7 @@ class TestParserReject(unittest.TestCase):
         for fixture in self.files:
             src = fixture.read_text()
             with self.subTest(file=fixture.name):
-                with self.assertRaises((LexerError, ParserError),
-                                       msg=f"{fixture.name} should fail but was accepted"):
+                with self.assertRaises((LexerError, ParserError), msg=f"{fixture.name} should fail but was accepted"):
                     parse_source(src)
 
 
@@ -67,16 +66,13 @@ class TestParserJudgmentCalls(unittest.TestCase):
 
     def test_multi_write_field_widths_pass(self):
         """Multiple WRITE arguments may each carry width/precision formatting."""
-        parse_source(
-            "PROGRAM P; VAR x, y : REAL; z : INTEGER; "
-            "BEGIN WRITELN(x:5:2, y:5:2, z:4, 'Hello World') END."
-        )
+        parse_source("PROGRAM P; VAR x, y : REAL; z : INTEGER; "
+                     "BEGIN WRITELN(x:5:2, y:5:2, z:4, 'Hello World') END.")
 
     def test_colon_args_on_ordinary_call_fail(self):
         """Ordinary procedure calls do not accept WRITE-style :width/:precision suffixes."""
         fixture = Path(__file__).parent / "fixtures" / "parser" / "judgment_calls" / "B_colon_args_any_call.pas"
-        with self.assertRaises((LexerError, ParserError),
-                               msg=f"{fixture.name} should fail but was accepted"):
+        with self.assertRaises((LexerError, ParserError), msg=f"{fixture.name} should fail but was accepted"):
             parse_source(fixture.read_text())
 
     def test_set_base_type_is_preserved(self):
@@ -139,9 +135,7 @@ class TestParserJudgmentCalls(unittest.TestCase):
 
     def test_labeled_break_and_cycle_parse_identifier_labels(self):
         """BREAK/CYCLE should accept an optional identifier label target."""
-        ast = parse_source(
-            "PROGRAM P; LABEL done, again; BEGIN WHILE TRUE DO BEGIN BREAK done; CYCLE again END; done: END."
-        )
+        ast = parse_source("PROGRAM P; LABEL done, again; BEGIN WHILE TRUE DO BEGIN BREAK done; CYCLE again END; done: END.")
         loop_body = ast.block.body[0].body
         self.assertEqual(type(loop_body.stmts[0]).__name__, 'BreakStmt')
         self.assertEqual(loop_body.stmts[0].label, 'done')
@@ -150,9 +144,7 @@ class TestParserJudgmentCalls(unittest.TestCase):
 
     def test_labeled_break_and_cycle_parse_numeric_labels(self):
         """BREAK/CYCLE should also accept numeric labels."""
-        ast = parse_source(
-            "PROGRAM P; LABEL 10, 20; BEGIN WHILE TRUE DO BEGIN BREAK 10; CYCLE 20 END; 10: END."
-        )
+        ast = parse_source("PROGRAM P; LABEL 10, 20; BEGIN WHILE TRUE DO BEGIN BREAK 10; CYCLE 20 END; 10: END.")
         loop_body = ast.block.body[0].body
         self.assertEqual(loop_body.stmts[0].label, 10)
         self.assertEqual(loop_body.stmts[1].label, 20)
@@ -166,17 +158,13 @@ class TestParserJudgmentCalls(unittest.TestCase):
 
     def test_short_circuit_and_then_or_else_parse(self):
         """Boolean conditions accept IBM Pascal short-circuit operators."""
-        ast = parse_source(
-            "PROGRAM P; VAR a, b: BOOLEAN; BEGIN IF a AND THEN b THEN WRITELN(1); WHILE a OR ELSE b DO a := FALSE END."
-        )
+        ast = parse_source("PROGRAM P; VAR a, b: BOOLEAN; BEGIN IF a AND THEN b THEN WRITELN(1); WHILE a OR ELSE b DO a := FALSE END.")
         self.assertEqual(ast.block.body[0].cond.op, 'AND_THEN')
         self.assertEqual(ast.block.body[1].cond.op, 'OR_ELSE')
 
     def test_ads_factor_and_address_pointer_types_parse(self):
         """ADS expression and ADR OF / ADS OF type prefixes are manual address forms."""
-        ast = parse_source(
-            "PROGRAM P; VAR x: INTEGER; a: ADR OF INTEGER; s: ADS OF INTEGER; BEGIN a := ADR x; s := ADS x END."
-        )
+        ast = parse_source("PROGRAM P; VAR x: INTEGER; a: ADR OF INTEGER; s: ADS OF INTEGER; BEGIN a := ADR x; s := ADS x END.")
         adr_decl = ast.block.decls[1]
         ads_decl = ast.block.decls[2]
         self.assertEqual(adr_decl.type_expr.flavor, 'ADR')
@@ -192,9 +180,7 @@ class TestParserJudgmentCalls(unittest.TestCase):
 
     def test_confirmed_attributes_parse(self):
         """The six confirmed attributes should parse in bracketed lists."""
-        ast = parse_source(
-            "PROGRAM P; VAR [STATIC, READONLY] x: INTEGER; PROCEDURE Q [PUBLIC, EXTERN, PURE]; BEGIN END; BEGIN END."
-        )
+        ast = parse_source("PROGRAM P; VAR [STATIC, READONLY] x: INTEGER; PROCEDURE Q [PUBLIC, EXTERN, PURE]; BEGIN END; BEGIN END.")
         var_decl = ast.block.decls[0]
         proc_decl = ast.block.decls[1]
         self.assertEqual(var_decl.attributes, ['STATIC', 'READONLY'])
@@ -241,8 +227,8 @@ class TestParserJudgmentCalls(unittest.TestCase):
         manual's only hex notation is the n#digits radix form). It must be
         rejected in both constant and expression position."""
         for src in [
-            "PROGRAM P; CONST MASK = $FF; BEGIN END.",
-            "PROGRAM P; VAR x: INTEGER; BEGIN x := $FF END.",
+                "PROGRAM P; CONST MASK = $FF; BEGIN END.",
+                "PROGRAM P; VAR x: INTEGER; BEGIN x := $FF END.",
         ]:
             with self.assertRaises((LexerError, ParserError)):
                 parse_source(src)
