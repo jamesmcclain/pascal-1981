@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import sys
 import argparse
+import sys
 from typing import List, Optional, Sequence, Union
 
-from ast_nodes import (AdrExpr, ArrayType, AssignStmt, ASTNode, BinOp, Block, BoolLiteral, BreakStmt, BuiltinType, CaseElement, CaseStmt, CharLiteral, CompoundStmt, ConstDecl,
-                       CycleStmt, Declaration, Designator, EmptyStmt, EnumType, Expression, FileType, ForStmt, FuncCall, FuncDecl, GotoStmt, Identifier, IfStmt, ImplementationUnit,
-                       AdsExpr,
-                       IndexRange, InterfaceUnit, IntLiteral, LabelDecl, LabelStmt, LStringType, ModuleUnit, NamedType, NilLiteral, Param, PointerType, ProcCallStmt, ProcDecl, ProgramUnit,
-                       RangeExpr, RealLiteral, RecordType, RepeatStmt, ReturnStmt, Selector, SetConstructor, SetType, SizeofExpr, Statement, StringLiteral, SubrangeType, Type, TypeDecl, UnaryOp,
-                       UpperExpr, LowerExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt, WriteArg)
+from ast_nodes import (AdrExpr, AdsExpr, ArrayType, AssignStmt, ASTNode, BinOp, Block, BoolLiteral, BreakStmt, BuiltinType, CaseElement, CaseStmt, CharLiteral, CompoundStmt,
+                       ConstDecl, CycleStmt, Declaration, Designator, EmptyStmt, EnumType, Expression, FileType, ForStmt, FuncCall, FuncDecl, GotoStmt, Identifier, IfStmt,
+                       ImplementationUnit, IndexRange, InterfaceUnit, IntLiteral, LabelDecl, LabelStmt, LowerExpr, LStringType, ModuleUnit, NamedType, NilLiteral, Param,
+                       PointerType, ProcCallStmt, ProcDecl, ProgramUnit, RangeExpr, RealLiteral, RecordType, RepeatStmt, ReturnStmt, RetypeExpr, Selector, SetConstructor, SetType,
+                       SizeofExpr, Statement, StringLiteral, SubrangeType, Type, TypeDecl, UnaryOp, UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt, WriteArg)
 from lexer import ALL_CODES, KEYWORD_CODES, LexerError, Token, lex_file
 
 
@@ -660,7 +659,17 @@ class Parser:
             return UnaryOp('NOT', operand)
         if kind == 'IDENTIFIER':
             name = self.current().lexeme
-            if self.next_kind() == 'LPAREN':
+            if name.upper() == 'RETYPE' and self.next_kind() == 'LPAREN':
+                self.pos += 2  # consume 'RETYPE' and '('
+                type_id = self.expect('IDENTIFIER').lexeme
+                self.expect('COMMA')
+                expr = self.parse_expression()
+                self.expect('RPAREN')
+                selectors = []
+                while self.current().kind in {'LBRACKET', 'DOT', 'POINTER'}:
+                    selectors.extend(self.parse_selector())
+                return RetypeExpr(type_id, expr, selectors)
+            elif self.next_kind() == 'LPAREN':
                 self.pos += 1
                 self.pos += 1
                 args: List[Expression] = []
@@ -818,6 +827,17 @@ class Parser:
         if kind == 'IDENTIFIER':
             name = self.current().lexeme
             self.pos += 1
+            # WRD(x) and BYWORD(hi,lo) may appear as constant expressions
+            # (manual p.6-5, p.11-8); parse them as FuncCall nodes so the
+            # constant-folder in codegen can evaluate them at compile time.
+            if name.upper() in {'WRD', 'BYWORD'} and self.current().kind == 'LPAREN':
+                self.pos += 1  # consume '('
+                args = [self.parse_constant()]
+                while self.current().kind == 'COMMA':
+                    self.pos += 1
+                    args.append(self.parse_constant())
+                self.expect('RPAREN')
+                return FuncCall(name=name, args=args)
             return Identifier(name)
         if kind in {'PLUS', 'MINUS'}:
             sign = self.current().kind

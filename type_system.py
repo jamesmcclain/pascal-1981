@@ -102,19 +102,35 @@ class LStringType(Type):
 
 @dataclass
 class ArrayType(Type):
-    """Array type: ARRAY[lower..upper] OF element_type."""
+    """Array type: ARRAY[lower..upper] OF element_type.
+
+    ``lower_bound``/``upper_bound`` are the *ordinal* values of the index range
+    (for a CHAR index these are the ORD of the bound characters; for an enum
+    index, the member positions). ``index_type`` records the ordinal type a
+    subscript must have. It defaults to ``None``, which is treated as INTEGER so
+    arrays built the old way (integer subscripts) keep their exact behavior.
+    """
 
     element_type: Type
     lower_bound: int
     upper_bound: int
+    packed: bool = False
+    index_type: Optional[Type] = None
+
+    @property
+    def effective_index_type(self) -> Type:
+        """The subscript type, defaulting to INTEGER when unspecified."""
+        return self.index_type if self.index_type is not None else INTEGER_TYPE
 
     def __str__(self) -> str:
-        return f"ARRAY[{self.lower_bound}..{self.upper_bound}] OF {self.element_type}"
+        prefix = "PACKED " if self.packed else ""
+        return f"{prefix}ARRAY[{self.lower_bound}..{self.upper_bound}] OF {self.element_type}"
 
     def equivalent_to(self, other: Type) -> bool:
         if not isinstance(other, ArrayType):
             return False
-        return (self.element_type.equivalent_to(other.element_type) and self.lower_bound == other.lower_bound and self.upper_bound == other.upper_bound)
+        return (self.element_type.equivalent_to(other.element_type) and self.lower_bound == other.lower_bound and self.upper_bound == other.upper_bound
+                and self.packed == other.packed and self.effective_index_type.equivalent_to(other.effective_index_type))
 
 
 @dataclass
@@ -132,16 +148,35 @@ class RecordType(Type):
     def equivalent_to(self, other: Type) -> bool:
         if not isinstance(other, RecordType):
             return False
-        if set(self.fields.keys()) != set(other.fields.keys()):
+        if len(self.fields) != len(other.fields):
             return False
-        for field_name in self.fields:
-            if not self.fields[field_name].equivalent_to(other.fields[field_name]):
+        # Structural equivalence is ORDER-SENSITIVE: a record's field order
+        # determines its physical layout, and whole-record assignment copies
+        # by position, so two records are interchangeable only if they list the
+        # same fields, in the same order, with equivalent types. (Without this,
+        # `RECORD a,b: INTEGER` and `RECORD b,a: INTEGER` would be deemed equal
+        # and a positional copy would silently swap the fields.) Field names
+        # compare case-insensitively, since Pascal identifiers ignore case.
+        for (self_name, self_type), (other_name, other_type) in zip(self.fields.items(), other.fields.items()):
+            if self_name.upper() != other_name.upper():
+                return False
+            if not self_type.equivalent_to(other_type):
                 return False
         return True
 
+    def has_field(self, field_name: str) -> bool:
+        """Case-insensitive membership test (Pascal identifiers ignore case)."""
+        return self.get_field_type(field_name) is not None
+
     def get_field_type(self, field_name: str) -> Optional[Type]:
-        """Get the type of a field by name."""
-        return self.fields.get(field_name)
+        """Get the type of a field by name, case-insensitively."""
+        if field_name in self.fields:
+            return self.fields[field_name]
+        target = field_name.upper()
+        for name, ftype in self.fields.items():
+            if name.upper() == target:
+                return ftype
+        return None
 
 
 @dataclass

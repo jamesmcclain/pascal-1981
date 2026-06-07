@@ -204,15 +204,37 @@ well. This is where `CHR`/`ORD`/`ODD`/`SUCC`/`SIZEOF`/`UPPER`/`ADR` already live
   - Done: registered `PRED` as a predeclared integer function and lowered it to integer subtraction in codegen. Proven by `python3 -m unittest tests.test_typecheck tests.test_codegen`.
 - [x] **4.2 — `SQR`.** `[READ]` **XS** `x*x`. Distinct from `SQRT` (6.x).
   - Done: registered `SQR` as a predeclared integer/real intrinsic and lowered it to self-multiplication in codegen. Proven by `python3 -m unittest tests.test_typecheck tests.test_codegen`.
-- [ ] **4.3 — `FLOAT`.** `[READ]` **S** INTEGER→REAL (`sitofp`). Needs REAL codegen (see note).
-- [ ] **4.4 — `TRUNC` / `ROUND`.** `[READ]` **M** REAL→INTEGER (`fptosi`; `ROUND` adds rounding). Needs REAL codegen.
+- [x] **4.3 — `FLOAT`.** `[READ]` **S** INTEGER→REAL (`sitofp`). Needs REAL codegen.
+  - Done: registered `FLOAT` as a predeclared intrinsic (manual 11-7: converts INTEGER to REAL) and lowered it to `sitofp` in codegen. Added type-checking and runtime executable coverage. Proven by `python -m unittest tests.test_typecheck tests.test_codegen`.
+- [x] **4.4 — `TRUNC` / `ROUND`.** `[READ]` **M** REAL→INTEGER (`fptosi`; `ROUND` adds rounding). Needs REAL codegen.
+  - Done: registered `TRUNC`/`ROUND` as REAL→INTEGER intrinsics (manual 11-7 confirmed: REAL-only arg, INTEGER result). `TRUNC` lowers to a direct `fptosi` (truncate toward zero). `ROUND` lowers to a ±0.5 select-and-add then `fptosi` (half-away-from-zero per IBM Pascal spec, no libm dependency — `llvm.round` links against `libm.round` in llvmlite so the arithmetic approach is used instead). Both reject non-REAL arguments at the type-checker level; INTEGER→REAL widening on the result side is correct Pascal. Proven by `python -m unittest tests.test_typecheck tests.test_codegen` (148 tests).
 - [x] **4.5 — `LOWER`.** `[READ]` **S** Mirror of existing `UPPER` (super-array lower bound).
   - Done: added `LOWER` parsing, type checking, and codegen alongside `UPPER` so array bounds can be queried symmetrically. Proven by `python3 -m unittest tests.test_typecheck tests.test_codegen`.
 - [x] **4.6 — `HIBYTE` / `LOBYTE`.** `[READ]` **S** Shift + truncate to byte.
   - Done: registered `HIBYTE`/`LOBYTE` as byte-extraction intrinsics and lowered them to shift/truncate codegen. Proven by `python3 -m unittest tests.test_typecheck tests.test_codegen`.
-- [ ] **4.7 — `WRD` / `BYWORD`.** `[INFERRED]` **M** Word conversions; confirm exact semantics from manual body first.
-- [ ] **4.8 — `RETYPE`.** `[INFERRED]` **M** Reinterpret cast (LLVM `bitcast`); needs care with type-checker rules. Confirm semantics.
-- [ ] **4.9 — `PACK` / `UNPACK`.** `[INFERRED]` **M** Packed-array (un)packing; inline for small, runtime loop for large. Depends on `PACKED` representation.
+- [x] **4.7 — `WRD` / `BYWORD`.** `[READ]` **M** Word conversions.
+  Manual (11-8/11-13): `WRD(x:ordinal):WORD` reinterprets any ordinal (or
+  pointer) as an unsigned 16-bit WORD — same 16-bit pattern, so negative
+  INTEGER is equivalent to `trunc i32→i16`; `BYWORD(hi,lo):WORD` packs two
+  byte-sized ordinals by significance (hi→MSB, lo→LSB: `(hi&0xFF)<<8|(lo&0xFF)`).
+  `WRD`/`BYWORD` also appear in constant expressions (manual p.6-5); extended
+  `parse_constant` to recognise them as `FuncCall` nodes so the constant-folder
+  can evaluate them at compile time.
+  Also corrected `HIBYTE`/`LOBYTE` to accept `WORD` arguments (manual 11-12:
+  "integer-word" parameter type); previously only `INTEGER` was accepted.
+  - Done: registered both in type checker (`_setup_builtins`), added inference
+    logic (WRD: any ordinal or pointer→WORD; BYWORD: 2 byte-sized ordinals→WORD;
+    REAL rejected), extended `eval_const_expr` in codegen, added IR lowering
+    (WRD: `trunc`/identity/`zext` by width; BYWORD: mask+shl+or), and extended
+    `parse_constant` for constant-expression usage. Fixtures:
+    `should_pass/wrd_basic.pas`, `should_pass/wrd_in_const.pas`,
+    `should_fail/wrd_real_arg.pas`. Proven by
+    `python -m unittest tests.test_typecheck tests.test_codegen` (172 tests,
+    20 new).
+- [x] **4.8 — `RETYPE`.** `[INFERRED]` **M** Reinterpret cast (LLVM `bitcast`); needs care with type-checker rules. Confirm semantics.
+  - Done: Added `RetypeExpr` AST node, supporting optional trailing selectors. Integrated type checker resolution with size checks (generating Warning 248 on mismatches). Designed robust codegen using stack allocation of the larger type (zero-initialized) and pointer bitcasting to eliminate buffer over-read bugs. Added tests in both type checker and codegen. Proven by `python3 -m unittest discover -s tests`.
+- [x] **4.9 — `PACK` / `UNPACK`.** `[INFERRED]` **M** Packed-array (un)packing; inline for small, runtime loop for large. Depends on `PACKED` representation.
+  - Done: Added `packed` flag support to type system's `ArrayType` and updated `resolve_type` to propagate it. Implemented semantically complete type checking for `PACK` and `UNPACK` including mutability of output buffers, index range constraints, and bounds/size mismatch verification. Implemented code generation by generating a clean dynamic LLVM loop that performs safe index translation. Added tests verifying error validation and end-to-end execution. Proven by `python3 -m unittest discover -s tests`.
 
 ---
 
@@ -237,13 +259,20 @@ C runtime, sibling to `runtime/fillc.c`. Loops/memory/OS, so not inline.
 Codegen builds the call; libm does the work. One consistent pattern for all six.
 Gated on REAL codegen depth (see note at end).
 
-- [ ] **6.1 — `SQRT`.** `[OBSERVED]` **M** Currently a trap (1.1). Map to libm `sqrt`.
-- [ ] **6.2 — `SIN`.** `[READ]` **S** libm `sin`.
-- [ ] **6.3 — `COS`.** `[READ]` **S** libm `cos`.
-- [ ] **6.4 — `LN`.** `[READ]` **S** libm `log`.
-- [ ] **6.5 — `EXP`.** `[READ]` **S** libm `exp`.
-- [ ] **6.6 — `ARCTAN`.** `[READ]` **S** libm `atan`.
-- [ ] **6.7 — `ABS` (INTEGER + REAL).** `[OBSERVED]` **S** Currently a trap (1.1). Integer path inline, REAL path inline or libm `fabs`.
+- [x] **6.1 — `SQRT`.** `[OBSERVED]` **M** Currently a trap (1.1). Map to libm `sqrt`.
+  - Done: Swapped the temporary LLVM intrinsic `llvm.sqrt` for standard external `libm` call pattern. Added `-lm` to the compilation options in `build_and_run`. Proven by `python -m unittest tests.test_codegen`.
+- [x] **6.2 — `SIN`.** `[READ]` **S** libm `sin`.
+  - Done: Added `SIN` to the type checker's special math functions list and mapped to libm `sin` in codegen. Proven by `tests.test_typecheck` and `tests.test_codegen`.
+- [x] **6.3 — `COS`.** `[READ]` **S** libm `cos`.
+  - Done: Added `COS` to the type checker's special math functions list and mapped to libm `cos` in codegen. Proven by `tests.test_typecheck` and `tests.test_codegen`.
+- [x] **6.4 — `LN`.** `[READ]` **S** libm `log`.
+  - Done: Added `LN` to the type checker's special math functions list and mapped to libm `log` in codegen. Proven by `tests.test_typecheck` and `tests.test_codegen`.
+- [x] **6.5 — `EXP`.** `[READ]` **S** libm `exp`.
+  - Done: Added `EXP` to the type checker's special math functions list and mapped to libm `exp` in codegen. Proven by `tests.test_typecheck` and `tests.test_codegen`.
+- [x] **6.6 — `ARCTAN`.** `[READ]` **S** libm `atan`.
+  - Done: Added `ARCTAN` to the type checker's special math functions list and mapped to libm `atan` in codegen. Proven by `tests.test_typecheck` and `tests.test_codegen`.
+- [x] **6.7 — `ABS` (INTEGER + REAL).** `[OBSERVED]` **S** Currently a trap (1.1). Integer path inline, REAL path inline or libm `fabs`.
+  - Done: ABS handles INTEGER/REAL inline (via select/sub/fsub). Proven by `tests.test_typecheck` and `tests.test_codegen`.
 
 ---
 
@@ -405,6 +434,10 @@ the biggest single chunk; expect it to need its own design pass.
   statements over enums, enum-controlled `FOR` loops, and `WRITE` of enum names
   all need dedicated paths to support the `EnumType` introduced in 9.6.
 
+- [ ] **9.9** `RETYPE` on a pointer value is ambiguous. When the inner expression is already a pointer type, the code bitcasts the pointer and loads through it — reinterpreting the pointee, not the pointer's address bits. That's correct when the "pointer" is an aggregate's address (array/string), but if someone retypes an actual Pascal `^T` variable, they'd reasonably expect the address bits reinterpreted, not a deref. This is the codebase's existing aggregate-vs-pointer-value conflation, but RETYPE makes it user-reachable, so at least a guard or comment is warranted.
+
+- [x] **9.10** `wrd_real_arg.pas` is misfiled and self-contradictory. It sits in `parser/should_pass/`, its body comment says "must be rejected — ERROR: REAL is not an ordinal type," and the 4.7 checklist note cites it as `should_fail/wrd_real_arg.pas`. All three disagree. As a parser fixture it correctly passes (REAL rejection is a type error, not a parse error), and the parser-reject test only catches `LexerError`/`ParserError` anyway — so even in `should_fail/` it wouldn't assert what the comment claims. The good news: the REAL rejection is actually covered, by `TestWrdByword.test_wrd_real_is_error` in `test_typecheck`. So there's no real coverage gap — just an artifact that documents a guarantee it doesn't itself enforce. Move/rename it or fix the comment so it stops lying.
+  - Done: Moved the test fixture to `tests/fixtures/typecheck/should_fail/wrd_real_arg.pas` and corrected its comment to clarify it's a type error, not a parse error.
 
 ---
 

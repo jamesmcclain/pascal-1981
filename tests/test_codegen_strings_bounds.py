@@ -27,8 +27,8 @@ re-declared.
 
 import unittest
 
-from tests.support import requires_llvm, requires_exe
-from tests.test_codegen import compile_to_ir, build_and_run
+from tests.support import requires_exe, requires_llvm
+from tests.test_codegen import build_and_run, compile_to_ir
 
 
 @requires_llvm

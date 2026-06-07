@@ -12,14 +12,15 @@ Walks the AST and emits LLVM IR. Supports:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from parser import parse_file
 from typing import Any, Dict, List, Optional, Union
 
 import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
 from ast_nodes import *
-from parser import parse_file
-from type_system import LStringType as ResolvedLStringType, StringType as ResolvedStringType
+from type_system import LStringType as ResolvedLStringType
+from type_system import StringType as ResolvedStringType
 
 
 class CodegenError(Exception):
@@ -182,6 +183,17 @@ class Codegen:
             except Exception:
                 size = 100
             return ir.ArrayType(elem_type, size)
+        elif isinstance(type_expr, RecordType):
+            # AST RecordType.fields is a list of (name_list, field_type) pairs.
+            # Lay the record out as an LLVM struct in declaration order, one
+            # struct element per field name (so `x, y: INTEGER` -> two i32s).
+            # record_field_index() uses this same ordering to address fields.
+            elem_types: List[ir.Type] = []
+            for names, ftype in type_expr.fields:
+                lt = self.llvm_type(ftype)
+                for _ in names:
+                    elem_types.append(lt)
+            return ir.LiteralStructType(elem_types)
         else:
             raise CodegenError(f'Type {type(type_expr).__name__} not yet supported')
 
@@ -264,7 +276,9 @@ class Codegen:
         decls = getattr(ast, 'decls', [])
         for decl in decls:
             if isinstance(decl, (ProcDecl, FuncDecl)) and getattr(decl, 'name', None):
-                self.codegen_decl(ProcDecl(decl.name, decl.params, getattr(decl, 'attributes', []), body=None) if isinstance(decl, ProcDecl) else FuncDecl(decl.name, decl.params, decl.return_type, getattr(decl, 'attributes', []), body=None))
+                self.codegen_decl(
+                    ProcDecl(decl.name, decl.params, getattr(decl, 'attributes', []), body=None
+                             ) if isinstance(decl, ProcDecl) else FuncDecl(decl.name, decl.params, decl.return_type, getattr(decl, 'attributes', []), body=None))
 
     def codegen_interface(self, unit: InterfaceUnit) -> ir.Module:
         """Codegen for INTERFACE unit (declarations only)."""
@@ -349,15 +363,16 @@ class Codegen:
 
     def get_string_type_info(self, t: Type) -> tuple[bool, int, bool]:
         """Returns (is_str, max_len, is_lstring) for any AST Type or Resolved Type."""
-        from type_system import LStringType as ResolvedLStringType, StringType as ResolvedStringType
-        
+        from type_system import LStringType as ResolvedLStringType
+        from type_system import StringType as ResolvedStringType
+
         if isinstance(t, (ResolvedLStringType, ResolvedStringType)):
             return True, t.max_len, isinstance(t, ResolvedLStringType)
-            
+
         # Check AST LStringType
         if isinstance(t, LStringType):
             return True, t.max_len, True
-            
+
         # Check NamedType
         if isinstance(t, NamedType):
             name_up = t.name.upper()
@@ -367,7 +382,7 @@ class Codegen:
                 return True, (int(t.param) if t.param is not None else 256), False
             elif name_up in self.type_aliases:
                 return self.get_string_type_info(self.type_aliases[name_up])
-                
+
         return False, 256, False
 
     def codegen_var_decl(self, decl: VarDecl) -> None:
@@ -384,7 +399,7 @@ class Codegen:
             for name in decl.names:
                 alloca = self.builder.alloca(llvm_type, name=name)
                 self.scope.define(name, alloca, decl.type_expr)
-                
+
                 if is_str:
                     # Initialize length byte to 0 for LSTRING
                     if is_lstring:
@@ -397,10 +412,10 @@ class Codegen:
             prefix = self.current_function.name if self.current_function else 'global'
             for name in decl.names:
                 gv_name = name if not self.builder else f'{prefix}.{name}'
-                
+
                 # Create global variable with the aggregate type
                 global_var = ir.GlobalVariable(self.module, llvm_type, name=gv_name)
-                
+
                 if is_str:
                     if is_lstring:
                         # Initialize with zero (length 0, rest undefined)
@@ -411,7 +426,7 @@ class Codegen:
                         global_var.initializer = ir.Constant(llvm_type, init_bytes)
                 else:
                     global_var.initializer = self.zero_initializer(llvm_type)
-                
+
                 self.scope.define(name, global_var, decl.type_expr)
 
     def codegen_proc_decl(self, decl: ProcDecl) -> None:
@@ -641,34 +656,29 @@ class Codegen:
                     # STRING: fill with blanks (0x20)
                     zero = ir.Constant(ir.IntType(32), 0)
                     chars_ptr = self.builder.gep(ptr, [zero, zero])
-                    size_64 = self.builder.zext(
-                        ir.Constant(ir.IntType(32), max_len), ir.IntType(64)
-                    )
-                    self.builder.call(
-                        self.memset_func(),
-                        [chars_ptr, ir.Constant(ir.IntType(32), 0x20), size_64]
-                    )
+                    size_64 = self.builder.zext(ir.Constant(ir.IntType(32), max_len), ir.IntType(64))
+                    self.builder.call(self.memset_func(), [chars_ptr, ir.Constant(ir.IntType(32), 0x20), size_64])
             else:
                 src_chars, src_len = self.get_string_chars_and_len(stmt.expr)
-                
+
                 # Range check: src_len <= max_len
                 cond = self.builder.icmp_signed('<=', src_len, ir.Constant(ir.IntType(32), max_len))
                 success_block = self.builder.block.parent.append_basic_block('str_assign_ok')
                 error_block = self.builder.block.parent.append_basic_block('str_assign_overflow')
                 end_block = self.builder.block.parent.append_basic_block('str_assign_end')
                 self.builder.cbranch(cond, success_block, error_block)
-                
+
                 # Error block: emit range-check failure
                 self.builder.position_at_end(error_block)
                 self.builder.call(self.runtime_error_func(), [])
                 self.builder.unreachable()
-                
+
                 # Success block: perform assignment
                 self.builder.position_at_end(success_block)
                 zero = ir.Constant(ir.IntType(32), 0)
                 one = ir.Constant(ir.IntType(32), 1)
                 src_len_64 = self.builder.zext(src_len, ir.IntType(64))
-                
+
                 if is_dest_lstring:
                     # LSTRING(n) is PACKED ARRAY [0..n] OF CHAR (manual 6-18):
                     # byte [0] = current length (0..n), bytes [1..n] = chars.
@@ -687,16 +697,13 @@ class Codegen:
                     # Copy characters to [0,0]
                     dest_chars = self.builder.gep(ptr, [zero, zero])
                     self.builder.call(self.memcpy_func(), [dest_chars, src_chars, src_len_64])
-                    
+
                     # Blank-pad from [src_len] to [max_len-1] with 0x20
                     pad_start = self.builder.gep(ptr, [zero, src_len])
                     pad_len = self.builder.sub(ir.Constant(ir.IntType(32), max_len), src_len)
                     pad_len_64 = self.builder.zext(pad_len, ir.IntType(64))
-                    self.builder.call(
-                        self.memset_func(),
-                        [pad_start, ir.Constant(ir.IntType(32), 0x20), pad_len_64]
-                    )
-                
+                    self.builder.call(self.memset_func(), [pad_start, ir.Constant(ir.IntType(32), 0x20), pad_len_64])
+
                 self.builder.branch(end_block)
                 self.builder.position_at_end(end_block)
         else:
@@ -720,6 +727,10 @@ class Codegen:
                 self.builtin_copylst(stmt.args)
             elif lookup_name == 'COPYSTR':
                 self.builtin_copystr(stmt.args)
+            elif lookup_name == 'PACK':
+                self.builtin_pack(stmt.args)
+            elif lookup_name == 'UNPACK':
+                self.builtin_unpack(stmt.args)
             else:
                 raise CodegenError(f'Undefined procedure: {stmt.name}')
         else:
@@ -946,22 +957,38 @@ class Codegen:
                 raise CodegenError(f'Undefined variable: {designator.name}')
 
         ptr = symbol.llvm_value
+        cur_type = symbol.type_expr
 
         if designator.selectors:
             for selector in designator.selectors:
                 if selector.kind == 'INDEX':
                     index = self.codegen_expr(selector.index_or_field)
+                    # Pascal array indices are relative to the declared lower
+                    # bound, but storage is allocated as [high-low+1 x elem]
+                    # (0-based). Translate the index to a 0-based slot so that
+                    # e.g. ARRAY[5..7] indexed by 5 lands on slot 0, not slot 5
+                    # (which would read/write outside the allocation).
+                    low, elem_type = self.array_lower_bound(cur_type)
+                    if low is not None and low != 0 and isinstance(index.type, ir.IntType):
+                        index = self.builder.sub(index, ir.Constant(index.type, low))
                     # GEP requires [0, index] for pointers to arrays, or [index] for flat pointers
                     if isinstance(ptr.type.pointee, ir.ArrayType):
                         ptr = self.builder.gep(ptr, [ir.Constant(ir.IntType(32), 0), index])
                     else:
                         ptr = self.builder.gep(ptr, [index])
+                    cur_type = elem_type
                 elif selector.kind == 'FIELD':
-                    # Record field access (simplified)
-                    pass
+                    # Record field access: GEP to the field's struct slot.
+                    fidx, ftype = self.record_field_index(cur_type, selector.index_or_field)
+                    if fidx is None:
+                        raise CodegenError(f"Cannot access field '{selector.index_or_field}' on type {cur_type}")
+                    ptr = self.builder.gep(ptr, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), fidx)])
+                    cur_type = ftype
                 elif selector.kind == 'DEREF':
                     # Pointer dereference
                     ptr = self.builder.load(ptr)
+                    base = self.resolve_type_alias(cur_type) if cur_type is not None else None
+                    cur_type = getattr(base, 'base', None) or getattr(base, 'target_type', None)
         return ptr
 
     # ========================================================================
@@ -1175,11 +1202,8 @@ class Codegen:
             # If the designator is a constant, return its value directly (not a pointer)
             if not isinstance(ptr.type, ir.PointerType):
                 return ptr
-            # For string/array designators, return pointer without loading (inline aggregates)
-            from ast_nodes import LStringType as ASTLStringType
-            if isinstance(symbol.type_expr, (ResolvedLStringType, ResolvedStringType, ASTLStringType, ArrayType)):
-                return ptr  # Return pointer to aggregate
-            elif isinstance(symbol.type_expr, NamedType) and symbol.type_expr.name.upper() in {'STRING', 'LSTRING'}:
+            # For aggregate designators, return pointer without loading (inline aggregates)
+            if isinstance(ptr.type.pointee, (ir.ArrayType, ir.LiteralStructType, ir.IdentifiedStructType)):
                 return ptr  # Return pointer to aggregate
             return self.builder.load(ptr)
         elif isinstance(expr, BinOp):
@@ -1188,6 +1212,80 @@ class Codegen:
             return self.codegen_unaryop(expr)
         elif isinstance(expr, FuncCall):
             return self.codegen_func_call(expr)
+        elif isinstance(expr, RetypeExpr):
+            # 1. Generate code for the inner expression
+            val = self.codegen_expr(expr.expr)
+
+            # 2. Get the target LLVM type
+            target_llvm_type = self.llvm_type(NamedType(expr.type_id, None))
+
+            # Helper to calculate LLVM type size in bytes
+            def llvm_type_size(ty: ir.Type) -> int:
+                if isinstance(ty, ir.IntType):
+                    return (ty.width + 7) // 8
+                elif isinstance(ty, ir.FloatType):
+                    return 4
+                elif isinstance(ty, ir.DoubleType):
+                    return 8
+                elif isinstance(ty, ir.PointerType):
+                    return 8
+                elif isinstance(ty, ir.ArrayType):
+                    return ty.count * llvm_type_size(ty.element)
+                elif isinstance(ty, (ir.LiteralStructType, ir.IdentifiedStructType)):
+                    return sum(llvm_type_size(f) for f in ty.elements)
+                return 4
+
+            # 3. Get pointer to the memory representation of target size
+            if isinstance(val.type, ir.PointerType):
+                ptr = val
+                casted_ptr = self.builder.bitcast(ptr, ir.PointerType(target_llvm_type))
+            else:
+                source_size = llvm_type_size(val.type)
+                target_size = llvm_type_size(target_llvm_type)
+
+                if source_size >= target_size:
+                    # Source is larger or equal. Allocate source type.
+                    ptr = self.builder.alloca(val.type)
+                    self.builder.store(val, ptr)
+                    casted_ptr = self.builder.bitcast(ptr, ir.PointerType(target_llvm_type))
+                else:
+                    # Target is larger. Allocate target type.
+                    ptr = self.builder.alloca(target_llvm_type)
+                    self.builder.store(self.zero_initializer(target_llvm_type), ptr)
+                    # Bitcast ptr to source pointer to store the smaller source value
+                    source_ptr = self.builder.bitcast(ptr, ir.PointerType(val.type))
+                    self.builder.store(val, source_ptr)
+                    casted_ptr = ptr
+
+            # 5. Process any selectors
+            if expr.selectors:
+                cur_type = self.resolve_type_alias(NamedType(expr.type_id, None))
+                for selector in expr.selectors:
+                    if selector.kind == 'INDEX':
+                        # RETYPE indexing is raw-memory navigation (the index is
+                        # a 0-based element offset into the reinterpreted bytes),
+                        # so it deliberately does not subtract a lower bound.
+                        index = self.codegen_expr(selector.index_or_field)
+                        if isinstance(casted_ptr.type.pointee, ir.ArrayType):
+                            casted_ptr = self.builder.gep(casted_ptr, [ir.Constant(ir.IntType(32), 0), index])
+                        else:
+                            casted_ptr = self.builder.gep(casted_ptr, [index])
+                        _, cur_type = self.array_lower_bound(cur_type)
+                    elif selector.kind == 'FIELD':
+                        fidx, ftype = self.record_field_index(cur_type, selector.index_or_field)
+                        if fidx is None:
+                            raise CodegenError(f"RETYPE: cannot access field '{selector.index_or_field}' on type {cur_type}")
+                        casted_ptr = self.builder.gep(casted_ptr, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), fidx)])
+                        cur_type = ftype
+                    elif selector.kind == 'DEREF':
+                        casted_ptr = self.builder.load(casted_ptr)
+                        base = self.resolve_type_alias(cur_type) if cur_type is not None else None
+                        cur_type = getattr(base, 'base', None) or getattr(base, 'target_type', None)
+
+            # 6. If the resulting type is an aggregate, return the pointer. Otherwise load the value.
+            if isinstance(casted_ptr.type.pointee, (ir.ArrayType, ir.LiteralStructType, ir.IdentifiedStructType)):
+                return casted_ptr
+            return self.builder.load(casted_ptr)
         else:
             raise CodegenError(f'Expression type {type(expr).__name__} not yet supported')
 
@@ -1219,8 +1317,7 @@ class Codegen:
                 else:
                     dynamic.append(element)
 
-        const_set = ir.Constant(self.set_llvm_type(),
-                                [ir.Constant(ir.IntType(64), word) for word in words])
+        const_set = ir.Constant(self.set_llvm_type(), [ir.Constant(ir.IntType(64), word) for word in words])
         if not dynamic:
             return const_set
 
@@ -1304,8 +1401,7 @@ class Codegen:
 
         # SLASH is always real division in Pascal (7/2 = 3.5), so force double
         # even when both operands are integer-typed.
-        is_real = (isinstance(left.type, ir.DoubleType) or isinstance(right.type, ir.DoubleType)
-                   or expr.op == 'SLASH')
+        is_real = (isinstance(left.type, ir.DoubleType) or isinstance(right.type, ir.DoubleType) or expr.op == 'SLASH')
         if is_real:
             if isinstance(left.type, ir.IntType):
                 left = self.builder.sitofp(left, ir.DoubleType())
@@ -1519,14 +1615,90 @@ class Codegen:
                 raise CodegenError(f'{lookup_name} not supported for type {val.type}')
             shifted = self.builder.lshr(val, ir.Constant(val.type, 8)) if lookup_name == 'HIBYTE' else val
             return self.builder.trunc(shifted, ir.IntType(8))
-        elif lookup_name == 'SQRT':
+        elif lookup_name == 'WRD':
+            val = self.codegen_expr(expr.args[0])
+            vt = val.type
+            if isinstance(vt, ir.DoubleType):
+                raise CodegenError('WRD: REAL argument not supported')
+            elif isinstance(vt, ir.PointerType):
+                # pointer → integer → truncate to 16-bit WORD
+                val = self.builder.ptrtoint(val, ir.IntType(32))
+                return self.builder.trunc(val, ir.IntType(16))
+            elif isinstance(vt, ir.IntType):
+                w = vt.width
+                if w > 16:
+                    # Same 16-bit two's-complement pattern: trunc handles
+                    # "add MAXWORD+1 if negative" without a branch
+                    return self.builder.trunc(val, ir.IntType(16))
+                elif w == 16:
+                    return val  # WORD → WORD: identity
+                else:
+                    # CHAR (i8) / BOOLEAN (i8) / small enum → zero-extend
+                    return self.builder.zext(val, ir.IntType(16))
+            raise CodegenError(f'WRD: unsupported value type {vt}')
+        elif lookup_name == 'BYWORD':
+            hi_val = self.codegen_expr(expr.args[0])
+            lo_val = self.codegen_expr(expr.args[1])
+
+            def _to_i16(v: ir.Value) -> ir.Value:
+                """Widen or narrow any integer value to i16."""
+                w = v.type.width
+                if w < 16:
+                    return self.builder.zext(v, ir.IntType(16))
+                if w > 16:
+                    return self.builder.trunc(v, ir.IntType(16))
+                return v
+
+            hi16 = self.builder.and_(_to_i16(hi_val), ir.Constant(ir.IntType(16), 0x00FF))
+            lo16 = self.builder.and_(_to_i16(lo_val), ir.Constant(ir.IntType(16), 0x00FF))
+            return self.builder.or_(self.builder.shl(hi16, ir.Constant(ir.IntType(16), 8)), lo16)
+        elif lookup_name in {'SQRT', 'SIN', 'COS', 'LN', 'EXP', 'ARCTAN'}:
             val = self.codegen_expr(expr.args[0])
             if isinstance(val.type, ir.IntType):
                 val = self.builder.sitofp(val, ir.DoubleType())
             elif not isinstance(val.type, ir.DoubleType):
-                raise CodegenError(f'SQRT not supported for type {val.type}')
-            sqrt_fn = self.module.declare_intrinsic('llvm.sqrt', [ir.DoubleType()])
-            return self.builder.call(sqrt_fn, [val])
+                raise CodegenError(f'{lookup_name} not supported for type {val.type}')
+
+            libm_names = {'SQRT': 'sqrt', 'SIN': 'sin', 'COS': 'cos', 'LN': 'log', 'EXP': 'exp', 'ARCTAN': 'atan'}
+            c_name = libm_names[lookup_name]
+            double_ty = ir.DoubleType()
+            try:
+                fn = self.module.get_global(c_name)
+            except KeyError:
+                fn = ir.Function(self.module, ir.FunctionType(double_ty, [double_ty]), name=c_name)
+            return self.builder.call(fn, [val])
+        elif lookup_name == 'TRUNC':
+            # REAL -> INTEGER: truncate toward zero (manual 11-7)
+            val = self.codegen_expr(expr.args[0])
+            if isinstance(val.type, ir.IntType):
+                val = self.builder.sitofp(val, ir.DoubleType())
+            elif not isinstance(val.type, ir.DoubleType):
+                raise CodegenError(f'TRUNC not supported for type {val.type}')
+            return self.builder.fptosi(val, ir.IntType(32))
+        elif lookup_name == 'ROUND':
+            # REAL -> INTEGER: rounds away from zero (manual 11-7).
+            # Implemented as: fptosi(x + copysign(0.5, x)), i.e. add +0.5
+            # for non-negative inputs and -0.5 for negative inputs, then
+            # truncate.  This gives half-away-from-zero without requiring
+            # libm.round (llvm.round lowers to a libm call in llvmlite).
+            val = self.codegen_expr(expr.args[0])
+            if isinstance(val.type, ir.IntType):
+                val = self.builder.sitofp(val, ir.DoubleType())
+            elif not isinstance(val.type, ir.DoubleType):
+                raise CodegenError(f'ROUND not supported for type {val.type}')
+            zero = ir.Constant(ir.DoubleType(), 0.0)
+            half = ir.Constant(ir.DoubleType(), 0.5)
+            neg_half = ir.Constant(ir.DoubleType(), -0.5)
+            is_neg = self.builder.fcmp_ordered('<', val, zero)
+            adj = self.builder.select(is_neg, neg_half, half)
+            rounded = self.builder.fadd(val, adj)
+            return self.builder.fptosi(rounded, ir.IntType(32))
+        elif lookup_name == 'FLOAT':
+            # INTEGER -> REAL: sitofp (manual 11-7)
+            val = self.codegen_expr(expr.args[0])
+            if not isinstance(val.type, ir.IntType):
+                raise CodegenError(f'FLOAT not supported for type {val.type}')
+            return self.builder.sitofp(val, ir.DoubleType())
 
         symbol = self.scope.lookup(lookup_name) or self.scope.lookup(expr.name)
         if not symbol:
@@ -1590,8 +1762,8 @@ class Codegen:
             is_lstring_var = False
             lstring_len = None
             string_max_len = 0
-            from type_system import StringType, LStringType
             from ast_nodes import LStringType as ASTLStringType
+            from type_system import LStringType, StringType
             if not isinstance(expr, StringLiteral) and not isinstance(expr, NilLiteral) and not (isinstance(expr, Identifier) and expr.name.upper() == 'NULL'):
                 t = None
                 if isinstance(expr, Identifier):
@@ -1602,7 +1774,7 @@ class Codegen:
                     symbol = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
                     if symbol:
                         t = symbol.type_expr
-                
+
                 if isinstance(t, (LStringType, ASTLStringType)):
                     is_string_var = True
                     is_lstring_var = True
@@ -1662,8 +1834,7 @@ class Codegen:
                 # Both STRING and LSTRING write with %.*s. STRING uses its
                 # (blank-padded) compile-time max length; LSTRING uses the
                 # runtime length read from byte [0] above.
-                length_arg = (lstring_len if is_lstring_var
-                              else ir.Constant(ir.IntType(32), string_max_len))
+                length_arg = (lstring_len if is_lstring_var else ir.Constant(ir.IntType(32), string_max_len))
                 if not precision:  # Only add length if not already in precision
                     prefix += '.*'
                     # printf consumes dynamic args as width, then precision,
@@ -1754,22 +1925,14 @@ class Codegen:
         for func in self.module.functions:
             if func.name == 'memcpy':
                 return func
-        memcpy_type = ir.FunctionType(ir.PointerType(ir.IntType(8)), [
-            ir.PointerType(ir.IntType(8)),
-            ir.PointerType(ir.IntType(8)),
-            ir.IntType(64)
-        ])
+        memcpy_type = ir.FunctionType(ir.PointerType(ir.IntType(8)), [ir.PointerType(ir.IntType(8)), ir.PointerType(ir.IntType(8)), ir.IntType(64)])
         return ir.Function(self.module, memcpy_type, name='memcpy')
 
     def memset_func(self) -> ir.Function:
         for func in self.module.functions:
             if func.name == 'memset':
                 return func
-        memset_type = ir.FunctionType(ir.PointerType(ir.IntType(8)), [
-            ir.PointerType(ir.IntType(8)),
-            ir.IntType(32),
-            ir.IntType(64)
-        ])
+        memset_type = ir.FunctionType(ir.PointerType(ir.IntType(8)), [ir.PointerType(ir.IntType(8)), ir.IntType(32), ir.IntType(64)])
         return ir.Function(self.module, memset_type, name='memset')
 
     def runtime_error_func(self) -> ir.Function:
@@ -1793,11 +1956,11 @@ class Codegen:
                 val_str = val_str[1:-1]
             val_str = val_str.replace("''", "'")
             lit_len = len(val_str)
-            
+
             chars_ptr = self.codegen_expr(expr)
             length = ir.Constant(ir.IntType(32), lit_len)
             return chars_ptr, length
-            
+
         elif isinstance(expr, NilLiteral) or (isinstance(expr, Identifier) and expr.name.upper() == 'NULL'):
             chars_ptr = self.null_lstring_ptr()
             length = ir.Constant(ir.IntType(32), 0)
@@ -1805,7 +1968,7 @@ class Codegen:
 
         # val is now a pointer to the inline aggregate [n+1 x i8] or [n x i8]
         val = self.codegen_expr(expr)
-        
+
         # Determine string type details
         t = None
         if isinstance(expr, Identifier):
@@ -1821,7 +1984,7 @@ class Codegen:
 
         zero = ir.Constant(ir.IntType(32), 0)
         one = ir.Constant(ir.IntType(32), 1)
-        
+
         if is_lstring:
             # LSTRING [n+1 x i8]: byte [0] = length, bytes [1..n] = chars
             len_ptr = self.builder.gep(val, [zero, zero])
@@ -1832,7 +1995,7 @@ class Codegen:
             # STRING [n x i8]: bytes [0..n-1] = chars, no length prefix
             chars_ptr = self.builder.gep(val, [zero, zero])
             length = ir.Constant(ir.IntType(32), max_len)
-            
+
         return chars_ptr, length
 
     def _dest_string_max_len(self, arg: Expression) -> int:
@@ -1853,8 +2016,7 @@ class Codegen:
         LSTRING assignment path. Returns the post-check block, which the caller
         must branch to once the guarded work is done.
         """
-        cond = self.builder.icmp_signed(
-            '<=', need_len, ir.Constant(ir.IntType(32), max_len))
+        cond = self.builder.icmp_signed('<=', need_len, ir.Constant(ir.IntType(32), max_len))
         parent = self.builder.block.parent
         ok_block = parent.append_basic_block(label + '_ok')
         err_block = parent.append_basic_block(label + '_overflow')
@@ -1946,13 +2108,13 @@ class Codegen:
         """COPYSTR(CONST S: STRING; VAR D: STRING)"""
         src_chars, src_len = self.get_string_chars_and_len(args[0])
         src_len_64 = self.builder.zext(src_len, ir.IntType(64))
-        
+
         D_arg = args[1]
         if isinstance(D_arg, Identifier):
             D_arg = Designator(D_arg.name, [])
         D_ptr = self.resolve_designator_ptr(D_arg)
         # D_ptr is now directly the aggregate pointer [n x i8]
-        
+
         # Get D's maximum length
         t = None
         if isinstance(args[1], Identifier):
@@ -1975,7 +2137,7 @@ class Codegen:
         # STRING has no length byte; copy to [0]
         dest_chars = self.builder.gep(D_ptr, [zero, zero])
         self.builder.call(self.memcpy_func(), [dest_chars, src_chars, src_len_64])
-        
+
         # Blank-pad remaining characters from [src_len] to [max_len-1] with 0x20
         pad_ptr = self.builder.gep(D_ptr, [zero, src_len])
         pad_len = self.builder.sub(ir.Constant(ir.IntType(32), max_len), src_len)
@@ -1984,6 +2146,188 @@ class Codegen:
 
         self.builder.branch(end_block)
         self.builder.position_at_end(end_block)
+
+    def resolve_type_alias(self, type_expr):
+        """Unwrap NamedType aliases (e.g. ``TYPE arr = ARRAY[..]``) to the
+        underlying declared type. Built-in names and unknown names are returned
+        unchanged. Cycle-safe."""
+        seen = set()
+        while isinstance(type_expr, NamedType):
+            key = type_expr.name.upper()
+            if key in seen or key not in self.type_aliases:
+                break
+            seen.add(key)
+            type_expr = self.type_aliases[key]
+        return type_expr
+
+    def array_lower_bound(self, type_expr) -> tuple[Optional[int], Any]:
+        """For a (possibly aliased) array type, return ``(lower_bound, element_type)``.
+
+        Returns ``(None, None)`` for anything that is not a genuine indexable
+        array. In particular STRING/LSTRING are deliberately excluded: their
+        element offsets follow a length-prefix convention (LSTRING reserves
+        byte 0 for the length), not array lower-bound subtraction, so they must
+        keep their existing indexing behavior.
+        """
+        t = self.resolve_type_alias(type_expr)
+        # AST ArrayType carries an index_range with constant-foldable bounds.
+        if hasattr(t, 'index_range') and getattr(t, 'index_range', None) is not None:
+            try:
+                low = self.eval_const_expr(t.index_range.low)
+            except Exception:
+                low = None
+            return low, getattr(t, 'element_type', None)
+        # Resolved type_system.ArrayType carries lower_bound + element_type.
+        # (StringType/LStringType expose max_len instead and are excluded.)
+        if hasattr(t, 'lower_bound') and hasattr(t, 'element_type') and not hasattr(t, 'max_len'):
+            return t.lower_bound, t.element_type
+        return None, None
+
+    def record_field_index(self, type_expr, field_name: str) -> tuple[Optional[int], Any]:
+        """For a (possibly aliased) record type, return ``(llvm_struct_index,
+        field_ast_type)`` for ``field_name``, matching the layout in
+        ``llvm_type``. Field lookup is case-insensitive (Pascal identifiers are
+        case-insensitive). Returns ``(None, None)`` if not a record / no match.
+        """
+        t = self.resolve_type_alias(type_expr)
+        if not isinstance(t, RecordType):  # AST RecordType
+            return None, None
+        target = field_name.upper()
+        idx = 0
+        for names, ftype in t.fields:
+            for nm in names:
+                if nm.upper() == target:
+                    return idx, ftype
+                idx += 1
+        return None, None
+
+    def get_array_bounds(self, type_expr) -> tuple[int, int]:
+        type_expr = self.resolve_type_alias(type_expr)
+        if hasattr(type_expr, 'index_range') and type_expr.index_range:
+            low = self.eval_const_expr(type_expr.index_range.low)
+            high = self.eval_const_expr(type_expr.index_range.high) if type_expr.index_range.high else low
+            return low, high
+        elif hasattr(type_expr, 'lower_bound') and hasattr(type_expr, 'upper_bound'):
+            return type_expr.lower_bound, type_expr.upper_bound
+        return 1, 10
+
+    def builtin_pack(self, args: List[Expression]) -> None:
+        """PACK(CONST A: unpacked-array; I: index; VAR Z: packed-array)
+
+        Semantics (manual / ISO): for j := low(Z) to high(Z),
+        Z[j] := A[I + (j - low(Z))]. Storage for both arrays is 0-based
+        ([high-low+1 x elem]), so every Pascal index is translated to a slot
+        by subtracting that array's lower bound.
+        """
+        a_arg, i_arg, z_arg = args[0], args[1], args[2]
+
+        a_ptr = self.codegen_expr(a_arg)
+        z_ptr = self.codegen_expr(z_arg)
+        i_val = self.codegen_expr(i_arg)
+
+        a_low = self._designator_array_low(a_arg)
+        z_low, z_high = self._designator_array_bounds(z_arg)
+
+        j_var = self.builder.alloca(ir.IntType(32), name='pack_j')
+        self.builder.store(ir.Constant(ir.IntType(32), z_low), j_var)
+
+        loop_block = self.current_function.append_basic_block(name='pack_loop')
+        body_block = self.current_function.append_basic_block(name='pack_body')
+        end_block = self.current_function.append_basic_block(name='pack_end')
+
+        self.builder.branch(loop_block)
+        self.builder.position_at_end(loop_block)
+
+        j_val = self.builder.load(j_var)
+        cond = self.builder.icmp_signed('<=', j_val, ir.Constant(ir.IntType(32), z_high))
+        self.builder.cbranch(cond, body_block, end_block)
+
+        self.builder.position_at_end(body_block)
+
+        # offset = j - low(Z): 0-based position, which is also Z's storage slot.
+        offset = self.builder.sub(j_val, ir.Constant(ir.IntType(32), z_low))
+        # A storage slot = (I + offset) - low(A).
+        a_pascal = self.builder.add(offset, i_val)
+        a_slot = self.builder.sub(a_pascal, ir.Constant(ir.IntType(32), a_low))
+
+        a_elem_ptr = self.builder.gep(a_ptr, [ir.Constant(ir.IntType(32), 0), a_slot])
+        elem_val = self.builder.load(a_elem_ptr)
+
+        z_elem_ptr = self.builder.gep(z_ptr, [ir.Constant(ir.IntType(32), 0), offset])
+        self.builder.store(elem_val, z_elem_ptr)
+
+        next_j = self.builder.add(j_val, ir.Constant(ir.IntType(32), 1))
+        self.builder.store(next_j, j_var)
+        self.builder.branch(loop_block)
+
+        self.builder.position_at_end(end_block)
+
+    def builtin_unpack(self, args: List[Expression]) -> None:
+        """UNPACK(CONST Z: packed-array; VAR A: unpacked-array; I: index)
+
+        Semantics (manual / ISO): for j := low(Z) to high(Z),
+        A[I + (j - low(Z))] := Z[j]. As in PACK, every Pascal index is
+        translated to a 0-based storage slot.
+        """
+        z_arg, a_arg, i_arg = args[0], args[1], args[2]
+
+        z_ptr = self.codegen_expr(z_arg)
+        a_ptr = self.codegen_expr(a_arg)
+        i_val = self.codegen_expr(i_arg)
+
+        a_low = self._designator_array_low(a_arg)
+        z_low, z_high = self._designator_array_bounds(z_arg)
+
+        j_var = self.builder.alloca(ir.IntType(32), name='unpack_j')
+        self.builder.store(ir.Constant(ir.IntType(32), z_low), j_var)
+
+        loop_block = self.current_function.append_basic_block(name='unpack_loop')
+        body_block = self.current_function.append_basic_block(name='unpack_body')
+        end_block = self.current_function.append_basic_block(name='unpack_end')
+
+        self.builder.branch(loop_block)
+        self.builder.position_at_end(loop_block)
+
+        j_val = self.builder.load(j_var)
+        cond = self.builder.icmp_signed('<=', j_val, ir.Constant(ir.IntType(32), z_high))
+        self.builder.cbranch(cond, body_block, end_block)
+
+        self.builder.position_at_end(body_block)
+
+        # offset = j - low(Z): Z's 0-based storage slot.
+        offset = self.builder.sub(j_val, ir.Constant(ir.IntType(32), z_low))
+        z_elem_ptr = self.builder.gep(z_ptr, [ir.Constant(ir.IntType(32), 0), offset])
+        elem_val = self.builder.load(z_elem_ptr)
+
+        # A storage slot = (I + offset) - low(A).
+        a_pascal = self.builder.add(offset, i_val)
+        a_slot = self.builder.sub(a_pascal, ir.Constant(ir.IntType(32), a_low))
+        a_elem_ptr = self.builder.gep(a_ptr, [ir.Constant(ir.IntType(32), 0), a_slot])
+        self.builder.store(elem_val, a_elem_ptr)
+
+        next_j = self.builder.add(j_val, ir.Constant(ir.IntType(32), 1))
+        self.builder.store(next_j, j_var)
+        self.builder.branch(loop_block)
+
+        self.builder.position_at_end(end_block)
+
+    def _designator_array_bounds(self, arg) -> tuple[int, int]:
+        """(lower, upper) bounds of the array a designator names; (1, 10) fallback."""
+        name = arg.name if isinstance(arg, (Identifier, Designator)) else ""
+        sym = self.scope.lookup(name) or self.scope.lookup(name.upper()) if name else None
+        if sym and sym.type_expr:
+            return self.get_array_bounds(sym.type_expr)
+        return 1, 10
+
+    def _designator_array_low(self, arg) -> int:
+        """Lower bound of the array a designator names; 0 fallback (no shift)."""
+        name = arg.name if isinstance(arg, (Identifier, Designator)) else ""
+        sym = self.scope.lookup(name) or self.scope.lookup(name.upper()) if name else None
+        if sym and sym.type_expr:
+            low, _ = self.array_lower_bound(sym.type_expr)
+            if low is not None:
+                return low
+        return 0
 
     # ========================================================================
     # Utilities
@@ -2004,6 +2348,8 @@ class Codegen:
             return 1 if expr.value else 0
         elif isinstance(expr, CharLiteral):
             return ord(expr.value) if len(expr.value) == 1 else 0
+        elif isinstance(expr, RetypeExpr):
+            return self.eval_const_expr(expr.expr)
         elif isinstance(expr, Identifier):
             key = expr.name.upper()
             if key in self.constants:
@@ -2049,6 +2395,19 @@ class Codegen:
                     return left // right if right != 0 else 0
                 elif expr.op == 'MOD':
                     return left % right if right != 0 else 0
+        elif isinstance(expr, FuncCall):
+            func_name = expr.name.upper() if hasattr(expr, 'name') else ''
+            if func_name == 'WRD':
+                raw = self.eval_const_expr(expr.args[0])
+                return int(raw) & 0xFFFF
+            elif func_name == 'BYWORD':
+                hi = int(self.eval_const_expr(expr.args[0])) & 0xFF
+                lo = int(self.eval_const_expr(expr.args[1])) & 0xFF
+                return (hi << 8) | lo
+            elif func_name == 'ORD':
+                return int(self.eval_const_expr(expr.args[0]))
+            elif func_name == 'CHR':
+                return int(self.eval_const_expr(expr.args[0])) & 0xFF
         raise CodegenError(f'Cannot evaluate constant expression: {type(expr).__name__}')
 
     def unique_name(self, prefix: str) -> str:

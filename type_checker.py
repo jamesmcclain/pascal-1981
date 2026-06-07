@@ -16,13 +16,22 @@ from typing import Any, Dict, List, Optional
 
 from ast_nodes import AdrExpr, AdsExpr
 from ast_nodes import ArrayType as ASTArrayType
-from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, CharLiteral, ConstDecl, Designator, Expression, ForStmt, FuncCall, FuncDecl, Identifier, IfStmt,
-                       ImplementationUnit, InterfaceUnit, IntLiteral, LabelStmt, LowerExpr, ModuleUnit, NamedType, NilLiteral, PointerType as ASTPointerType, ProcCallStmt, ProcDecl, ProgramUnit, RealLiteral, UpperExpr, WriteArg)
-from ast_nodes import LStringType as ASTLStringType, RecordType as ASTRecordType, SetType as ASTSetType, SubrangeType as ASTSubrangeType, EnumType as ASTEnumType
-from ast_nodes import (RangeExpr, RepeatStmt, ReturnStmt, Selector, SetConstructor, SizeofExpr, Statement, StringLiteral, TypeDecl, UnaryOp, UseClause, VarDecl, WhileStmt)
+from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, CharLiteral, ConstDecl, Designator)
+from ast_nodes import EnumType as ASTEnumType
+from ast_nodes import (Expression, ForStmt, FuncCall, FuncDecl, Identifier, IfStmt, ImplementationUnit, InterfaceUnit, IntLiteral, LabelStmt, LowerExpr)
+from ast_nodes import LStringType as ASTLStringType
+from ast_nodes import ModuleUnit, NamedType, NilLiteral
+from ast_nodes import PointerType as ASTPointerType
+from ast_nodes import (ProcCallStmt, ProcDecl, ProgramUnit, RangeExpr, RealLiteral)
+from ast_nodes import RecordType as ASTRecordType
+from ast_nodes import (RepeatStmt, ReturnStmt, RetypeExpr, Selector, SetConstructor)
+from ast_nodes import SetType as ASTSetType
+from ast_nodes import SizeofExpr, Statement, StringLiteral
+from ast_nodes import SubrangeType as ASTSubrangeType
+from ast_nodes import (TypeDecl, UnaryOp, UpperExpr, UseClause, VarDecl, WhileStmt, WriteArg)
 from symbol_table import SourceLocation, Symbol, SymbolTable
-from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, FileType, FunctionType, LStringType, PointerType, ProcedureType, RecordType, SetType, StringType, Type,
-                         EnumType, binary_op_result_type, can_assign, unary_op_result_type)
+from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, EnumType, FileType, FunctionType, LStringType, PointerType, ProcedureType,
+                         RecordType, SetType, StringType, Type, binary_op_result_type, can_assign, unary_op_result_type)
 
 
 @dataclass
@@ -96,6 +105,12 @@ class PascalTypeChecker(TypeChecker):
         copystr_type = ProcedureType('COPYSTR', [])
         self.symbol_table.define('COPYSTR', Symbol(name='COPYSTR', type=copystr_type, kind='procedure', is_mutable=False))
 
+        pack_type = ProcedureType('PACK', [])
+        self.symbol_table.define('PACK', Symbol(name='PACK', type=pack_type, kind='procedure', is_mutable=False))
+
+        unpack_type = ProcedureType('UNPACK', [])
+        self.symbol_table.define('UNPACK', Symbol(name='UNPACK', type=unpack_type, kind='procedure', is_mutable=False))
+
         # Predeclared constants.
         self.symbol_table.define('MAXINT', Symbol(name='MAXINT', type=INTEGER_TYPE, kind='const', is_mutable=False))
         self.symbol_table.define('MAXWORD', Symbol(name='MAXWORD', type=WORD_TYPE, kind='const', is_mutable=False))
@@ -108,7 +123,7 @@ class PascalTypeChecker(TypeChecker):
         self.symbol_table.define('OUTPUT', Symbol(name='OUTPUT', type=text_type, kind='var', is_mutable=False))
         self.symbol_table.define('STRING', Symbol(name='STRING', type=StringType(256), kind='type', is_mutable=False))
 
-        # ABS and SQRT are handled as special built-ins in type inference/codegen.
+        # ABS, SQRT, SIN, COS, LN, EXP, and ARCTAN are handled as special built-ins in type inference/codegen.
         # LENGTH is not part of the manual's predeclared list; keep it out until
         # a dialect decision puts it back in.
 
@@ -135,6 +150,21 @@ class PascalTypeChecker(TypeChecker):
         self.symbol_table.define('HIBYTE', Symbol(name='HIBYTE', type=hibyte_type, kind='function', is_mutable=False))
         lobyte_type = FunctionType('LOBYTE', [('n', INTEGER_TYPE)], CHAR_TYPE)
         self.symbol_table.define('LOBYTE', Symbol(name='LOBYTE', type=lobyte_type, kind='function', is_mutable=False))
+        # WRD / BYWORD functions (return WORD)
+        wrd_type = FunctionType('WRD', [('x', INTEGER_TYPE)], WORD_TYPE)  # placeholder sig; type-checker special-cases
+        self.symbol_table.define('WRD', Symbol(name='WRD', type=wrd_type, kind='function', is_mutable=False))
+        byword_type = FunctionType('BYWORD', [('hi', CHAR_TYPE), ('lo', CHAR_TYPE)], WORD_TYPE)  # placeholder sig
+        self.symbol_table.define('BYWORD', Symbol(name='BYWORD', type=byword_type, kind='function', is_mutable=False))
+
+        # TRUNC / ROUND functions (REAL -> INTEGER)
+        trunc_type = FunctionType('TRUNC', [('x', REAL_TYPE)], INTEGER_TYPE)
+        self.symbol_table.define('TRUNC', Symbol(name='TRUNC', type=trunc_type, kind='function', is_mutable=False))
+        round_type = FunctionType('ROUND', [('x', REAL_TYPE)], INTEGER_TYPE)
+        self.symbol_table.define('ROUND', Symbol(name='ROUND', type=round_type, kind='function', is_mutable=False))
+
+        # FLOAT function (INTEGER -> REAL)
+        float_type = FunctionType('FLOAT', [('x', INTEGER_TYPE)], REAL_TYPE)
+        self.symbol_table.define('FLOAT', Symbol(name='FLOAT', type=float_type, kind='function', is_mutable=False))
 
     def check(self, ast: ASTNode) -> TypeCheckResult:
         """Main entry point for type checking."""
@@ -631,10 +661,7 @@ class PascalTypeChecker(TypeChecker):
         if isinstance(resolved_type, EnumType):
             resolved_type.name = decl.name
             for member in resolved_type.members:
-                self.symbol_table.define(
-                    member,
-                    Symbol(name=member, type=resolved_type, kind='const',
-                           location=self.get_node_location(decl), is_mutable=False))
+                self.symbol_table.define(member, Symbol(name=member, type=resolved_type, kind='const', location=self.get_node_location(decl), is_mutable=False))
 
         self.symbol_table.define(decl.name, Symbol(name=decl.name, type=resolved_type, kind='type', location=self.get_node_location(decl), is_mutable=False))
 
@@ -933,6 +960,13 @@ class PascalTypeChecker(TypeChecker):
 
         # Look up the procedure (Pascal is case-insensitive)
         lookup_name = stmt.name.upper()
+        if lookup_name == 'PACK':
+            self._check_pack_args(stmt)
+            return
+        elif lookup_name == 'UNPACK':
+            self._check_unpack_args(stmt)
+            return
+
         sym = self.symbol_table.lookup(lookup_name) or self.symbol_table.lookup(stmt.name)
         if not sym:
             self.error(f"Undefined procedure: {stmt.name}", stmt)
@@ -954,7 +988,7 @@ class PascalTypeChecker(TypeChecker):
             elif stmt.name.upper() == 'COPYSTR':
                 self._check_copystr_args(stmt)
                 return
-            
+
             # For built-in procedures like WRITELN/WRITE/READLN, skip count/type checks but still
             # check that the arguments are valid expressions (e.g., defined variables)
             if stmt.name.upper() not in ['WRITELN', 'WRITE', 'READLN']:
@@ -992,34 +1026,130 @@ class PascalTypeChecker(TypeChecker):
         if len(stmt.args) != 2:
             self.error(f"CONCAT expects 2 arguments, got {len(stmt.args)}", stmt)
             return
-        
+
         # Argument 1: destination (VAR LSTRING)
         dest_arg = stmt.args[0]
         if not isinstance(dest_arg, Identifier) and not isinstance(dest_arg, Designator):
             self.error("CONCAT: first argument must be a designator (variable)", stmt)
             return
-        
+
         dest_name = dest_arg.name if isinstance(dest_arg, Identifier) else dest_arg.name
         dest_sym = self.symbol_table.lookup(dest_name) or self.symbol_table.lookup(dest_name.upper())
         if not dest_sym:
             self.error(f"CONCAT: undefined variable '{dest_name}'", stmt)
             return
-        
+
         dest_type = dest_sym.type if dest_sym else None
         if not isinstance(dest_type, LStringType):
             self.error(f"CONCAT: first argument must be LSTRING, got {dest_type}", stmt)
             return
-        
+
         if not dest_sym.is_mutable:
             self.error(f"CONCAT: first argument must be mutable (VAR parameter)", stmt)
             return
-        
+
         # Argument 2: source (CONST STRING or LSTRING)
         src_arg = stmt.args[1]
         src_type = self.infer_expression_type(src_arg)
         if not isinstance(src_type, (StringType, LStringType)):
             self.error(f"CONCAT: second argument must be STRING or LSTRING, got {src_type}", stmt)
             return
+
+    def _check_pack_args(self, stmt: ProcCallStmt) -> None:
+        """Type check PACK(CONST A: unpacked-array; I: index; VAR Z: packed-array)."""
+        if len(stmt.args) != 3:
+            self.error(f"PACK expects 3 arguments, got {len(stmt.args)}", stmt)
+            return
+
+        a_arg = stmt.args[0]
+        i_arg = stmt.args[1]
+        z_arg = stmt.args[2]
+
+        a_type = self.infer_expression_type(a_arg)
+        i_type = self.infer_expression_type(i_arg)
+        z_type = self.infer_expression_type(z_arg)
+
+        if not a_type or not i_type or not z_type:
+            return
+
+        if not isinstance(a_type, ArrayType) or a_type.packed:
+            self.error(f"PACK: first argument must be an unpacked array, got {a_type}", stmt)
+            return
+
+        if not i_type.equivalent_to(INTEGER_TYPE):
+            self.error(f"PACK: second argument must be an index (INTEGER), got {i_type}", stmt)
+            return
+
+        if not isinstance(z_type, ArrayType) or not z_type.packed:
+            self.error(f"PACK: third argument must be a packed array, got {z_type}", stmt)
+            return
+
+        if not a_type.element_type.equivalent_to(z_type.element_type):
+            self.error(f"PACK: element types of arrays must be equivalent, got {a_type.element_type} and {z_type.element_type}", stmt)
+            return
+
+        # Check mutability of Z
+        if isinstance(z_arg, (Identifier, Designator)):
+            z_name = z_arg.name
+            z_sym = self.symbol_table.lookup(z_name) or self.symbol_table.lookup(z_name.upper())
+            if z_sym and not z_sym.is_mutable:
+                self.error(f"PACK: third argument '{z_name}' must be mutable (VAR parameter)", stmt)
+
+        # Compile-time bounds validation if I is constant
+        if isinstance(i_arg, IntLiteral):
+            i_val = i_arg.value
+            a_len = a_type.upper_bound - i_val + 1
+            z_len = z_type.upper_bound - z_type.lower_bound + 1
+            if a_len < z_len:
+                self.error(f"PACK: unpacked array slice from index {i_val} (length {a_len}) is too small for packed array (length {z_len})", stmt)
+
+    def _check_unpack_args(self, stmt: ProcCallStmt) -> None:
+        """Type check UNPACK(CONST Z: packed-array; VAR A: unpacked-array; I: index)."""
+        if len(stmt.args) != 3:
+            self.error(f"UNPACK expects 3 arguments, got {len(stmt.args)}", stmt)
+            return
+
+        z_arg = stmt.args[0]
+        a_arg = stmt.args[1]
+        i_arg = stmt.args[2]
+
+        z_type = self.infer_expression_type(z_arg)
+        a_type = self.infer_expression_type(a_arg)
+        i_type = self.infer_expression_type(i_arg)
+
+        if not z_type or not a_type or not i_type:
+            return
+
+        if not isinstance(z_type, ArrayType) or not z_type.packed:
+            self.error(f"UNPACK: first argument must be a packed array, got {z_type}", stmt)
+            return
+
+        if not isinstance(a_type, ArrayType) or a_type.packed:
+            self.error(f"UNPACK: second argument must be an unpacked array, got {a_type}", stmt)
+            return
+
+        if not i_type.equivalent_to(INTEGER_TYPE):
+            self.error(f"UNPACK: third argument must be an index (INTEGER), got {i_type}", stmt)
+            return
+
+        if not z_type.element_type.equivalent_to(a_type.element_type):
+            self.error(f"UNPACK: element types of arrays must be equivalent, got {z_type.element_type} and {a_type.element_type}", stmt)
+            return
+
+        # Check mutability of A
+        if isinstance(a_arg, (Identifier, Designator)):
+            a_name = a_arg.name
+            a_sym = self.symbol_table.lookup(a_name) or self.symbol_table.lookup(a_name.upper())
+            if a_sym and not a_sym.is_mutable:
+                self.error(f"UNPACK: second argument '{a_name}' must be mutable (VAR parameter)", stmt)
+
+        # Compile-time bounds validation if I is constant
+        if isinstance(i_arg, IntLiteral):
+            i_val = i_arg.value
+            a_len = a_type.upper_bound - i_val + 1
+            z_len = z_type.upper_bound - z_type.lower_bound + 1
+            if a_len < z_len:
+                self.error(f"UNPACK: unpacked array slice from index {i_val} (length {a_len}) is too small for packed array (length {z_len})", stmt)
 
     def _check_copylst_args(self, stmt: ProcCallStmt) -> None:
         """Type check COPYLST(CONST S: STRING; VAR D: LSTRING).
@@ -1031,31 +1161,31 @@ class PascalTypeChecker(TypeChecker):
         if len(stmt.args) != 2:
             self.error(f"COPYLST expects 2 arguments, got {len(stmt.args)}", stmt)
             return
-        
+
         # Argument 1: source (CONST STRING or LSTRING)
         src_arg = stmt.args[0]
         src_type = self.infer_expression_type(src_arg)
         if not isinstance(src_type, (StringType, LStringType)):
             self.error(f"COPYLST: first argument must be STRING or LSTRING, got {src_type}", stmt)
             return
-        
+
         # Argument 2: destination (VAR LSTRING)
         dest_arg = stmt.args[1]
         if not isinstance(dest_arg, Identifier) and not isinstance(dest_arg, Designator):
             self.error("COPYLST: second argument must be a designator (variable)", stmt)
             return
-        
+
         dest_name = dest_arg.name if isinstance(dest_arg, Identifier) else dest_arg.name
         dest_sym = self.symbol_table.lookup(dest_name) or self.symbol_table.lookup(dest_name.upper())
         if not dest_sym:
             self.error(f"COPYLST: undefined variable '{dest_name}'", stmt)
             return
-        
+
         dest_type = dest_sym.type if dest_sym else None
         if not isinstance(dest_type, LStringType):
             self.error(f"COPYLST: second argument must be LSTRING, got {dest_type}", stmt)
             return
-        
+
         if not dest_sym.is_mutable:
             self.error(f"COPYLST: second argument must be mutable (VAR parameter)", stmt)
             return
@@ -1070,31 +1200,31 @@ class PascalTypeChecker(TypeChecker):
         if len(stmt.args) != 2:
             self.error(f"COPYSTR expects 2 arguments, got {len(stmt.args)}", stmt)
             return
-        
+
         # Argument 1: source (CONST STRING or LSTRING)
         src_arg = stmt.args[0]
         src_type = self.infer_expression_type(src_arg)
         if not isinstance(src_type, (StringType, LStringType)):
             self.error(f"COPYSTR: first argument must be STRING or LSTRING, got {src_type}", stmt)
             return
-        
+
         # Argument 2: destination (VAR STRING)
         dest_arg = stmt.args[1]
         if not isinstance(dest_arg, Identifier) and not isinstance(dest_arg, Designator):
             self.error("COPYSTR: second argument must be a designator (variable)", stmt)
             return
-        
+
         dest_name = dest_arg.name if isinstance(dest_arg, Identifier) else dest_arg.name
         dest_sym = self.symbol_table.lookup(dest_name) or self.symbol_table.lookup(dest_name.upper())
         if not dest_sym:
             self.error(f"COPYSTR: undefined variable '{dest_name}'", stmt)
             return
-        
+
         dest_type = dest_sym.type if dest_sym else None
         if not isinstance(dest_type, StringType):
             self.error(f"COPYSTR: second argument must be STRING, got {dest_type}", stmt)
             return
-        
+
         if not dest_sym.is_mutable:
             self.error(f"COPYSTR: second argument must be mutable (VAR parameter)", stmt)
             return
@@ -1186,6 +1316,52 @@ class PascalTypeChecker(TypeChecker):
                 return INTEGER_TYPE
             self.error(f"Function '{type(expr).__name__[:-4].upper()}' expects an array variable", expr)
             return None
+        elif isinstance(expr, RetypeExpr):
+            # 1. Resolve target type
+            target_type = self.resolve_type(NamedType(expr.type_id, None))
+            if not target_type:
+                self.error(f"First parameter of RETYPE must be a type identifier, got {expr.type_id}", expr)
+                return None
+
+            # 2. Check inner expression type
+            expr_type = self.infer_expression_type(expr.expr)
+            if expr_type:
+                # 3. Check and warn if sizes are not identical
+                target_size = self.get_resolved_type_size(target_type)
+                expr_size = self.get_resolved_type_size(expr_type)
+                if target_size != expr_size:
+                    self.warning(f"Size Not Identical: RETYPE from {expr_type} ({expr_size} bytes) to {target_type} ({target_size} bytes)", expr)
+
+            # 4. Handle any selectors on the target type
+            current_type = target_type
+            if expr.selectors:
+                for selector in expr.selectors:
+                    if selector.kind == 'INDEX':
+                        if not isinstance(current_type, ArrayType):
+                            self.error(f"Cannot index non-array type {current_type}", expr)
+                            return None
+                        if selector.index_or_field:
+                            index_type = self.infer_expression_type(selector.index_or_field)
+                            expected = current_type.effective_index_type
+                            if index_type and not index_type.equivalent_to(expected):
+                                self.error(f"Array index must be {expected}, got {index_type}", expr)
+                        current_type = current_type.element_type
+                    elif selector.kind == 'FIELD':
+                        if not isinstance(current_type, RecordType):
+                            self.error(f"Cannot access field on non-record type {current_type}", expr)
+                            return None
+                        field_name = selector.index_or_field
+                        field_type = current_type.get_field_type(field_name)
+                        if field_type is None:
+                            self.error(f"Record has no field '{field_name}'", expr)
+                            return None
+                        current_type = field_type
+                    elif selector.kind == 'DEREF':
+                        if not isinstance(current_type, PointerType):
+                            self.error(f"Cannot dereference non-pointer type {current_type}", expr)
+                            return None
+                        current_type = current_type.target_type
+            return current_type
         elif isinstance(expr, Identifier):
             sym = self.symbol_table.lookup(expr.name)
             if not sym:
@@ -1221,9 +1397,9 @@ class PascalTypeChecker(TypeChecker):
                 if arg_type:
                     self.error(f"Argument 1 type mismatch: expected INTEGER or REAL, got {arg_type}", expr)
                 return None
-            if lookup_name == 'SQRT':
+            if lookup_name in {'SQRT', 'SIN', 'COS', 'LN', 'EXP', 'ARCTAN'}:
                 if len(expr.args) != 1:
-                    self.error(f"Function 'SQRT' expects 1 argument, got {len(expr.args)}", expr)
+                    self.error(f"Function '{lookup_name}' expects 1 argument, got {len(expr.args)}", expr)
                     return None
                 arg_type = self.infer_expression_type(expr.args[0])
                 if arg_type in (INTEGER_TYPE, REAL_TYPE):
@@ -1256,8 +1432,58 @@ class PascalTypeChecker(TypeChecker):
                     self.error(f"Function '{lookup_name}' expects 1 argument, got {len(expr.args)}", expr)
                     return None
                 arg_type = self.infer_expression_type(expr.args[0])
-                if arg_type == INTEGER_TYPE:
+                if arg_type in (INTEGER_TYPE, WORD_TYPE):
                     return CHAR_TYPE
+                if arg_type:
+                    self.error(f"Argument 1 type mismatch: expected INTEGER or WORD, got {arg_type}", expr)
+                return None
+            if lookup_name == 'WRD':
+                if len(expr.args) != 1:
+                    self.error(f"WRD expects 1 argument, got {len(expr.args)}", expr)
+                    return None
+                arg_type = self.infer_expression_type(expr.args[0])
+                if isinstance(arg_type, PointerType):
+                    return WORD_TYPE
+                if isinstance(arg_type, EnumType):
+                    return WORD_TYPE
+                if arg_type in (INTEGER_TYPE, WORD_TYPE, CHAR_TYPE, BOOLEAN_TYPE):
+                    return WORD_TYPE
+                if arg_type == REAL_TYPE:
+                    self.error("WRD: REAL argument not supported (argument must be an ordinal type or pointer)", expr)
+                    return None
+                if arg_type:
+                    self.error(f"WRD: unsupported argument type {arg_type}", expr)
+                return None
+            if lookup_name == 'BYWORD':
+                if len(expr.args) != 2:
+                    self.error(f"BYWORD expects 2 arguments, got {len(expr.args)}", expr)
+                    return None
+                for i, arg in enumerate(expr.args):
+                    arg_type = self.infer_expression_type(arg)
+                    if arg_type == REAL_TYPE:
+                        self.error(f"BYWORD: argument {i+1} must be a byte-sized ordinal type, got REAL", expr)
+                        return None
+                    if arg_type and not isinstance(arg_type, (EnumType, )) and arg_type not in (INTEGER_TYPE, WORD_TYPE, CHAR_TYPE, BOOLEAN_TYPE):
+                        self.error(f"BYWORD: argument {i+1} must be an ordinal type, got {arg_type}", expr)
+                        return None
+                return WORD_TYPE
+            if lookup_name in {'TRUNC', 'ROUND'}:
+                if len(expr.args) != 1:
+                    self.error(f"Function '{lookup_name}' expects 1 argument, got {len(expr.args)}", expr)
+                    return None
+                arg_type = self.infer_expression_type(expr.args[0])
+                if arg_type == REAL_TYPE:
+                    return INTEGER_TYPE
+                if arg_type:
+                    self.error(f"Argument 1 type mismatch: expected REAL, got {arg_type}", expr)
+                return None
+            if lookup_name == 'FLOAT':
+                if len(expr.args) != 1:
+                    self.error(f"Function 'FLOAT' expects 1 argument, got {len(expr.args)}", expr)
+                    return None
+                arg_type = self.infer_expression_type(expr.args[0])
+                if arg_type == INTEGER_TYPE:
+                    return REAL_TYPE
                 if arg_type:
                     self.error(f"Argument 1 type mismatch: expected INTEGER, got {arg_type}", expr)
                 return None
@@ -1323,11 +1549,12 @@ class PascalTypeChecker(TypeChecker):
                     if not isinstance(current_type, ArrayType):
                         self.error(f"Cannot index non-array type {current_type}", designator)
                         return None
-                    # Check that index is INTEGER
+                    # Check that the index matches the array's index type
                     if selector.index_or_field:
                         index_type = self.infer_expression_type(selector.index_or_field)
-                        if index_type and not index_type.equivalent_to(INTEGER_TYPE):
-                            self.error(f"Array index must be INTEGER, got {index_type}", designator)
+                        expected = current_type.effective_index_type
+                        if index_type and not index_type.equivalent_to(expected):
+                            self.error(f"Array index must be {expected}, got {index_type}", designator)
                     current_type = current_type.element_type
 
                 elif selector.kind == 'FIELD':
@@ -1350,6 +1577,44 @@ class PascalTypeChecker(TypeChecker):
                     current_type = current_type.target_type
 
         return current_type
+
+    def _eval_index_bound(self, expr) -> Optional[tuple]:
+        """Best-effort evaluate an array index-range endpoint.
+
+        Returns ``(ordinal_value, Type)`` for a compile-time ordinal constant,
+        where ``ordinal_value`` is the value used for storage bounds (ORD for
+        chars, member position for enums) and ``Type`` is the index type the
+        endpoint implies. Returns ``None`` when the endpoint isn't a recognized
+        ordinal constant (e.g. a named INTEGER constant), letting the caller
+        fall back to INTEGER indexing.
+        """
+        if isinstance(expr, IntLiteral):
+            return expr.value, INTEGER_TYPE
+        if isinstance(expr, CharLiteral):
+            return (ord(expr.value[0]) if expr.value else 0), CHAR_TYPE
+        if isinstance(expr, BoolLiteral):
+            return (1 if expr.value else 0), BOOLEAN_TYPE
+        if isinstance(expr, UnaryOp) and expr.op in ('PLUS', 'MINUS'):
+            inner = self._eval_index_bound(expr.operand)
+            if inner is None:
+                return None
+            val, ty = inner
+            return (-val if expr.op == 'MINUS' else val), ty
+        # A bare identifier may name an enum member (its ordinal is its
+        # declaration position) used as an index bound, e.g. ARRAY[Red..Blue].
+        name = None
+        if isinstance(expr, Identifier):
+            name = expr.name
+        elif isinstance(expr, Designator) and not expr.selectors:
+            name = expr.name
+        if name is not None:
+            sym = self.symbol_table.lookup(name)
+            if sym and sym.kind == 'const' and isinstance(sym.type, EnumType):
+                target = name.upper()
+                for i, member in enumerate(sym.type.members):
+                    if member.upper() == target:
+                        return i, sym.type
+        return None
 
     def resolve_type(self, type_expr) -> Optional[Type]:
         """Resolve a type expression to a Type object."""
@@ -1405,36 +1670,91 @@ class PascalTypeChecker(TypeChecker):
                 element_type = self.resolve_type(type_expr.element_type)
 
             if element_type and type_expr.index_range:
-                # Extract bounds - these are expressions, evaluate them as constants
+                # The index range fixes both the storage bounds and the ordinal
+                # type a subscript must have. Pascal index types are ordinal
+                # (INTEGER, CHAR, BOOLEAN, enum, ...), not just INTEGER, so we
+                # evaluate each endpoint to (ordinal_value, type) rather than
+                # assuming integer literals.
                 try:
-                    if isinstance(type_expr.index_range.low, IntLiteral):
-                        lower = type_expr.index_range.low.value
-                    else:
-                        lower = 1  # Default if not a constant
+                    low_eval = self._eval_index_bound(type_expr.index_range.low)
+                    high_node = type_expr.index_range.high
+                    high_eval = self._eval_index_bound(high_node) if high_node else None
 
-                    if type_expr.index_range.high and isinstance(type_expr.index_range.high, IntLiteral):
-                        upper = type_expr.index_range.high.value
-                    else:
-                        upper = 10  # Default if not a constant
+                    # Index type comes from whichever endpoint we could resolve
+                    # (they should agree); default to INTEGER when neither is a
+                    # recognizable ordinal constant (e.g. named-constant bounds).
+                    index_type = None
+                    if low_eval is not None:
+                        index_type = low_eval[1]
+                    elif high_eval is not None:
+                        index_type = high_eval[1]
 
-                    return ArrayType(element_type, lower, upper)
-                except:
+                    lower = low_eval[0] if low_eval is not None else 1
+                    if high_eval is not None:
+                        upper = high_eval[0]
+                    elif high_node is None:
+                        # Super array (ARRAY[lo..*]): upper bound is open.
+                        upper = lower
+                    else:
+                        upper = 10
+
+                    return ArrayType(element_type, lower, upper, packed=getattr(type_expr, 'packed', False), index_type=index_type)
+                except Exception:
                     return None
             return None
         elif isinstance(type_expr, ASTRecordType):
+            # AST RecordType.fields is a list of (name_list, type) pairs, e.g.
+            # `x, y: INTEGER` parses to (['x', 'y'], INTEGER). Expand each name
+            # into the name->type dict that type_system.RecordType expects.
+            # Insertion order is preserved (declaration order), matching the
+            # struct layout codegen builds.
             fields = {}
-            if type_expr.fields:
-                for field_name, field_type_expr in type_expr.fields.items():
-                    field_type = self.resolve_type(field_type_expr)
-                    if field_type:
+            for names, field_type_expr in (type_expr.fields or []):
+                field_type = self.resolve_type(field_type_expr)
+                if field_type:
+                    for field_name in names:
                         fields[field_name] = field_type
-            return RecordType(type_expr.name, fields)
+            return RecordType(getattr(type_expr, 'name', None), fields)
         elif isinstance(type_expr, ASTPointerType):
             base_type = self.resolve_type(type_expr.base)
             flavor = getattr(type_expr, 'flavor', 'POINTER')
             return PointerType(base_type, flavor=flavor) if base_type else PointerType(CHAR_TYPE, flavor=flavor)
         else:
             return None
+
+    def get_resolved_type_size(self, t: Type) -> int:
+        """Estimate the size of a resolved Type in bytes."""
+        from type_system import (ArrayType, BooleanType, CharType, EnumType, IntegerType, LStringType, PointerType, RealType, RecordType, SetType, StringType, WordType)
+        if isinstance(t, IntegerType):
+            return 4
+        elif isinstance(t, RealType):
+            return 8
+        elif isinstance(t, BooleanType):
+            return 1
+        elif isinstance(t, WordType):
+            return 2
+        elif isinstance(t, CharType):
+            return 1
+        elif isinstance(t, EnumType):
+            return 4
+        elif isinstance(t, SetType):
+            return 32
+        elif isinstance(t, StringType):
+            return t.max_len
+        elif isinstance(t, LStringType):
+            return t.max_len + 1
+        elif isinstance(t, PointerType):
+            return 8
+        elif isinstance(t, ArrayType):
+            elem_size = self.get_resolved_type_size(t.element_type)
+            count = max(0, t.upper_bound - t.lower_bound + 1)
+            return count * elem_size
+        elif isinstance(t, RecordType):
+            total = 0
+            for ftype in t.fields.values():
+                total += self.get_resolved_type_size(ftype)
+            return total
+        return 4
 
     def make_location(self, location) -> Optional[SourceLocation]:
         """Convert AST location tuple to SourceLocation."""

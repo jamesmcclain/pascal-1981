@@ -9,7 +9,7 @@ Runs in-process (no subprocess); no llvmlite dependency.
 
 import unittest
 
-from tests.support import typecheck_source, typecheck_module
+from tests.support import typecheck_module, typecheck_source
 
 
 class TestVariableScope(unittest.TestCase):
@@ -28,11 +28,9 @@ class TestVariableScope(unittest.TestCase):
 
     def test_scope_isolation_procedure(self):
         """Procedure scope does not leak to outer scope."""
-        result = typecheck_source(
-            "PROGRAM P; "
-            "PROCEDURE P1; VAR x: INTEGER; BEGIN END; "
-            "BEGIN WRITELN(x) END."
-        )
+        result = typecheck_source("PROGRAM P; "
+                                  "PROCEDURE P1; VAR x: INTEGER; BEGIN END; "
+                                  "BEGIN WRITELN(x) END.")
         self.assertFalse(result.success)
         self.assertIn("Undefined", " ".join(str(e) for e in result.errors))
 
@@ -80,12 +78,10 @@ class TestVariableScope(unittest.TestCase):
 
     def test_shadowing_nested_scope(self):
         """Variable shadowing in nested scope is allowed."""
-        result = typecheck_source(
-            "PROGRAM P; "
-            "VAR x: INTEGER; "
-            "PROCEDURE P1; VAR x: INTEGER; BEGIN x := 1 END; "
-            "BEGIN x := 2 END."
-        )
+        result = typecheck_source("PROGRAM P; "
+                                  "VAR x: INTEGER; "
+                                  "PROCEDURE P1; VAR x: INTEGER; BEGIN x := 1 END; "
+                                  "BEGIN x := 2 END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
 
@@ -148,15 +144,13 @@ class TestTypeCompatibility(unittest.TestCase):
 
     def test_enum_set_declaration_and_membership(self):
         """SET OF an enum type resolves, and members are usable elements/values."""
-        result = typecheck_source(
-            "PROGRAM P; TYPE C = (Red, Green, Blue); VAR s: SET OF C; VAR ok: BOOLEAN; "
-            "BEGIN s := [Red, Blue]; ok := Green IN s END.")
+        result = typecheck_source("PROGRAM P; TYPE C = (Red, Green, Blue); VAR s: SET OF C; VAR ok: BOOLEAN; "
+                                  "BEGIN s := [Red, Blue]; ok := Green IN s END.")
         self.assertTrue(result.success, [e.message for e in result.errors])
 
     def test_named_const_subrange_set_base_resolves(self):
         """A SET OF lo..hi with named integer-constant bounds resolves."""
-        result = typecheck_source(
-            "PROGRAM P; CONST lo = 1; hi = 10; VAR s: SET OF lo..hi; BEGIN s := [2, 3] END.")
+        result = typecheck_source("PROGRAM P; CONST lo = 1; hi = 10; VAR s: SET OF lo..hi; BEGIN s := [2, 3] END.")
         self.assertTrue(result.success, [e.message for e in result.errors])
 
     def test_pred_typecheck(self):
@@ -182,8 +176,47 @@ class TestTypeCompatibility(unittest.TestCase):
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_abs_and_sqrt_typecheck(self):
-        """ABS accepts INTEGER/REAL and SQRT returns REAL."""
+        """ABS accepts INTEGER/REAL and SQRT/SIN/COS/LN/EXP/ARCTAN return REAL."""
         result = typecheck_source("PROGRAM P; VAR x: REAL; BEGIN x := SQRT(ABS(-5)) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+        for name in ["SIN", "COS", "LN", "EXP", "ARCTAN"]:
+            result = typecheck_source(f"PROGRAM P; VAR x: REAL; BEGIN x := {name}(4.2) END.")
+            self.assertTrue(result.success, msg=f"{name} failed: " + " ".join(str(e) for e in result.errors))
+
+    def test_trunc_typecheck(self):
+        """TRUNC accepts REAL and returns INTEGER."""
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := TRUNC(3.7) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_round_typecheck(self):
+        """ROUND accepts REAL and returns INTEGER."""
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := ROUND(1.6) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_float_typecheck(self):
+        """FLOAT accepts INTEGER and returns REAL."""
+        result = typecheck_source("PROGRAM P; VAR x: REAL; BEGIN x := FLOAT(42) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_float_rejects_real_arg(self):
+        """FLOAT requires INTEGER; REAL argument is a type error."""
+        result = typecheck_source("PROGRAM P; VAR x: REAL; BEGIN x := FLOAT(4.2) END.")
+        self.assertFalse(result.success)
+
+    def test_trunc_rejects_integer_arg(self):
+        """TRUNC requires REAL; INTEGER argument is a type error."""
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := TRUNC(3) END.")
+        self.assertFalse(result.success)
+
+    def test_round_rejects_integer_arg(self):
+        """ROUND requires REAL; INTEGER argument is a type error."""
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := ROUND(3) END.")
+        self.assertFalse(result.success)
+
+    def test_trunc_result_is_integer_usable_in_integer_context(self):
+        """TRUNC returns INTEGER; result can feed integer-only intrinsics like SUCC."""
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := SUCC(TRUNC(3.7)) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_nil_typecheck_for_pointer_assignment(self):
@@ -193,20 +226,15 @@ class TestTypeCompatibility(unittest.TestCase):
 
     def test_adr_ads_address_types_typecheck(self):
         """ADR OF and ADS OF variables accept matching address-of expressions."""
-        result = typecheck_source(
-            "PROGRAM P; VAR x: INTEGER; a: ADR OF INTEGER; s: ADS OF INTEGER; BEGIN a := ADR x; s := ADS x END."
-        )
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; a: ADR OF INTEGER; s: ADS OF INTEGER; BEGIN a := ADR x; s := ADS x END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_parameter_modes_typecheck(self):
         """VAR/VARS are writable references; CONST/CONSTS are read-only references."""
         ok = typecheck_source(
-            "PROGRAM P; PROCEDURE Q(VAR a: INTEGER; VARS b: INTEGER; CONST c: INTEGER; CONSTS d: INTEGER); BEGIN a := 1; b := 2; WRITELN(c); WRITELN(d) END; BEGIN END."
-        )
+            "PROGRAM P; PROCEDURE Q(VAR a: INTEGER; VARS b: INTEGER; CONST c: INTEGER; CONSTS d: INTEGER); BEGIN a := 1; b := 2; WRITELN(c); WRITELN(d) END; BEGIN END.")
         self.assertTrue(ok.success, msg=" ".join(str(e) for e in ok.errors))
-        bad = typecheck_source(
-            "PROGRAM P; PROCEDURE Q(CONST c: INTEGER; CONSTS d: INTEGER); BEGIN c := 1; d := 2 END; BEGIN END."
-        )
+        bad = typecheck_source("PROGRAM P; PROCEDURE Q(CONST c: INTEGER; CONSTS d: INTEGER); BEGIN c := 1; d := 2 END; BEGIN END.")
         self.assertFalse(bad.success)
         self.assertTrue(any("Cannot assign" in e.message for e in bad.errors))
 
@@ -245,9 +273,7 @@ class TestControlFlow(unittest.TestCase):
 
     def test_short_circuit_boolean_operands(self):
         """AND THEN / OR ELSE are valid for BOOLEAN operands."""
-        result = typecheck_source(
-            "PROGRAM P; VAR a, b: BOOLEAN; BEGIN IF a AND THEN b THEN WRITELN(1); IF a OR ELSE b THEN WRITELN(2) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR a, b: BOOLEAN; BEGIN IF a AND THEN b THEN WRITELN(1); IF a OR ELSE b THEN WRITELN(2) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_short_circuit_rejects_integer_operands(self):
@@ -258,31 +284,23 @@ class TestControlFlow(unittest.TestCase):
 
     def test_while_boolean_condition(self):
         """WHILE with BOOLEAN condition is valid."""
-        result = typecheck_source(
-            "PROGRAM P; VAR x: INTEGER; BEGIN x := 0; WHILE x < 10 DO x := x + 1 END."
-        )
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := 0; WHILE x < 10 DO x := x + 1 END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_while_integer_condition_error(self):
         """WHILE with INTEGER condition is an error."""
-        result = typecheck_source(
-            "PROGRAM P; VAR x: INTEGER; BEGIN WHILE x DO x := x + 1 END."
-        )
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN WHILE x DO x := x + 1 END.")
         self.assertFalse(result.success)
         self.assertIn("must be BOOLEAN", " ".join(str(e) for e in result.errors))
 
     def test_for_loop_integer_variable(self):
         """FOR with INTEGER loop variable is valid."""
-        result = typecheck_source(
-            "PROGRAM P; VAR i: INTEGER; BEGIN FOR i := 1 TO 10 DO WRITELN(i) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR i: INTEGER; BEGIN FOR i := 1 TO 10 DO WRITELN(i) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_for_loop_real_variable_error(self):
         """FOR with REAL loop variable is an error."""
-        result = typecheck_source(
-            "PROGRAM P; VAR r: REAL; BEGIN FOR r := 1.0 TO 10.0 DO WRITELN(r) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR r: REAL; BEGIN FOR r := 1.0 TO 10.0 DO WRITELN(r) END.")
         self.assertFalse(result.success)
         self.assertIn("must be INTEGER", " ".join(str(e) for e in result.errors))
 
@@ -303,16 +321,12 @@ class TestCallValidation(unittest.TestCase):
 
     def test_procedure_with_parameters(self):
         """Procedure call with correct parameters is valid."""
-        result = typecheck_source(
-            "PROGRAM P; PROCEDURE P1(x: INTEGER); BEGIN END; BEGIN P1(42) END."
-        )
+        result = typecheck_source("PROGRAM P; PROCEDURE P1(x: INTEGER); BEGIN END; BEGIN P1(42) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_integer_to_real_procedure_parameter(self):
         """INTEGER actual may flow to REAL formal parameter."""
-        result = typecheck_source(
-            "PROGRAM P; PROCEDURE P1(x: REAL); BEGIN END; BEGIN P1(42) END."
-        )
+        result = typecheck_source("PROGRAM P; PROCEDURE P1(x: REAL); BEGIN END; BEGIN P1(42) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_undefined_function_error(self):
@@ -327,11 +341,9 @@ class TestFunctionReturnTypes(unittest.TestCase):
 
     def test_mismatched_return_type_error(self):
         """Function return with wrong type is an error."""
-        result = typecheck_source(
-            "PROGRAM P; "
-            "FUNCTION F: INTEGER; BEGIN F := 3.14 END; "
-            "BEGIN END."
-        )
+        result = typecheck_source("PROGRAM P; "
+                                  "FUNCTION F: INTEGER; BEGIN F := 3.14 END; "
+                                  "BEGIN END.")
         self.assertFalse(result.success)
         self.assertIn("Cannot assign", " ".join(str(e) for e in result.errors))
 
@@ -341,9 +353,7 @@ class TestArrayTypeChecking(unittest.TestCase):
 
     def test_array_real_index_error(self):
         """Array index with REAL is an error."""
-        result = typecheck_source(
-            "PROGRAM P; VAR a: ARRAY[1..10] OF INTEGER; BEGIN a[1.5] := 42 END."
-        )
+        result = typecheck_source("PROGRAM P; VAR a: ARRAY[1..10] OF INTEGER; BEGIN a[1.5] := 42 END.")
         self.assertFalse(result.success)
         self.assertIn("Array index must be INTEGER", " ".join(str(e) for e in result.errors))
 
@@ -378,15 +388,10 @@ class TestIntegration(unittest.TestCase):
 
     def test_parameter_type_mismatch_error(self):
         """Parameter type mismatch is an error."""
-        result = typecheck_source(
-            "PROGRAM P; PROCEDURE P1(x: INTEGER); BEGIN END; BEGIN P1(1.5) END."
-        )
+        result = typecheck_source("PROGRAM P; PROCEDURE P1(x: INTEGER); BEGIN END; BEGIN P1(1.5) END.")
         self.assertFalse(result.success)
         # Error message may say "type mismatch" or similar
-        self.assertTrue(
-            not result.success,
-            msg="Expected type error on parameter mismatch"
-        )
+        self.assertTrue(not result.success, msg="Expected type error on parameter mismatch")
 
 
 class TestStringProcedures(unittest.TestCase):
@@ -394,89 +399,57 @@ class TestStringProcedures(unittest.TestCase):
 
     def test_concat_valid_types(self):
         """CONCAT with LSTRING destination and STRING source is valid."""
-        result = typecheck_source(
-            "PROGRAM P; VAR d: LSTRING(256); s: STRING(100); BEGIN CONCAT(d, s) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR d: LSTRING(256); s: STRING(100); BEGIN CONCAT(d, s) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_concat_wrong_dest_type(self):
         """CONCAT requires LSTRING destination, not STRING."""
-        result = typecheck_source(
-            "PROGRAM P; VAR d: STRING(256); s: STRING(100); BEGIN CONCAT(d, s) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR d: STRING(256); s: STRING(100); BEGIN CONCAT(d, s) END.")
         self.assertFalse(result.success)
-        self.assertTrue(
-            any('LSTRING' in str(e) for e in result.errors),
-            msg="Expected LSTRING type error in: " + " ".join(str(e) for e in result.errors)
-        )
+        self.assertTrue(any('LSTRING' in str(e) for e in result.errors), msg="Expected LSTRING type error in: " + " ".join(str(e) for e in result.errors))
 
     def test_concat_immutable_dest(self):
         """CONCAT destination must be mutable (VAR), not a constant."""
-        result = typecheck_source(
-            "PROGRAM P; VAR s: STRING(100); CONST d = 'test'; BEGIN CONCAT(d, s) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR s: STRING(100); CONST d = 'test'; BEGIN CONCAT(d, s) END.")
         self.assertFalse(result.success)
 
     def test_copylst_valid_types(self):
         """COPYLST with STRING source and LSTRING destination is valid."""
-        result = typecheck_source(
-            "PROGRAM P; VAR s: STRING(100); d: LSTRING(256); BEGIN COPYLST(s, d) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR s: STRING(100); d: LSTRING(256); BEGIN COPYLST(s, d) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_copylst_wrong_dest_type(self):
         """COPYLST requires LSTRING destination, not STRING."""
-        result = typecheck_source(
-            "PROGRAM P; VAR s: STRING(100); d: STRING(256); BEGIN COPYLST(s, d) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR s: STRING(100); d: STRING(256); BEGIN COPYLST(s, d) END.")
         self.assertFalse(result.success)
-        self.assertTrue(
-            any('LSTRING' in str(e) for e in result.errors),
-            msg="Expected LSTRING type error in: " + " ".join(str(e) for e in result.errors)
-        )
+        self.assertTrue(any('LSTRING' in str(e) for e in result.errors), msg="Expected LSTRING type error in: " + " ".join(str(e) for e in result.errors))
 
     def test_copylst_immutable_dest(self):
         """COPYLST destination must be mutable (VAR), not a constant."""
-        result = typecheck_source(
-            "PROGRAM P; VAR s: STRING(100); CONST d = 'test'; BEGIN COPYLST(s, d) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR s: STRING(100); CONST d = 'test'; BEGIN COPYLST(s, d) END.")
         self.assertFalse(result.success)
 
     def test_copystr_valid_types(self):
         """COPYSTR with STRING source and destination is valid."""
-        result = typecheck_source(
-            "PROGRAM P; VAR s: STRING(100); d: STRING(256); BEGIN COPYSTR(s, d) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR s: STRING(100); d: STRING(256); BEGIN COPYSTR(s, d) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_copystr_wrong_dest_type(self):
         """COPYSTR requires STRING destination, not LSTRING."""
-        result = typecheck_source(
-            "PROGRAM P; VAR s: STRING(100); d: LSTRING(256); BEGIN COPYSTR(s, d) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR s: STRING(100); d: LSTRING(256); BEGIN COPYSTR(s, d) END.")
         self.assertFalse(result.success)
-        self.assertTrue(
-            any('STRING' in str(e) for e in result.errors),
-            msg="Expected STRING type error in: " + " ".join(str(e) for e in result.errors)
-        )
+        self.assertTrue(any('STRING' in str(e) for e in result.errors), msg="Expected STRING type error in: " + " ".join(str(e) for e in result.errors))
 
     def test_copystr_immutable_dest(self):
         """COPYSTR destination must be mutable (VAR), not a constant."""
-        result = typecheck_source(
-            "PROGRAM P; VAR s: STRING(100); CONST d = 'test'; BEGIN COPYSTR(s, d) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR s: STRING(100); CONST d = 'test'; BEGIN COPYSTR(s, d) END.")
         self.assertFalse(result.success)
 
     def test_concat_wrong_arg_count(self):
         """CONCAT requires exactly 2 arguments."""
-        result = typecheck_source(
-            "PROGRAM P; VAR d: LSTRING(256); s: STRING(100); i: INTEGER; BEGIN CONCAT(d, s, i) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR d: LSTRING(256); s: STRING(100); i: INTEGER; BEGIN CONCAT(d, s, i) END.")
         self.assertFalse(result.success)
-        self.assertTrue(
-            any('argument' in str(e).lower() for e in result.errors),
-            msg="Expected argument count error in: " + " ".join(str(e) for e in result.errors)
-        )
+        self.assertTrue(any('argument' in str(e).lower() for e in result.errors), msg="Expected argument count error in: " + " ".join(str(e) for e in result.errors))
 
 
 class TestModuleSemantics(unittest.TestCase):
@@ -686,3 +659,245 @@ END.
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestWrdByword(unittest.TestCase):
+    """Type-checker tests for WRD and BYWORD intrinsics (item 4.7)."""
+
+    # --- WRD ---
+
+    def test_wrd_integer_returns_word(self):
+        src = """PROGRAM P(OUTPUT);
+VAR w: WORD; i: INTEGER;
+BEGIN i := 42; w := WRD(i); END."""
+        r = typecheck_source(src)
+        self.assertTrue(r.success, r.errors)
+
+    def test_wrd_word_returns_word(self):
+        # Use WRD(integer) result as the WORD source to avoid INTEGER->WORD
+        # literal assignment (a separate pre-existing limitation).
+        src = """PROGRAM P(OUTPUT);
+VAR w1, w2: WORD; i: INTEGER;
+BEGIN i := 5; w1 := WRD(i); w2 := WRD(w1); END."""
+        r = typecheck_source(src)
+        self.assertTrue(r.success, r.errors)
+
+    def test_wrd_char_returns_word(self):
+        src = """PROGRAM P(OUTPUT);
+VAR w: WORD; c: CHAR;
+BEGIN c := 'A'; w := WRD(c); END."""
+        r = typecheck_source(src)
+        self.assertTrue(r.success, r.errors)
+
+    def test_wrd_boolean_returns_word(self):
+        src = """PROGRAM P(OUTPUT);
+VAR w: WORD;
+BEGIN w := WRD(TRUE); END."""
+        r = typecheck_source(src)
+        self.assertTrue(r.success, r.errors)
+
+    def test_wrd_real_is_error(self):
+        src = """PROGRAM P(OUTPUT);
+VAR w: WORD; x: REAL;
+BEGIN x := 3.14; w := WRD(x); END."""
+        r = typecheck_source(src)
+        self.assertFalse(r.success)
+
+    def test_wrd_no_args_is_error(self):
+        src = """PROGRAM P(OUTPUT);
+VAR w: WORD;
+BEGIN w := WRD(); END."""
+        r = typecheck_source(src)
+        self.assertFalse(r.success)
+
+    def test_wrd_two_args_is_error(self):
+        src = """PROGRAM P(OUTPUT);
+VAR w: WORD;
+BEGIN w := WRD(1, 2); END."""
+        r = typecheck_source(src)
+        self.assertFalse(r.success)
+
+    # --- BYWORD ---
+
+    def test_byword_two_chars_returns_word(self):
+        # Use radix-16 literals (16#xx), not the H-suffix form
+        src = """PROGRAM P(OUTPUT);
+VAR w: WORD;
+BEGIN w := BYWORD(CHR(16#AB), CHR(16#CD)); END."""
+        r = typecheck_source(src)
+        self.assertTrue(r.success, r.errors)
+
+    def test_byword_integer_args_returns_word(self):
+        src = """PROGRAM P(OUTPUT);
+VAR w: WORD; hi, lo: INTEGER;
+BEGIN hi := 16; lo := 32; w := BYWORD(hi, lo); END."""
+        r = typecheck_source(src)
+        self.assertTrue(r.success, r.errors)
+
+    def test_byword_one_arg_is_error(self):
+        src = """PROGRAM P(OUTPUT);
+VAR w: WORD;
+BEGIN w := BYWORD(1); END."""
+        r = typecheck_source(src)
+        self.assertFalse(r.success)
+
+    def test_byword_three_args_is_error(self):
+        src = """PROGRAM P(OUTPUT);
+VAR w: WORD;
+BEGIN w := BYWORD(1, 2, 3); END."""
+        r = typecheck_source(src)
+        self.assertFalse(r.success)
+
+    def test_byword_real_arg_is_error(self):
+        src = """PROGRAM P(OUTPUT);
+VAR w: WORD; x: REAL;
+BEGIN x := 1.0; w := BYWORD(x, 0); END."""
+        r = typecheck_source(src)
+        self.assertFalse(r.success)
+
+
+class TestRetypeValidation(unittest.TestCase):
+    """Validation tests for the RETYPE intrinsic."""
+
+    def test_retype_char_to_boolean_succeeds_without_warnings(self):
+        # CHAR (1 byte) -> BOOLEAN (1 byte)
+        src = """PROGRAM P(OUTPUT);
+VAR b: BOOLEAN; c: CHAR;
+BEGIN
+    c := 'A';
+    b := RETYPE(BOOLEAN, c);
+END."""
+        r = typecheck_source(src)
+        self.assertTrue(r.success, r.errors)
+        # Verify no size warnings were emitted
+        warnings = [w for w in r.errors if w.severity == 'warning' and "Size Not Identical" in w.message]
+        self.assertEqual(len(warnings), 0)
+
+    def test_retype_size_mismatch_warns(self):
+        # INTEGER (4 bytes) -> CHAR (1 byte). Should warning, but succeed.
+        src = """PROGRAM P(OUTPUT);
+VAR c: CHAR; i: INTEGER;
+BEGIN
+    i := 42;
+    c := RETYPE(CHAR, i);
+END."""
+        r = typecheck_source(src)
+        self.assertTrue(r.success, r.errors)
+        warnings = [w for w in r.warnings if w.severity == 'warning' and "Size Not Identical" in w.message]
+        self.assertGreaterEqual(len(warnings), 1)
+
+    def test_retype_selector_validation(self):
+        src = """PROGRAM P(OUTPUT);
+TYPE
+    TArray = ARRAY[1..10] OF CHAR;
+VAR
+    c: CHAR;
+    i: INTEGER;
+BEGIN
+    c := RETYPE(TArray, i)[2];
+END."""
+        r = typecheck_source(src)
+        self.assertTrue(r.success, r.errors)
+
+
+class TestPackUnpackValidation(unittest.TestCase):
+    """Validation tests for the PACK and UNPACK intrinsics."""
+
+    def test_pack_valid(self):
+        src = """PROGRAM P(OUTPUT);
+VAR
+    a: ARRAY[1..10] OF CHAR;
+    z: PACKED ARRAY[1..5] OF CHAR;
+BEGIN
+    PACK(a, 2, z);
+END."""
+        r = typecheck_source(src)
+        self.assertTrue(r.success, r.errors)
+
+    def test_unpack_valid(self):
+        src = """PROGRAM P(OUTPUT);
+VAR
+    a: ARRAY[1..10] OF CHAR;
+    z: PACKED ARRAY[1..5] OF CHAR;
+BEGIN
+    UNPACK(z, a, 2);
+END."""
+        r = typecheck_source(src)
+        self.assertTrue(r.success, r.errors)
+
+    def test_pack_insufficient_slice_is_error(self):
+        # Slice from index 8 (len = 10 - 8 + 1 = 3) is too small for packed array z (len = 5)
+        src = """PROGRAM P(OUTPUT);
+VAR
+    a: ARRAY[1..10] OF CHAR;
+    z: PACKED ARRAY[1..5] OF CHAR;
+BEGIN
+    PACK(a, 8, z);
+END."""
+        r = typecheck_source(src)
+        self.assertFalse(r.success)
+
+    def test_pack_mismatched_types_is_error(self):
+        src = """PROGRAM P(OUTPUT);
+VAR
+    a: ARRAY[1..10] OF INTEGER;
+    z: PACKED ARRAY[1..5] OF CHAR;
+BEGIN
+    PACK(a, 1, z);
+END."""
+        r = typecheck_source(src)
+        self.assertFalse(r.success)
+
+
+class TestRecordTypeChecking(unittest.TestCase):
+    """Records previously raised an internal error during type checking
+    (resolve_type treated the field list as a dict). They must now type-check,
+    validate field access, and reject unknown fields cleanly."""
+
+    def test_record_declaration_and_field_access(self):
+        result = typecheck_source(
+            "PROGRAM P; TYPE Pt = RECORD x, y: INTEGER END; VAR p: Pt; "
+            "BEGIN p.x := 1; p.y := 2 END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_unknown_field_is_error(self):
+        result = typecheck_source(
+            "PROGRAM P; TYPE Pt = RECORD x: INTEGER END; VAR p: Pt; "
+            "BEGIN p.zzz := 1 END.")
+        self.assertFalse(result.success)
+        self.assertIn("field", " ".join(str(e) for e in result.errors).lower())
+
+    def test_nested_record_field_access(self):
+        result = typecheck_source(
+            "PROGRAM P; "
+            "TYPE Inner = RECORD m: INTEGER END; Outer = RECORD n: Inner END; "
+            "VAR o: Outer; BEGIN o.n.m := 5 END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_field_access_is_case_insensitive(self):
+        """Pascal identifiers are case-insensitive, so a field declared 'Count'
+        is reachable as 'count'/'COUNT'/'cOuNt'."""
+        result = typecheck_source(
+            "PROGRAM P; TYPE R = RECORD Count: INTEGER END; VAR r: R; "
+            "BEGIN r.count := 1; r.COUNT := 2; r.cOuNt := 3 END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_record_equivalence_is_order_sensitive(self):
+        """Two records with the same field names but different declaration
+        order have different layouts and must NOT be assignment-compatible
+        (a positional whole-record copy would otherwise swap the fields)."""
+        result = typecheck_source(
+            "PROGRAM P; "
+            "TYPE A = RECORD x, y: INTEGER END; B = RECORD y, x: INTEGER END; "
+            "VAR a: A; b: B; BEGIN a := b END.")
+        self.assertFalse(result.success)
+
+    def test_record_equivalence_same_order_case_only_difference(self):
+        """Records with identical field order/types whose names differ only in
+        case ARE equivalent (Pascal identifiers are case-insensitive)."""
+        result = typecheck_source(
+            "PROGRAM P; "
+            "TYPE A = RECORD Count, Total: INTEGER END; "
+            "B = RECORD count, total: INTEGER END; "
+            "VAR a: A; b: B; BEGIN a := b END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
