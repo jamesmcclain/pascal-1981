@@ -1068,3 +1068,41 @@ END."""
         # On little-endian systems, 16#41 (65) is the first byte.
         self.assertIn("65", out)
 
+
+class TestPackUnpackCodegen(unittest.TestCase):
+    """Runtime execution tests for the PACK and UNPACK intrinsics."""
+
+    @requires_exe
+    def test_pack_and_unpack_runtime(self):
+        src = """PROGRAM P;
+VAR
+    a: ARRAY[1..10] OF INTEGER;
+    z: PACKED ARRAY[1..5] OF INTEGER;
+    i: INTEGER;
+BEGIN
+    { Initialize unpacked array: 10, 20, 30, ... }
+    FOR i := 1 TO 10 DO
+        a[i] := i * 10;
+
+    { Pack elements a[3..7] (30, 40, 50, 60, 70) into z }
+    PACK(a, 3, z);
+
+    { Write z[2] which should be 40 }
+    WRITELN(z[2]);
+
+    { Modify z }
+    z[3] := 999;
+
+    { Unpack z back to a starting at index 5 }
+    UNPACK(z, a, 5);
+
+    { Write a[7] which should be 999 (z[3] unpacked at a[5-1+3] = a[7]) }
+    WRITELN(a[7]);
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        lines = [l.strip() for l in out.splitlines() if l.strip()]
+        self.assertEqual(lines[0], "40")
+        self.assertEqual(lines[1], "999")
+
+

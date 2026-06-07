@@ -233,7 +233,8 @@ well. This is where `CHR`/`ORD`/`ODD`/`SUCC`/`SIZEOF`/`UPPER`/`ADR` already live
     20 new).
 - [x] **4.8 — `RETYPE`.** `[INFERRED]` **M** Reinterpret cast (LLVM `bitcast`); needs care with type-checker rules. Confirm semantics.
   - Done: Added `RetypeExpr` AST node, supporting optional trailing selectors. Integrated type checker resolution with size checks (generating Warning 248 on mismatches). Designed robust codegen using stack allocation of the larger type (zero-initialized) and pointer bitcasting to eliminate buffer over-read bugs. Added tests in both type checker and codegen. Proven by `python3 -m unittest discover -s tests`.
-- [ ] **4.9 — `PACK` / `UNPACK`.** `[INFERRED]` **M** Packed-array (un)packing; inline for small, runtime loop for large. Depends on `PACKED` representation.
+- [x] **4.9 — `PACK` / `UNPACK`.** `[INFERRED]` **M** Packed-array (un)packing; inline for small, runtime loop for large. Depends on `PACKED` representation.
+  - Done: Added `packed` flag support to type system's `ArrayType` and updated `resolve_type` to propagate it. Implemented semantically complete type checking for `PACK` and `UNPACK` including mutability of output buffers, index range constraints, and bounds/size mismatch verification. Implemented code generation by generating a clean dynamic LLVM loop that performs safe index translation. Added tests verifying error validation and end-to-end execution. Proven by `python3 -m unittest discover -s tests`.
 
 ---
 

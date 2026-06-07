@@ -720,6 +720,10 @@ class Codegen:
                 self.builtin_copylst(stmt.args)
             elif lookup_name == 'COPYSTR':
                 self.builtin_copystr(stmt.args)
+            elif lookup_name == 'PACK':
+                self.builtin_pack(stmt.args)
+            elif lookup_name == 'UNPACK':
+                self.builtin_unpack(stmt.args)
             else:
                 raise CodegenError(f'Undefined procedure: {stmt.name}')
         else:
@@ -1175,11 +1179,8 @@ class Codegen:
             # If the designator is a constant, return its value directly (not a pointer)
             if not isinstance(ptr.type, ir.PointerType):
                 return ptr
-            # For string/array designators, return pointer without loading (inline aggregates)
-            from ast_nodes import LStringType as ASTLStringType
-            if isinstance(symbol.type_expr, (ResolvedLStringType, ResolvedStringType, ASTLStringType, ArrayType)):
-                return ptr  # Return pointer to aggregate
-            elif isinstance(symbol.type_expr, NamedType) and symbol.type_expr.name.upper() in {'STRING', 'LSTRING'}:
+            # For aggregate designators, return pointer without loading (inline aggregates)
+            if isinstance(ptr.type.pointee, (ir.ArrayType, ir.LiteralStructType, ir.IdentifiedStructType)):
                 return ptr  # Return pointer to aggregate
             return self.builder.load(ptr)
         elif isinstance(expr, BinOp):
@@ -2117,6 +2118,116 @@ class Codegen:
         self.builder.call(self.memset_func(), [pad_ptr, ir.Constant(ir.IntType(32), 0x20), pad_len_64])
 
         self.builder.branch(end_block)
+        self.builder.position_at_end(end_block)
+
+    def get_array_bounds(self, type_expr) -> tuple[int, int]:
+        if hasattr(type_expr, 'index_range') and type_expr.index_range:
+            low = self.eval_const_expr(type_expr.index_range.low)
+            high = self.eval_const_expr(type_expr.index_range.high) if type_expr.index_range.high else low
+            return low, high
+        elif hasattr(type_expr, 'lower_bound') and hasattr(type_expr, 'upper_bound'):
+            return type_expr.lower_bound, type_expr.upper_bound
+        return 1, 10
+
+    def builtin_pack(self, args: List[Expression]) -> None:
+        """PACK(CONST A: unpacked-array; I: index; VAR Z: packed-array)"""
+        a_arg, i_arg, z_arg = args[0], args[1], args[2]
+        
+        a_ptr = self.codegen_expr(a_arg)
+        z_ptr = self.codegen_expr(z_arg)
+        i_val = self.codegen_expr(i_arg)
+        
+        # Look up bounds
+        z_name = z_arg.name if isinstance(z_arg, (Identifier, Designator)) else ""
+        z_sym = self.scope.lookup(z_name) or self.scope.lookup(z_name.upper())
+        if z_sym and z_sym.type_expr:
+            z_low, z_high = self.get_array_bounds(z_sym.type_expr)
+        else:
+            z_low, z_high = 1, 10
+            
+        j_var = self.builder.alloca(ir.IntType(32), name='pack_j')
+        self.builder.store(ir.Constant(ir.IntType(32), z_low), j_var)
+        
+        loop_block = self.current_function.append_basic_block(name='pack_loop')
+        body_block = self.current_function.append_basic_block(name='pack_body')
+        end_block = self.current_function.append_basic_block(name='pack_end')
+        
+        self.builder.branch(loop_block)
+        self.builder.position_at_end(loop_block)
+        
+        j_val = self.builder.load(j_var)
+        cond = self.builder.icmp_signed('<=', j_val, ir.Constant(ir.IntType(32), z_high))
+        self.builder.cbranch(cond, body_block, end_block)
+        
+        self.builder.position_at_end(body_block)
+        
+        # Calculate A index: j_val - z_low + i_val
+        offset = self.builder.sub(j_val, ir.Constant(ir.IntType(32), z_low))
+        a_index = self.builder.add(offset, i_val)
+        
+        # Load A[a_index]
+        a_elem_ptr = self.builder.gep(a_ptr, [ir.Constant(ir.IntType(32), 0), a_index])
+        elem_val = self.builder.load(a_elem_ptr)
+        
+        # Store Z[j_val]
+        z_elem_ptr = self.builder.gep(z_ptr, [ir.Constant(ir.IntType(32), 0), j_val])
+        self.builder.store(elem_val, z_elem_ptr)
+        
+        # Increment J
+        next_j = self.builder.add(j_val, ir.Constant(ir.IntType(32), 1))
+        self.builder.store(next_j, j_var)
+        self.builder.branch(loop_block)
+        
+        self.builder.position_at_end(end_block)
+
+    def builtin_unpack(self, args: List[Expression]) -> None:
+        """UNPACK(CONST Z: packed-array; VAR A: unpacked-array; I: index)"""
+        z_arg, a_arg, i_arg = args[0], args[1], args[2]
+        
+        z_ptr = self.codegen_expr(z_arg)
+        a_ptr = self.codegen_expr(a_arg)
+        i_val = self.codegen_expr(i_arg)
+        
+        z_name = z_arg.name if isinstance(z_arg, (Identifier, Designator)) else ""
+        z_sym = self.scope.lookup(z_name) or self.scope.lookup(z_name.upper())
+        if z_sym and z_sym.type_expr:
+            z_low, z_high = self.get_array_bounds(z_sym.type_expr)
+        else:
+            z_low, z_high = 1, 10
+            
+        j_var = self.builder.alloca(ir.IntType(32), name='unpack_j')
+        self.builder.store(ir.Constant(ir.IntType(32), z_low), j_var)
+        
+        loop_block = self.current_function.append_basic_block(name='unpack_loop')
+        body_block = self.current_function.append_basic_block(name='unpack_body')
+        end_block = self.current_function.append_basic_block(name='unpack_end')
+        
+        self.builder.branch(loop_block)
+        self.builder.position_at_end(loop_block)
+        
+        j_val = self.builder.load(j_var)
+        cond = self.builder.icmp_signed('<=', j_val, ir.Constant(ir.IntType(32), z_high))
+        self.builder.cbranch(cond, body_block, end_block)
+        
+        self.builder.position_at_end(body_block)
+        
+        # Load Z[j_val]
+        z_elem_ptr = self.builder.gep(z_ptr, [ir.Constant(ir.IntType(32), 0), j_val])
+        elem_val = self.builder.load(z_elem_ptr)
+        
+        # Calculate A index: j_val - z_low + i_val
+        offset = self.builder.sub(j_val, ir.Constant(ir.IntType(32), z_low))
+        a_index = self.builder.add(offset, i_val)
+        
+        # Store A[a_index]
+        a_elem_ptr = self.builder.gep(a_ptr, [ir.Constant(ir.IntType(32), 0), a_index])
+        self.builder.store(elem_val, a_elem_ptr)
+        
+        # Increment J
+        next_j = self.builder.add(j_val, ir.Constant(ir.IntType(32), 1))
+        self.builder.store(next_j, j_var)
+        self.builder.branch(loop_block)
+        
         self.builder.position_at_end(end_block)
 
     # ========================================================================

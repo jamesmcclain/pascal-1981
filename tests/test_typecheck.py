@@ -861,3 +861,53 @@ END."""
         r = typecheck_source(src)
         self.assertTrue(r.success, r.errors)
 
+
+class TestPackUnpackValidation(unittest.TestCase):
+    """Validation tests for the PACK and UNPACK intrinsics."""
+
+    def test_pack_valid(self):
+        src = """PROGRAM P(OUTPUT);
+VAR
+    a: ARRAY[1..10] OF CHAR;
+    z: PACKED ARRAY[1..5] OF CHAR;
+BEGIN
+    PACK(a, 2, z);
+END."""
+        r = typecheck_source(src)
+        self.assertTrue(r.success, r.errors)
+
+    def test_unpack_valid(self):
+        src = """PROGRAM P(OUTPUT);
+VAR
+    a: ARRAY[1..10] OF CHAR;
+    z: PACKED ARRAY[1..5] OF CHAR;
+BEGIN
+    UNPACK(z, a, 2);
+END."""
+        r = typecheck_source(src)
+        self.assertTrue(r.success, r.errors)
+
+    def test_pack_insufficient_slice_is_error(self):
+        # Slice from index 8 (len = 10 - 8 + 1 = 3) is too small for packed array z (len = 5)
+        src = """PROGRAM P(OUTPUT);
+VAR
+    a: ARRAY[1..10] OF CHAR;
+    z: PACKED ARRAY[1..5] OF CHAR;
+BEGIN
+    PACK(a, 8, z);
+END."""
+        r = typecheck_source(src)
+        self.assertFalse(r.success)
+
+    def test_pack_mismatched_types_is_error(self):
+        src = """PROGRAM P(OUTPUT);
+VAR
+    a: ARRAY[1..10] OF INTEGER;
+    z: PACKED ARRAY[1..5] OF CHAR;
+BEGIN
+    PACK(a, 1, z);
+END."""
+        r = typecheck_source(src)
+        self.assertFalse(r.success)
+
+

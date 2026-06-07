@@ -107,14 +107,16 @@ class ArrayType(Type):
     element_type: Type
     lower_bound: int
     upper_bound: int
+    packed: bool = False
 
     def __str__(self) -> str:
-        return f"ARRAY[{self.lower_bound}..{self.upper_bound}] OF {self.element_type}"
+        prefix = "PACKED " if self.packed else ""
+        return f"{prefix}ARRAY[{self.lower_bound}..{self.upper_bound}] OF {self.element_type}"
 
     def equivalent_to(self, other: Type) -> bool:
         if not isinstance(other, ArrayType):
             return False
-        return (self.element_type.equivalent_to(other.element_type) and self.lower_bound == other.lower_bound and self.upper_bound == other.upper_bound)
+        return (self.element_type.equivalent_to(other.element_type) and self.lower_bound == other.lower_bound and self.upper_bound == other.upper_bound and self.packed == other.packed)
 
 
 @dataclass

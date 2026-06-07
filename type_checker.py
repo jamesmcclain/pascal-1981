@@ -96,6 +96,12 @@ class PascalTypeChecker(TypeChecker):
         copystr_type = ProcedureType('COPYSTR', [])
         self.symbol_table.define('COPYSTR', Symbol(name='COPYSTR', type=copystr_type, kind='procedure', is_mutable=False))
 
+        pack_type = ProcedureType('PACK', [])
+        self.symbol_table.define('PACK', Symbol(name='PACK', type=pack_type, kind='procedure', is_mutable=False))
+
+        unpack_type = ProcedureType('UNPACK', [])
+        self.symbol_table.define('UNPACK', Symbol(name='UNPACK', type=unpack_type, kind='procedure', is_mutable=False))
+
         # Predeclared constants.
         self.symbol_table.define('MAXINT', Symbol(name='MAXINT', type=INTEGER_TYPE, kind='const', is_mutable=False))
         self.symbol_table.define('MAXWORD', Symbol(name='MAXWORD', type=WORD_TYPE, kind='const', is_mutable=False))
@@ -948,6 +954,13 @@ class PascalTypeChecker(TypeChecker):
 
         # Look up the procedure (Pascal is case-insensitive)
         lookup_name = stmt.name.upper()
+        if lookup_name == 'PACK':
+            self._check_pack_args(stmt)
+            return
+        elif lookup_name == 'UNPACK':
+            self._check_unpack_args(stmt)
+            return
+
         sym = self.symbol_table.lookup(lookup_name) or self.symbol_table.lookup(stmt.name)
         if not sym:
             self.error(f"Undefined procedure: {stmt.name}", stmt)
@@ -1035,6 +1048,102 @@ class PascalTypeChecker(TypeChecker):
         if not isinstance(src_type, (StringType, LStringType)):
             self.error(f"CONCAT: second argument must be STRING or LSTRING, got {src_type}", stmt)
             return
+
+    def _check_pack_args(self, stmt: ProcCallStmt) -> None:
+        """Type check PACK(CONST A: unpacked-array; I: index; VAR Z: packed-array)."""
+        if len(stmt.args) != 3:
+            self.error(f"PACK expects 3 arguments, got {len(stmt.args)}", stmt)
+            return
+
+        a_arg = stmt.args[0]
+        i_arg = stmt.args[1]
+        z_arg = stmt.args[2]
+
+        a_type = self.infer_expression_type(a_arg)
+        i_type = self.infer_expression_type(i_arg)
+        z_type = self.infer_expression_type(z_arg)
+
+        if not a_type or not i_type or not z_type:
+            return
+
+        if not isinstance(a_type, ArrayType) or a_type.packed:
+            self.error(f"PACK: first argument must be an unpacked array, got {a_type}", stmt)
+            return
+
+        if not i_type.equivalent_to(INTEGER_TYPE):
+            self.error(f"PACK: second argument must be an index (INTEGER), got {i_type}", stmt)
+            return
+
+        if not isinstance(z_type, ArrayType) or not z_type.packed:
+            self.error(f"PACK: third argument must be a packed array, got {z_type}", stmt)
+            return
+
+        if not a_type.element_type.equivalent_to(z_type.element_type):
+            self.error(f"PACK: element types of arrays must be equivalent, got {a_type.element_type} and {z_type.element_type}", stmt)
+            return
+
+        # Check mutability of Z
+        if isinstance(z_arg, (Identifier, Designator)):
+            z_name = z_arg.name
+            z_sym = self.symbol_table.lookup(z_name) or self.symbol_table.lookup(z_name.upper())
+            if z_sym and not z_sym.is_mutable:
+                self.error(f"PACK: third argument '{z_name}' must be mutable (VAR parameter)", stmt)
+
+        # Compile-time bounds validation if I is constant
+        if isinstance(i_arg, IntLiteral):
+            i_val = i_arg.value
+            a_len = a_type.upper_bound - i_val + 1
+            z_len = z_type.upper_bound - z_type.lower_bound + 1
+            if a_len < z_len:
+                self.error(f"PACK: unpacked array slice from index {i_val} (length {a_len}) is too small for packed array (length {z_len})", stmt)
+
+    def _check_unpack_args(self, stmt: ProcCallStmt) -> None:
+        """Type check UNPACK(CONST Z: packed-array; VAR A: unpacked-array; I: index)."""
+        if len(stmt.args) != 3:
+            self.error(f"UNPACK expects 3 arguments, got {len(stmt.args)}", stmt)
+            return
+
+        z_arg = stmt.args[0]
+        a_arg = stmt.args[1]
+        i_arg = stmt.args[2]
+
+        z_type = self.infer_expression_type(z_arg)
+        a_type = self.infer_expression_type(a_arg)
+        i_type = self.infer_expression_type(i_arg)
+
+        if not z_type or not a_type or not i_type:
+            return
+
+        if not isinstance(z_type, ArrayType) or not z_type.packed:
+            self.error(f"UNPACK: first argument must be a packed array, got {z_type}", stmt)
+            return
+
+        if not isinstance(a_type, ArrayType) or a_type.packed:
+            self.error(f"UNPACK: second argument must be an unpacked array, got {a_type}", stmt)
+            return
+
+        if not i_type.equivalent_to(INTEGER_TYPE):
+            self.error(f"UNPACK: third argument must be an index (INTEGER), got {i_type}", stmt)
+            return
+
+        if not z_type.element_type.equivalent_to(a_type.element_type):
+            self.error(f"UNPACK: element types of arrays must be equivalent, got {z_type.element_type} and {a_type.element_type}", stmt)
+            return
+
+        # Check mutability of A
+        if isinstance(a_arg, (Identifier, Designator)):
+            a_name = a_arg.name
+            a_sym = self.symbol_table.lookup(a_name) or self.symbol_table.lookup(a_name.upper())
+            if a_sym and not a_sym.is_mutable:
+                self.error(f"UNPACK: second argument '{a_name}' must be mutable (VAR parameter)", stmt)
+
+        # Compile-time bounds validation if I is constant
+        if isinstance(i_arg, IntLiteral):
+            i_val = i_arg.value
+            a_len = a_type.upper_bound - i_val + 1
+            z_len = z_type.upper_bound - z_type.lower_bound + 1
+            if a_len < z_len:
+                self.error(f"UNPACK: unpacked array slice from index {i_val} (length {a_len}) is too small for packed array (length {z_len})", stmt)
 
     def _check_copylst_args(self, stmt: ProcCallStmt) -> None:
         """Type check COPYLST(CONST S: STRING; VAR D: LSTRING).
@@ -1527,7 +1636,7 @@ class PascalTypeChecker(TypeChecker):
                     else:
                         upper = 10  # Default if not a constant
 
-                    return ArrayType(element_type, lower, upper)
+                    return ArrayType(element_type, lower, upper, packed=getattr(type_expr, 'packed', False))
                 except:
                     return None
             return None
