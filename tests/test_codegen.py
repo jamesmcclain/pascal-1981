@@ -60,7 +60,7 @@ def build_and_run(src: str, stdin: str = "") -> tuple:
         # Compile to native executable
         exe_path = os.path.join(tmpdir, "prog")
         result = subprocess.run(
-            ["clang", ll_path, "-o", exe_path],
+            ["clang", ll_path, "-o", exe_path, "-lm"],
             capture_output=True,
             text=True
         )

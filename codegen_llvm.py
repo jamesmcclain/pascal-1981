@@ -1628,7 +1628,11 @@ class Codegen:
                 val = self.builder.sitofp(val, ir.DoubleType())
             elif not isinstance(val.type, ir.DoubleType):
                 raise CodegenError(f'SQRT not supported for type {val.type}')
-            sqrt_fn = self.module.declare_intrinsic('llvm.sqrt', [ir.DoubleType()])
+            double_ty = ir.DoubleType()
+            try:
+                sqrt_fn = self.module.get_global('sqrt')
+            except KeyError:
+                sqrt_fn = ir.Function(self.module, ir.FunctionType(double_ty, [double_ty]), name='sqrt')
             return self.builder.call(sqrt_fn, [val])
         elif lookup_name == 'TRUNC':
             # REAL -> INTEGER: truncate toward zero (manual 11-7)

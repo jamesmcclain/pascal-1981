@@ -259,7 +259,8 @@ C runtime, sibling to `runtime/fillc.c`. Loops/memory/OS, so not inline.
 Codegen builds the call; libm does the work. One consistent pattern for all six.
 Gated on REAL codegen depth (see note at end).
 
-- [ ] **6.1 — `SQRT`.** `[OBSERVED]` **M** Currently a trap (1.1). Map to libm `sqrt`.
+- [x] **6.1 — `SQRT`.** `[OBSERVED]` **M** Currently a trap (1.1). Map to libm `sqrt`.
+  - Done: Swapped the temporary LLVM intrinsic `llvm.sqrt` for standard external `libm` call pattern. Added `-lm` to the compilation options in `build_and_run`. Proven by `python -m unittest tests.test_codegen`.
 - [ ] **6.2 — `SIN`.** `[READ]` **S** libm `sin`.
 - [ ] **6.3 — `COS`.** `[READ]` **S** libm `cos`.
 - [ ] **6.4 — `LN`.** `[READ]` **S** libm `log`.
