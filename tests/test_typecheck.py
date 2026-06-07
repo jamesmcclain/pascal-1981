@@ -721,3 +721,98 @@ END.
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestWrdByword(unittest.TestCase):
+    """Type-checker tests for WRD and BYWORD intrinsics (item 4.7)."""
+
+    # --- WRD ---
+
+    def test_wrd_integer_returns_word(self):
+        src = """PROGRAM P(OUTPUT);
+VAR w: WORD; i: INTEGER;
+BEGIN i := 42; w := WRD(i); END."""
+        r = typecheck_source(src)
+        self.assertTrue(r.success, r.errors)
+
+    def test_wrd_word_returns_word(self):
+        # Use WRD(integer) result as the WORD source to avoid INTEGER->WORD
+        # literal assignment (a separate pre-existing limitation).
+        src = """PROGRAM P(OUTPUT);
+VAR w1, w2: WORD; i: INTEGER;
+BEGIN i := 5; w1 := WRD(i); w2 := WRD(w1); END."""
+        r = typecheck_source(src)
+        self.assertTrue(r.success, r.errors)
+
+    def test_wrd_char_returns_word(self):
+        src = """PROGRAM P(OUTPUT);
+VAR w: WORD; c: CHAR;
+BEGIN c := 'A'; w := WRD(c); END."""
+        r = typecheck_source(src)
+        self.assertTrue(r.success, r.errors)
+
+    def test_wrd_boolean_returns_word(self):
+        src = """PROGRAM P(OUTPUT);
+VAR w: WORD;
+BEGIN w := WRD(TRUE); END."""
+        r = typecheck_source(src)
+        self.assertTrue(r.success, r.errors)
+
+    def test_wrd_real_is_error(self):
+        src = """PROGRAM P(OUTPUT);
+VAR w: WORD; x: REAL;
+BEGIN x := 3.14; w := WRD(x); END."""
+        r = typecheck_source(src)
+        self.assertFalse(r.success)
+
+    def test_wrd_no_args_is_error(self):
+        src = """PROGRAM P(OUTPUT);
+VAR w: WORD;
+BEGIN w := WRD(); END."""
+        r = typecheck_source(src)
+        self.assertFalse(r.success)
+
+    def test_wrd_two_args_is_error(self):
+        src = """PROGRAM P(OUTPUT);
+VAR w: WORD;
+BEGIN w := WRD(1, 2); END."""
+        r = typecheck_source(src)
+        self.assertFalse(r.success)
+
+    # --- BYWORD ---
+
+    def test_byword_two_chars_returns_word(self):
+        # Use radix-16 literals (16#xx), not the H-suffix form
+        src = """PROGRAM P(OUTPUT);
+VAR w: WORD;
+BEGIN w := BYWORD(CHR(16#AB), CHR(16#CD)); END."""
+        r = typecheck_source(src)
+        self.assertTrue(r.success, r.errors)
+
+    def test_byword_integer_args_returns_word(self):
+        src = """PROGRAM P(OUTPUT);
+VAR w: WORD; hi, lo: INTEGER;
+BEGIN hi := 16; lo := 32; w := BYWORD(hi, lo); END."""
+        r = typecheck_source(src)
+        self.assertTrue(r.success, r.errors)
+
+    def test_byword_one_arg_is_error(self):
+        src = """PROGRAM P(OUTPUT);
+VAR w: WORD;
+BEGIN w := BYWORD(1); END."""
+        r = typecheck_source(src)
+        self.assertFalse(r.success)
+
+    def test_byword_three_args_is_error(self):
+        src = """PROGRAM P(OUTPUT);
+VAR w: WORD;
+BEGIN w := BYWORD(1, 2, 3); END."""
+        r = typecheck_source(src)
+        self.assertFalse(r.success)
+
+    def test_byword_real_arg_is_error(self):
+        src = """PROGRAM P(OUTPUT);
+VAR w: WORD; x: REAL;
+BEGIN x := 1.0; w := BYWORD(x, 0); END."""
+        r = typecheck_source(src)
+        self.assertFalse(r.success)

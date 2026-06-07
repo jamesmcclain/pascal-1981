@@ -906,3 +906,106 @@ class TestCodegenBuildRun(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestWrdBywordCodegen(unittest.TestCase):
+    """IR-level and run-level tests for WRD and BYWORD (item 4.7)."""
+
+    # --- IR-level: check instruction shape ---
+
+    def test_wrd_integer_emits_trunc(self):
+        """WRD of an INTEGER value lowers to a trunc to i16."""
+        src = "PROGRAM P; VAR i: INTEGER; w: WORD; BEGIN i := -1; w := WRD(i) END."
+        ir_text = compile_to_ir(src)
+        self.assertIn("trunc", ir_text)
+
+    def test_wrd_char_emits_zext(self):
+        """WRD of a CHAR value lowers to a zext to i16."""
+        src = "PROGRAM P; VAR c: CHAR; w: WORD; BEGIN c := 'A'; w := WRD(c) END."
+        ir_text = compile_to_ir(src)
+        self.assertIn("zext", ir_text)
+
+    def test_byword_emits_shl_and_or(self):
+        """BYWORD lowers to a shift-left-8 and bitwise-or."""
+        src = "PROGRAM P; VAR w: WORD; BEGIN w := BYWORD(16#AB, 16#CD) END."
+        ir_text = compile_to_ir(src)
+        self.assertIn("shl", ir_text)
+        self.assertIn("or", ir_text)
+
+    # --- Run-level: check numeric results ---
+
+    @requires_exe
+    def test_wrd_negative_one_is_maxword(self):
+        """WRD(-1) must equal MAXWORD (65535): same 16-bit pattern, unsigned."""
+        src = """PROGRAM P;
+VAR w: WORD;
+BEGIN
+  w := WRD(-1);
+  WRITELN(w)
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertIn("65535", out)
+
+    @requires_exe
+    def test_wrd_char_gives_ascii_value(self):
+        """WRD('A') equals 65 (ASCII code of A)."""
+        src = """PROGRAM P;
+VAR w: WORD;
+BEGIN
+  w := WRD('A');
+  WRITELN(w)
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertIn("65", out)
+
+    @requires_exe
+    def test_wrd_word_identity(self):
+        """WRD of a WORD value is identity."""
+        # Populate via WRD(integer) to avoid the pre-existing INTEGER->WORD
+        # literal assignment limitation.
+        src = """PROGRAM P;
+VAR w: WORD; i: INTEGER;
+BEGIN
+  i := 1000;
+  w := WRD(i);
+  w := WRD(w);
+  WRITELN(w)
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertIn("1000", out)
+
+    @requires_exe
+    def test_byword_hi_lo_assembly(self):
+        """BYWORD(0xAB, 0xCD) == 0xABCD == 43981."""
+        src = """PROGRAM P;
+VAR w: WORD;
+BEGIN
+  w := BYWORD(16#AB, 16#CD);
+  WRITELN(w)
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertIn("43981", out)
+
+    @requires_exe
+    def test_byword_lobyte_hibyte_roundtrip(self):
+        """LOBYTE(BYWORD(hi,lo)) == lo  and  HIBYTE(BYWORD(hi,lo)) == hi."""
+        # HIBYTE/LOBYTE return CHAR; use CHAR variables to avoid the
+        # pre-existing CHAR->INTEGER assignment limitation.
+        src = """PROGRAM P;
+VAR w: WORD; hi_out, lo_out: CHAR;
+BEGIN
+  w := BYWORD(16#12, 16#34);
+  hi_out := HIBYTE(w);
+  lo_out := LOBYTE(w);
+  WRITELN(ORD(hi_out));
+  WRITELN(ORD(lo_out))
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        lines = [l for l in out.splitlines() if l.strip()]
+        self.assertEqual(lines[0].strip(), "18")   # 0x12 = 18
+        self.assertEqual(lines[1].strip(), "52")   # 0x34 = 52

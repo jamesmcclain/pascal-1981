@@ -212,7 +212,25 @@ well. This is where `CHR`/`ORD`/`ODD`/`SUCC`/`SIZEOF`/`UPPER`/`ADR` already live
   - Done: added `LOWER` parsing, type checking, and codegen alongside `UPPER` so array bounds can be queried symmetrically. Proven by `python3 -m unittest tests.test_typecheck tests.test_codegen`.
 - [x] **4.6 — `HIBYTE` / `LOBYTE`.** `[READ]` **S** Shift + truncate to byte.
   - Done: registered `HIBYTE`/`LOBYTE` as byte-extraction intrinsics and lowered them to shift/truncate codegen. Proven by `python3 -m unittest tests.test_typecheck tests.test_codegen`.
-- [ ] **4.7 — `WRD` / `BYWORD`.** `[INFERRED]` **M** Word conversions; confirm exact semantics from manual body first.
+- [x] **4.7 — `WRD` / `BYWORD`.** `[READ]` **M** Word conversions.
+  Manual (11-8/11-13): `WRD(x:ordinal):WORD` reinterprets any ordinal (or
+  pointer) as an unsigned 16-bit WORD — same 16-bit pattern, so negative
+  INTEGER is equivalent to `trunc i32→i16`; `BYWORD(hi,lo):WORD` packs two
+  byte-sized ordinals by significance (hi→MSB, lo→LSB: `(hi&0xFF)<<8|(lo&0xFF)`).
+  `WRD`/`BYWORD` also appear in constant expressions (manual p.6-5); extended
+  `parse_constant` to recognise them as `FuncCall` nodes so the constant-folder
+  can evaluate them at compile time.
+  Also corrected `HIBYTE`/`LOBYTE` to accept `WORD` arguments (manual 11-12:
+  "integer-word" parameter type); previously only `INTEGER` was accepted.
+  - Done: registered both in type checker (`_setup_builtins`), added inference
+    logic (WRD: any ordinal or pointer→WORD; BYWORD: 2 byte-sized ordinals→WORD;
+    REAL rejected), extended `eval_const_expr` in codegen, added IR lowering
+    (WRD: `trunc`/identity/`zext` by width; BYWORD: mask+shl+or), and extended
+    `parse_constant` for constant-expression usage. Fixtures:
+    `should_pass/wrd_basic.pas`, `should_pass/wrd_in_const.pas`,
+    `should_fail/wrd_real_arg.pas`. Proven by
+    `python -m unittest tests.test_typecheck tests.test_codegen` (172 tests,
+    20 new).
 - [ ] **4.8 — `RETYPE`.** `[INFERRED]` **M** Reinterpret cast (LLVM `bitcast`); needs care with type-checker rules. Confirm semantics.
 - [ ] **4.9 — `PACK` / `UNPACK`.** `[INFERRED]` **M** Packed-array (un)packing; inline for small, runtime loop for large. Depends on `PACKED` representation.
 

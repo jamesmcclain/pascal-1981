@@ -818,6 +818,17 @@ class Parser:
         if kind == 'IDENTIFIER':
             name = self.current().lexeme
             self.pos += 1
+            # WRD(x) and BYWORD(hi,lo) may appear as constant expressions
+            # (manual p.6-5, p.11-8); parse them as FuncCall nodes so the
+            # constant-folder in codegen can evaluate them at compile time.
+            if name.upper() in {'WRD', 'BYWORD'} and self.current().kind == 'LPAREN':
+                self.pos += 1  # consume '('
+                args = [self.parse_constant()]
+                while self.current().kind == 'COMMA':
+                    self.pos += 1
+                    args.append(self.parse_constant())
+                self.expect('RPAREN')
+                return FuncCall(name=name, args=args)
             return Identifier(name)
         if kind in {'PLUS', 'MINUS'}:
             sign = self.current().kind

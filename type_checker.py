@@ -135,6 +135,11 @@ class PascalTypeChecker(TypeChecker):
         self.symbol_table.define('HIBYTE', Symbol(name='HIBYTE', type=hibyte_type, kind='function', is_mutable=False))
         lobyte_type = FunctionType('LOBYTE', [('n', INTEGER_TYPE)], CHAR_TYPE)
         self.symbol_table.define('LOBYTE', Symbol(name='LOBYTE', type=lobyte_type, kind='function', is_mutable=False))
+        # WRD / BYWORD functions (return WORD)
+        wrd_type = FunctionType('WRD', [('x', INTEGER_TYPE)], WORD_TYPE)  # placeholder sig; type-checker special-cases
+        self.symbol_table.define('WRD', Symbol(name='WRD', type=wrd_type, kind='function', is_mutable=False))
+        byword_type = FunctionType('BYWORD', [('hi', CHAR_TYPE), ('lo', CHAR_TYPE)], WORD_TYPE)  # placeholder sig
+        self.symbol_table.define('BYWORD', Symbol(name='BYWORD', type=byword_type, kind='function', is_mutable=False))
 
         # TRUNC / ROUND functions (REAL -> INTEGER)
         trunc_type = FunctionType('TRUNC', [('x', REAL_TYPE)], INTEGER_TYPE)
@@ -1266,11 +1271,42 @@ class PascalTypeChecker(TypeChecker):
                     self.error(f"Function '{lookup_name}' expects 1 argument, got {len(expr.args)}", expr)
                     return None
                 arg_type = self.infer_expression_type(expr.args[0])
-                if arg_type == INTEGER_TYPE:
+                if arg_type in (INTEGER_TYPE, WORD_TYPE):
                     return CHAR_TYPE
                 if arg_type:
-                    self.error(f"Argument 1 type mismatch: expected INTEGER, got {arg_type}", expr)
+                    self.error(f"Argument 1 type mismatch: expected INTEGER or WORD, got {arg_type}", expr)
                 return None
+            if lookup_name == 'WRD':
+                if len(expr.args) != 1:
+                    self.error(f"WRD expects 1 argument, got {len(expr.args)}", expr)
+                    return None
+                arg_type = self.infer_expression_type(expr.args[0])
+                if isinstance(arg_type, PointerType):
+                    return WORD_TYPE
+                if isinstance(arg_type, EnumType):
+                    return WORD_TYPE
+                if arg_type in (INTEGER_TYPE, WORD_TYPE, CHAR_TYPE, BOOLEAN_TYPE):
+                    return WORD_TYPE
+                if arg_type == REAL_TYPE:
+                    self.error("WRD: REAL argument not supported (argument must be an ordinal type or pointer)", expr)
+                    return None
+                if arg_type:
+                    self.error(f"WRD: unsupported argument type {arg_type}", expr)
+                return None
+            if lookup_name == 'BYWORD':
+                if len(expr.args) != 2:
+                    self.error(f"BYWORD expects 2 arguments, got {len(expr.args)}", expr)
+                    return None
+                for i, arg in enumerate(expr.args):
+                    arg_type = self.infer_expression_type(arg)
+                    if arg_type == REAL_TYPE:
+                        self.error(f"BYWORD: argument {i+1} must be a byte-sized ordinal type, got REAL", expr)
+                        return None
+                    if arg_type and not isinstance(arg_type, (EnumType,)) and arg_type not in (
+                            INTEGER_TYPE, WORD_TYPE, CHAR_TYPE, BOOLEAN_TYPE):
+                        self.error(f"BYWORD: argument {i+1} must be an ordinal type, got {arg_type}", expr)
+                        return None
+                return WORD_TYPE
             if lookup_name in {'TRUNC', 'ROUND'}:
                 if len(expr.args) != 1:
                     self.error(f"Function '{lookup_name}' expects 1 argument, got {len(expr.args)}", expr)

@@ -1519,6 +1519,44 @@ class Codegen:
                 raise CodegenError(f'{lookup_name} not supported for type {val.type}')
             shifted = self.builder.lshr(val, ir.Constant(val.type, 8)) if lookup_name == 'HIBYTE' else val
             return self.builder.trunc(shifted, ir.IntType(8))
+        elif lookup_name == 'WRD':
+            val = self.codegen_expr(expr.args[0])
+            vt = val.type
+            if isinstance(vt, ir.DoubleType):
+                raise CodegenError('WRD: REAL argument not supported')
+            elif isinstance(vt, ir.PointerType):
+                # pointer → integer → truncate to 16-bit WORD
+                val = self.builder.ptrtoint(val, ir.IntType(32))
+                return self.builder.trunc(val, ir.IntType(16))
+            elif isinstance(vt, ir.IntType):
+                w = vt.width
+                if w > 16:
+                    # Same 16-bit two's-complement pattern: trunc handles
+                    # "add MAXWORD+1 if negative" without a branch
+                    return self.builder.trunc(val, ir.IntType(16))
+                elif w == 16:
+                    return val  # WORD → WORD: identity
+                else:
+                    # CHAR (i8) / BOOLEAN (i8) / small enum → zero-extend
+                    return self.builder.zext(val, ir.IntType(16))
+            raise CodegenError(f'WRD: unsupported value type {vt}')
+        elif lookup_name == 'BYWORD':
+            hi_val = self.codegen_expr(expr.args[0])
+            lo_val = self.codegen_expr(expr.args[1])
+            def _to_i16(v: ir.Value) -> ir.Value:
+                """Widen or narrow any integer value to i16."""
+                w = v.type.width
+                if w < 16:
+                    return self.builder.zext(v, ir.IntType(16))
+                if w > 16:
+                    return self.builder.trunc(v, ir.IntType(16))
+                return v
+            hi16 = self.builder.and_(_to_i16(hi_val), ir.Constant(ir.IntType(16), 0x00FF))
+            lo16 = self.builder.and_(_to_i16(lo_val), ir.Constant(ir.IntType(16), 0x00FF))
+            return self.builder.or_(
+                self.builder.shl(hi16, ir.Constant(ir.IntType(16), 8)),
+                lo16
+            )
         elif lookup_name == 'SQRT':
             val = self.codegen_expr(expr.args[0])
             if isinstance(val.type, ir.IntType):
@@ -2081,6 +2119,19 @@ class Codegen:
                     return left // right if right != 0 else 0
                 elif expr.op == 'MOD':
                     return left % right if right != 0 else 0
+        elif isinstance(expr, FuncCall):
+            func_name = expr.name.upper() if hasattr(expr, 'name') else ''
+            if func_name == 'WRD':
+                raw = self.eval_const_expr(expr.args[0])
+                return int(raw) & 0xFFFF
+            elif func_name == 'BYWORD':
+                hi = int(self.eval_const_expr(expr.args[0])) & 0xFF
+                lo = int(self.eval_const_expr(expr.args[1])) & 0xFF
+                return (hi << 8) | lo
+            elif func_name == 'ORD':
+                return int(self.eval_const_expr(expr.args[0]))
+            elif func_name == 'CHR':
+                return int(self.eval_const_expr(expr.args[0])) & 0xFF
         raise CodegenError(f'Cannot evaluate constant expression: {type(expr).__name__}')
 
     def unique_name(self, prefix: str) -> str:
