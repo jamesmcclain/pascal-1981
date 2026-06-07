@@ -1063,6 +1063,101 @@ END."""
         self.assertIn("0", out)
 
 
+class TestEnumCodegen(unittest.TestCase):
+    """First-class enum support (checklist 9.8): SUCC/PRED, CASE, FOR, WRITE."""
+
+    ENUM = "TYPE Color = (Red, Green, Blue);"
+
+    @requires_exe
+    def test_enum_succ_pred_runtime(self):
+        src = f"""PROGRAM P;
+{self.ENUM}
+VAR c: Color;
+BEGIN
+    c := Green;
+    c := SUCC(c);
+    WRITELN(ORD(c));
+    c := PRED(PRED(c));
+    WRITELN(ORD(c))
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.split(), ["2", "0"])
+
+    @requires_exe
+    def test_enum_case_runtime(self):
+        src = f"""PROGRAM P;
+{self.ENUM}
+VAR c: Color;
+BEGIN
+    c := Green;
+    CASE c OF
+        Red: WRITELN(1);
+        Green: WRITELN(2);
+        Blue: WRITELN(3)
+    END
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertIn("2", out)
+
+    @requires_exe
+    def test_enum_for_loop_runtime(self):
+        src = f"""PROGRAM P;
+{self.ENUM}
+VAR c: Color;
+BEGIN
+    FOR c := Red TO Blue DO WRITELN(ORD(c))
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.split(), ["0", "1", "2"])
+
+    @requires_exe
+    def test_enum_write_name_runtime(self):
+        """WRITE of an enum variable prints the symbolic member name."""
+        src = f"""PROGRAM P;
+{self.ENUM}
+VAR c: Color;
+BEGIN
+    c := Green;
+    WRITELN(c)
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertIn("Green", out)
+
+    @requires_exe
+    def test_enum_write_names_in_for_loop_runtime(self):
+        src = f"""PROGRAM P;
+{self.ENUM}
+VAR c: Color;
+BEGIN
+    FOR c := Red TO Blue DO WRITELN(c)
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.split(), ["Red", "Green", "Blue"])
+
+    @requires_exe
+    def test_enum_write_bare_member_literal_runtime(self):
+        src = f"""PROGRAM P;
+{self.ENUM}
+BEGIN
+    WRITELN(Blue)
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertIn("Blue", out)
+
+    def test_enum_write_emits_name_table(self):
+        """IR-level: WRITE of an enum value builds an i8* name table and prints
+        with %s rather than emitting the bare ordinal with %d."""
+        src = f"PROGRAM P; {self.ENUM} VAR c: Color; BEGIN c := Red; WRITELN(c) END."
+        ir_text = compile_to_ir(src)
+        self.assertIn("enumtab", ir_text)
+
+
 class TestPackUnpackCodegen(unittest.TestCase):
     """Runtime execution tests for the PACK and UNPACK intrinsics."""
 

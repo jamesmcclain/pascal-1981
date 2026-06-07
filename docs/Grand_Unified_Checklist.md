@@ -428,11 +428,46 @@ the biggest single chunk; expect it to need its own design pass.
   `ORIGIN(c)` and any `PORT(addr)`-style attribute syntax remain intentionally
   out of scope until the manual's prose and grammar are reconciled more fully.
 
-- [ ] **9.8 — Full Enum support.** `[INFERRED]` **M**
+- [x] **9.8 — Full Enum support.** `[INFERRED]` **M**
   Enum-based sets (9.6) now work because they resolve to `i32` ordinals, but
   the compiler lacks first-class enum support: `SUCC`/`PRED` on enums, `CASE`
   statements over enums, enum-controlled `FOR` loops, and `WRITE` of enum names
   all need dedicated paths to support the `EnumType` introduced in 9.6.
+  - Done: enums lower to `i32`, so the codegen for `SUCC`/`PRED`, `ORD`, `CASE`,
+    and `FOR` already operated correctly on the ordinal; the gaps were in the
+    type checker plus one real codegen feature (WRITE-by-name).
+    (1) **`SUCC`/`PRED`** now accept any ordinal type and return that same type
+    (so `c := SUCC(c)` keeps its enum type) instead of demanding `INTEGER`.
+    (2) **`CASE`** type-checking was a no-op `TODO`; it now infers the selector
+    type and checks every label (and range endpoint) for compatibility, so
+    `CASE c OF Red: ...` is validated and a wrong-enum label is rejected. The
+    check is lenient (silent on un-inferable types, bidirectional `can_assign`)
+    so existing INTEGER/CHAR cases are unaffected. (3) **`FOR`** now accepts any
+    ordinal control variable with assignment-compatible bounds (`FOR c := Red TO
+    Blue`), replacing the hard INTEGER-only rule. (4) **`WRITE`/`WRITELN`** of an
+    enum value now prints the symbolic member name: codegen emits a cached
+    per-enum `[n x i8*]` name table, indexes it by the runtime ordinal, and
+    prints the resulting pointer with `%s`. Covers enum variables, enum
+    designators, and bare member literals (`WRITE(Blue)`).
+  - Also in scope (necessary supporting fix, noted per the strike-don't-delete
+    convention): **`ORD`** previously accepted only `CHAR`; it now accepts any
+    ordinal type (enums included) and returns `INTEGER`. This is what makes an
+    enum `FOR` body able to use the ordinal and is core to first-class enum use.
+  - Does NOT cover: printing the *name* of an arbitrary enum-typed expression
+    such as `WRITE(SUCC(c))` — codegen has no per-expression Pascal type, so
+    only enum variables/designators/member-literals print by name; other
+    enum-typed expressions still print the ordinal. Also unchanged: `READ` of an
+    enum (no enum input parsing). These are intentionally out of scope here.
+  - Existing-behavior change: a non-ordinal `FOR` control variable (e.g. `REAL`)
+    is still rejected, but the message is now "FOR loop variable must be an
+    ordinal type" rather than "must be INTEGER"; the one test asserting the old
+    wording was updated accordingly.
+  - Proven by `python -m unittest tests.test_parser tests.test_typecheck
+    tests.test_codegen tests.test_integration tests.test_codegen_strings_bounds`
+    (262 tests). New tests: `TestEnumCodegen` (SUCC/PRED, CASE, FOR, WRITE-name
+    variable/loop/bare-literal runtime, plus an IR-level name-table check) and
+    `TestEnumValidation` (valid enum FOR/SUCC/PRED/ORD/CASE, plus
+    `SUCC` on REAL and wrong-enum CASE label rejections).
 
 - [x] **9.9** `RETYPE` on a pointer value is ambiguous. When the inner expression is already a pointer type, the code bitcasts the pointer and loads through it — reinterpreting the pointee, not the pointer's address bits. That's correct when the "pointer" is an aggregate's address (array/string), but if someone retypes an actual Pascal `^T` variable, they'd reasonably expect the address bits reinterpreted, not a deref. This is the codebase's existing aggregate-vs-pointer-value conflation, but RETYPE makes it user-reachable, so at least a guard or comment is warranted.
   - Done: the `RetypeExpr` codegen no longer branches on the LLVM type alone.

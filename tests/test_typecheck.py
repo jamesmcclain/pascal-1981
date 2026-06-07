@@ -302,7 +302,7 @@ class TestControlFlow(unittest.TestCase):
         """FOR with REAL loop variable is an error."""
         result = typecheck_source("PROGRAM P; VAR r: REAL; BEGIN FOR r := 1.0 TO 10.0 DO WRITELN(r) END.")
         self.assertFalse(result.success)
-        self.assertIn("must be INTEGER", " ".join(str(e) for e in result.errors))
+        self.assertIn("must be an ordinal type", " ".join(str(e) for e in result.errors))
 
 
 class TestCallValidation(unittest.TestCase):
@@ -754,6 +754,45 @@ VAR w: WORD; x: REAL;
 BEGIN x := 1.0; w := BYWORD(x, 0); END."""
         r = typecheck_source(src)
         self.assertFalse(r.success)
+
+
+class TestEnumValidation(unittest.TestCase):
+    """First-class enum type-checking (checklist 9.8)."""
+
+    ENUM = "TYPE Color = (Red, Green, Blue);"
+
+    def test_enum_for_loop_valid(self):
+        result = typecheck_source(
+            f"PROGRAM P; {self.ENUM} VAR c: Color; BEGIN FOR c := Red TO Blue DO WRITELN(c) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_enum_succ_pred_valid(self):
+        result = typecheck_source(
+            f"PROGRAM P; {self.ENUM} VAR c: Color; BEGIN c := SUCC(Red); c := PRED(Blue) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_succ_on_real_is_error(self):
+        result = typecheck_source("PROGRAM P; VAR r: REAL; BEGIN r := SUCC(1.0) END.")
+        self.assertFalse(result.success)
+        self.assertIn("ordinal type", " ".join(str(e) for e in result.errors))
+
+    def test_ord_on_enum_valid(self):
+        result = typecheck_source(
+            f"PROGRAM P; {self.ENUM} VAR i: INTEGER; BEGIN i := ORD(Green) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_case_label_wrong_enum_is_error(self):
+        result = typecheck_source(
+            f"PROGRAM P; {self.ENUM} TYPE Fruit = (Apple, Pear); VAR c: Color; "
+            "BEGIN c := Red; CASE c OF Apple: WRITELN(1) END END.")
+        self.assertFalse(result.success)
+        self.assertIn("CASE label", " ".join(str(e) for e in result.errors))
+
+    def test_case_over_enum_valid(self):
+        result = typecheck_source(
+            f"PROGRAM P; {self.ENUM} VAR c: Color; "
+            "BEGIN c := Green; CASE c OF Red: WRITELN(1); Green: WRITELN(2); Blue: WRITELN(3) END END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
 
 class TestRetypeValidation(unittest.TestCase):

@@ -97,6 +97,12 @@ class Codegen:
         self.current_interface_decls: Dict[str, Declaration] = {}
         self.proc_param_modes: Dict[str, List[Optional[str]]] = {}
         self.loop_stack: List[LoopContext] = []
+        # Enum support (checklist 9.8): map each enum member (UPPER) to the full
+        # ordered member-name list of its enum so WRITE can print the symbolic
+        # name of a bare member literal; cache the per-enum `[n x i8*]` name
+        # tables so each enum emits its name strings only once.
+        self.enum_member_names: Dict[str, List[str]] = {}
+        self._enum_name_tables: Dict[str, ir.GlobalVariable] = {}
         self.verbose = verbose
 
     def _log(self, msg: str) -> None:
@@ -360,6 +366,9 @@ class Codegen:
         if isinstance(decl.type_expr, EnumType):
             for ordinal, member in enumerate(decl.type_expr.values):
                 self.constants[member.upper()] = ordinal
+                # Remember which enum each member belongs to so WRITE can print
+                # the symbolic name of a bare member literal (checklist 9.8).
+                self.enum_member_names[member.upper()] = list(decl.type_expr.values)
 
     def get_string_type_info(self, t: Type) -> tuple[bool, int, bool]:
         """Returns (is_str, max_len, is_lstring) for any AST Type or Resolved Type."""
@@ -1791,6 +1800,17 @@ class Codegen:
 
             val = self.codegen_expr(expr)
 
+            # Enum value printed by symbolic name (checklist 9.8): index the
+            # per-enum name table by the runtime ordinal and print the resulting
+            # i8* with %s. The i8* flows through the format logic below, which
+            # already maps a char pointer to %s.
+            enum_names = self.write_enum_names(expr)
+            if enum_names is not None:
+                table = self.enum_name_table(enum_names)
+                zero = ir.Constant(ir.IntType(32), 0)
+                name_ptr = self.builder.gep(table, [zero, val])
+                val = self.builder.load(name_ptr)
+
             # Check if it is a string variable (non-literal)
             is_string_var = False
             is_lstring_var = False
@@ -2231,6 +2251,60 @@ class Codegen:
             seen.add(key)
             type_expr = self.type_aliases[key]
         return type_expr
+
+    # ------------------------------------------------------------------
+    # Enum support (checklist 9.8)
+    # ------------------------------------------------------------------
+    def enum_value_list(self, type_expr) -> Optional[List[str]]:
+        """Return the ordered member names if ``type_expr`` is (or aliases) an
+        enum type, else ``None``. Enums lower to i32 ordinals; this recovers the
+        symbolic names for WRITE."""
+        t = self.resolve_type_alias(type_expr)
+        if isinstance(t, EnumType):  # AST EnumType carries `.values`
+            return list(t.values)
+        return None
+
+    def write_enum_names(self, expr) -> Optional[List[str]]:
+        """If a WRITE argument denotes an enum value (an enum variable, an enum
+        designator without further selectors, or a bare enum member literal),
+        return the member-name list so it can be printed by name. Returns
+        ``None`` for anything else — notably arbitrary enum-typed *expressions*
+        (e.g. ``SUCC(c)``), which still print as their ordinal because codegen
+        does not carry per-expression Pascal types."""
+        if isinstance(expr, (Identifier, Designator)) and not getattr(expr, 'selectors', None):
+            sym = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
+            if sym is not None and sym.type_expr is not None:
+                names = self.enum_value_list(sym.type_expr)
+                if names:
+                    return names
+            # Bare enum member literal, e.g. WRITE(Red).
+            return self.enum_member_names.get(expr.name.upper())
+        return None
+
+    def enum_name_table(self, names: List[str]) -> ir.GlobalVariable:
+        """Get (or build once) a constant ``[n x i8*]`` table of pointers to the
+        null-terminated member-name strings for an enum, indexable by ordinal."""
+        key = '\x00'.join(names)
+        cached = self._enum_name_tables.get(key)
+        if cached is not None:
+            return cached
+        i8 = ir.IntType(8)
+        i8p = ir.PointerType(i8)
+        zero = ir.Constant(ir.IntType(32), 0)
+        ptrs = []
+        for nm in names:
+            data = bytearray(nm.encode('utf-8') + b'\0')
+            const = ir.Constant(ir.ArrayType(i8, len(data)), data)
+            g = ir.GlobalVariable(self.module, const.type, name=self.unique_name('enumname'))
+            g.initializer = const
+            g.global_constant = True
+            ptrs.append(g.gep([zero, zero]))
+        table_type = ir.ArrayType(i8p, len(names))
+        table = ir.GlobalVariable(self.module, table_type, name=self.unique_name('enumtab'))
+        table.global_constant = True
+        table.initializer = ir.Constant(table_type, ptrs)
+        self._enum_name_tables[key] = table
+        return table
 
     def array_lower_bound(self, type_expr) -> tuple[Optional[int], Any]:
         """For a (possibly aliased) array type, return ``(lower_bound, element_type)``.

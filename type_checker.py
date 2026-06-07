@@ -824,26 +824,41 @@ class PascalTypeChecker(TypeChecker):
         if stmt.else_branch:
             self.check_statement(stmt.else_branch)
 
+    def _is_ordinal_type(self, t) -> bool:
+        """Ordinal types are the ones valid as FOR control variables, CASE
+        selectors, and SUCC/PRED/ORD operands: INTEGER, WORD, CHAR, BOOLEAN and
+        any enumerated type (checklist 9.8)."""
+        return isinstance(t, EnumType) or t in (INTEGER_TYPE, WORD_TYPE, CHAR_TYPE, BOOLEAN_TYPE)
+
     def check_for_stmt(self, stmt: ForStmt) -> None:
         """Type check a FOR statement."""
-        # Loop variable must be INTEGER
+        # The control variable must be an ordinal type (INTEGER, CHAR, BOOLEAN,
+        # WORD, or an enum). Enum-controlled loops are valid: enum ordinals are
+        # contiguous, so `FOR c := Red TO Blue` iterates the members in order.
+        var_type = None
         if stmt.var:
             sym = self.symbol_table.lookup(stmt.var)
             if not sym:
                 self.error(f"Undefined variable: {stmt.var}", stmt)
-            elif not sym.type.equivalent_to(INTEGER_TYPE):
-                self.error(f"FOR loop variable must be INTEGER, got {sym.type}", stmt)
+            else:
+                var_type = sym.type
+                if not self._is_ordinal_type(var_type):
+                    self.error(f"FOR loop variable must be an ordinal type, got {var_type}", stmt)
+                    var_type = None
 
-        # Loop bounds must be INTEGER
-        if stmt.start:
-            start_type = self.infer_expression_type(stmt.start)
-            if start_type and not start_type.equivalent_to(INTEGER_TYPE):
-                self.error(f"FOR start bound must be INTEGER, got {start_type}", stmt)
-
-        if stmt.end:
-            end_type = self.infer_expression_type(stmt.end)
-            if end_type and not end_type.equivalent_to(INTEGER_TYPE):
-                self.error(f"FOR end bound must be INTEGER, got {end_type}", stmt)
+        # Each bound must be assignment-compatible with the control variable
+        # (e.g. enum bounds for an enum control variable).
+        for bound, which in ((stmt.start, 'start'), (stmt.end, 'end')):
+            if bound is None:
+                continue
+            bound_type = self.infer_expression_type(bound)
+            if bound_type is None:
+                continue
+            if var_type is not None:
+                if not (can_assign(bound_type, var_type) or can_assign(var_type, bound_type)):
+                    self.error(f"FOR {which} bound type {bound_type} is incompatible with loop variable type {var_type}", stmt)
+            elif stmt.var is None and not self._is_ordinal_type(bound_type):
+                self.error(f"FOR {which} bound must be an ordinal type, got {bound_type}", stmt)
 
         # Check loop body
         if stmt.body:
@@ -873,9 +888,28 @@ class PascalTypeChecker(TypeChecker):
                 self.check_statement(s)
 
     def check_case_stmt(self, stmt: CaseStmt) -> None:
-        """Type check a CASE statement."""
-        # TODO: Check selector type and case value types
-        pass
+        """Type check a CASE statement.
+
+        The selector must be an ordinal value and each case label (or range
+        endpoint) must be compatible with it — this is what makes `CASE c OF
+        Red: ...` over an enum a checked construct (checklist 9.8). The check is
+        deliberately lenient: it stays silent when a type can't be inferred, and
+        accepts compatibility in either direction so INTEGER/WORD/CHAR literal
+        labels are not falsely rejected against a related selector type.
+        """
+        selector_type = self.infer_expression_type(stmt.expr)
+        for element in stmt.elements:
+            for label in element.constants:
+                endpoints = (label.low, label.high) if isinstance(label, RangeExpr) else (label,)
+                for endpoint in endpoints:
+                    label_type = self.infer_expression_type(endpoint)
+                    if selector_type and label_type and not (
+                            can_assign(label_type, selector_type) or can_assign(selector_type, label_type)):
+                        self.error(f"CASE label type {label_type} is incompatible with selector type {selector_type}", stmt)
+            if element.stmt:
+                self.check_statement(element.stmt)
+        if stmt.otherwise:
+            self.check_statement(stmt.otherwise)
 
     def check_return_stmt(self, stmt: ReturnStmt) -> None:
         """Type check a RETURN statement."""
@@ -1422,10 +1456,26 @@ class PascalTypeChecker(TypeChecker):
                     self.error(f"Function '{lookup_name}' expects 1 argument, got {len(expr.args)}", expr)
                     return None
                 arg_type = self.infer_expression_type(expr.args[0])
-                if arg_type == INTEGER_TYPE:
+                if arg_type is None:
+                    return None
+                # SUCC/PRED are defined on any ordinal type and yield the same
+                # type (checklist 9.8: enums included).
+                if isinstance(arg_type, EnumType) or arg_type in (INTEGER_TYPE, WORD_TYPE, CHAR_TYPE, BOOLEAN_TYPE):
+                    return arg_type
+                self.error(f"Argument 1 type mismatch: {lookup_name} expects an ordinal type, got {arg_type}", expr)
+                return None
+            if lookup_name == 'ORD':
+                if len(expr.args) != 1:
+                    self.error(f"Function 'ORD' expects 1 argument, got {len(expr.args)}", expr)
+                    return None
+                arg_type = self.infer_expression_type(expr.args[0])
+                if arg_type is None:
+                    return None
+                # ORD maps any ordinal value to its INTEGER ordinal position
+                # (checklist 9.8: enums included).
+                if isinstance(arg_type, EnumType) or arg_type in (INTEGER_TYPE, WORD_TYPE, CHAR_TYPE, BOOLEAN_TYPE):
                     return INTEGER_TYPE
-                if arg_type:
-                    self.error(f"Argument 1 type mismatch: expected INTEGER, got {arg_type}", expr)
+                self.error(f"Argument 1 type mismatch: ORD expects an ordinal type, got {arg_type}", expr)
                 return None
             if lookup_name in {'HIBYTE', 'LOBYTE'}:
                 if len(expr.args) != 1:
