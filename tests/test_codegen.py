@@ -1020,6 +1020,48 @@ END."""
         # On little-endian systems, 16#41 (65) is the first byte.
         self.assertIn("65", out)
 
+    def test_retype_pointer_value_reinterprets_bits_not_pointee(self):
+        """Checklist 9.9: RETYPE of a genuine ``^T`` pointer must reinterpret the
+        pointer's address bits, NOT dereference it. The fixed lowering spills the
+        loaded pointer to a slot and bitcasts the slot (pointer-to-pointer);
+        the old buggy path bitcast the pointer value directly and loaded through
+        it (a hidden dereference)."""
+        src = ("PROGRAM P; TYPE PInt = ^INTEGER; VAR p: PInt; w: WORD; "
+               "BEGIN w := RETYPE(WORD, p) END.")
+        ir_text = compile_to_ir(src)
+        # Pointer value is spilled to a slot, and the *slot* (i32**) is bitcast.
+        self.assertIn("alloca i32*", ir_text)
+        self.assertIn("bitcast i32**", ir_text)
+
+    def test_retype_aggregate_address_still_loads_through(self):
+        """Checklist 9.9 regression guard: retyping an aggregate (a STRING here,
+        which lowers to an address-of-bytes pointer) must keep reinterpreting the
+        pointee in place — i.e. bitcast the aggregate address and load through
+        it, with no pointer spill."""
+        src = ("PROGRAM P; VAR s: STRING(4); i: INTEGER; "
+               "BEGIN i := RETYPE(INTEGER, s) END.")
+        ir_text = compile_to_ir(src)
+        self.assertIn("bitcast [4 x i8]*", ir_text)
+        # No spill of an aggregate pointer to a slot on this path.
+        self.assertNotIn("alloca [4 x i8]*", ir_text)
+
+    @requires_exe
+    def test_retype_nil_pointer_does_not_dereference(self):
+        """A NIL pointer retyped to an ordinal must yield 0 (its address bits),
+        not segfault. The buggy load-through path dereferenced NIL and crashed;
+        the fixed path reinterprets the null bits and prints 0."""
+        src = """PROGRAM P;
+TYPE PInt = ^INTEGER;
+VAR p: PInt; n: INTEGER;
+BEGIN
+    p := NIL;
+    n := RETYPE(INTEGER, p);
+    WRITELN(n)
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertIn("0", out)
+
 
 class TestPackUnpackCodegen(unittest.TestCase):
     """Runtime execution tests for the PACK and UNPACK intrinsics."""

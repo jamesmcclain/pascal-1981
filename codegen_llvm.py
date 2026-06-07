@@ -1235,10 +1235,44 @@ class Codegen:
                     return sum(llvm_type_size(f) for f in ty.elements)
                 return 4
 
-            # 3. Get pointer to the memory representation of target size
-            if isinstance(val.type, ir.PointerType):
+            # 3. Get pointer to the memory representation of target size.
+            #
+            # An LLVM pointer reaching here is ambiguous (checklist 9.9): it is
+            # either the *address of* an aggregate value (STRING/LSTRING/ARRAY/
+            # RECORD), in which case RETYPE reinterprets the pointee by loading
+            # through the bitcast, OR it is a genuine Pascal pointer *value* (a
+            # ``^T`` variable, ADR/ADS, NIL), in which case RETYPE must
+            # reinterpret the address bits and must NOT dereference. We split on
+            # the Pascal type of the inner expression; only when that is
+            # inconclusive do we fall back to the LLVM type (a non-aggregate
+            # pointee can only be a scalar pointer value, so it is safe to treat
+            # as bits; an aggregate pointee defaults to the legacy load-through).
+            is_ptr_value = self.retype_source_is_pointer_value(expr.expr)
+            if is_ptr_value is None and isinstance(val.type, ir.PointerType):
+                is_ptr_value = not isinstance(
+                    val.type.pointee,
+                    (ir.ArrayType, ir.LiteralStructType, ir.IdentifiedStructType))
+
+            if isinstance(val.type, ir.PointerType) and not is_ptr_value:
+                # Aggregate address: reinterpret the bytes the pointer refers to.
                 ptr = val
                 casted_ptr = self.builder.bitcast(ptr, ir.PointerType(target_llvm_type))
+            elif isinstance(val.type, ir.PointerType):
+                # Genuine pointer value: reinterpret the address bits themselves
+                # by spilling the pointer to a slot and bitcasting the slot,
+                # exactly as a non-pointer scalar is handled below.
+                source_size = llvm_type_size(val.type)
+                target_size = llvm_type_size(target_llvm_type)
+                if source_size >= target_size:
+                    ptr = self.builder.alloca(val.type)
+                    self.builder.store(val, ptr)
+                    casted_ptr = self.builder.bitcast(ptr, ir.PointerType(target_llvm_type))
+                else:
+                    ptr = self.builder.alloca(target_llvm_type)
+                    self.builder.store(self.zero_initializer(target_llvm_type), ptr)
+                    source_ptr = self.builder.bitcast(ptr, ir.PointerType(val.type))
+                    self.builder.store(val, source_ptr)
+                    casted_ptr = ptr
             else:
                 source_size = llvm_type_size(val.type)
                 target_size = llvm_type_size(target_llvm_type)
@@ -2146,6 +2180,44 @@ class Codegen:
 
         self.builder.branch(end_block)
         self.builder.position_at_end(end_block)
+
+    def retype_source_is_pointer_value(self, expr) -> Optional[bool]:
+        """Classify the inner expression of a RETYPE for the pointer-vs-aggregate
+        conflation documented in checklist item 9.9.
+
+        ``codegen_expr`` returns an LLVM pointer for two unrelated reasons:
+
+        * the value *is* an aggregate (STRING/LSTRING/ARRAY/RECORD) and the
+          pointer is merely the address of those bytes — RETYPE should
+          reinterpret the *pointee* (load through the bitcast);
+        * the value is a genuine Pascal pointer scalar (a ``^T`` variable, an
+          ``ADR``/``ADS`` factor, ``NIL``) — RETYPE should reinterpret the
+          *address bits*, not dereference them.
+
+        Returns ``True`` if the inner expression is a genuine pointer value,
+        ``False`` if it is an aggregate address, and ``None`` if it cannot be
+        classified from the AST alone (caller falls back to the LLVM type).
+        """
+        # ADR/ADS factors and NIL are always pointer *values*.
+        if isinstance(expr, (AdrExpr, AdsExpr, NilLiteral)):
+            return True
+        # A nested RETYPE's value type is its declared target type.
+        if isinstance(expr, RetypeExpr):
+            t = self.resolve_type_alias(NamedType(expr.type_id, None))
+            return isinstance(t, PointerType)
+        # Named variables/designators: consult the declared Pascal type.
+        if isinstance(expr, (Identifier, Designator)):
+            sym = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
+            if sym is None or sym.type_expr is None:
+                return None
+            t = self.resolve_type_alias(sym.type_expr)
+            # A selector chain (field/index/deref) yields whatever the selected
+            # component is; that is not necessarily a pointer, so do not claim
+            # to know — let the caller fall back to the LLVM-type heuristic.
+            if getattr(expr, 'selectors', None):
+                return None
+            return isinstance(t, PointerType)
+        return None
 
     def resolve_type_alias(self, type_expr):
         """Unwrap NamedType aliases (e.g. ``TYPE arr = ARRAY[..]``) to the

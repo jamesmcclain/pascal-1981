@@ -434,7 +434,23 @@ the biggest single chunk; expect it to need its own design pass.
   statements over enums, enum-controlled `FOR` loops, and `WRITE` of enum names
   all need dedicated paths to support the `EnumType` introduced in 9.6.
 
-- [ ] **9.9** `RETYPE` on a pointer value is ambiguous. When the inner expression is already a pointer type, the code bitcasts the pointer and loads through it — reinterpreting the pointee, not the pointer's address bits. That's correct when the "pointer" is an aggregate's address (array/string), but if someone retypes an actual Pascal `^T` variable, they'd reasonably expect the address bits reinterpreted, not a deref. This is the codebase's existing aggregate-vs-pointer-value conflation, but RETYPE makes it user-reachable, so at least a guard or comment is warranted.
+- [x] **9.9** `RETYPE` on a pointer value is ambiguous. When the inner expression is already a pointer type, the code bitcasts the pointer and loads through it — reinterpreting the pointee, not the pointer's address bits. That's correct when the "pointer" is an aggregate's address (array/string), but if someone retypes an actual Pascal `^T` variable, they'd reasonably expect the address bits reinterpreted, not a deref. This is the codebase's existing aggregate-vs-pointer-value conflation, but RETYPE makes it user-reachable, so at least a guard or comment is warranted.
+  - Done: the `RetypeExpr` codegen no longer branches on the LLVM type alone.
+    A new helper `retype_source_is_pointer_value` classifies the inner
+    expression from its Pascal type: `ADR`/`ADS`/`NIL` and `^T` variables are
+    genuine pointer *values* (reinterpret the address bits via a spill + slot
+    bitcast, no dereference), while STRING/LSTRING/ARRAY/RECORD addresses keep
+    the legacy load-through-pointee behavior. When the AST can't classify the
+    inner expression, the lowering falls back to the LLVM pointee type (a
+    non-aggregate pointee is treated as a scalar pointer; an aggregate pointee
+    defaults to load-through), so the silent null-deref miscompile is gone and
+    no case is left to guess wrongly. The branch carries a comment documenting
+    the conflation so it isn't re-collapsed later. Proven by
+    `python -m unittest tests.test_parser tests.test_typecheck tests.test_codegen`,
+    including new IR-level tests
+    `test_retype_pointer_value_reinterprets_bits_not_pointee` and
+    `test_retype_aggregate_address_still_loads_through`, plus the
+    `@requires_exe` `test_retype_nil_pointer_does_not_dereference`.
 
 - [x] **9.10** `wrd_real_arg.pas` is misfiled and self-contradictory. It sits in `parser/should_pass/`, its body comment says "must be rejected — ERROR: REAL is not an ordinal type," and the 4.7 checklist note cites it as `should_fail/wrd_real_arg.pas`. All three disagree. As a parser fixture it correctly passes (REAL rejection is a type error, not a parse error), and the parser-reject test only catches `LexerError`/`ParserError` anyway — so even in `should_fail/` it wouldn't assert what the comment claims. The good news: the REAL rejection is actually covered, by `TestWrdByword.test_wrd_real_is_error` in `test_typecheck`. So there's no real coverage gap — just an artifact that documents a guarantee it doesn't itself enforce. Move/rename it or fix the comment so it stops lying.
   - Done: Moved the test fixture to `tests/fixtures/typecheck/should_fail/wrd_real_arg.pas` and corrected its comment to clarify it's a type error, not a parse error.
