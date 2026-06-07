@@ -231,7 +231,8 @@ well. This is where `CHR`/`ORD`/`ODD`/`SUCC`/`SIZEOF`/`UPPER`/`ADR` already live
     `should_fail/wrd_real_arg.pas`. Proven by
     `python -m unittest tests.test_typecheck tests.test_codegen` (172 tests,
     20 new).
-- [ ] **4.8 — `RETYPE`.** `[INFERRED]` **M** Reinterpret cast (LLVM `bitcast`); needs care with type-checker rules. Confirm semantics.
+- [x] **4.8 — `RETYPE`.** `[INFERRED]` **M** Reinterpret cast (LLVM `bitcast`); needs care with type-checker rules. Confirm semantics.
+  - Done: Added `RetypeExpr` AST node, supporting optional trailing selectors. Integrated type checker resolution with size checks (generating Warning 248 on mismatches). Designed robust codegen using stack allocation of the larger type (zero-initialized) and pointer bitcasting to eliminate buffer over-read bugs. Added tests in both type checker and codegen. Proven by `python3 -m unittest discover -s tests`.
 - [ ] **4.9 — `PACK` / `UNPACK`.** `[INFERRED]` **M** Packed-array (un)packing; inline for small, runtime loop for large. Depends on `PACKED` representation.
 
 ---
