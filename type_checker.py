@@ -142,6 +142,10 @@ class PascalTypeChecker(TypeChecker):
         round_type = FunctionType('ROUND', [('x', REAL_TYPE)], INTEGER_TYPE)
         self.symbol_table.define('ROUND', Symbol(name='ROUND', type=round_type, kind='function', is_mutable=False))
 
+        # FLOAT function (INTEGER -> REAL)
+        float_type = FunctionType('FLOAT', [('x', INTEGER_TYPE)], REAL_TYPE)
+        self.symbol_table.define('FLOAT', Symbol(name='FLOAT', type=float_type, kind='function', is_mutable=False))
+
     def check(self, ast: ASTNode) -> TypeCheckResult:
         """Main entry point for type checking."""
         self.errors = []
@@ -1276,6 +1280,16 @@ class PascalTypeChecker(TypeChecker):
                     return INTEGER_TYPE
                 if arg_type:
                     self.error(f"Argument 1 type mismatch: expected REAL, got {arg_type}", expr)
+                return None
+            if lookup_name == 'FLOAT':
+                if len(expr.args) != 1:
+                    self.error(f"Function 'FLOAT' expects 1 argument, got {len(expr.args)}", expr)
+                    return None
+                arg_type = self.infer_expression_type(expr.args[0])
+                if arg_type == INTEGER_TYPE:
+                    return REAL_TYPE
+                if arg_type:
+                    self.error(f"Argument 1 type mismatch: expected INTEGER, got {arg_type}", expr)
                 return None
             sym = self.symbol_table.lookup(lookup_name) or self.symbol_table.lookup(expr.name)
             if not sym:

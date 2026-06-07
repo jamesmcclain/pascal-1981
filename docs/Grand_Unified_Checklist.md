@@ -204,7 +204,8 @@ well. This is where `CHR`/`ORD`/`ODD`/`SUCC`/`SIZEOF`/`UPPER`/`ADR` already live
   - Done: registered `PRED` as a predeclared integer function and lowered it to integer subtraction in codegen. Proven by `python3 -m unittest tests.test_typecheck tests.test_codegen`.
 - [x] **4.2 — `SQR`.** `[READ]` **XS** `x*x`. Distinct from `SQRT` (6.x).
   - Done: registered `SQR` as a predeclared integer/real intrinsic and lowered it to self-multiplication in codegen. Proven by `python3 -m unittest tests.test_typecheck tests.test_codegen`.
-- [ ] **4.3 — `FLOAT`.** `[READ]` **S** INTEGER→REAL (`sitofp`). Needs REAL codegen (see note).
+- [x] **4.3 — `FLOAT`.** `[READ]` **S** INTEGER→REAL (`sitofp`). Needs REAL codegen.
+  - Done: registered `FLOAT` as a predeclared intrinsic (manual 11-7: converts INTEGER to REAL) and lowered it to `sitofp` in codegen. Added type-checking and runtime executable coverage. Proven by `python -m unittest tests.test_typecheck tests.test_codegen`.
 - [x] **4.4 — `TRUNC` / `ROUND`.** `[READ]` **M** REAL→INTEGER (`fptosi`; `ROUND` adds rounding). Needs REAL codegen.
   - Done: registered `TRUNC`/`ROUND` as REAL→INTEGER intrinsics (manual 11-7 confirmed: REAL-only arg, INTEGER result). `TRUNC` lowers to a direct `fptosi` (truncate toward zero). `ROUND` lowers to a ±0.5 select-and-add then `fptosi` (half-away-from-zero per IBM Pascal spec, no libm dependency — `llvm.round` links against `libm.round` in llvmlite so the arithmetic approach is used instead). Both reject non-REAL arguments at the type-checker level; INTEGER→REAL widening on the result side is correct Pascal. Proven by `python -m unittest tests.test_typecheck tests.test_codegen` (148 tests).
 - [x] **4.5 — `LOWER`.** `[READ]` **S** Mirror of existing `UPPER` (super-array lower bound).

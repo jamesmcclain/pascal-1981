@@ -196,6 +196,16 @@ class TestTypeCompatibility(unittest.TestCase):
         result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := ROUND(1.6) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
+    def test_float_typecheck(self):
+        """FLOAT accepts INTEGER and returns REAL."""
+        result = typecheck_source("PROGRAM P; VAR x: REAL; BEGIN x := FLOAT(42) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_float_rejects_real_arg(self):
+        """FLOAT requires INTEGER; REAL argument is a type error."""
+        result = typecheck_source("PROGRAM P; VAR x: REAL; BEGIN x := FLOAT(4.2) END.")
+        self.assertFalse(result.success)
+
     def test_trunc_rejects_integer_arg(self):
         """TRUNC requires REAL; INTEGER argument is a type error."""
         result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := TRUNC(3) END.")

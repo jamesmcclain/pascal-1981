@@ -147,6 +147,12 @@ class TestCodegenIR(unittest.TestCase):
         self.assertIn("fadd", ir_text)
         self.assertIn("fptosi", ir_text)
 
+    def test_float_lowers_to_sitofp(self):
+        """FLOAT lowers to a sitofp conversion."""
+        src = "PROGRAM P; VAR x: REAL; BEGIN x := FLOAT(42) END."
+        ir_text = compile_to_ir(src)
+        self.assertIn("sitofp", ir_text)
+
     def test_variable_assignment(self):
         """Variable assignment generates valid IR."""
         src = "PROGRAM P; VAR x: INTEGER; BEGIN x := 42; WRITELN(x) END."
@@ -400,6 +406,17 @@ class TestCodegenBuildRun(unittest.TestCase):
         self.assertEqual(lines[2].strip(), "-2")   # round toward zero (away from zero magnitude)
         self.assertEqual(lines[3].strip(), "4")    # tie: away from zero
         self.assertEqual(lines[4].strip(), "-4")   # tie: away from zero
+
+    def test_float_run(self):
+        """FLOAT converts integer to real."""
+        src = (
+            "PROGRAM P; VAR r: REAL; BEGIN "
+            "r := FLOAT(42); WRITELN(r) "
+            "END."
+        )
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertIn("42", stdout)
 
     def test_nil_codegen(self):
         """NIL lowers to a null pointer value."""

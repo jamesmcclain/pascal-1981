@@ -1553,6 +1553,12 @@ class Codegen:
             adj = self.builder.select(is_neg, neg_half, half)
             rounded = self.builder.fadd(val, adj)
             return self.builder.fptosi(rounded, ir.IntType(32))
+        elif lookup_name == 'FLOAT':
+            # INTEGER -> REAL: sitofp (manual 11-7)
+            val = self.codegen_expr(expr.args[0])
+            if not isinstance(val.type, ir.IntType):
+                raise CodegenError(f'FLOAT not supported for type {val.type}')
+            return self.builder.sitofp(val, ir.DoubleType())
 
         symbol = self.scope.lookup(lookup_name) or self.scope.lookup(expr.name)
         if not symbol:
