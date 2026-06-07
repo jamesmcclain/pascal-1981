@@ -1342,8 +1342,9 @@ class PascalTypeChecker(TypeChecker):
                             return None
                         if selector.index_or_field:
                             index_type = self.infer_expression_type(selector.index_or_field)
-                            if index_type and not index_type.equivalent_to(INTEGER_TYPE):
-                                self.error(f"Array index must be INTEGER, got {index_type}", expr)
+                            expected = current_type.effective_index_type
+                            if index_type and not index_type.equivalent_to(expected):
+                                self.error(f"Array index must be {expected}, got {index_type}", expr)
                         current_type = current_type.element_type
                     elif selector.kind == 'FIELD':
                         if not isinstance(current_type, RecordType):
@@ -1548,11 +1549,12 @@ class PascalTypeChecker(TypeChecker):
                     if not isinstance(current_type, ArrayType):
                         self.error(f"Cannot index non-array type {current_type}", designator)
                         return None
-                    # Check that index is INTEGER
+                    # Check that the index matches the array's index type
                     if selector.index_or_field:
                         index_type = self.infer_expression_type(selector.index_or_field)
-                        if index_type and not index_type.equivalent_to(INTEGER_TYPE):
-                            self.error(f"Array index must be INTEGER, got {index_type}", designator)
+                        expected = current_type.effective_index_type
+                        if index_type and not index_type.equivalent_to(expected):
+                            self.error(f"Array index must be {expected}, got {index_type}", designator)
                     current_type = current_type.element_type
 
                 elif selector.kind == 'FIELD':
@@ -1575,6 +1577,44 @@ class PascalTypeChecker(TypeChecker):
                     current_type = current_type.target_type
 
         return current_type
+
+    def _eval_index_bound(self, expr) -> Optional[tuple]:
+        """Best-effort evaluate an array index-range endpoint.
+
+        Returns ``(ordinal_value, Type)`` for a compile-time ordinal constant,
+        where ``ordinal_value`` is the value used for storage bounds (ORD for
+        chars, member position for enums) and ``Type`` is the index type the
+        endpoint implies. Returns ``None`` when the endpoint isn't a recognized
+        ordinal constant (e.g. a named INTEGER constant), letting the caller
+        fall back to INTEGER indexing.
+        """
+        if isinstance(expr, IntLiteral):
+            return expr.value, INTEGER_TYPE
+        if isinstance(expr, CharLiteral):
+            return (ord(expr.value[0]) if expr.value else 0), CHAR_TYPE
+        if isinstance(expr, BoolLiteral):
+            return (1 if expr.value else 0), BOOLEAN_TYPE
+        if isinstance(expr, UnaryOp) and expr.op in ('PLUS', 'MINUS'):
+            inner = self._eval_index_bound(expr.operand)
+            if inner is None:
+                return None
+            val, ty = inner
+            return (-val if expr.op == 'MINUS' else val), ty
+        # A bare identifier may name an enum member (its ordinal is its
+        # declaration position) used as an index bound, e.g. ARRAY[Red..Blue].
+        name = None
+        if isinstance(expr, Identifier):
+            name = expr.name
+        elif isinstance(expr, Designator) and not expr.selectors:
+            name = expr.name
+        if name is not None:
+            sym = self.symbol_table.lookup(name)
+            if sym and sym.kind == 'const' and isinstance(sym.type, EnumType):
+                target = name.upper()
+                for i, member in enumerate(sym.type.members):
+                    if member.upper() == target:
+                        return i, sym.type
+        return None
 
     def resolve_type(self, type_expr) -> Optional[Type]:
         """Resolve a type expression to a Type object."""
@@ -1630,20 +1670,36 @@ class PascalTypeChecker(TypeChecker):
                 element_type = self.resolve_type(type_expr.element_type)
 
             if element_type and type_expr.index_range:
-                # Extract bounds - these are expressions, evaluate them as constants
+                # The index range fixes both the storage bounds and the ordinal
+                # type a subscript must have. Pascal index types are ordinal
+                # (INTEGER, CHAR, BOOLEAN, enum, ...), not just INTEGER, so we
+                # evaluate each endpoint to (ordinal_value, type) rather than
+                # assuming integer literals.
                 try:
-                    if isinstance(type_expr.index_range.low, IntLiteral):
-                        lower = type_expr.index_range.low.value
-                    else:
-                        lower = 1  # Default if not a constant
+                    low_eval = self._eval_index_bound(type_expr.index_range.low)
+                    high_node = type_expr.index_range.high
+                    high_eval = self._eval_index_bound(high_node) if high_node else None
 
-                    if type_expr.index_range.high and isinstance(type_expr.index_range.high, IntLiteral):
-                        upper = type_expr.index_range.high.value
-                    else:
-                        upper = 10  # Default if not a constant
+                    # Index type comes from whichever endpoint we could resolve
+                    # (they should agree); default to INTEGER when neither is a
+                    # recognizable ordinal constant (e.g. named-constant bounds).
+                    index_type = None
+                    if low_eval is not None:
+                        index_type = low_eval[1]
+                    elif high_eval is not None:
+                        index_type = high_eval[1]
 
-                    return ArrayType(element_type, lower, upper, packed=getattr(type_expr, 'packed', False))
-                except:
+                    lower = low_eval[0] if low_eval is not None else 1
+                    if high_eval is not None:
+                        upper = high_eval[0]
+                    elif high_node is None:
+                        # Super array (ARRAY[lo..*]): upper bound is open.
+                        upper = lower
+                    else:
+                        upper = 10
+
+                    return ArrayType(element_type, lower, upper, packed=getattr(type_expr, 'packed', False), index_type=index_type)
+                except Exception:
                     return None
             return None
         elif isinstance(type_expr, ASTRecordType):

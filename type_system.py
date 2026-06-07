@@ -102,12 +102,25 @@ class LStringType(Type):
 
 @dataclass
 class ArrayType(Type):
-    """Array type: ARRAY[lower..upper] OF element_type."""
+    """Array type: ARRAY[lower..upper] OF element_type.
+
+    ``lower_bound``/``upper_bound`` are the *ordinal* values of the index range
+    (for a CHAR index these are the ORD of the bound characters; for an enum
+    index, the member positions). ``index_type`` records the ordinal type a
+    subscript must have. It defaults to ``None``, which is treated as INTEGER so
+    arrays built the old way (integer subscripts) keep their exact behavior.
+    """
 
     element_type: Type
     lower_bound: int
     upper_bound: int
     packed: bool = False
+    index_type: Optional[Type] = None
+
+    @property
+    def effective_index_type(self) -> Type:
+        """The subscript type, defaulting to INTEGER when unspecified."""
+        return self.index_type if self.index_type is not None else INTEGER_TYPE
 
     def __str__(self) -> str:
         prefix = "PACKED " if self.packed else ""
@@ -117,7 +130,7 @@ class ArrayType(Type):
         if not isinstance(other, ArrayType):
             return False
         return (self.element_type.equivalent_to(other.element_type) and self.lower_bound == other.lower_bound and self.upper_bound == other.upper_bound
-                and self.packed == other.packed)
+                and self.packed == other.packed and self.effective_index_type.equivalent_to(other.effective_index_type))
 
 
 @dataclass
