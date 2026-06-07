@@ -19,7 +19,7 @@ from ast_nodes import ArrayType as ASTArrayType
 from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, CharLiteral, ConstDecl, Designator, Expression, ForStmt, FuncCall, FuncDecl, Identifier, IfStmt,
                        ImplementationUnit, InterfaceUnit, IntLiteral, LabelStmt, LowerExpr, ModuleUnit, NamedType, NilLiteral, PointerType as ASTPointerType, ProcCallStmt, ProcDecl, ProgramUnit, RealLiteral, UpperExpr, WriteArg)
 from ast_nodes import LStringType as ASTLStringType, RecordType as ASTRecordType, SetType as ASTSetType, SubrangeType as ASTSubrangeType, EnumType as ASTEnumType
-from ast_nodes import (RangeExpr, RepeatStmt, ReturnStmt, Selector, SetConstructor, SizeofExpr, Statement, StringLiteral, TypeDecl, UnaryOp, UseClause, VarDecl, WhileStmt)
+from ast_nodes import (RangeExpr, RepeatStmt, RetypeExpr, ReturnStmt, Selector, SetConstructor, SizeofExpr, Statement, StringLiteral, TypeDecl, UnaryOp, UseClause, VarDecl, WhileStmt)
 from symbol_table import SourceLocation, Symbol, SymbolTable
 from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, FileType, FunctionType, LStringType, PointerType, ProcedureType, RecordType, SetType, StringType, Type,
                          EnumType, binary_op_result_type, can_assign, unary_op_result_type)
@@ -1201,6 +1201,50 @@ class PascalTypeChecker(TypeChecker):
                 return INTEGER_TYPE
             self.error(f"Function '{type(expr).__name__[:-4].upper()}' expects an array variable", expr)
             return None
+        elif isinstance(expr, RetypeExpr):
+            # 1. Resolve target type
+            target_type = self.resolve_type(NamedType(expr.type_id, None))
+            if not target_type:
+                self.error(f"First parameter of RETYPE must be a type identifier, got {expr.type_id}", expr)
+                return None
+            
+            # 2. Check inner expression type
+            expr_type = self.infer_expression_type(expr.expr)
+            if expr_type:
+                # 3. Check and warn if sizes are not identical
+                target_size = self.get_resolved_type_size(target_type)
+                expr_size = self.get_resolved_type_size(expr_type)
+                if target_size != expr_size:
+                    self.warning(f"Size Not Identical: RETYPE from {expr_type} ({expr_size} bytes) to {target_type} ({target_size} bytes)", expr)
+            
+            # 4. Handle any selectors on the target type
+            current_type = target_type
+            if expr.selectors:
+                for selector in expr.selectors:
+                    if selector.kind == 'INDEX':
+                        if not isinstance(current_type, ArrayType):
+                            self.error(f"Cannot index non-array type {current_type}", expr)
+                            return None
+                        if selector.index_or_field:
+                            index_type = self.infer_expression_type(selector.index_or_field)
+                            if index_type and not index_type.equivalent_to(INTEGER_TYPE):
+                                self.error(f"Array index must be INTEGER, got {index_type}", expr)
+                        current_type = current_type.element_type
+                    elif selector.kind == 'FIELD':
+                        if not isinstance(current_type, RecordType):
+                            self.error(f"Cannot access field on non-record type {current_type}", expr)
+                            return None
+                        field_name = selector.index_or_field
+                        if field_name not in current_type.fields:
+                            self.error(f"Record has no field '{field_name}'", expr)
+                            return None
+                        current_type = current_type.fields[field_name]
+                    elif selector.kind == 'DEREF':
+                        if not isinstance(current_type, PointerType):
+                            self.error(f"Cannot dereference non-pointer type {current_type}", expr)
+                            return None
+                        current_type = current_type.target_type
+            return current_type
         elif isinstance(expr, Identifier):
             sym = self.symbol_table.lookup(expr.name)
             if not sym:
@@ -1501,6 +1545,42 @@ class PascalTypeChecker(TypeChecker):
             return PointerType(base_type, flavor=flavor) if base_type else PointerType(CHAR_TYPE, flavor=flavor)
         else:
             return None
+
+    def get_resolved_type_size(self, t: Type) -> int:
+        """Estimate the size of a resolved Type in bytes."""
+        from type_system import (IntegerType, RealType, BooleanType, WordType, CharType,
+                                 EnumType, SetType, StringType, LStringType, PointerType,
+                                 ArrayType, RecordType)
+        if isinstance(t, IntegerType):
+            return 4
+        elif isinstance(t, RealType):
+            return 8
+        elif isinstance(t, BooleanType):
+            return 1
+        elif isinstance(t, WordType):
+            return 2
+        elif isinstance(t, CharType):
+            return 1
+        elif isinstance(t, EnumType):
+            return 4
+        elif isinstance(t, SetType):
+            return 32
+        elif isinstance(t, StringType):
+            return t.max_len
+        elif isinstance(t, LStringType):
+            return t.max_len + 1
+        elif isinstance(t, PointerType):
+            return 8
+        elif isinstance(t, ArrayType):
+            elem_size = self.get_resolved_type_size(t.element_type)
+            count = max(0, t.upper_bound - t.lower_bound + 1)
+            return count * elem_size
+        elif isinstance(t, RecordType):
+            total = 0
+            for ftype in t.fields.values():
+                total += self.get_resolved_type_size(ftype)
+            return total
+        return 4
 
     def make_location(self, location) -> Optional[SourceLocation]:
         """Convert AST location tuple to SourceLocation."""

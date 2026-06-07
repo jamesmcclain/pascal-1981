@@ -9,7 +9,7 @@ from ast_nodes import (AdrExpr, ArrayType, AssignStmt, ASTNode, BinOp, Block, Bo
                        AdsExpr,
                        IndexRange, InterfaceUnit, IntLiteral, LabelDecl, LabelStmt, LStringType, ModuleUnit, NamedType, NilLiteral, Param, PointerType, ProcCallStmt, ProcDecl, ProgramUnit,
                        RangeExpr, RealLiteral, RecordType, RepeatStmt, ReturnStmt, Selector, SetConstructor, SetType, SizeofExpr, Statement, StringLiteral, SubrangeType, Type, TypeDecl, UnaryOp,
-                       UpperExpr, LowerExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt, WriteArg)
+                       UpperExpr, LowerExpr, RetypeExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt, WriteArg)
 from lexer import ALL_CODES, KEYWORD_CODES, LexerError, Token, lex_file
 
 
@@ -660,7 +660,17 @@ class Parser:
             return UnaryOp('NOT', operand)
         if kind == 'IDENTIFIER':
             name = self.current().lexeme
-            if self.next_kind() == 'LPAREN':
+            if name.upper() == 'RETYPE' and self.next_kind() == 'LPAREN':
+                self.pos += 2  # consume 'RETYPE' and '('
+                type_id = self.expect('IDENTIFIER').lexeme
+                self.expect('COMMA')
+                expr = self.parse_expression()
+                self.expect('RPAREN')
+                selectors = []
+                while self.current().kind in {'LBRACKET', 'DOT', 'POINTER'}:
+                    selectors.extend(self.parse_selector())
+                return RetypeExpr(type_id, expr, selectors)
+            elif self.next_kind() == 'LPAREN':
                 self.pos += 1
                 self.pos += 1
                 args: List[Expression] = []

@@ -1188,6 +1188,70 @@ class Codegen:
             return self.codegen_unaryop(expr)
         elif isinstance(expr, FuncCall):
             return self.codegen_func_call(expr)
+        elif isinstance(expr, RetypeExpr):
+            # 1. Generate code for the inner expression
+            val = self.codegen_expr(expr.expr)
+            
+            # 2. Get the target LLVM type
+            target_llvm_type = self.llvm_type(NamedType(expr.type_id, None))
+            
+            # Helper to calculate LLVM type size in bytes
+            def llvm_type_size(ty: ir.Type) -> int:
+                if isinstance(ty, ir.IntType):
+                    return (ty.width + 7) // 8
+                elif isinstance(ty, ir.FloatType):
+                    return 4
+                elif isinstance(ty, ir.DoubleType):
+                    return 8
+                elif isinstance(ty, ir.PointerType):
+                    return 8
+                elif isinstance(ty, ir.ArrayType):
+                    return ty.count * llvm_type_size(ty.element)
+                elif isinstance(ty, (ir.LiteralStructType, ir.IdentifiedStructType)):
+                    return sum(llvm_type_size(f) for f in ty.elements)
+                return 4
+
+            # 3. Get pointer to the memory representation of target size
+            if isinstance(val.type, ir.PointerType):
+                ptr = val
+                casted_ptr = self.builder.bitcast(ptr, ir.PointerType(target_llvm_type))
+            else:
+                source_size = llvm_type_size(val.type)
+                target_size = llvm_type_size(target_llvm_type)
+                
+                if source_size >= target_size:
+                    # Source is larger or equal. Allocate source type.
+                    ptr = self.builder.alloca(val.type)
+                    self.builder.store(val, ptr)
+                    casted_ptr = self.builder.bitcast(ptr, ir.PointerType(target_llvm_type))
+                else:
+                    # Target is larger. Allocate target type.
+                    ptr = self.builder.alloca(target_llvm_type)
+                    self.builder.store(self.zero_initializer(target_llvm_type), ptr)
+                    # Bitcast ptr to source pointer to store the smaller source value
+                    source_ptr = self.builder.bitcast(ptr, ir.PointerType(val.type))
+                    self.builder.store(val, source_ptr)
+                    casted_ptr = ptr
+                
+            # 5. Process any selectors
+            if expr.selectors:
+                for selector in expr.selectors:
+                    if selector.kind == 'INDEX':
+                        index = self.codegen_expr(selector.index_or_field)
+                        if isinstance(casted_ptr.type.pointee, ir.ArrayType):
+                            casted_ptr = self.builder.gep(casted_ptr, [ir.Constant(ir.IntType(32), 0), index])
+                        else:
+                            casted_ptr = self.builder.gep(casted_ptr, [index])
+                    elif selector.kind == 'FIELD':
+                        # Placeholder for field access if needed later
+                        pass
+                    elif selector.kind == 'DEREF':
+                        casted_ptr = self.builder.load(casted_ptr)
+            
+            # 6. If the resulting type is an aggregate, return the pointer. Otherwise load the value.
+            if isinstance(casted_ptr.type.pointee, (ir.ArrayType, ir.LiteralStructType, ir.IdentifiedStructType)):
+                return casted_ptr
+            return self.builder.load(casted_ptr)
         else:
             raise CodegenError(f'Expression type {type(expr).__name__} not yet supported')
 
@@ -2074,6 +2138,8 @@ class Codegen:
             return 1 if expr.value else 0
         elif isinstance(expr, CharLiteral):
             return ord(expr.value) if len(expr.value) == 1 else 0
+        elif isinstance(expr, RetypeExpr):
+            return self.eval_const_expr(expr.expr)
         elif isinstance(expr, Identifier):
             key = expr.name.upper()
             if key in self.constants:

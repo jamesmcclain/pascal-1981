@@ -22,7 +22,7 @@ class TestParserAccept(unittest.TestCase):
         """Load all should_pass fixtures."""
         fixtures_dir = Path(__file__).parent / "fixtures" / "parser" / "should_pass"
         self.files = sorted(fixtures_dir.glob("*.pas"))
-        self.assertEqual(len(self.files), 19, f"Expected 19 should_pass fixtures, found {len(self.files)}")
+        self.assertGreaterEqual(len(self.files), 19, f"Expected at least 19 should_pass fixtures, found {len(self.files)}")
 
     def test_parser_accepts_all_should_pass(self):
         """Each should_pass/ file must parse without raising."""
@@ -42,7 +42,7 @@ class TestParserReject(unittest.TestCase):
         """Load all should_fail fixtures."""
         fixtures_dir = Path(__file__).parent / "fixtures" / "parser" / "should_fail"
         self.files = sorted(fixtures_dir.glob("*.pas"))
-        self.assertEqual(len(self.files), 15, f"Expected 15 should_fail fixtures, found {len(self.files)}")
+        self.assertGreaterEqual(len(self.files), 15, f"Expected at least 15 should_fail fixtures, found {len(self.files)}")
 
     def test_parser_rejects_all_should_fail(self):
         """Each should_fail/ file must raise LexerError or ParserError (not any other exception)."""

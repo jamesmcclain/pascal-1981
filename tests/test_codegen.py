@@ -1009,3 +1009,62 @@ END."""
         lines = [l for l in out.splitlines() if l.strip()]
         self.assertEqual(lines[0].strip(), "18")   # 0x12 = 18
         self.assertEqual(lines[1].strip(), "52")   # 0x34 = 52
+
+
+class TestRetypeCodegen(unittest.TestCase):
+    """IR-level and run-level tests for the RETYPE intrinsic."""
+
+    def test_retype_ir_shape(self):
+        """Verify that RETYPE lowers to memory load/store and pointer bitcast."""
+        src = "PROGRAM P; VAR i: INTEGER; c: CHAR; BEGIN i := 65; c := RETYPE(CHAR, i) END."
+        ir_text = compile_to_ir(src)
+        self.assertIn("bitcast", ir_text)
+
+    @requires_exe
+    def test_retype_char_to_boolean_runtime(self):
+        src = """PROGRAM P;
+VAR c: CHAR; b: BOOLEAN;
+BEGIN
+    c := CHR(1);
+    b := RETYPE(BOOLEAN, c);
+    IF b THEN
+        WRITELN(1)
+    ELSE
+        WRITELN(0)
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertIn("1", out)
+
+    @requires_exe
+    def test_retype_constant_folding(self):
+        src = """PROGRAM P;
+VAR i: INTEGER;
+BEGIN
+    i := RETYPE(INTEGER, 'A');
+    WRITELN(i)
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertIn("65", out)
+
+    @requires_exe
+    def test_retype_selectors(self):
+        src = """PROGRAM P;
+TYPE
+    TArray = ARRAY[1..4] OF CHAR;
+VAR
+    i: INTEGER;
+    c: CHAR;
+BEGIN
+    { 16#4100 is 'A\0' in little endian.
+      Index 1 in memory will fetch the second byte, which is 16#41 = 65. }
+    i := 16#4100;
+    c := RETYPE(TArray, i)[1];
+    WRITELN(ORD(c))
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        # On little-endian systems, 16#41 (65) is the first byte.
+        self.assertIn("65", out)
+

@@ -816,3 +816,48 @@ VAR w: WORD; x: REAL;
 BEGIN x := 1.0; w := BYWORD(x, 0); END."""
         r = typecheck_source(src)
         self.assertFalse(r.success)
+
+
+class TestRetypeValidation(unittest.TestCase):
+    """Validation tests for the RETYPE intrinsic."""
+
+    def test_retype_char_to_boolean_succeeds_without_warnings(self):
+        # CHAR (1 byte) -> BOOLEAN (1 byte)
+        src = """PROGRAM P(OUTPUT);
+VAR b: BOOLEAN; c: CHAR;
+BEGIN
+    c := 'A';
+    b := RETYPE(BOOLEAN, c);
+END."""
+        r = typecheck_source(src)
+        self.assertTrue(r.success, r.errors)
+        # Verify no size warnings were emitted
+        warnings = [w for w in r.errors if w.severity == 'warning' and "Size Not Identical" in w.message]
+        self.assertEqual(len(warnings), 0)
+
+    def test_retype_size_mismatch_warns(self):
+        # INTEGER (4 bytes) -> CHAR (1 byte). Should warning, but succeed.
+        src = """PROGRAM P(OUTPUT);
+VAR c: CHAR; i: INTEGER;
+BEGIN
+    i := 42;
+    c := RETYPE(CHAR, i);
+END."""
+        r = typecheck_source(src)
+        self.assertTrue(r.success, r.errors)
+        warnings = [w for w in r.warnings if w.severity == 'warning' and "Size Not Identical" in w.message]
+        self.assertGreaterEqual(len(warnings), 1)
+
+    def test_retype_selector_validation(self):
+        src = """PROGRAM P(OUTPUT);
+TYPE
+    TArray = ARRAY[1..10] OF CHAR;
+VAR
+    c: CHAR;
+    i: INTEGER;
+BEGIN
+    c := RETYPE(TArray, i)[2];
+END."""
+        r = typecheck_source(src)
+        self.assertTrue(r.success, r.errors)
+
