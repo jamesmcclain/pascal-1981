@@ -133,6 +133,20 @@ class TestCodegenIR(unittest.TestCase):
         self.assertIn("lshr", ir)
         self.assertIn("trunc", ir)
 
+    def test_trunc_lowers_to_fptosi(self):
+        """TRUNC lowers to a direct fptosi (truncate-toward-zero) instruction."""
+        src = "PROGRAM P; VAR x: INTEGER; BEGIN x := TRUNC(3.7) END."
+        ir_text = compile_to_ir(src)
+        self.assertIn("fptosi", ir_text)
+
+    def test_round_lowers_to_half_adjust_then_fptosi(self):
+        """ROUND lowers to a ±0.5 adjustment + fptosi (half-away-from-zero, no libm)."""
+        src = "PROGRAM P; VAR x: INTEGER; BEGIN x := ROUND(1.6) END."
+        ir_text = compile_to_ir(src)
+        # The ±0.5 select-and-add pattern must appear, followed by fptosi
+        self.assertIn("fadd", ir_text)
+        self.assertIn("fptosi", ir_text)
+
     def test_variable_assignment(self):
         """Variable assignment generates valid IR."""
         src = "PROGRAM P; VAR x: INTEGER; BEGIN x := 42; WRITELN(x) END."
@@ -352,6 +366,40 @@ class TestCodegenBuildRun(unittest.TestCase):
         self.assertEqual(returncode, 0)
         self.assertIn("5", stdout)
         self.assertIn("3", stdout)
+
+    def test_trunc_run(self):
+        """TRUNC truncates toward zero (not floor) for both positive and negative reals."""
+        src = (
+            "PROGRAM P; VAR i: INTEGER; BEGIN "
+            "i := TRUNC(3.7); WRITELN(i); "
+            "i := TRUNC(-3.7); WRITELN(i) "
+            "END."
+        )
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        lines = stdout.strip().splitlines()
+        self.assertEqual(lines[0].strip(), "3")    # truncate positive
+        self.assertEqual(lines[1].strip(), "-3")   # truncate toward zero, NOT floor (-4)
+
+    def test_round_run(self):
+        """ROUND rounds away from zero (IBM Pascal manual 11-7)."""
+        src = (
+            "PROGRAM P; VAR i: INTEGER; BEGIN "
+            "i := ROUND(2.4); WRITELN(i); "
+            "i := ROUND(1.6); WRITELN(i); "
+            "i := ROUND(-1.6); WRITELN(i); "
+            "i := ROUND(3.5); WRITELN(i); "
+            "i := ROUND(-3.5); WRITELN(i) "
+            "END."
+        )
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        lines = stdout.strip().splitlines()
+        self.assertEqual(lines[0].strip(), "2")    # round down
+        self.assertEqual(lines[1].strip(), "2")    # round up
+        self.assertEqual(lines[2].strip(), "-2")   # round toward zero (away from zero magnitude)
+        self.assertEqual(lines[3].strip(), "4")    # tie: away from zero
+        self.assertEqual(lines[4].strip(), "-4")   # tie: away from zero
 
     def test_nil_codegen(self):
         """NIL lowers to a null pointer value."""

@@ -186,6 +186,31 @@ class TestTypeCompatibility(unittest.TestCase):
         result = typecheck_source("PROGRAM P; VAR x: REAL; BEGIN x := SQRT(ABS(-5)) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
+    def test_trunc_typecheck(self):
+        """TRUNC accepts REAL and returns INTEGER."""
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := TRUNC(3.7) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_round_typecheck(self):
+        """ROUND accepts REAL and returns INTEGER."""
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := ROUND(1.6) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_trunc_rejects_integer_arg(self):
+        """TRUNC requires REAL; INTEGER argument is a type error."""
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := TRUNC(3) END.")
+        self.assertFalse(result.success)
+
+    def test_round_rejects_integer_arg(self):
+        """ROUND requires REAL; INTEGER argument is a type error."""
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := ROUND(3) END.")
+        self.assertFalse(result.success)
+
+    def test_trunc_result_is_integer_usable_in_integer_context(self):
+        """TRUNC returns INTEGER; result can feed integer-only intrinsics like SUCC."""
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := SUCC(TRUNC(3.7)) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
     def test_nil_typecheck_for_pointer_assignment(self):
         """NIL is a typed null pointer constant."""
         result = typecheck_source("PROGRAM P; VAR p: ^INTEGER; BEGIN p := NIL END.")

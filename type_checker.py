@@ -136,6 +136,12 @@ class PascalTypeChecker(TypeChecker):
         lobyte_type = FunctionType('LOBYTE', [('n', INTEGER_TYPE)], CHAR_TYPE)
         self.symbol_table.define('LOBYTE', Symbol(name='LOBYTE', type=lobyte_type, kind='function', is_mutable=False))
 
+        # TRUNC / ROUND functions (REAL -> INTEGER)
+        trunc_type = FunctionType('TRUNC', [('x', REAL_TYPE)], INTEGER_TYPE)
+        self.symbol_table.define('TRUNC', Symbol(name='TRUNC', type=trunc_type, kind='function', is_mutable=False))
+        round_type = FunctionType('ROUND', [('x', REAL_TYPE)], INTEGER_TYPE)
+        self.symbol_table.define('ROUND', Symbol(name='ROUND', type=round_type, kind='function', is_mutable=False))
+
     def check(self, ast: ASTNode) -> TypeCheckResult:
         """Main entry point for type checking."""
         self.errors = []
@@ -1260,6 +1266,16 @@ class PascalTypeChecker(TypeChecker):
                     return CHAR_TYPE
                 if arg_type:
                     self.error(f"Argument 1 type mismatch: expected INTEGER, got {arg_type}", expr)
+                return None
+            if lookup_name in {'TRUNC', 'ROUND'}:
+                if len(expr.args) != 1:
+                    self.error(f"Function '{lookup_name}' expects 1 argument, got {len(expr.args)}", expr)
+                    return None
+                arg_type = self.infer_expression_type(expr.args[0])
+                if arg_type == REAL_TYPE:
+                    return INTEGER_TYPE
+                if arg_type:
+                    self.error(f"Argument 1 type mismatch: expected REAL, got {arg_type}", expr)
                 return None
             sym = self.symbol_table.lookup(lookup_name) or self.symbol_table.lookup(expr.name)
             if not sym:

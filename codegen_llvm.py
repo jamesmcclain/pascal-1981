@@ -1527,6 +1527,32 @@ class Codegen:
                 raise CodegenError(f'SQRT not supported for type {val.type}')
             sqrt_fn = self.module.declare_intrinsic('llvm.sqrt', [ir.DoubleType()])
             return self.builder.call(sqrt_fn, [val])
+        elif lookup_name == 'TRUNC':
+            # REAL -> INTEGER: truncate toward zero (manual 11-7)
+            val = self.codegen_expr(expr.args[0])
+            if isinstance(val.type, ir.IntType):
+                val = self.builder.sitofp(val, ir.DoubleType())
+            elif not isinstance(val.type, ir.DoubleType):
+                raise CodegenError(f'TRUNC not supported for type {val.type}')
+            return self.builder.fptosi(val, ir.IntType(32))
+        elif lookup_name == 'ROUND':
+            # REAL -> INTEGER: rounds away from zero (manual 11-7).
+            # Implemented as: fptosi(x + copysign(0.5, x)), i.e. add +0.5
+            # for non-negative inputs and -0.5 for negative inputs, then
+            # truncate.  This gives half-away-from-zero without requiring
+            # libm.round (llvm.round lowers to a libm call in llvmlite).
+            val = self.codegen_expr(expr.args[0])
+            if isinstance(val.type, ir.IntType):
+                val = self.builder.sitofp(val, ir.DoubleType())
+            elif not isinstance(val.type, ir.DoubleType):
+                raise CodegenError(f'ROUND not supported for type {val.type}')
+            zero = ir.Constant(ir.DoubleType(), 0.0)
+            half = ir.Constant(ir.DoubleType(), 0.5)
+            neg_half = ir.Constant(ir.DoubleType(), -0.5)
+            is_neg = self.builder.fcmp_ordered('<', val, zero)
+            adj = self.builder.select(is_neg, neg_half, half)
+            rounded = self.builder.fadd(val, adj)
+            return self.builder.fptosi(rounded, ir.IntType(32))
 
         symbol = self.scope.lookup(lookup_name) or self.scope.lookup(expr.name)
         if not symbol:
