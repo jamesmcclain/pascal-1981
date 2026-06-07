@@ -135,16 +135,30 @@ class RecordType(Type):
     def equivalent_to(self, other: Type) -> bool:
         if not isinstance(other, RecordType):
             return False
-        if set(self.fields.keys()) != set(other.fields.keys()):
+        # Pascal identifiers are case-insensitive, so field names compare
+        # without regard to case.
+        self_keys = {k.upper(): k for k in self.fields}
+        other_keys = {k.upper(): k for k in other.fields}
+        if set(self_keys) != set(other_keys):
             return False
-        for field_name in self.fields:
-            if not self.fields[field_name].equivalent_to(other.fields[field_name]):
+        for up, sk in self_keys.items():
+            if not self.fields[sk].equivalent_to(other.fields[other_keys[up]]):
                 return False
         return True
 
+    def has_field(self, field_name: str) -> bool:
+        """Case-insensitive membership test (Pascal identifiers ignore case)."""
+        return self.get_field_type(field_name) is not None
+
     def get_field_type(self, field_name: str) -> Optional[Type]:
-        """Get the type of a field by name."""
-        return self.fields.get(field_name)
+        """Get the type of a field by name, case-insensitively."""
+        if field_name in self.fields:
+            return self.fields[field_name]
+        target = field_name.upper()
+        for name, ftype in self.fields.items():
+            if name.upper() == target:
+                return ftype
+        return None
 
 
 @dataclass

@@ -873,3 +873,11 @@ class TestRecordTypeChecking(unittest.TestCase):
             "TYPE Inner = RECORD m: INTEGER END; Outer = RECORD n: Inner END; "
             "VAR o: Outer; BEGIN o.n.m := 5 END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_field_access_is_case_insensitive(self):
+        """Pascal identifiers are case-insensitive, so a field declared 'Count'
+        is reachable as 'count'/'COUNT'/'cOuNt'."""
+        result = typecheck_source(
+            "PROGRAM P; TYPE R = RECORD Count: INTEGER END; VAR r: R; "
+            "BEGIN r.count := 1; r.COUNT := 2; r.cOuNt := 3 END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))

@@ -1350,10 +1350,11 @@ class PascalTypeChecker(TypeChecker):
                             self.error(f"Cannot access field on non-record type {current_type}", expr)
                             return None
                         field_name = selector.index_or_field
-                        if field_name not in current_type.fields:
+                        field_type = current_type.get_field_type(field_name)
+                        if field_type is None:
                             self.error(f"Record has no field '{field_name}'", expr)
                             return None
-                        current_type = current_type.fields[field_name]
+                        current_type = field_type
                     elif selector.kind == 'DEREF':
                         if not isinstance(current_type, PointerType):
                             self.error(f"Cannot dereference non-pointer type {current_type}", expr)

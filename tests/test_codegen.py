@@ -1200,3 +1200,17 @@ END."""
         rc, out = build_and_run(src)
         self.assertEqual(rc, 0)
         self.assertEqual(out.strip(), "10")
+
+    @requires_exe
+    def test_field_access_case_insensitive(self):
+        """Fields declared in one case are reachable in any case, end to end."""
+        src = """PROGRAM P;
+TYPE Rec = RECORD Count: INTEGER; Total: INTEGER END;
+VAR r: Rec;
+BEGIN
+    r.count := 5; r.TOTAL := 50;
+    WRITELN(r.Count); WRITELN(r.cOuNt); WRITELN(r.total)
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual([l.strip() for l in out.splitlines() if l.strip()], ["5", "5", "50"])
