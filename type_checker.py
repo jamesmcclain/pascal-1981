@@ -1646,13 +1646,18 @@ class PascalTypeChecker(TypeChecker):
                     return None
             return None
         elif isinstance(type_expr, ASTRecordType):
+            # AST RecordType.fields is a list of (name_list, type) pairs, e.g.
+            # `x, y: INTEGER` parses to (['x', 'y'], INTEGER). Expand each name
+            # into the name->type dict that type_system.RecordType expects.
+            # Insertion order is preserved (declaration order), matching the
+            # struct layout codegen builds.
             fields = {}
-            if type_expr.fields:
-                for field_name, field_type_expr in type_expr.fields.items():
-                    field_type = self.resolve_type(field_type_expr)
-                    if field_type:
+            for names, field_type_expr in (type_expr.fields or []):
+                field_type = self.resolve_type(field_type_expr)
+                if field_type:
+                    for field_name in names:
                         fields[field_name] = field_type
-            return RecordType(type_expr.name, fields)
+            return RecordType(getattr(type_expr, 'name', None), fields)
         elif isinstance(type_expr, ASTPointerType):
             base_type = self.resolve_type(type_expr.base)
             flavor = getattr(type_expr, 'flavor', 'POINTER')

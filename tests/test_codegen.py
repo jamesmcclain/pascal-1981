@@ -1114,3 +1114,89 @@ END."""
         self.assertEqual(rc, 0)
         self.assertEqual([l.strip() for l in out.splitlines() if l.strip()],
                          ["210", "312"])
+
+class TestRecordFieldCodegen(unittest.TestCase):
+    """Record field access (declaration, plain `.field`, RETYPE `.field`).
+
+    Records were previously unimplemented: the type checker crashed on a
+    record declaration and codegen had no struct layout, so a FIELD selector
+    was a no-op that addressed offset 0 regardless of which field was named.
+    """
+
+    @requires_exe
+    def test_field_access_reads_correct_offsets(self):
+        """Each field round-trips at its own offset; a non-first field must not
+        resolve to offset 0 (the original no-op behavior)."""
+        src = """PROGRAM P;
+TYPE Pt = RECORD x: INTEGER; y: INTEGER END;
+VAR p: Pt;
+BEGIN
+    p.x := 10; p.y := 20;
+    WRITELN(p.x); WRITELN(p.y)
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual([l.strip() for l in out.splitlines() if l.strip()], ["10", "20"])
+
+    @requires_exe
+    def test_record_field_does_not_clobber_neighbor(self):
+        """Writing record fields must stay within the struct's storage."""
+        src = """PROGRAM P;
+TYPE R = RECORD a, b, c: INTEGER END;
+VAR v: R;
+    guard: INTEGER;
+BEGIN
+    guard := 1234;
+    v.a := 1; v.b := 2; v.c := 3;
+    WRITELN(v.c); WRITELN(guard)
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual([l.strip() for l in out.splitlines() if l.strip()], ["3", "1234"])
+
+    @requires_exe
+    def test_array_of_records(self):
+        """Array-of-record indexing exercises lower-bound subtraction AND field
+        offset together."""
+        src = """PROGRAM P;
+TYPE Pt = RECORD a, b: INTEGER END;
+VAR arr: ARRAY[1..3] OF Pt;
+    i: INTEGER;
+BEGIN
+    FOR i := 1 TO 3 DO BEGIN arr[i].a := i; arr[i].b := i * 100 END;
+    WRITELN(arr[2].a); WRITELN(arr[3].b)
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual([l.strip() for l in out.splitlines() if l.strip()], ["2", "300"])
+
+    @requires_exe
+    def test_nested_records(self):
+        src = """PROGRAM P;
+TYPE Inner = RECORD m, n: INTEGER END;
+     Outer = RECORD tag: INTEGER; nested: Inner END;
+VAR o: Outer;
+BEGIN
+    o.tag := 9; o.nested.m := 100; o.nested.n := 200;
+    WRITELN(o.tag); WRITELN(o.nested.m); WRITELN(o.nested.n)
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual([l.strip() for l in out.splitlines() if l.strip()], ["9", "100", "200"])
+
+    @requires_exe
+    def test_retype_reads_non_first_record_field(self):
+        """RETYPE(record, x).field must address the field's real offset, not 0.
+        0x000A0005 little-endian: lo WORD = 5, hi WORD = 10."""
+        src = """PROGRAM P;
+TYPE Pair = RECORD lo, hi: WORD END;
+VAR i: INTEGER;
+    w: WORD;
+BEGIN
+    i := 16#000A0005;
+    w := RETYPE(Pair, i).hi;
+    WRITELN(w)
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), "10")

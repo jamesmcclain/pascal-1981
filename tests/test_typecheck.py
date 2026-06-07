@@ -847,3 +847,29 @@ BEGIN
 END."""
         r = typecheck_source(src)
         self.assertFalse(r.success)
+
+
+class TestRecordTypeChecking(unittest.TestCase):
+    """Records previously raised an internal error during type checking
+    (resolve_type treated the field list as a dict). They must now type-check,
+    validate field access, and reject unknown fields cleanly."""
+
+    def test_record_declaration_and_field_access(self):
+        result = typecheck_source(
+            "PROGRAM P; TYPE Pt = RECORD x, y: INTEGER END; VAR p: Pt; "
+            "BEGIN p.x := 1; p.y := 2 END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_unknown_field_is_error(self):
+        result = typecheck_source(
+            "PROGRAM P; TYPE Pt = RECORD x: INTEGER END; VAR p: Pt; "
+            "BEGIN p.zzz := 1 END.")
+        self.assertFalse(result.success)
+        self.assertIn("field", " ".join(str(e) for e in result.errors).lower())
+
+    def test_nested_record_field_access(self):
+        result = typecheck_source(
+            "PROGRAM P; "
+            "TYPE Inner = RECORD m: INTEGER END; Outer = RECORD n: Inner END; "
+            "VAR o: Outer; BEGIN o.n.m := 5 END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))

@@ -183,6 +183,17 @@ class Codegen:
             except Exception:
                 size = 100
             return ir.ArrayType(elem_type, size)
+        elif isinstance(type_expr, RecordType):
+            # AST RecordType.fields is a list of (name_list, field_type) pairs.
+            # Lay the record out as an LLVM struct in declaration order, one
+            # struct element per field name (so `x, y: INTEGER` -> two i32s).
+            # record_field_index() uses this same ordering to address fields.
+            elem_types: List[ir.Type] = []
+            for names, ftype in type_expr.fields:
+                lt = self.llvm_type(ftype)
+                for _ in names:
+                    elem_types.append(lt)
+            return ir.LiteralStructType(elem_types)
         else:
             raise CodegenError(f'Type {type(type_expr).__name__} not yet supported')
 
@@ -967,8 +978,12 @@ class Codegen:
                         ptr = self.builder.gep(ptr, [index])
                     cur_type = elem_type
                 elif selector.kind == 'FIELD':
-                    # Record field access (simplified)
-                    cur_type = None
+                    # Record field access: GEP to the field's struct slot.
+                    fidx, ftype = self.record_field_index(cur_type, selector.index_or_field)
+                    if fidx is None:
+                        raise CodegenError(f"Cannot access field '{selector.index_or_field}' on type {cur_type}")
+                    ptr = self.builder.gep(ptr, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), fidx)])
+                    cur_type = ftype
                 elif selector.kind == 'DEREF':
                     # Pointer dereference
                     ptr = self.builder.load(ptr)
@@ -1244,18 +1259,28 @@ class Codegen:
 
             # 5. Process any selectors
             if expr.selectors:
+                cur_type = self.resolve_type_alias(NamedType(expr.type_id, None))
                 for selector in expr.selectors:
                     if selector.kind == 'INDEX':
+                        # RETYPE indexing is raw-memory navigation (the index is
+                        # a 0-based element offset into the reinterpreted bytes),
+                        # so it deliberately does not subtract a lower bound.
                         index = self.codegen_expr(selector.index_or_field)
                         if isinstance(casted_ptr.type.pointee, ir.ArrayType):
                             casted_ptr = self.builder.gep(casted_ptr, [ir.Constant(ir.IntType(32), 0), index])
                         else:
                             casted_ptr = self.builder.gep(casted_ptr, [index])
+                        _, cur_type = self.array_lower_bound(cur_type)
                     elif selector.kind == 'FIELD':
-                        # Placeholder for field access if needed later
-                        pass
+                        fidx, ftype = self.record_field_index(cur_type, selector.index_or_field)
+                        if fidx is None:
+                            raise CodegenError(f"RETYPE: cannot access field '{selector.index_or_field}' on type {cur_type}")
+                        casted_ptr = self.builder.gep(casted_ptr, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), fidx)])
+                        cur_type = ftype
                     elif selector.kind == 'DEREF':
                         casted_ptr = self.builder.load(casted_ptr)
+                        base = self.resolve_type_alias(cur_type) if cur_type is not None else None
+                        cur_type = getattr(base, 'base', None) or getattr(base, 'target_type', None)
 
             # 6. If the resulting type is an aggregate, return the pointer. Otherwise load the value.
             if isinstance(casted_ptr.type.pointee, (ir.ArrayType, ir.LiteralStructType, ir.IdentifiedStructType)):
@@ -2156,6 +2181,24 @@ class Codegen:
         # (StringType/LStringType expose max_len instead and are excluded.)
         if hasattr(t, 'lower_bound') and hasattr(t, 'element_type') and not hasattr(t, 'max_len'):
             return t.lower_bound, t.element_type
+        return None, None
+
+    def record_field_index(self, type_expr, field_name: str) -> tuple[Optional[int], Any]:
+        """For a (possibly aliased) record type, return ``(llvm_struct_index,
+        field_ast_type)`` for ``field_name``, matching the layout in
+        ``llvm_type``. Field lookup is case-insensitive (Pascal identifiers are
+        case-insensitive). Returns ``(None, None)`` if not a record / no match.
+        """
+        t = self.resolve_type_alias(type_expr)
+        if not isinstance(t, RecordType):  # AST RecordType
+            return None, None
+        target = field_name.upper()
+        idx = 0
+        for names, ftype in t.fields:
+            for nm in names:
+                if nm.upper() == target:
+                    return idx, ftype
+                idx += 1
         return None, None
 
     def get_array_bounds(self, type_expr) -> tuple[int, int]:
