@@ -381,6 +381,20 @@ class TestCallValidation(unittest.TestCase):
         )
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
+    def test_predeclared_movesl_procedure(self):
+        """MOVESL should be available without a manual declaration."""
+        result = typecheck_source(
+            "PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN MOVESL(ADR buf, ADR buf, WRD(4)) END."
+        )
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_predeclared_movesr_procedure(self):
+        """MOVESR should be available without a manual declaration."""
+        result = typecheck_source(
+            "PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN MOVESR(ADR buf, ADR buf, WRD(4)) END."
+        )
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
 
 
 class TestFunctionReturnTypes(unittest.TestCase):

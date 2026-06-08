@@ -129,6 +129,12 @@ class Codegen:
         mover = ir.Function(self.module, mov_ty, name='mover')
         mover.linkage = 'external'
         self.scope.define('mover', mover, None)
+        movesl = ir.Function(self.module, mov_ty, name='movesl')
+        movesl.linkage = 'external'
+        self.scope.define('movesl', movesl, None)
+        movesr = ir.Function(self.module, mov_ty, name='movesr')
+        movesr.linkage = 'external'
+        self.scope.define('movesr', movesr, None)
 
     # ========================================================================
     # Type System
@@ -769,6 +775,10 @@ class Codegen:
                 self.builtin_movel(stmt.args)
             elif lookup_name == 'MOVER':
                 self.builtin_mover(stmt.args)
+            elif lookup_name == 'MOVESL':
+                self.builtin_movesl(stmt.args)
+            elif lookup_name == 'MOVESR':
+                self.builtin_movesr(stmt.args)
             else:
                 raise CodegenError(f'Undefined procedure: {stmt.name}')
         else:
@@ -2501,6 +2511,12 @@ class Codegen:
 
     def builtin_mover(self, args: List[Expression]) -> None:
         self._runtime_fillmove('MOVER', args)
+
+    def builtin_movesl(self, args: List[Expression]) -> None:
+        self._runtime_fillmove('MOVESL', args)
+
+    def builtin_movesr(self, args: List[Expression]) -> None:
+        self._runtime_fillmove('MOVESR', args)
         self.builder.cbranch(cond, body_block, end_block)
 
         self.builder.position_at_end(body_block)

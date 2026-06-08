@@ -139,6 +139,30 @@ class TestCodegenIR(unittest.TestCase):
         self.assertIn("mover", ir.lower())
         self.assertIn("external", ir.lower())
 
+    def test_predeclared_movesl_works_with_extern_declaration(self):
+        """MOVESL should work both as a predeclared extern and when declared extern in source."""
+        src = (
+            "PROGRAM P; "
+            "PROCEDURE movesl (src, dst: ADRMEM; len: WORD); extern; "
+            "VAR buf: ARRAY[1..4] OF CHAR; "
+            "BEGIN MOVESL(ADR buf, ADR buf, WRD(4)) END."
+        )
+        ir = compile_to_ir(src)
+        self.assertIn("movesl", ir.lower())
+        self.assertIn("external", ir.lower())
+
+    def test_predeclared_movesr_works_with_extern_declaration(self):
+        """MOVESR should work both as a predeclared extern and when declared extern in source."""
+        src = (
+            "PROGRAM P; "
+            "PROCEDURE movesr (src, dst: ADRMEM; len: WORD); extern; "
+            "VAR buf: ARRAY[1..4] OF CHAR; "
+            "BEGIN MOVESR(ADR buf, ADR buf, WRD(4)) END."
+        )
+        ir = compile_to_ir(src)
+        self.assertIn("movesr", ir.lower())
+        self.assertIn("external", ir.lower())
+
     def test_null_lowers_as_empty_string_pointer(self):
         """NULL lowers to a pointer to the empty LSTRING constant."""
         src = "PROGRAM P; VAR s: LSTRING(10); BEGIN s := NULL END."
