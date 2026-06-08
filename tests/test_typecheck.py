@@ -395,6 +395,13 @@ class TestCallValidation(unittest.TestCase):
         )
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
+    def test_predeclared_abort_procedure(self):
+        """ABORT should be available without a manual declaration."""
+        result = typecheck_source(
+            "PROGRAM P; VAR s: STRING(10); BEGIN s := 'oops'; ABORT(ADR s, WRD(0), WRD(0)) END."
+        )
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
 
 
 class TestFunctionReturnTypes(unittest.TestCase):

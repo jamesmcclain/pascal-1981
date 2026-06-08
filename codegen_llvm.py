@@ -779,6 +779,8 @@ class Codegen:
                 self.builtin_movesl(stmt.args)
             elif lookup_name == 'MOVESR':
                 self.builtin_movesr(stmt.args)
+            elif lookup_name == 'ABORT':
+                self.builtin_abort(stmt.args)
             else:
                 raise CodegenError(f'Undefined procedure: {stmt.name}')
         else:
@@ -2517,26 +2519,11 @@ class Codegen:
 
     def builtin_movesr(self, args: List[Expression]) -> None:
         self._runtime_fillmove('MOVESR', args)
-        self.builder.cbranch(cond, body_block, end_block)
 
-        self.builder.position_at_end(body_block)
-
-        # offset = j - low(Z): Z's 0-based storage slot.
-        offset = self.builder.sub(j_val, ir.Constant(ir.IntType(32), z_low))
-        z_elem_ptr = self.builder.gep(z_ptr, [ir.Constant(ir.IntType(32), 0), offset])
-        elem_val = self.builder.load(z_elem_ptr)
-
-        # A storage slot = (I + offset) - low(A).
-        a_pascal = self.builder.add(offset, i_val)
-        a_slot = self.builder.sub(a_pascal, ir.Constant(ir.IntType(32), a_low))
-        a_elem_ptr = self.builder.gep(a_ptr, [ir.Constant(ir.IntType(32), 0), a_slot])
-        self.builder.store(elem_val, a_elem_ptr)
-
-        next_j = self.builder.add(j_val, ir.Constant(ir.IntType(32), 1))
-        self.builder.store(next_j, j_var)
-        self.builder.branch(loop_block)
-
-        self.builder.position_at_end(end_block)
+    def builtin_abort(self, args: List[Expression]) -> None:
+        abort_fn = self.runtime_error_func()
+        self.builder.call(abort_fn, [])
+        self.builder.unreachable()
 
     def _designator_array_bounds(self, arg) -> tuple[int, int]:
         """(lower, upper) bounds of the array a designator names; (1, 10) fallback."""

@@ -163,6 +163,11 @@ class TestCodegenIR(unittest.TestCase):
         self.assertIn("movesr", ir.lower())
         self.assertIn("external", ir.lower())
 
+    def test_predeclared_abort_generates_abort_call(self):
+        """ABORT should lower to the runtime abort handler."""
+        ir = compile_to_ir("PROGRAM P; VAR s: STRING(10); BEGIN s := 'oops'; ABORT(ADR s, WRD(0), WRD(0)) END.")
+        self.assertIn("abort", ir.lower())
+
     def test_null_lowers_as_empty_string_pointer(self):
         """NULL lowers to a pointer to the empty LSTRING constant."""
         src = "PROGRAM P; VAR s: LSTRING(10); BEGIN s := NULL END."

@@ -264,7 +264,9 @@ C runtime, sibling to `runtime/fillc.c`. Loops/memory/OS, so not inline.
   externs in codegen, and added runtime stubs using `memmove` so overlap is safe.
   Source-level `extern` declarations reuse the existing LLVM symbol. Verified by
   `python -m unittest` (276 tests).
-- [ ] **5.5 — `ABORT`.** `[READ]` **S** Wrapper over `abort()`/`exit()`.
+- [x] **5.5 — `ABORT`.** `[READ]` **S** Wrapper over `abort()`/`exit()`.
+  Added ABORT as a predeclared procedure and lowered it directly to the runtime
+  abort handler. Verified by `python -m unittest` (278 tests).
 - [ ] **5.6 — `NEW` / `DISPOSE`.** `[READ]` **M** Heap alloc/free (`malloc`/`free`). Needs real pointer-type support to be meaningful.
 
 ---
