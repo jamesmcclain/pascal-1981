@@ -1130,8 +1130,7 @@ class Codegen:
             return value
 
         def _is_seg(t):
-            return (isinstance(t, ir.LiteralStructType) and len(t.elements) == 2
-                    and isinstance(t.elements[0], ir.PointerType) and isinstance(t.elements[1], ir.IntType))
+            return (isinstance(t, ir.LiteralStructType) and len(t.elements) == 2 and isinstance(t.elements[0], ir.PointerType) and isinstance(t.elements[1], ir.IntType))
 
         # Segmented address (ADS) reconciliation. ADS values lower to a
         # {pointer, segment} pair whose pointer field is typed to the pointee
@@ -1337,9 +1336,7 @@ class Codegen:
             # as bits; an aggregate pointee defaults to the legacy load-through).
             is_ptr_value = self.retype_source_is_pointer_value(expr.expr)
             if is_ptr_value is None and isinstance(val.type, ir.PointerType):
-                is_ptr_value = not isinstance(
-                    val.type.pointee,
-                    (ir.ArrayType, ir.LiteralStructType, ir.IdentifiedStructType))
+                is_ptr_value = not isinstance(val.type.pointee, (ir.ArrayType, ir.LiteralStructType, ir.IdentifiedStructType))
 
             if isinstance(val.type, ir.PointerType) and not is_ptr_value:
                 # Aggregate address: reinterpret the bytes the pointer refers to.
@@ -2561,9 +2558,7 @@ class Codegen:
         for func in self.module.functions:
             if func.name == 'pabort':
                 return func
-        fn_type = ir.FunctionType(
-            ir.VoidType(),
-            [ir.PointerType(ir.IntType(8)), ir.IntType(32), ir.IntType(16), ir.IntType(16)])
+        fn_type = ir.FunctionType(ir.VoidType(), [ir.PointerType(ir.IntType(8)), ir.IntType(32), ir.IntType(16), ir.IntType(16)])
         fn = ir.Function(self.module, fn_type, name='pabort')
         fn.linkage = 'external'
         return fn

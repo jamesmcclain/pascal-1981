@@ -9,7 +9,8 @@
  * propagation is the defined behavior. There is no bounds checking.
  */
 
-int movel(char *src, char *dst, unsigned short len) {
+int movel(char *src, char *dst, unsigned short len)
+{
     unsigned short i;
     for (i = 0; i < len; i++) {
         dst[i] = src[i];

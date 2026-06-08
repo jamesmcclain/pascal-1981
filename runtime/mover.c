@@ -7,7 +7,8 @@
  * memmove. There is no bounds checking.
  */
 
-int mover(char *src, char *dst, unsigned short len) {
+int mover(char *src, char *dst, unsigned short len)
+{
     unsigned short i;
     for (i = len; i > 0; i--) {
         dst[i - 1] = src[i - 1];

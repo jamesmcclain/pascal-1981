@@ -16,8 +16,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-void pabort(const char *msg, int msglen, unsigned short code, unsigned short status) {
-    fprintf(stderr, "ABORT: %.*s (error code %u, status %u)\n",
-            msglen, msg, (unsigned)code, (unsigned)status);
+void pabort(const char *msg, int msglen, unsigned short code, unsigned short status)
+{
+    fprintf(stderr, "ABORT: %.*s (error code %u, status %u)\n", msglen, msg, (unsigned) code, (unsigned) status);
     abort();
 }

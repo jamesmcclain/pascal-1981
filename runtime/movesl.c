@@ -16,7 +16,8 @@ typedef struct {
     unsigned short seg;
 } adsmem;
 
-int movesl(adsmem src, adsmem dst, unsigned short len) {
+int movesl(adsmem src, adsmem dst, unsigned short len)
+{
     unsigned short i;
     for (i = 0; i < len; i++) {
         dst.ptr[i] = src.ptr[i];

@@ -29,8 +29,8 @@ from ast_nodes import SetType as ASTSetType
 from ast_nodes import SizeofExpr, Statement, StringLiteral
 from ast_nodes import SubrangeType as ASTSubrangeType
 from ast_nodes import (TypeDecl, UnaryOp, UpperExpr, UseClause, VarDecl, WhileStmt, WriteArg)
-from symbol_table import SourceLocation, Symbol, SymbolTable
 from builtins_registry import register_builtins
+from symbol_table import SourceLocation, Symbol, SymbolTable
 from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, EnumType, FileType, FunctionType, LStringType, PointerType, ProcedureType,
                          RecordType, SetType, StringType, Type, binary_op_result_type, can_assign, unary_op_result_type)
 
@@ -820,11 +820,10 @@ class PascalTypeChecker(TypeChecker):
         selector_type = self.infer_expression_type(stmt.expr)
         for element in stmt.elements:
             for label in element.constants:
-                endpoints = (label.low, label.high) if isinstance(label, RangeExpr) else (label,)
+                endpoints = (label.low, label.high) if isinstance(label, RangeExpr) else (label, )
                 for endpoint in endpoints:
                     label_type = self.infer_expression_type(endpoint)
-                    if selector_type and label_type and not (
-                            can_assign(label_type, selector_type) or can_assign(selector_type, label_type)):
+                    if selector_type and label_type and not (can_assign(label_type, selector_type) or can_assign(selector_type, label_type)):
                         self.error(f"CASE label type {label_type} is incompatible with selector type {selector_type}", stmt)
             if element.stmt:
                 self.check_statement(element.stmt)

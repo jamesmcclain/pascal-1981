@@ -6,26 +6,17 @@ This is shared between the type checker and code generator to prevent
 """
 
 from symbol_table import Symbol
-from type_system import (
-    INTEGER_TYPE, REAL_TYPE, CHAR_TYPE, BOOLEAN_TYPE, WORD_TYPE,
-    ProcedureType, FunctionType, FileType, StringType, LStringType, PointerType
-)
+from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, FileType, FunctionType, LStringType, PointerType, ProcedureType, StringType)
 
 # Lists of all built-in function and procedure names
-BUILTIN_FUNCTIONS = {
-    'ABS', 'SQR', 'SQRT', 'SIN', 'COS', 'LN', 'EXP', 'ARCTAN',
-    'CHR', 'ORD', 'ODD', 'SUCC', 'PRED', 'HIBYTE', 'LOBYTE',
-    'WRD', 'BYWORD', 'TRUNC', 'ROUND', 'FLOAT'
-}
+BUILTIN_FUNCTIONS = {'ABS', 'SQR', 'SQRT', 'SIN', 'COS', 'LN', 'EXP', 'ARCTAN', 'CHR', 'ORD', 'ODD', 'SUCC', 'PRED', 'HIBYTE', 'LOBYTE', 'WRD', 'BYWORD', 'TRUNC', 'ROUND', 'FLOAT'}
 
-BUILTIN_PROCEDURES = {
-    'WRITE', 'WRITELN', 'READLN',
-    'CONCAT', 'COPYLST', 'COPYSTR',
-    'PACK', 'UNPACK', 'FILLC', 'FILLSC', 'MOVEL', 'MOVER', 'MOVESL', 'MOVESR', 'ABORT'
-}
+BUILTIN_PROCEDURES = {'WRITE', 'WRITELN', 'READLN', 'CONCAT', 'COPYLST', 'COPYSTR', 'PACK', 'UNPACK', 'FILLC', 'FILLSC', 'MOVEL', 'MOVER', 'MOVESL', 'MOVESR', 'ABORT'}
+
 
 def register_builtins(symbol_table) -> None:
     """Define built-in procedures, functions, constants, and types in the global scope."""
+
     def define_builtin(name: str, symbol_type, kind: str):
         symbol_table.define(name, Symbol(name=name, type=symbol_type, kind=kind, is_mutable=False, is_builtin=True))
 

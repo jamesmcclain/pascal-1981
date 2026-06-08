@@ -17,7 +17,8 @@ typedef struct {
     unsigned short seg;
 } adsmem;
 
-int fillsc(adsmem dst, unsigned short len, char val) {
+int fillsc(adsmem dst, unsigned short len, char val)
+{
     unsigned short i;
     for (i = 0; i < len; i++) {
         dst.ptr[i] = val;

@@ -337,93 +337,67 @@ class TestCallValidation(unittest.TestCase):
 
     def test_redefine_builtin_function(self):
         """Predeclared identifiers (like ABS) are redefinable by the programmer."""
-        result = typecheck_source(
-            "PROGRAM P; "
-            "FUNCTION ABS: CHAR; BEGIN ABS := 'A' END; "
-            "VAR c: CHAR; BEGIN c := ABS END."
-        )
+        result = typecheck_source("PROGRAM P; "
+                                  "FUNCTION ABS: CHAR; BEGIN ABS := 'A' END; "
+                                  "VAR c: CHAR; BEGIN c := ABS END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_redefine_builtin_procedure(self):
         """Predeclared procedures (like WRITE/WRITELN) are redefinable by the programmer."""
-        result = typecheck_source(
-            "PROGRAM P; "
-            "PROCEDURE WRITELN(x: CHAR; y: INTEGER); BEGIN END; "
-            "BEGIN WRITELN('A', 42) END."
-        )
+        result = typecheck_source("PROGRAM P; "
+                                  "PROCEDURE WRITELN(x: CHAR; y: INTEGER); BEGIN END; "
+                                  "BEGIN WRITELN('A', 42) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_predeclared_fillc_procedure(self):
         """FILLC should be available without a manual declaration, matching the reference compiler."""
-        result = typecheck_source(
-            "PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN FILLC(ADR buf, WRD(4), 'X') END."
-        )
+        result = typecheck_source("PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN FILLC(ADR buf, WRD(4), 'X') END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_predeclared_fillsc_procedure(self):
         """FILLSC (segmented sibling of FILLC) is predeclared and takes ADS."""
-        result = typecheck_source(
-            "PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN FILLSC(ADS buf, WRD(4), 'X') END."
-        )
+        result = typecheck_source("PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN FILLSC(ADS buf, WRD(4), 'X') END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_predeclared_movel_procedure(self):
         """MOVEL should be available without a manual declaration."""
-        result = typecheck_source(
-            "PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN MOVEL(ADR buf, ADR buf, WRD(4)) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN MOVEL(ADR buf, ADR buf, WRD(4)) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_predeclared_mover_procedure(self):
         """MOVER should be available without a manual declaration."""
-        result = typecheck_source(
-            "PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN MOVER(ADR buf, ADR buf, WRD(4)) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN MOVER(ADR buf, ADR buf, WRD(4)) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_predeclared_movesl_procedure(self):
         """MOVESL (segmented sibling of MOVEL) is predeclared and takes ADS."""
-        result = typecheck_source(
-            "PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN MOVESL(ADS buf, ADS buf, WRD(4)) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN MOVESL(ADS buf, ADS buf, WRD(4)) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_predeclared_movesr_procedure(self):
         """MOVESR (segmented sibling of MOVER) is predeclared and takes ADS."""
-        result = typecheck_source(
-            "PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN MOVESR(ADS buf, ADS buf, WRD(4)) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN MOVESR(ADS buf, ADS buf, WRD(4)) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_segmented_move_rejects_flat_address(self):
         """The segmented variants take ADSMEM: passing a flat ADR address is a
         type error (and conversely the flat MOVEL accepts ADR)."""
-        bad = typecheck_source(
-            "PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN MOVESL(ADR buf, ADR buf, WRD(4)) END."
-        )
+        bad = typecheck_source("PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN MOVESL(ADR buf, ADR buf, WRD(4)) END.")
         self.assertFalse(bad.success)
-        self.assertTrue(any("ADS OF CHAR" in str(e) for e in bad.errors),
-                        msg=" ".join(str(e) for e in bad.errors))
-        good = typecheck_source(
-            "PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN MOVEL(ADR buf, ADR buf, WRD(4)) END."
-        )
+        self.assertTrue(any("ADS OF CHAR" in str(e) for e in bad.errors), msg=" ".join(str(e) for e in bad.errors))
+        good = typecheck_source("PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN MOVEL(ADR buf, ADR buf, WRD(4)) END.")
         self.assertTrue(good.success, msg=" ".join(str(e) for e in good.errors))
 
     def test_adsmem_type_resolves(self):
         """ADSMEM is a usable type name (segmented sibling of ADRMEM)."""
-        result = typecheck_source(
-            "PROGRAM P; PROCEDURE blit (d: ADSMEM; n: WORD); extern; "
-            "VAR buf: ARRAY[1..4] OF CHAR; BEGIN blit(ADS buf, WRD(4)) END."
-        )
+        result = typecheck_source("PROGRAM P; PROCEDURE blit (d: ADSMEM; n: WORD); extern; "
+                                  "VAR buf: ARRAY[1..4] OF CHAR; BEGIN blit(ADS buf, WRD(4)) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_predeclared_abort_procedure(self):
         """ABORT should be available without a manual declaration."""
-        result = typecheck_source(
-            "PROGRAM P; VAR s: STRING(10); BEGIN s := 'oops'; ABORT(s, WRD(0), WRD(0)) END."
-        )
+        result = typecheck_source("PROGRAM P; VAR s: STRING(10); BEGIN s := 'oops'; ABORT(s, WRD(0), WRD(0)) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
-
 
 
 class TestFunctionReturnTypes(unittest.TestCase):
@@ -852,13 +826,11 @@ class TestEnumValidation(unittest.TestCase):
     ENUM = "TYPE Color = (Red, Green, Blue);"
 
     def test_enum_for_loop_valid(self):
-        result = typecheck_source(
-            f"PROGRAM P; {self.ENUM} VAR c: Color; BEGIN FOR c := Red TO Blue DO WRITELN(c) END.")
+        result = typecheck_source(f"PROGRAM P; {self.ENUM} VAR c: Color; BEGIN FOR c := Red TO Blue DO WRITELN(c) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_enum_succ_pred_valid(self):
-        result = typecheck_source(
-            f"PROGRAM P; {self.ENUM} VAR c: Color; BEGIN c := SUCC(Red); c := PRED(Blue) END.")
+        result = typecheck_source(f"PROGRAM P; {self.ENUM} VAR c: Color; BEGIN c := SUCC(Red); c := PRED(Blue) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_succ_on_real_is_error(self):
@@ -867,21 +839,18 @@ class TestEnumValidation(unittest.TestCase):
         self.assertIn("ordinal type", " ".join(str(e) for e in result.errors))
 
     def test_ord_on_enum_valid(self):
-        result = typecheck_source(
-            f"PROGRAM P; {self.ENUM} VAR i: INTEGER; BEGIN i := ORD(Green) END.")
+        result = typecheck_source(f"PROGRAM P; {self.ENUM} VAR i: INTEGER; BEGIN i := ORD(Green) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_case_label_wrong_enum_is_error(self):
-        result = typecheck_source(
-            f"PROGRAM P; {self.ENUM} TYPE Fruit = (Apple, Pear); VAR c: Color; "
-            "BEGIN c := Red; CASE c OF Apple: WRITELN(1) END END.")
+        result = typecheck_source(f"PROGRAM P; {self.ENUM} TYPE Fruit = (Apple, Pear); VAR c: Color; "
+                                  "BEGIN c := Red; CASE c OF Apple: WRITELN(1) END END.")
         self.assertFalse(result.success)
         self.assertIn("CASE label", " ".join(str(e) for e in result.errors))
 
     def test_case_over_enum_valid(self):
-        result = typecheck_source(
-            f"PROGRAM P; {self.ENUM} VAR c: Color; "
-            "BEGIN c := Green; CASE c OF Red: WRITELN(1); Green: WRITELN(2); Blue: WRITELN(3) END END.")
+        result = typecheck_source(f"PROGRAM P; {self.ENUM} VAR c: Color; "
+                                  "BEGIN c := Green; CASE c OF Red: WRITELN(1); Green: WRITELN(2); Blue: WRITELN(3) END END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
 
@@ -984,49 +953,43 @@ class TestRecordTypeChecking(unittest.TestCase):
     validate field access, and reject unknown fields cleanly."""
 
     def test_record_declaration_and_field_access(self):
-        result = typecheck_source(
-            "PROGRAM P; TYPE Pt = RECORD x, y: INTEGER END; VAR p: Pt; "
-            "BEGIN p.x := 1; p.y := 2 END.")
+        result = typecheck_source("PROGRAM P; TYPE Pt = RECORD x, y: INTEGER END; VAR p: Pt; "
+                                  "BEGIN p.x := 1; p.y := 2 END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_unknown_field_is_error(self):
-        result = typecheck_source(
-            "PROGRAM P; TYPE Pt = RECORD x: INTEGER END; VAR p: Pt; "
-            "BEGIN p.zzz := 1 END.")
+        result = typecheck_source("PROGRAM P; TYPE Pt = RECORD x: INTEGER END; VAR p: Pt; "
+                                  "BEGIN p.zzz := 1 END.")
         self.assertFalse(result.success)
         self.assertIn("field", " ".join(str(e) for e in result.errors).lower())
 
     def test_nested_record_field_access(self):
-        result = typecheck_source(
-            "PROGRAM P; "
-            "TYPE Inner = RECORD m: INTEGER END; Outer = RECORD n: Inner END; "
-            "VAR o: Outer; BEGIN o.n.m := 5 END.")
+        result = typecheck_source("PROGRAM P; "
+                                  "TYPE Inner = RECORD m: INTEGER END; Outer = RECORD n: Inner END; "
+                                  "VAR o: Outer; BEGIN o.n.m := 5 END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_field_access_is_case_insensitive(self):
         """Pascal identifiers are case-insensitive, so a field declared 'Count'
         is reachable as 'count'/'COUNT'/'cOuNt'."""
-        result = typecheck_source(
-            "PROGRAM P; TYPE R = RECORD Count: INTEGER END; VAR r: R; "
-            "BEGIN r.count := 1; r.COUNT := 2; r.cOuNt := 3 END.")
+        result = typecheck_source("PROGRAM P; TYPE R = RECORD Count: INTEGER END; VAR r: R; "
+                                  "BEGIN r.count := 1; r.COUNT := 2; r.cOuNt := 3 END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_record_equivalence_is_order_sensitive(self):
         """Two records with the same field names but different declaration
         order have different layouts and must NOT be assignment-compatible
         (a positional whole-record copy would otherwise swap the fields)."""
-        result = typecheck_source(
-            "PROGRAM P; "
-            "TYPE A = RECORD x, y: INTEGER END; B = RECORD y, x: INTEGER END; "
-            "VAR a: A; b: B; BEGIN a := b END.")
+        result = typecheck_source("PROGRAM P; "
+                                  "TYPE A = RECORD x, y: INTEGER END; B = RECORD y, x: INTEGER END; "
+                                  "VAR a: A; b: B; BEGIN a := b END.")
         self.assertFalse(result.success)
 
     def test_record_equivalence_same_order_case_only_difference(self):
         """Records with identical field order/types whose names differ only in
         case ARE equivalent (Pascal identifiers are case-insensitive)."""
-        result = typecheck_source(
-            "PROGRAM P; "
-            "TYPE A = RECORD Count, Total: INTEGER END; "
-            "B = RECORD count, total: INTEGER END; "
-            "VAR a: A; b: B; BEGIN a := b END.")
+        result = typecheck_source("PROGRAM P; "
+                                  "TYPE A = RECORD Count, Total: INTEGER END; "
+                                  "B = RECORD count, total: INTEGER END; "
+                                  "VAR a: A; b: B; BEGIN a := b END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
