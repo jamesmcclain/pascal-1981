@@ -91,6 +91,18 @@ class TestCodegenIR(unittest.TestCase):
         self.assertIn("2147483647", ir)
         self.assertIn("65535", ir)
 
+    def test_predeclared_fillc_works_with_extern_declaration(self):
+        """FILLC should work both as a predeclared extern and when declared extern in source."""
+        src = (
+            "PROGRAM P; "
+            "PROCEDURE fillc (loc: ADRMEM; len: WORD; val: CHAR); extern; "
+            "VAR buf: ARRAY[1..4] OF CHAR; "
+            "BEGIN FILLC(ADR buf, WRD(4), 'X') END."
+        )
+        ir = compile_to_ir(src)
+        self.assertIn("fillc", ir.lower())
+        self.assertIn("external", ir.lower())
+
     def test_null_lowers_as_empty_string_pointer(self):
         """NULL lowers to a pointer to the empty LSTRING constant."""
         src = "PROGRAM P; VAR s: LSTRING(10); BEGIN s := NULL END."

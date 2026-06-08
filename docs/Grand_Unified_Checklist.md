@@ -245,9 +245,10 @@ C runtime, sibling to `runtime/fillc.c`. Loops/memory/OS, so not inline.
 - [x] **5.1 — Promote `FILLC` to a real predeclared `extern`.** `[OBSERVED]` **S**
   Added `FILLC` to the shared predeclared registry and predeclared its runtime
   symbol in codegen, so user code can call it without a manual declaration while
-  programmer-defined `FILLC` still shadows the builtin. Verified by
-  `python -m unittest tests.test_typecheck.TestCallValidation
-  tests.test_codegen.TestCodegenBuildRun`.
+  programmer-defined `FILLC` still shadows the builtin. Also handles the
+  reference-compiler case where source declares `PROCEDURE fillc ...; extern;`
+  by reusing the existing LLVM symbol instead of duplicating it. Verified by
+  `python -m unittest` (266 tests).
 - [ ] **5.2 — `FILLSC`.** `[READ]` **S** Fill-with-shortcount sibling of `FILLC`.
 - [ ] **5.3 — `MOVEL` / `MOVER`.** `[READ]` **M** Block moves, left/right (overlap-aware → memmove direction).
 - [ ] **5.4 — `MOVESL` / `MOVESR`.** `[READ]` **M** Short-count move variants.

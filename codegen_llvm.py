@@ -464,9 +464,15 @@ class Codegen:
                 flat_modes.append(param.mode)
         func_type = ir.FunctionType(ir.IntType(32), param_types)
 
-        # Create function
-        func = ir.Function(self.module, func_type, name=decl.name)
         attrs = {attr.upper() for attr in getattr(decl, 'attributes', [])}
+        existing = self.scope.lookup(decl.name)
+        if existing and isinstance(existing.llvm_value, ir.Function):
+            func = existing.llvm_value
+            if func.function_type != func_type:
+                raise CodegenError(f"Procedure '{decl.name}' already declared with a different signature")
+        else:
+            # Create function
+            func = ir.Function(self.module, func_type, name=decl.name)
         if attrs.intersection({'PUBLIC', 'EXTERN', 'EXTERNAL'}):
             func.linkage = 'external'
         self.proc_param_modes[decl.name.lower()] = flat_modes
