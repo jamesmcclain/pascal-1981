@@ -249,7 +249,11 @@ C runtime, sibling to `runtime/fillc.c`. Loops/memory/OS, so not inline.
   reference-compiler case where source declares `PROCEDURE fillc ...; extern;`
   by reusing the existing LLVM symbol instead of duplicating it. Verified by
   `python -m unittest` (266 tests).
-- [ ] **5.2 — `FILLSC`.** `[READ]` **S** Fill-with-shortcount sibling of `FILLC`.
+- [x] **5.2 — `FILLSC`.** `[READ]` **S** Fill-with-shortcount sibling of `FILLC`.
+  Added `FILLSC` to the shared predeclared registry, predeclared its runtime
+  symbol in codegen, and added a runtime stub mirroring `FILLC` so source-level
+  `extern` declarations reuse the existing LLVM symbol instead of colliding.
+  Verified by `python -m unittest` (268 tests).
 - [ ] **5.3 — `MOVEL` / `MOVER`.** `[READ]` **M** Block moves, left/right (overlap-aware → memmove direction).
 - [ ] **5.4 — `MOVESL` / `MOVESR`.** `[READ]` **M** Short-count move variants.
 - [ ] **5.5 — `ABORT`.** `[READ]` **S** Wrapper over `abort()`/`exit()`.

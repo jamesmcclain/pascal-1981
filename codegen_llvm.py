@@ -115,10 +115,13 @@ class Codegen:
 
     def _register_predeclared_externs(self) -> None:
         """Predeclare runtime externs that behave like builtins."""
-        fillc_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer(), ir.IntType(16), ir.IntType(8)])
-        fillc = ir.Function(self.module, fillc_ty, name='fillc')
+        fill_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer(), ir.IntType(16), ir.IntType(8)])
+        fillc = ir.Function(self.module, fill_ty, name='fillc')
         fillc.linkage = 'external'
         self.scope.define('fillc', fillc, None)
+        fillsc = ir.Function(self.module, fill_ty, name='fillsc')
+        fillsc.linkage = 'external'
+        self.scope.define('fillsc', fillsc, None)
 
     # ========================================================================
     # Type System

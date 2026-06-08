@@ -21,7 +21,7 @@ BUILTIN_FUNCTIONS = {
 BUILTIN_PROCEDURES = {
     'WRITE', 'WRITELN', 'READLN',
     'CONCAT', 'COPYLST', 'COPYSTR',
-    'PACK', 'UNPACK', 'FILLC'
+    'PACK', 'UNPACK', 'FILLC', 'FILLSC'
 }
 
 def register_builtins(symbol_table) -> None:
@@ -38,7 +38,9 @@ def register_builtins(symbol_table) -> None:
     define_builtin('COPYSTR', ProcedureType('COPYSTR', []), 'procedure')
     define_builtin('PACK', ProcedureType('PACK', []), 'procedure')
     define_builtin('UNPACK', ProcedureType('UNPACK', []), 'procedure')
-    define_builtin('FILLC', ProcedureType('FILLC', [('loc', PointerType(CHAR_TYPE)), ('len', WORD_TYPE), ('val', CHAR_TYPE)]), 'procedure')
+    fill_proc = ProcedureType('FILLC', [('loc', PointerType(CHAR_TYPE)), ('len', WORD_TYPE), ('val', CHAR_TYPE)])
+    define_builtin('FILLC', fill_proc, 'procedure')
+    define_builtin('FILLSC', ProcedureType('FILLSC', [('loc', PointerType(CHAR_TYPE)), ('len', WORD_TYPE), ('val', CHAR_TYPE)]), 'procedure')
 
     # Constants
     define_builtin('MAXINT', INTEGER_TYPE, 'const')
