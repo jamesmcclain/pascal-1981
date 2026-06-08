@@ -369,12 +369,11 @@ the biggest single chunk; expect it to need its own design pass.
     not a correctness blocker. Proven by `python -m unittest tests.test_parser
     tests.test_typecheck tests.test_codegen` (157 tests, 8 new REAL-hardening
     run tests in `TestCodegenBuildRun`).
-- [ ] **9.2 — Predeclared-identifier registration mechanism.** `[INFERRED]` **S**
-  Today builtins are scattered (some in `_setup_builtins`, some as dedicated AST
-  nodes `AdrExpr`/`SizeofExpr`/`UpperExpr`, some hand-declared `extern`). Consider
-  one table the type checker and codegen share, so "registered but no codegen"
-  traps (1.1) can't recur. The manual says predeclared identifiers are
-  *re-definable* by the programmer — model that (don't hard-reserve the names).
+- [x] **9.2 — Predeclared-identifier registration mechanism.** `[INFERRED]` **S**
+  Centralized predeclared registration in `builtins_registry.py`; `type_checker`
+  now uses the shared table, predeclared symbols are tagged `is_builtin`, and
+  user-defined redeclarations are allowed to shadow builtins instead of tripping
+  redeclaration errors. Proven by `python -m unittest` (264 tests).
 - [ ] **9.3 — Test fixtures for every closed item.** `[INFERRED]` **S (ongoing)**
   Each grammar item → a `should_pass`/`should_fail` fixture; each intrinsic → a
   codegen test (and a build/run test where a runtime is involved). Keeps the
