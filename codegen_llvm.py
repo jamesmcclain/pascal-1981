@@ -1186,6 +1186,8 @@ class Codegen:
             symbol = self.scope.lookup(expr.name) or self.scope.lookup(key)
             if not symbol:
                 raise CodegenError(f'Undefined variable: {expr.name}')
+            if symbol.type_expr is None and getattr(symbol.llvm_value, 'function_type', None) and len(symbol.llvm_value.function_type.args) == 0:
+                return self.builder.call(symbol.llvm_value, [])
             # Parameters are passed by value, don't load them
             if symbol.is_parameter:
                 return symbol.llvm_value
@@ -1603,6 +1605,20 @@ class Codegen:
     def codegen_func_call(self, expr: FuncCall) -> ir.Value:
         """Codegen function call."""
         lookup_name = expr.name.upper()
+        symbol = self.scope.lookup(lookup_name) or self.scope.lookup(expr.name)
+
+        if symbol:
+            fn = symbol.llvm_value
+            param_types = fn.function_type.args
+            param_modes = self.proc_param_modes.get(expr.name.lower(), [])
+            args = []
+            for i, arg in enumerate(expr.args):
+                mode = param_modes[i] if i < len(param_modes) else None
+                v = self.codegen_actual_arg(arg, mode)
+                if i < len(param_types):
+                    v = self.coerce_arg(v, param_types[i])
+                args.append(v)
+            return self.builder.call(fn, args)
 
         # Inline built-in functions
         if lookup_name == 'CHR':
@@ -1743,21 +1759,7 @@ class Codegen:
                 raise CodegenError(f'FLOAT not supported for type {val.type}')
             return self.builder.sitofp(val, ir.DoubleType())
 
-        symbol = self.scope.lookup(lookup_name) or self.scope.lookup(expr.name)
-        if not symbol:
-            raise CodegenError(f'Undefined function: {expr.name}')
-
-        fn = symbol.llvm_value
-        param_types = fn.function_type.args
-        param_modes = self.proc_param_modes.get(expr.name.lower(), [])
-        args = []
-        for i, arg in enumerate(expr.args):
-            mode = param_modes[i] if i < len(param_modes) else None
-            v = self.codegen_actual_arg(arg, mode)
-            if i < len(param_types):
-                v = self.coerce_arg(v, param_types[i])
-            args.append(v)
-        return self.builder.call(fn, args)
+        raise CodegenError(f'Undefined function: {expr.name}')
 
     # ========================================================================
     # Built-in Functions

@@ -335,6 +335,25 @@ class TestCallValidation(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("Undefined", " ".join(str(e) for e in result.errors))
 
+    def test_redefine_builtin_function(self):
+        """Predeclared identifiers (like ABS) are redefinable by the programmer."""
+        result = typecheck_source(
+            "PROGRAM P; "
+            "FUNCTION ABS: CHAR; BEGIN ABS := 'A' END; "
+            "VAR c: CHAR; BEGIN c := ABS END."
+        )
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_redefine_builtin_procedure(self):
+        """Predeclared procedures (like WRITE/WRITELN) are redefinable by the programmer."""
+        result = typecheck_source(
+            "PROGRAM P; "
+            "PROCEDURE WRITELN(x: CHAR; y: INTEGER); BEGIN END; "
+            "BEGIN WRITELN('A', 42) END."
+        )
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+
 
 class TestFunctionReturnTypes(unittest.TestCase):
     """Function return type validation."""

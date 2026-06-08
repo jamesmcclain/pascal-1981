@@ -30,6 +30,7 @@ from ast_nodes import SizeofExpr, Statement, StringLiteral
 from ast_nodes import SubrangeType as ASTSubrangeType
 from ast_nodes import (TypeDecl, UnaryOp, UpperExpr, UseClause, VarDecl, WhileStmt, WriteArg)
 from symbol_table import SourceLocation, Symbol, SymbolTable
+from builtins_registry import register_builtins
 from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, EnumType, FileType, FunctionType, LStringType, PointerType, ProcedureType,
                          RecordType, SetType, StringType, Type, binary_op_result_type, can_assign, unary_op_result_type)
 
@@ -83,88 +84,7 @@ class PascalTypeChecker(TypeChecker):
 
     def _setup_builtins(self) -> None:
         """Define built-in procedures and functions in the global scope."""
-        # WRITELN - variable argument procedure
-        writeln_type = ProcedureType('WRITELN', [])
-        self.symbol_table.define('WRITELN', Symbol(name='WRITELN', type=writeln_type, kind='procedure', is_mutable=False))
-
-        # WRITE - variable argument procedure (no newline)
-        write_type = ProcedureType('WRITE', [])
-        self.symbol_table.define('WRITE', Symbol(name='WRITE', type=write_type, kind='procedure', is_mutable=False))
-
-        # READLN - variable argument procedure
-        readln_type = ProcedureType('READLN', [])
-        self.symbol_table.define('READLN', Symbol(name='READLN', type=readln_type, kind='procedure', is_mutable=False))
-
-        # String manipulation procedures (section 7.2 of manual)
-        concat_type = ProcedureType('CONCAT', [])
-        self.symbol_table.define('CONCAT', Symbol(name='CONCAT', type=concat_type, kind='procedure', is_mutable=False))
-
-        copylst_type = ProcedureType('COPYLST', [])
-        self.symbol_table.define('COPYLST', Symbol(name='COPYLST', type=copylst_type, kind='procedure', is_mutable=False))
-
-        copystr_type = ProcedureType('COPYSTR', [])
-        self.symbol_table.define('COPYSTR', Symbol(name='COPYSTR', type=copystr_type, kind='procedure', is_mutable=False))
-
-        pack_type = ProcedureType('PACK', [])
-        self.symbol_table.define('PACK', Symbol(name='PACK', type=pack_type, kind='procedure', is_mutable=False))
-
-        unpack_type = ProcedureType('UNPACK', [])
-        self.symbol_table.define('UNPACK', Symbol(name='UNPACK', type=unpack_type, kind='procedure', is_mutable=False))
-
-        # Predeclared constants.
-        self.symbol_table.define('MAXINT', Symbol(name='MAXINT', type=INTEGER_TYPE, kind='const', is_mutable=False))
-        self.symbol_table.define('MAXWORD', Symbol(name='MAXWORD', type=WORD_TYPE, kind='const', is_mutable=False))
-        self.symbol_table.define('NULL', Symbol(name='NULL', type=LStringType(0), kind='const', is_mutable=False))
-
-        # Predeclared file/type names.
-        text_type = FileType(CHAR_TYPE)
-        self.symbol_table.define('TEXT', Symbol(name='TEXT', type=text_type, kind='type', is_mutable=False))
-        self.symbol_table.define('INPUT', Symbol(name='INPUT', type=text_type, kind='var', is_mutable=False))
-        self.symbol_table.define('OUTPUT', Symbol(name='OUTPUT', type=text_type, kind='var', is_mutable=False))
-        self.symbol_table.define('STRING', Symbol(name='STRING', type=StringType(256), kind='type', is_mutable=False))
-
-        # ABS, SQRT, SIN, COS, LN, EXP, and ARCTAN are handled as special built-ins in type inference/codegen.
-        # LENGTH is not part of the manual's predeclared list; keep it out until
-        # a dialect decision puts it back in.
-
-        # CHR function (returns CHAR)
-        chr_type = FunctionType('CHR', [('n', INTEGER_TYPE)], CHAR_TYPE)
-        self.symbol_table.define('CHR', Symbol(name='CHR', type=chr_type, kind='function', is_mutable=False))
-
-        # ORD function (returns INTEGER)
-        ord_type = FunctionType('ORD', [('c', CHAR_TYPE)], INTEGER_TYPE)
-        self.symbol_table.define('ORD', Symbol(name='ORD', type=ord_type, kind='function', is_mutable=False))
-
-        # ODD function (returns BOOLEAN)
-        odd_type = FunctionType('ODD', [('n', INTEGER_TYPE)], BOOLEAN_TYPE)
-        self.symbol_table.define('ODD', Symbol(name='ODD', type=odd_type, kind='function', is_mutable=False))
-
-        # SUCC / PRED functions (returns INTEGER)
-        succ_type = FunctionType('SUCC', [('n', INTEGER_TYPE)], INTEGER_TYPE)
-        self.symbol_table.define('SUCC', Symbol(name='SUCC', type=succ_type, kind='function', is_mutable=False))
-        pred_type = FunctionType('PRED', [('n', INTEGER_TYPE)], INTEGER_TYPE)
-        self.symbol_table.define('PRED', Symbol(name='PRED', type=pred_type, kind='function', is_mutable=False))
-
-        # HIBYTE / LOBYTE functions (return CHAR)
-        hibyte_type = FunctionType('HIBYTE', [('n', INTEGER_TYPE)], CHAR_TYPE)
-        self.symbol_table.define('HIBYTE', Symbol(name='HIBYTE', type=hibyte_type, kind='function', is_mutable=False))
-        lobyte_type = FunctionType('LOBYTE', [('n', INTEGER_TYPE)], CHAR_TYPE)
-        self.symbol_table.define('LOBYTE', Symbol(name='LOBYTE', type=lobyte_type, kind='function', is_mutable=False))
-        # WRD / BYWORD functions (return WORD)
-        wrd_type = FunctionType('WRD', [('x', INTEGER_TYPE)], WORD_TYPE)  # placeholder sig; type-checker special-cases
-        self.symbol_table.define('WRD', Symbol(name='WRD', type=wrd_type, kind='function', is_mutable=False))
-        byword_type = FunctionType('BYWORD', [('hi', CHAR_TYPE), ('lo', CHAR_TYPE)], WORD_TYPE)  # placeholder sig
-        self.symbol_table.define('BYWORD', Symbol(name='BYWORD', type=byword_type, kind='function', is_mutable=False))
-
-        # TRUNC / ROUND functions (REAL -> INTEGER)
-        trunc_type = FunctionType('TRUNC', [('x', REAL_TYPE)], INTEGER_TYPE)
-        self.symbol_table.define('TRUNC', Symbol(name='TRUNC', type=trunc_type, kind='function', is_mutable=False))
-        round_type = FunctionType('ROUND', [('x', REAL_TYPE)], INTEGER_TYPE)
-        self.symbol_table.define('ROUND', Symbol(name='ROUND', type=round_type, kind='function', is_mutable=False))
-
-        # FLOAT function (INTEGER -> REAL)
-        float_type = FunctionType('FLOAT', [('x', INTEGER_TYPE)], REAL_TYPE)
-        self.symbol_table.define('FLOAT', Symbol(name='FLOAT', type=float_type, kind='function', is_mutable=False))
+        register_builtins(self.symbol_table)
 
     def check(self, ast: ASTNode) -> TypeCheckResult:
         """Main entry point for type checking."""
@@ -613,7 +533,7 @@ class PascalTypeChecker(TypeChecker):
         for name in decl.names:
             # Check for redeclaration
             existing = self.symbol_table.lookup_local(name)
-            if existing:
+            if existing and not getattr(existing, 'is_builtin', False):
                 self.error(f"Variable '{name}' already declared at {existing.location}", decl)
                 continue
 
@@ -634,7 +554,7 @@ class PascalTypeChecker(TypeChecker):
 
         # Add constant to the symbol table
         existing = self.symbol_table.lookup_local(decl.name)
-        if existing:
+        if existing and not getattr(existing, 'is_builtin', False):
             self.error(f"Constant '{decl.name}' already declared at {existing.location}", decl)
             return
 
@@ -647,7 +567,7 @@ class PascalTypeChecker(TypeChecker):
             return
 
         existing = self.symbol_table.lookup_local(decl.name)
-        if existing:
+        if existing and not getattr(existing, 'is_builtin', False):
             self.error(f"Type '{decl.name}' already declared at {existing.location}", decl)
             return
 
@@ -704,7 +624,7 @@ class PascalTypeChecker(TypeChecker):
 
         # Check for redeclaration
         existing = self.symbol_table.lookup_local(decl.name)
-        if existing:
+        if existing and not getattr(existing, 'is_builtin', False):
             self.error(f"Function '{decl.name}' already declared at {existing.location}", decl)
             return
 
@@ -763,7 +683,7 @@ class PascalTypeChecker(TypeChecker):
 
         # Check for redeclaration
         existing = self.symbol_table.lookup_local(decl.name)
-        if existing:
+        if existing and not getattr(existing, 'is_builtin', False):
             self.error(f"Procedure '{decl.name}' already declared at {existing.location}", decl)
             return
 
@@ -994,14 +914,17 @@ class PascalTypeChecker(TypeChecker):
 
         # Look up the procedure (Pascal is case-insensitive)
         lookup_name = stmt.name.upper()
-        if lookup_name == 'PACK':
-            self._check_pack_args(stmt)
-            return
-        elif lookup_name == 'UNPACK':
-            self._check_unpack_args(stmt)
-            return
-
         sym = self.symbol_table.lookup(lookup_name) or self.symbol_table.lookup(stmt.name)
+        is_builtin = sym is None or getattr(sym, 'is_builtin', False)
+
+        if is_builtin:
+            if lookup_name == 'PACK':
+                self._check_pack_args(stmt)
+                return
+            elif lookup_name == 'UNPACK':
+                self._check_unpack_args(stmt)
+                return
+
         if not sym:
             self.error(f"Undefined procedure: {stmt.name}", stmt)
             return
@@ -1013,19 +936,19 @@ class PascalTypeChecker(TypeChecker):
         # Check argument types (including built-in procedures)
         if stmt.args:
             # Special handling for string procedures (section 7.2)
-            if stmt.name.upper() == 'CONCAT':
+            if is_builtin and stmt.name.upper() == 'CONCAT':
                 self._check_concat_args(stmt)
                 return
-            elif stmt.name.upper() == 'COPYLST':
+            elif is_builtin and stmt.name.upper() == 'COPYLST':
                 self._check_copylst_args(stmt)
                 return
-            elif stmt.name.upper() == 'COPYSTR':
+            elif is_builtin and stmt.name.upper() == 'COPYSTR':
                 self._check_copystr_args(stmt)
                 return
 
             # For built-in procedures like WRITELN/WRITE/READLN, skip count/type checks but still
             # check that the arguments are valid expressions (e.g., defined variables)
-            if stmt.name.upper() not in ['WRITELN', 'WRITE', 'READLN']:
+            if not is_builtin or stmt.name.upper() not in ['WRITELN', 'WRITE', 'READLN']:
                 # For user-defined procedures, check argument count
                 expected_args = len(sym.type.params)
                 actual_args = len(stmt.args)
@@ -1401,6 +1324,8 @@ class PascalTypeChecker(TypeChecker):
             if not sym:
                 self.error(f"Undefined variable: {expr.name}", expr)
                 return None
+            if isinstance(sym.type, FunctionType) and not sym.type.params:
+                return sym.type.return_type
             return sym.type
         elif isinstance(expr, BinOp):
             left_type = self.infer_expression_type(expr.left)
@@ -1421,6 +1346,28 @@ class PascalTypeChecker(TypeChecker):
             return None
         elif isinstance(expr, FuncCall):
             lookup_name = expr.name.upper()
+            sym = self.symbol_table.lookup(lookup_name) or self.symbol_table.lookup(expr.name)
+            is_builtin = sym is None or getattr(sym, 'is_builtin', False)
+
+            if not is_builtin:
+                if not sym:
+                    self.error(f"Undefined function: {expr.name}", expr)
+                    return None
+                if isinstance(sym.type, FunctionType):
+                    # Check argument count
+                    expected_args = len(sym.type.params)
+                    actual_args = len(expr.args) if expr.args else 0
+                    if actual_args != expected_args:
+                        self.error(f"Function '{expr.name}' expects {expected_args} arguments, got {actual_args}", expr)
+                    # Check argument types
+                    if expr.args:
+                        for i, (arg, (param_name, param_type)) in enumerate(zip(expr.args, sym.type.params)):
+                            arg_type = self.infer_expression_type(arg)
+                            if arg_type and not can_assign(arg_type, param_type):
+                                self.error(f"Argument {i+1} type mismatch: expected {param_type}, got {arg_type}", expr)
+                    return sym.type.return_type
+                return None
+
             if lookup_name == 'ABS':
                 if len(expr.args) != 1:
                     self.error(f"Function 'ABS' expects 1 argument, got {len(expr.args)}", expr)
@@ -1537,7 +1484,7 @@ class PascalTypeChecker(TypeChecker):
                 if arg_type:
                     self.error(f"Argument 1 type mismatch: expected INTEGER, got {arg_type}", expr)
                 return None
-            sym = self.symbol_table.lookup(lookup_name) or self.symbol_table.lookup(expr.name)
+
             if not sym:
                 self.error(f"Undefined function: {expr.name}", expr)
                 return None
@@ -1590,6 +1537,8 @@ class PascalTypeChecker(TypeChecker):
                 self.error(f"Undefined variable: {designator.name}", designator)
                 return None
             current_type = sym.type
+            if isinstance(current_type, FunctionType) and not current_type.params:
+                current_type = current_type.return_type
 
         # Process selectors (array indexing, field access, pointer dereference)
         if designator.selectors:

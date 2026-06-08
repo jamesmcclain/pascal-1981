@@ -33,6 +33,7 @@ class Symbol:
     location: Optional[SourceLocation] = None
     is_mutable: bool = True  # False for constants and parameters
     value: Any = None  # For codegen: LLVM value
+    is_builtin: bool = False  # True for predeclared standard symbols
 
     def __repr__(self) -> str:
         return f"Symbol({self.name}: {self.type}, kind={self.kind})"
