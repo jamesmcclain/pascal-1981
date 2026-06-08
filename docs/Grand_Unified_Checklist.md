@@ -254,7 +254,11 @@ C runtime, sibling to `runtime/fillc.c`. Loops/memory/OS, so not inline.
   symbol in codegen, and added a runtime stub mirroring `FILLC` so source-level
   `extern` declarations reuse the existing LLVM symbol instead of colliding.
   Verified by `python -m unittest` (268 tests).
-- [ ] **5.3 — `MOVEL` / `MOVER`.** `[READ]` **M** Block moves, left/right (overlap-aware → memmove direction).
+- [x] **5.3 — `MOVEL` / `MOVER`.** `[READ]` **M** Block moves, left/right (overlap-aware → memmove direction).
+  Added both names to the shared predeclared registry, predeclared their runtime
+  externs in codegen, and implemented runtime stubs using `memmove` so overlap
+  is safe. Source-level `extern` declarations reuse the existing LLVM symbol.
+  Verified by `python -m unittest` (272 tests).
 - [ ] **5.4 — `MOVESL` / `MOVESR`.** `[READ]` **M** Short-count move variants.
 - [ ] **5.5 — `ABORT`.** `[READ]` **S** Wrapper over `abort()`/`exit()`.
 - [ ] **5.6 — `NEW` / `DISPOSE`.** `[READ]` **M** Heap alloc/free (`malloc`/`free`). Needs real pointer-type support to be meaningful.

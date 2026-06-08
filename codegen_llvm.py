@@ -122,6 +122,13 @@ class Codegen:
         fillsc = ir.Function(self.module, fill_ty, name='fillsc')
         fillsc.linkage = 'external'
         self.scope.define('fillsc', fillsc, None)
+        mov_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer(), ir.IntType(16)])
+        movel = ir.Function(self.module, mov_ty, name='movel')
+        movel.linkage = 'external'
+        self.scope.define('movel', movel, None)
+        mover = ir.Function(self.module, mov_ty, name='mover')
+        mover.linkage = 'external'
+        self.scope.define('mover', mover, None)
 
     # ========================================================================
     # Type System
@@ -758,6 +765,10 @@ class Codegen:
                 self.builtin_pack(stmt.args)
             elif lookup_name == 'UNPACK':
                 self.builtin_unpack(stmt.args)
+            elif lookup_name == 'MOVEL':
+                self.builtin_movel(stmt.args)
+            elif lookup_name == 'MOVER':
+                self.builtin_mover(stmt.args)
             else:
                 raise CodegenError(f'Undefined procedure: {stmt.name}')
         else:
@@ -2456,6 +2467,40 @@ class Codegen:
 
         j_val = self.builder.load(j_var)
         cond = self.builder.icmp_signed('<=', j_val, ir.Constant(ir.IntType(32), z_high))
+        self.builder.cbranch(cond, body_block, end_block)
+
+        self.builder.position_at_end(body_block)
+
+        offset = self.builder.sub(j_val, ir.Constant(ir.IntType(32), z_low))
+        a_pascal = self.builder.add(offset, i_val)
+        a_slot = self.builder.sub(a_pascal, ir.Constant(ir.IntType(32), a_low))
+
+        z_elem_ptr = self.builder.gep(z_ptr, [ir.Constant(ir.IntType(32), 0), offset])
+        elem_val = self.builder.load(z_elem_ptr)
+
+        a_elem_ptr = self.builder.gep(a_ptr, [ir.Constant(ir.IntType(32), 0), a_slot])
+        self.builder.store(elem_val, a_elem_ptr)
+
+        next_j = self.builder.add(j_val, ir.Constant(ir.IntType(32), 1))
+        self.builder.store(next_j, j_var)
+        self.builder.branch(loop_block)
+
+        self.builder.position_at_end(end_block)
+
+    def _runtime_fillmove(self, name: str, args: List[Expression]) -> None:
+        src = self.codegen_expr(args[0])
+        dst = self.codegen_expr(args[1])
+        length = self.codegen_expr(args[2])
+        fn = self.scope.lookup(name)
+        if not fn:
+            raise CodegenError(f'Undefined procedure: {name}')
+        self.builder.call(fn.llvm_value, [src, dst, length])
+
+    def builtin_movel(self, args: List[Expression]) -> None:
+        self._runtime_fillmove('MOVEL', args)
+
+    def builtin_mover(self, args: List[Expression]) -> None:
+        self._runtime_fillmove('MOVER', args)
         self.builder.cbranch(cond, body_block, end_block)
 
         self.builder.position_at_end(body_block)
