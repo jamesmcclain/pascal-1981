@@ -19,6 +19,7 @@ import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
 from ast_nodes import *
+from builtins_registry import register_builtins
 from type_system import LStringType as ResolvedLStringType
 from type_system import StringType as ResolvedStringType
 
@@ -104,12 +105,20 @@ class Codegen:
         self.enum_member_names: Dict[str, List[str]] = {}
         self._enum_name_tables: Dict[str, ir.GlobalVariable] = {}
         self.verbose = verbose
+        self._register_predeclared_externs()
 
     def _log(self, msg: str) -> None:
         """Emit a diagnostic line to stderr when verbose mode is on."""
         if self.verbose:
             import sys
             print(f'[codegen] {msg}', file=sys.stderr)
+
+    def _register_predeclared_externs(self) -> None:
+        """Predeclare runtime externs that behave like builtins."""
+        fillc_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer(), ir.IntType(16), ir.IntType(8)])
+        fillc = ir.Function(self.module, fillc_ty, name='fillc')
+        fillc.linkage = 'external'
+        self.scope.define('fillc', fillc, None)
 
     # ========================================================================
     # Type System

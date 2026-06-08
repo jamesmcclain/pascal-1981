@@ -242,10 +242,12 @@ well. This is where `CHR`/`ORD`/`ODD`/`SUCC`/`SIZEOF`/`UPPER`/`ADR` already live
 
 C runtime, sibling to `runtime/fillc.c`. Loops/memory/OS, so not inline.
 
-- [ ] **5.1 — Promote `FILLC` to a real predeclared `extern`.** `[OBSERVED]` **S**
-  Today it only works because `primes.pas` hand-declares it and links `fillc.c`.
-  Auto-register it (manual: System Intrinsics) so user code needn't declare it.
-  This establishes the pattern for the rest of section 5.
+- [x] **5.1 — Promote `FILLC` to a real predeclared `extern`.** `[OBSERVED]` **S**
+  Added `FILLC` to the shared predeclared registry and predeclared its runtime
+  symbol in codegen, so user code can call it without a manual declaration while
+  programmer-defined `FILLC` still shadows the builtin. Verified by
+  `python -m unittest tests.test_typecheck.TestCallValidation
+  tests.test_codegen.TestCodegenBuildRun`.
 - [ ] **5.2 — `FILLSC`.** `[READ]` **S** Fill-with-shortcount sibling of `FILLC`.
 - [ ] **5.3 — `MOVEL` / `MOVER`.** `[READ]` **M** Block moves, left/right (overlap-aware → memmove direction).
 - [ ] **5.4 — `MOVESL` / `MOVESR`.** `[READ]` **M** Short-count move variants.

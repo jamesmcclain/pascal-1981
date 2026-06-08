@@ -353,6 +353,13 @@ class TestCallValidation(unittest.TestCase):
         )
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
+    def test_predeclared_fillc_procedure(self):
+        """FILLC should be available without a manual declaration, matching the reference compiler."""
+        result = typecheck_source(
+            "PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN FILLC(ADR buf, WRD(4), 'X') END."
+        )
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
 
 
 class TestFunctionReturnTypes(unittest.TestCase):

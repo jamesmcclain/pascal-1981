@@ -8,7 +8,7 @@ This is shared between the type checker and code generator to prevent
 from symbol_table import Symbol
 from type_system import (
     INTEGER_TYPE, REAL_TYPE, CHAR_TYPE, BOOLEAN_TYPE, WORD_TYPE,
-    ProcedureType, FunctionType, FileType, StringType, LStringType
+    ProcedureType, FunctionType, FileType, StringType, LStringType, PointerType
 )
 
 # Lists of all built-in function and procedure names
@@ -21,7 +21,7 @@ BUILTIN_FUNCTIONS = {
 BUILTIN_PROCEDURES = {
     'WRITE', 'WRITELN', 'READLN',
     'CONCAT', 'COPYLST', 'COPYSTR',
-    'PACK', 'UNPACK'
+    'PACK', 'UNPACK', 'FILLC'
 }
 
 def register_builtins(symbol_table) -> None:
@@ -38,6 +38,7 @@ def register_builtins(symbol_table) -> None:
     define_builtin('COPYSTR', ProcedureType('COPYSTR', []), 'procedure')
     define_builtin('PACK', ProcedureType('PACK', []), 'procedure')
     define_builtin('UNPACK', ProcedureType('UNPACK', []), 'procedure')
+    define_builtin('FILLC', ProcedureType('FILLC', [('loc', PointerType(CHAR_TYPE)), ('len', WORD_TYPE), ('val', CHAR_TYPE)]), 'procedure')
 
     # Constants
     define_builtin('MAXINT', INTEGER_TYPE, 'const')
