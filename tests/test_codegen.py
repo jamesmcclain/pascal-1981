@@ -164,9 +164,31 @@ class TestCodegenIR(unittest.TestCase):
         self.assertIn("external", ir.lower())
 
     def test_predeclared_abort_generates_abort_call(self):
-        """ABORT should lower to the runtime abort handler."""
-        ir = compile_to_ir("PROGRAM P; VAR s: STRING(10); BEGIN s := 'oops'; ABORT(ADR s, WRD(0), WRD(0)) END.")
-        self.assertIn("abort", ir.lower())
+        """ABORT should lower to the runtime abort handler, carrying the message,
+        error code, and status (manual: CONST STRING, WORD, WORD)."""
+        ir = compile_to_ir("PROGRAM P; VAR s: STRING(10); BEGIN s := 'oops'; ABORT(s, WRD(3), WRD(7)) END.")
+        self.assertIn("pabort", ir.lower())
+        # void pabort(i8*, i32, i16, i16): message pointer + length + two words.
+        self.assertIn("call void @\"pabort\"", ir)
+
+    def test_predeclared_move_fill_callable_without_source_declaration(self):
+        """The section-5 builtins must lower when called WITHOUT a source `extern`
+        declaration (the whole point of predeclaring them). Each should emit a
+        call to its lowercase runtime extern, with the array address bitcast to
+        i8* and a WORD length."""
+        for proc, fn in (("FILLC", "fillc"), ("FILLSC", "fillsc"),
+                         ("MOVEL", "movel"), ("MOVER", "mover"),
+                         ("MOVESL", "movesl"), ("MOVESR", "movesr")):
+            with self.subTest(proc=proc):
+                if proc.startswith("FILL"):
+                    src = (f"PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; "
+                           f"BEGIN {proc}(ADR buf, WRD(4), 'X') END.")
+                else:
+                    src = (f"PROGRAM P; VAR a, b: ARRAY[1..4] OF CHAR; "
+                           f"BEGIN {proc}(ADR a, ADR b, WRD(4)) END.")
+                ir = compile_to_ir(src)
+                self.assertIn(f"call i32 @\"{fn}\"", ir)
+                self.assertIn("bitcast [4 x i8]*", ir)
 
     def test_null_lowers_as_empty_string_pointer(self):
         """NULL lowers to a pointer to the empty LSTRING constant."""
@@ -1446,3 +1468,91 @@ END."""
         rc, out = build_and_run(src)
         self.assertEqual(rc, 0)
         self.assertEqual([l.strip() for l in out.splitlines() if l.strip()], ["7", "8"])
+
+
+# Path to the runtime C library (sibling of the tests/ directory).
+RUNTIME_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "runtime")
+
+
+def _compile_and_run_c(driver_src: str, runtime_files: list) -> tuple:
+    """Compile a small C driver together with one or more runtime/*.c stubs,
+    run it, and return (returncode, stdout, stderr). Used to exercise the
+    runtime library directly (the Pascal harness does not link runtime stubs)."""
+    tmpdir = tempfile.mkdtemp()
+    try:
+        driver_path = os.path.join(tmpdir, "driver.c")
+        with open(driver_path, "w") as f:
+            f.write(driver_src)
+        exe_path = os.path.join(tmpdir, "prog")
+        sources = [driver_path] + [os.path.join(RUNTIME_DIR, rf) for rf in runtime_files]
+        compile_result = subprocess.run(["clang", *sources, "-o", exe_path],
+                                        capture_output=True, text=True)
+        if compile_result.returncode != 0:
+            raise RuntimeError(f"clang failed: {compile_result.stderr}")
+        run_result = subprocess.run([exe_path], capture_output=True, text=True)
+        return run_result.returncode, run_result.stdout, run_result.stderr
+    finally:
+        import shutil
+        shutil.rmtree(tmpdir)
+
+
+@requires_exe
+class TestMoveRuntimeDirection(unittest.TestCase):
+    """The move builtins must honor MOVEL/MOVER's left/right direction (manual),
+    which is only observable on overlapping regions. With dst = src + 1 a forward
+    (left-start) move propagates the first byte across the buffer, while a
+    backward (right-start) move performs a plain shifted copy. A memmove would
+    erase this distinction, so these tests fail if the stubs revert to memmove."""
+
+    def _run(self, func_name: str) -> str:
+        driver = (
+            "#include <stdio.h>\n"
+            f"extern int {func_name}(char *src, char *dst, unsigned short len);\n"
+            "int main(void) {\n"
+            "    char b[6] = \"ABCDE\";\n"
+            f"    {func_name}(b, b + 1, 4);\n"
+            "    printf(\"%s\\n\", b);\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        rc, out, _ = _compile_and_run_c(driver, [f"{func_name}.c"])
+        self.assertEqual(rc, 0)
+        return out.strip()
+
+    def test_movel_propagates_forward(self):
+        # Forward copy: b[1]=b[0]='A', then each new 'A' feeds the next -> "AAAAA".
+        self.assertEqual(self._run("movel"), "AAAAA")
+
+    def test_mover_copies_backward(self):
+        # Backward copy (dst>src): bytes shift right by one -> "AABCD".
+        self.assertEqual(self._run("mover"), "AABCD")
+
+    def test_movel_and_mover_differ(self):
+        self.assertNotEqual(self._run("movel"), self._run("mover"))
+
+    def test_movesl_propagates_forward(self):
+        self.assertEqual(self._run("movesl"), "AAAAA")
+
+    def test_movesr_copies_backward(self):
+        self.assertEqual(self._run("movesr"), "AABCD")
+
+
+@requires_exe
+class TestAbortRuntime(unittest.TestCase):
+    """ABORT's runtime must surface the message, error code, and status, then
+    abort (manual: stops like an internal runtime error)."""
+
+    def test_pabort_reports_message_and_aborts(self):
+        driver = (
+            "extern void pabort(const char *msg, int msglen, "
+            "unsigned short code, unsigned short status);\n"
+            "int main(void) {\n"
+            "    pabort(\"boom\", 4, 5, 7);\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        rc, out, err = _compile_and_run_c(driver, ["pabort.c"])
+        self.assertNotEqual(rc, 0)          # abort() does not return 0
+        self.assertIn("boom", err)
+        self.assertIn("5", err)
+        self.assertIn("7", err)

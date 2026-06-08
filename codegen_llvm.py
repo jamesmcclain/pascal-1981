@@ -2520,10 +2520,36 @@ class Codegen:
     def builtin_movesr(self, args: List[Expression]) -> None:
         self._runtime_fillmove('MOVESR', args)
 
+    def pascal_abort_func(self) -> ir.Function:
+        """Declare or fetch the ABORT runtime: void pabort(i8* msg, i32 len, i16 code, i16 status)."""
+        for func in self.module.functions:
+            if func.name == 'pabort':
+                return func
+        fn_type = ir.FunctionType(
+            ir.VoidType(),
+            [ir.PointerType(ir.IntType(8)), ir.IntType(32), ir.IntType(16), ir.IntType(16)])
+        fn = ir.Function(self.module, fn_type, name='pabort')
+        fn.linkage = 'external'
+        return fn
+
     def builtin_abort(self, args: List[Expression]) -> None:
-        abort_fn = self.runtime_error_func()
-        self.builder.call(abort_fn, [])
+        # ABORT(CONST STRING, WORD, WORD): surface the message, error code, and
+        # STATUS word through the runtime rather than dropping them (manual:
+        # stops execution like an internal runtime error).
+        chars, length = self.get_string_chars_and_len(args[0])
+        code = self._coerce_to_word(self.codegen_expr(args[1]))
+        status = self._coerce_to_word(self.codegen_expr(args[2]))
+        self.builder.call(self.pascal_abort_func(), [chars, length, code, status])
         self.builder.unreachable()
+
+    def _coerce_to_word(self, val: ir.Value) -> ir.Value:
+        """Coerce an integer value to i16 (WORD) for a runtime call."""
+        if isinstance(val.type, ir.IntType):
+            if val.type.width > 16:
+                return self.builder.trunc(val, ir.IntType(16))
+            if val.type.width < 16:
+                return self.builder.zext(val, ir.IntType(16))
+        return val
 
     def _designator_array_bounds(self, arg) -> tuple[int, int]:
         """(lower, upper) bounds of the array a designator names; (1, 10) fallback."""

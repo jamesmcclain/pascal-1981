@@ -256,17 +256,36 @@ C runtime, sibling to `runtime/fillc.c`. Loops/memory/OS, so not inline.
   Verified by `python -m unittest` (268 tests).
 - [x] **5.3 — `MOVEL` / `MOVER`.** `[READ]` **M** Block moves, left/right (overlap-aware → memmove direction).
   Added both names to the shared predeclared registry, predeclared their runtime
-  externs in codegen, and implemented runtime stubs using `memmove` so overlap
-  is safe. Source-level `extern` declarations reuse the existing LLVM symbol.
-  Verified by `python -m unittest` (272 tests).
+  externs in codegen, and implemented runtime stubs. CORRECTION to the original
+  note: these must NOT be `memmove`. The manual defines `MOVEL` as a forward
+  (left-start, ascending) byte copy and `MOVER` as a backward (right-start,
+  descending) copy, and the direction is observable for overlapping regions
+  (e.g. `MOVEL(p, p+1, n)` propagates the first byte across the buffer).
+  `memmove` copies as-if-through-a-temporary and erases that distinction, so the
+  stubs are now explicit forward/backward loops. Source-level `extern`
+  declarations reuse the existing LLVM symbol. Proven by `python -m unittest`,
+  including `TestMoveRuntimeDirection` (C-level overlap tests asserting
+  `movel`→`AAAAA`, `mover`→`AABCD`, and that they differ).
 - [x] **5.4 — `MOVESL` / `MOVESR`.** `[READ]` **M** Short-count move variants.
   Added both names to the shared predeclared registry, predeclared their runtime
-  externs in codegen, and added runtime stubs using `memmove` so overlap is safe.
-  Source-level `extern` declarations reuse the existing LLVM symbol. Verified by
-  `python -m unittest` (276 tests).
+  externs in codegen, and implemented runtime stubs. As with 5.3 the stubs are
+  explicit forward (`MOVESL`, left-start) / backward (`MOVESR`, right-start)
+  loops, not `memmove`. CAVEAT: only the direction defect is fixed; the full
+  "short count" length semantics are not yet modeled (the explicit caller-
+  supplied length is used as-is), pending reconciliation with the manual.
+  Source-level `extern` declarations reuse the existing LLVM symbol. Proven by
+  `python -m unittest` (`TestMoveRuntimeDirection` covers the S variants too).
 - [x] **5.5 — `ABORT`.** `[READ]` **S** Wrapper over `abort()`/`exit()`.
-  Added ABORT as a predeclared procedure and lowered it directly to the runtime
-  abort handler. Verified by `python -m unittest` (278 tests).
+  Added ABORT as a predeclared procedure. CORRECTION to the original note: the
+  manual signature is `ABORT(CONST STRING, WORD, WORD)` — an error message, an
+  error code, and a STATUS word — so the message param is typed `STRING` (not a
+  raw pointer) and the lowering no longer discards the arguments. `builtin_abort`
+  extracts the message chars/length, coerces the two WORD operands, and calls a
+  new runtime `pabort(msg, len, code, status)` that reports them on stderr and
+  aborts ("stops execution in the same way as an internal runtime error").
+  Proven by `python -m unittest`, including `TestAbortRuntime` (the handler
+  prints the message/code/status and aborts) and an IR test asserting the
+  `pabort` call carries all four operands.
 - [ ] **5.6 — `NEW` / `DISPOSE`.** `[READ]` **M** Heap alloc/free (`malloc`/`free`). Needs real pointer-type support to be meaningful.
 
 ---

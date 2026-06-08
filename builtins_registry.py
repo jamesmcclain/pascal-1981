@@ -45,7 +45,8 @@ def register_builtins(symbol_table) -> None:
     define_builtin('MOVER', ProcedureType('MOVER', [('src', PointerType(CHAR_TYPE)), ('dst', PointerType(CHAR_TYPE)), ('len', WORD_TYPE)]), 'procedure')
     define_builtin('MOVESL', ProcedureType('MOVESL', [('src', PointerType(CHAR_TYPE)), ('dst', PointerType(CHAR_TYPE)), ('len', WORD_TYPE)]), 'procedure')
     define_builtin('MOVESR', ProcedureType('MOVESR', [('src', PointerType(CHAR_TYPE)), ('dst', PointerType(CHAR_TYPE)), ('len', WORD_TYPE)]), 'procedure')
-    define_builtin('ABORT', ProcedureType('ABORT', [('msg', PointerType(CHAR_TYPE)), ('code', WORD_TYPE), ('status', WORD_TYPE)]), 'procedure')
+    # ABORT(CONST STRING, WORD, WORD): error message, error code, STATUS word.
+    define_builtin('ABORT', ProcedureType('ABORT', [('msg', StringType(255)), ('code', WORD_TYPE), ('status', WORD_TYPE)]), 'procedure')
 
     # Constants
     define_builtin('MAXINT', INTEGER_TYPE, 'const')
