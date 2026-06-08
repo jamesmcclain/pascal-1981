@@ -1,16 +1,25 @@
 /*
  * Runtime support for MOVESR.
  *
- * Short-count sibling of MOVESL that moves starting at the RIGHT end
- * (backward), mirroring MOVER. As with movesl, only the direction defect is
- * fixed here; the explicit caller-supplied length is used as-is pending the
- * manual's full short-count semantics.
+ * MOVESR is the SEGMENTED-address sibling of MOVER (manual: declared with
+ * ADSMEM instead of ADRMEM parameters), NOT a "short count" variant. Both
+ * source and destination are ADSMEM values, lowered to {flat pointer, segment
+ * word} pairs; on this flat host the segment is always zero, so only the
+ * pointer is used.
+ *
+ * Like MOVER, this is a backward (right-start, descending) byte copy. There is
+ * no bounds checking.
  */
 
-int movesr(char *src, char *dst, unsigned short len) {
+typedef struct {
+    char *ptr;
+    unsigned short seg;
+} adsmem;
+
+int movesr(adsmem src, adsmem dst, unsigned short len) {
     unsigned short i;
     for (i = len; i > 0; i--) {
-        dst[i - 1] = src[i - 1];
+        dst.ptr[i - 1] = src.ptr[i - 1];
     }
     return 0;
 }

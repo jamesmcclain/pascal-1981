@@ -1631,6 +1631,11 @@ class PascalTypeChecker(TypeChecker):
                 return CHAR_TYPE
             elif name == 'ADRMEM':
                 return PointerType(CHAR_TYPE)
+            elif name == 'ADSMEM':
+                # Segmented address type: the ADS sibling of ADRMEM. Distinct
+                # from ADRMEM (flavor 'ADS' vs 'POINTER'), so the segmented
+                # runtime builtins require ADS-style addresses.
+                return PointerType(CHAR_TYPE, flavor='ADS')
             elif name == 'STRING':
                 max_len = int(type_expr.param) if isinstance(type_expr.param, int) else 256
                 return StringType(max_len)

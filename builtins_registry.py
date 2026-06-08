@@ -40,11 +40,15 @@ def register_builtins(symbol_table) -> None:
     define_builtin('UNPACK', ProcedureType('UNPACK', []), 'procedure')
     fill_proc = ProcedureType('FILLC', [('loc', PointerType(CHAR_TYPE)), ('len', WORD_TYPE), ('val', CHAR_TYPE)])
     define_builtin('FILLC', fill_proc, 'procedure')
-    define_builtin('FILLSC', ProcedureType('FILLSC', [('loc', PointerType(CHAR_TYPE)), ('len', WORD_TYPE), ('val', CHAR_TYPE)]), 'procedure')
+    # FILLSC/MOVESL/MOVESR are the SEGMENTED-address siblings of FILLC/MOVEL/
+    # MOVER (manual: "the corresponding segmented address versions ... declared
+    # with ADSMEM instead of ADRMEM parameters"), NOT short-count variants.
+    ADSMEM = PointerType(CHAR_TYPE, flavor='ADS')
+    define_builtin('FILLSC', ProcedureType('FILLSC', [('loc', ADSMEM), ('len', WORD_TYPE), ('val', CHAR_TYPE)]), 'procedure')
     define_builtin('MOVEL', ProcedureType('MOVEL', [('src', PointerType(CHAR_TYPE)), ('dst', PointerType(CHAR_TYPE)), ('len', WORD_TYPE)]), 'procedure')
     define_builtin('MOVER', ProcedureType('MOVER', [('src', PointerType(CHAR_TYPE)), ('dst', PointerType(CHAR_TYPE)), ('len', WORD_TYPE)]), 'procedure')
-    define_builtin('MOVESL', ProcedureType('MOVESL', [('src', PointerType(CHAR_TYPE)), ('dst', PointerType(CHAR_TYPE)), ('len', WORD_TYPE)]), 'procedure')
-    define_builtin('MOVESR', ProcedureType('MOVESR', [('src', PointerType(CHAR_TYPE)), ('dst', PointerType(CHAR_TYPE)), ('len', WORD_TYPE)]), 'procedure')
+    define_builtin('MOVESL', ProcedureType('MOVESL', [('src', ADSMEM), ('dst', ADSMEM), ('len', WORD_TYPE)]), 'procedure')
+    define_builtin('MOVESR', ProcedureType('MOVESR', [('src', ADSMEM), ('dst', ADSMEM), ('len', WORD_TYPE)]), 'procedure')
     # ABORT(CONST STRING, WORD, WORD): error message, error code, STATUS word.
     define_builtin('ABORT', ProcedureType('ABORT', [('msg', StringType(255)), ('code', WORD_TYPE), ('status', WORD_TYPE)]), 'procedure')
 

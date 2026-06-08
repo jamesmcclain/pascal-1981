@@ -361,9 +361,9 @@ class TestCallValidation(unittest.TestCase):
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_predeclared_fillsc_procedure(self):
-        """FILLSC should be available without a manual declaration too."""
+        """FILLSC (segmented sibling of FILLC) is predeclared and takes ADS."""
         result = typecheck_source(
-            "PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN FILLSC(ADR buf, WRD(4), 'X') END."
+            "PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN FILLSC(ADS buf, WRD(4), 'X') END."
         )
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
@@ -382,16 +382,38 @@ class TestCallValidation(unittest.TestCase):
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_predeclared_movesl_procedure(self):
-        """MOVESL should be available without a manual declaration."""
+        """MOVESL (segmented sibling of MOVEL) is predeclared and takes ADS."""
         result = typecheck_source(
-            "PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN MOVESL(ADR buf, ADR buf, WRD(4)) END."
+            "PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN MOVESL(ADS buf, ADS buf, WRD(4)) END."
         )
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_predeclared_movesr_procedure(self):
-        """MOVESR should be available without a manual declaration."""
+        """MOVESR (segmented sibling of MOVER) is predeclared and takes ADS."""
         result = typecheck_source(
-            "PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN MOVESR(ADR buf, ADR buf, WRD(4)) END."
+            "PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN MOVESR(ADS buf, ADS buf, WRD(4)) END."
+        )
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_segmented_move_rejects_flat_address(self):
+        """The segmented variants take ADSMEM: passing a flat ADR address is a
+        type error (and conversely the flat MOVEL accepts ADR)."""
+        bad = typecheck_source(
+            "PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN MOVESL(ADR buf, ADR buf, WRD(4)) END."
+        )
+        self.assertFalse(bad.success)
+        self.assertTrue(any("ADS OF CHAR" in str(e) for e in bad.errors),
+                        msg=" ".join(str(e) for e in bad.errors))
+        good = typecheck_source(
+            "PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; BEGIN MOVEL(ADR buf, ADR buf, WRD(4)) END."
+        )
+        self.assertTrue(good.success, msg=" ".join(str(e) for e in good.errors))
+
+    def test_adsmem_type_resolves(self):
+        """ADSMEM is a usable type name (segmented sibling of ADRMEM)."""
+        result = typecheck_source(
+            "PROGRAM P; PROCEDURE blit (d: ADSMEM; n: WORD); extern; "
+            "VAR buf: ARRAY[1..4] OF CHAR; BEGIN blit(ADS buf, WRD(4)) END."
         )
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 

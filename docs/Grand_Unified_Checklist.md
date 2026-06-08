@@ -253,7 +253,16 @@ C runtime, sibling to `runtime/fillc.c`. Loops/memory/OS, so not inline.
   Added `FILLSC` to the shared predeclared registry, predeclared its runtime
   symbol in codegen, and added a runtime stub mirroring `FILLC` so source-level
   `extern` declarations reuse the existing LLVM symbol instead of colliding.
-  Verified by `python -m unittest` (268 tests).
+  CORRECTION to the original note: the leading **S** does NOT mean "shortcount".
+  Per the manual, `FILLSC`/`MOVESL`/`MOVESR` are "the corresponding segmented
+  address versions of these routines ... declared with `ADSMEM` instead of
+  `ADRMEM` parameters" — i.e. they are the compatibility forms of the 8088
+  segmented-memory builtins. `FILLSC` now takes an `ADSMEM` destination
+  (segmented address). `ADSMEM` is a first-class type (the `ADS` sibling of
+  `ADRMEM`) lowering to a `{flat pointer, segment word}` pair, matching `ADS`
+  pointers; the runtime stub takes the matching C `adsmem` struct by value (the
+  segment is always zero on this flat host, but is passed intact). Verified by
+  `python -m unittest`.
 - [x] **5.3 — `MOVEL` / `MOVER`.** `[READ]` **M** Block moves, left/right (overlap-aware → memmove direction).
   Added both names to the shared predeclared registry, predeclared their runtime
   externs in codegen, and implemented runtime stubs. CORRECTION to the original
@@ -270,11 +279,19 @@ C runtime, sibling to `runtime/fillc.c`. Loops/memory/OS, so not inline.
   Added both names to the shared predeclared registry, predeclared their runtime
   externs in codegen, and implemented runtime stubs. As with 5.3 the stubs are
   explicit forward (`MOVESL`, left-start) / backward (`MOVESR`, right-start)
-  loops, not `memmove`. CAVEAT: only the direction defect is fixed; the full
-  "short count" length semantics are not yet modeled (the explicit caller-
-  supplied length is used as-is), pending reconciliation with the manual.
-  Source-level `extern` declarations reuse the existing LLVM symbol. Proven by
-  `python -m unittest` (`TestMoveRuntimeDirection` covers the S variants too).
+  loops, not `memmove`. CORRECTION to the original note: these are NOT
+  "short-count" move variants. Per the manual they are the SEGMENTED-address
+  versions of `MOVEL`/`MOVER`, "declared with `ADSMEM` instead of `ADRMEM`
+  parameters" — the compatibility forms of the original 8088 segmented-memory
+  moves. Both `src`/`dst` are now `ADSMEM` (segmented `{pointer, segment}`
+  pairs); passing a flat `ADR` address is a type error, and the runtime stubs
+  take the matching C `adsmem` struct by value. There is no separate "short
+  count" length semantics — the explicit caller-supplied length is correct.
+  Source-level `extern` declarations (now with `ADSMEM` params) reuse the
+  existing LLVM symbol. Proven by `python -m unittest`: `TestMoveRuntimeDirection`
+  exercises the S variants (including a full Pascal→IR→runtime link asserting
+  `MOVESL(ADS a, ADS b, WRD 4)` copies correctly), plus typecheck coverage that
+  the segmented variants reject `ADR` and that `ADSMEM` resolves as a type.
 - [x] **5.5 — `ABORT`.** `[READ]` **S** Wrapper over `abort()`/`exit()`.
   Added ABORT as a predeclared procedure. CORRECTION to the original note: the
   manual signature is `ABORT(CONST STRING, WORD, WORD)` — an error message, an

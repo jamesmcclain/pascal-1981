@@ -114,25 +114,32 @@ class Codegen:
             print(f'[codegen] {msg}', file=sys.stderr)
 
     def _register_predeclared_externs(self) -> None:
-        """Predeclare runtime externs that behave like builtins."""
+        """Predeclare runtime externs that behave like builtins.
+
+        The flat variants (fillc/movel/mover) take ADRMEM (i8*) addresses; the
+        segmented variants (fillsc/movesl/movesr) take ADSMEM addresses, modeled
+        as a {flat pointer, segment word} pair to match ADS pointers."""
+        ads_ty = ir.LiteralStructType([ir.IntType(8).as_pointer(), ir.IntType(16)])
         fill_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer(), ir.IntType(16), ir.IntType(8)])
+        seg_fill_ty = ir.FunctionType(ir.IntType(32), [ads_ty, ir.IntType(16), ir.IntType(8)])
         fillc = ir.Function(self.module, fill_ty, name='fillc')
         fillc.linkage = 'external'
         self.scope.define('fillc', fillc, None)
-        fillsc = ir.Function(self.module, fill_ty, name='fillsc')
+        fillsc = ir.Function(self.module, seg_fill_ty, name='fillsc')
         fillsc.linkage = 'external'
         self.scope.define('fillsc', fillsc, None)
         mov_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer(), ir.IntType(16)])
+        seg_mov_ty = ir.FunctionType(ir.IntType(32), [ads_ty, ads_ty, ir.IntType(16)])
         movel = ir.Function(self.module, mov_ty, name='movel')
         movel.linkage = 'external'
         self.scope.define('movel', movel, None)
         mover = ir.Function(self.module, mov_ty, name='mover')
         mover.linkage = 'external'
         self.scope.define('mover', mover, None)
-        movesl = ir.Function(self.module, mov_ty, name='movesl')
+        movesl = ir.Function(self.module, seg_mov_ty, name='movesl')
         movesl.linkage = 'external'
         self.scope.define('movesl', movesl, None)
-        movesr = ir.Function(self.module, mov_ty, name='movesr')
+        movesr = ir.Function(self.module, seg_mov_ty, name='movesr')
         movesr.linkage = 'external'
         self.scope.define('movesr', movesr, None)
 
@@ -155,6 +162,8 @@ class Codegen:
                 return ir.DoubleType()
             elif type_expr.name == 'ADRMEM':
                 return ir.PointerType(ir.IntType(8))  # pointer/address
+            elif type_expr.name == 'ADSMEM':
+                return ir.LiteralStructType([ir.PointerType(ir.IntType(8)), ir.IntType(16)])
             else:
                 raise CodegenError(f'Unknown built-in type: {type_expr.name}')
         elif isinstance(type_expr, NamedType):
@@ -169,6 +178,10 @@ class Codegen:
                 return ir.ArrayType(ir.IntType(8), param_val)
             if name_up == 'ADRMEM':
                 return ir.PointerType(ir.IntType(8))
+            elif name_up == 'ADSMEM':
+                # Segmented address: {flat pointer, segment word}, matching how
+                # ADS pointers (ADS OF CHAR) lower.
+                return ir.LiteralStructType([ir.PointerType(ir.IntType(8)), ir.IntType(16)])
             elif name_up == 'INTEGER':
                 return ir.IntType(32)
             elif name_up == 'BOOLEAN':
@@ -1115,6 +1128,29 @@ class Codegen:
         vt = value.type
         if vt == target_type:
             return value
+
+        def _is_seg(t):
+            return (isinstance(t, ir.LiteralStructType) and len(t.elements) == 2
+                    and isinstance(t.elements[0], ir.PointerType) and isinstance(t.elements[1], ir.IntType))
+
+        # Segmented address (ADS) reconciliation. ADS values lower to a
+        # {pointer, segment} pair whose pointer field is typed to the pointee
+        # (e.g. {[4 x i8]*, i16} for `ADS` of an array), which may not match a
+        # segmented parameter's {i8*, i16} or a flat pointer parameter.
+        if _is_seg(vt) and _is_seg(target_type):
+            ptr = self.builder.bitcast(self.builder.extract_value(value, 0), target_type.elements[0])
+            seg = self.builder.extract_value(value, 1)
+            out = self.builder.insert_value(ir.Constant(target_type, ir.Undefined), ptr, 0)
+            return self.builder.insert_value(out, seg, 1)
+        if _is_seg(vt) and isinstance(target_type, ir.PointerType):
+            # Segmented value into a flat pointer parameter: drop the segment.
+            return self.builder.bitcast(self.builder.extract_value(value, 0), target_type)
+        if isinstance(vt, ir.PointerType) and _is_seg(target_type):
+            # Flat pointer into a segmented parameter: segment zero.
+            ptr = self.builder.bitcast(value, target_type.elements[0])
+            out = self.builder.insert_value(ir.Constant(target_type, ir.Undefined), ptr, 0)
+            return self.builder.insert_value(out, ir.Constant(target_type.elements[1], 0), 1)
+
         if isinstance(target_type, ir.PointerType) and isinstance(vt, ir.PointerType):
             return self.builder.bitcast(value, target_type)
         if isinstance(target_type, ir.IntType) and isinstance(vt, ir.IntType):

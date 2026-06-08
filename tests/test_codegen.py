@@ -104,12 +104,13 @@ class TestCodegenIR(unittest.TestCase):
         self.assertIn("external", ir.lower())
 
     def test_predeclared_fillsc_works_with_extern_declaration(self):
-        """FILLSC should work both as a predeclared extern and when declared extern in source."""
+        """FILLSC is the segmented sibling of FILLC: it takes ADSMEM (not ADRMEM)
+        and must work both predeclared and when declared extern in source."""
         src = (
             "PROGRAM P; "
-            "PROCEDURE fillsc (loc: ADRMEM; len: WORD; val: CHAR); extern; "
+            "PROCEDURE fillsc (loc: ADSMEM; len: WORD; val: CHAR); extern; "
             "VAR buf: ARRAY[1..4] OF CHAR; "
-            "BEGIN FILLSC(ADR buf, WRD(4), 'X') END."
+            "BEGIN FILLSC(ADS buf, WRD(4), 'X') END."
         )
         ir = compile_to_ir(src)
         self.assertIn("fillsc", ir.lower())
@@ -140,24 +141,24 @@ class TestCodegenIR(unittest.TestCase):
         self.assertIn("external", ir.lower())
 
     def test_predeclared_movesl_works_with_extern_declaration(self):
-        """MOVESL should work both as a predeclared extern and when declared extern in source."""
+        """MOVESL is the segmented sibling of MOVEL: it takes ADSMEM (not ADRMEM)."""
         src = (
             "PROGRAM P; "
-            "PROCEDURE movesl (src, dst: ADRMEM; len: WORD); extern; "
+            "PROCEDURE movesl (src, dst: ADSMEM; len: WORD); extern; "
             "VAR buf: ARRAY[1..4] OF CHAR; "
-            "BEGIN MOVESL(ADR buf, ADR buf, WRD(4)) END."
+            "BEGIN MOVESL(ADS buf, ADS buf, WRD(4)) END."
         )
         ir = compile_to_ir(src)
         self.assertIn("movesl", ir.lower())
         self.assertIn("external", ir.lower())
 
     def test_predeclared_movesr_works_with_extern_declaration(self):
-        """MOVESR should work both as a predeclared extern and when declared extern in source."""
+        """MOVESR is the segmented sibling of MOVER: it takes ADSMEM (not ADRMEM)."""
         src = (
             "PROGRAM P; "
-            "PROCEDURE movesr (src, dst: ADRMEM; len: WORD); extern; "
+            "PROCEDURE movesr (src, dst: ADSMEM; len: WORD); extern; "
             "VAR buf: ARRAY[1..4] OF CHAR; "
-            "BEGIN MOVESR(ADR buf, ADR buf, WRD(4)) END."
+            "BEGIN MOVESR(ADS buf, ADS buf, WRD(4)) END."
         )
         ir = compile_to_ir(src)
         self.assertIn("movesr", ir.lower())
@@ -173,19 +174,24 @@ class TestCodegenIR(unittest.TestCase):
 
     def test_predeclared_move_fill_callable_without_source_declaration(self):
         """The section-5 builtins must lower when called WITHOUT a source `extern`
-        declaration (the whole point of predeclaring them). Each should emit a
+        declaration (the whole point of predeclaring them). The flat variants
+        (FILLC/MOVEL/MOVER) take ADRMEM addresses; the segmented siblings
+        (FILLSC/MOVESL/MOVESR) take ADSMEM (ADS) addresses. Each should emit a
         call to its lowercase runtime extern, with the array address bitcast to
-        i8* and a WORD length."""
+        i8* (directly for the flat variants, inside the segment pair for the
+        segmented ones) and a WORD length."""
+        segmented = {"FILLSC", "MOVESL", "MOVESR"}
         for proc, fn in (("FILLC", "fillc"), ("FILLSC", "fillsc"),
                          ("MOVEL", "movel"), ("MOVER", "mover"),
                          ("MOVESL", "movesl"), ("MOVESR", "movesr")):
             with self.subTest(proc=proc):
+                addr = "ADS" if proc in segmented else "ADR"
                 if proc.startswith("FILL"):
                     src = (f"PROGRAM P; VAR buf: ARRAY[1..4] OF CHAR; "
-                           f"BEGIN {proc}(ADR buf, WRD(4), 'X') END.")
+                           f"BEGIN {proc}({addr} buf, WRD(4), 'X') END.")
                 else:
                     src = (f"PROGRAM P; VAR a, b: ARRAY[1..4] OF CHAR; "
-                           f"BEGIN {proc}(ADR a, ADR b, WRD(4)) END.")
+                           f"BEGIN {proc}({addr} a, {addr} b, WRD(4)) END.")
                 ir = compile_to_ir(src)
                 self.assertIn(f"call i32 @\"{fn}\"", ir)
                 self.assertIn("bitcast [4 x i8]*", ir)
@@ -1496,6 +1502,38 @@ def _compile_and_run_c(driver_src: str, runtime_files: list) -> tuple:
         shutil.rmtree(tmpdir)
 
 
+def _build_pascal_with_runtime(src: str, runtime_files: list, stdin: str = "") -> tuple:
+    """Compile Pascal source to IR, link it with the given runtime/*.c stubs,
+    run it, and return (returncode, stdout). Unlike build_and_run this links the
+    real runtime, so it exercises the Pascal -> IR -> native ABI end to end
+    (notably the segmented {i8*, i16} address pair against the C `adsmem`
+    struct)."""
+    from codegen_llvm import compile_to_llvm
+
+    ast = parse_source(src)
+    result = typecheck_source(src)
+    if not result.success:
+        raise RuntimeError(f"Type check failed: {result.errors}")
+    ir = compile_to_llvm(ast)
+
+    tmpdir = tempfile.mkdtemp()
+    try:
+        ll_path = os.path.join(tmpdir, "prog.ll")
+        with open(ll_path, "w") as f:
+            f.write(ir)
+        exe_path = os.path.join(tmpdir, "prog")
+        sources = [ll_path] + [os.path.join(RUNTIME_DIR, rf) for rf in runtime_files]
+        compile_result = subprocess.run(["clang", *sources, "-o", exe_path, "-lm"],
+                                        capture_output=True, text=True)
+        if compile_result.returncode != 0:
+            raise RuntimeError(f"clang failed: {compile_result.stderr}")
+        run_result = subprocess.run([exe_path], input=stdin, capture_output=True, text=True)
+        return run_result.returncode, run_result.stdout
+    finally:
+        import shutil
+        shutil.rmtree(tmpdir)
+
+
 @requires_exe
 class TestMoveRuntimeDirection(unittest.TestCase):
     """The move builtins must honor MOVEL/MOVER's left/right direction (manual),
@@ -1519,6 +1557,26 @@ class TestMoveRuntimeDirection(unittest.TestCase):
         self.assertEqual(rc, 0)
         return out.strip()
 
+    def _run_seg(self, func_name: str) -> str:
+        """Driver for the SEGMENTED variants, which take ADSMEM addresses,
+        lowered to a {char *ptr, unsigned short seg} pair passed by value."""
+        driver = (
+            "#include <stdio.h>\n"
+            "typedef struct { char *ptr; unsigned short seg; } adsmem;\n"
+            f"extern int {func_name}(adsmem src, adsmem dst, unsigned short len);\n"
+            "int main(void) {\n"
+            "    char b[6] = \"ABCDE\";\n"
+            "    adsmem s = { b, 0 };\n"
+            "    adsmem d = { b + 1, 0 };\n"
+            f"    {func_name}(s, d, 4);\n"
+            "    printf(\"%s\\n\", b);\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        rc, out, _ = _compile_and_run_c(driver, [f"{func_name}.c"])
+        self.assertEqual(rc, 0)
+        return out.strip()
+
     def test_movel_propagates_forward(self):
         # Forward copy: b[1]=b[0]='A', then each new 'A' feeds the next -> "AAAAA".
         self.assertEqual(self._run("movel"), "AAAAA")
@@ -1531,10 +1589,33 @@ class TestMoveRuntimeDirection(unittest.TestCase):
         self.assertNotEqual(self._run("movel"), self._run("mover"))
 
     def test_movesl_propagates_forward(self):
-        self.assertEqual(self._run("movesl"), "AAAAA")
+        # Segmented forward move mirrors MOVEL's left-start propagation.
+        self.assertEqual(self._run_seg("movesl"), "AAAAA")
 
     def test_movesr_copies_backward(self):
-        self.assertEqual(self._run("movesr"), "AABCD")
+        # Segmented backward move mirrors MOVER's right-start shifted copy.
+        self.assertEqual(self._run_seg("movesr"), "AABCD")
+
+    def test_movesl_and_movesr_differ(self):
+        self.assertNotEqual(self._run_seg("movesl"), self._run_seg("movesr"))
+
+    def test_segmented_move_through_full_pipeline(self):
+        """End-to-end: a Pascal MOVESL(ADS .., ADS .., WRD(..)) compiled to IR and
+        linked against the real movesl.c must copy correctly, proving the
+        segmented address pair matches the C `adsmem` struct ABI."""
+        src = (
+            "PROGRAM P; "
+            "VAR a, b: ARRAY[1..4] OF CHAR; "
+            "BEGIN "
+            "a[1] := 'W'; a[2] := 'X'; a[3] := 'Y'; a[4] := 'Z'; "
+            "b[1] := '.'; b[2] := '.'; b[3] := '.'; b[4] := '.'; "
+            "MOVESL(ADS a, ADS b, WRD(4)); "
+            "WRITELN(b[1], b[2], b[3], b[4]) "
+            "END."
+        )
+        rc, out = _build_pascal_with_runtime(src, ["movesl.c"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), "WXYZ")
 
 
 @requires_exe

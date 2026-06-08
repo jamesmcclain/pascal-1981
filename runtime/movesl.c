@@ -1,18 +1,25 @@
 /*
  * Runtime support for MOVESL.
  *
- * The short-count move variants share MOVEL/MOVER's left/right direction
- * convention: MOVESL moves starting at the LEFT end (forward). Only the
- * direction defect is fixed here (previously this was an overlap-erasing
- * memmove identical to every other move); the full "short count" length
- * semantics await reconciliation with the manual, so the explicit caller-
- * supplied length is used as-is.
+ * MOVESL is the SEGMENTED-address sibling of MOVEL (manual: declared with
+ * ADSMEM instead of ADRMEM parameters), NOT a "short count" variant. Both
+ * source and destination are ADSMEM values, lowered to {flat pointer, segment
+ * word} pairs; on this flat host the segment is always zero, so only the
+ * pointer is used.
+ *
+ * Like MOVEL, this is a forward (left-start, ascending) byte copy, so for
+ * overlapping regions it propagates left-to-right. There is no bounds checking.
  */
 
-int movesl(char *src, char *dst, unsigned short len) {
+typedef struct {
+    char *ptr;
+    unsigned short seg;
+} adsmem;
+
+int movesl(adsmem src, adsmem dst, unsigned short len) {
     unsigned short i;
     for (i = 0; i < len; i++) {
-        dst[i] = src[i];
+        dst.ptr[i] = src.ptr[i];
     }
     return 0;
 }
