@@ -19,6 +19,7 @@ import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
 from ast_nodes import *
+from builtins_registry import register_builtins
 from type_system import LStringType as ResolvedLStringType
 from type_system import StringType as ResolvedStringType
 
@@ -97,13 +98,50 @@ class Codegen:
         self.current_interface_decls: Dict[str, Declaration] = {}
         self.proc_param_modes: Dict[str, List[Optional[str]]] = {}
         self.loop_stack: List[LoopContext] = []
+        # Enum support (checklist 9.8): map each enum member (UPPER) to the full
+        # ordered member-name list of its enum so WRITE can print the symbolic
+        # name of a bare member literal; cache the per-enum `[n x i8*]` name
+        # tables so each enum emits its name strings only once.
+        self.enum_member_names: Dict[str, List[str]] = {}
+        self._enum_name_tables: Dict[str, ir.GlobalVariable] = {}
         self.verbose = verbose
+        self._register_predeclared_externs()
 
     def _log(self, msg: str) -> None:
         """Emit a diagnostic line to stderr when verbose mode is on."""
         if self.verbose:
             import sys
             print(f'[codegen] {msg}', file=sys.stderr)
+
+    def _register_predeclared_externs(self) -> None:
+        """Predeclare runtime externs that behave like builtins.
+
+        The flat variants (fillc/movel/mover) take ADRMEM (i8*) addresses; the
+        segmented variants (fillsc/movesl/movesr) take ADSMEM addresses, modeled
+        as a {flat pointer, segment word} pair to match ADS pointers."""
+        ads_ty = ir.LiteralStructType([ir.IntType(8).as_pointer(), ir.IntType(16)])
+        fill_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer(), ir.IntType(16), ir.IntType(8)])
+        seg_fill_ty = ir.FunctionType(ir.IntType(32), [ads_ty, ir.IntType(16), ir.IntType(8)])
+        fillc = ir.Function(self.module, fill_ty, name='fillc')
+        fillc.linkage = 'external'
+        self.scope.define('fillc', fillc, None)
+        fillsc = ir.Function(self.module, seg_fill_ty, name='fillsc')
+        fillsc.linkage = 'external'
+        self.scope.define('fillsc', fillsc, None)
+        mov_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer(), ir.IntType(16)])
+        seg_mov_ty = ir.FunctionType(ir.IntType(32), [ads_ty, ads_ty, ir.IntType(16)])
+        movel = ir.Function(self.module, mov_ty, name='movel')
+        movel.linkage = 'external'
+        self.scope.define('movel', movel, None)
+        mover = ir.Function(self.module, mov_ty, name='mover')
+        mover.linkage = 'external'
+        self.scope.define('mover', mover, None)
+        movesl = ir.Function(self.module, seg_mov_ty, name='movesl')
+        movesl.linkage = 'external'
+        self.scope.define('movesl', movesl, None)
+        movesr = ir.Function(self.module, seg_mov_ty, name='movesr')
+        movesr.linkage = 'external'
+        self.scope.define('movesr', movesr, None)
 
     # ========================================================================
     # Type System
@@ -124,6 +162,8 @@ class Codegen:
                 return ir.DoubleType()
             elif type_expr.name == 'ADRMEM':
                 return ir.PointerType(ir.IntType(8))  # pointer/address
+            elif type_expr.name == 'ADSMEM':
+                return ir.LiteralStructType([ir.PointerType(ir.IntType(8)), ir.IntType(16)])
             else:
                 raise CodegenError(f'Unknown built-in type: {type_expr.name}')
         elif isinstance(type_expr, NamedType):
@@ -138,6 +178,10 @@ class Codegen:
                 return ir.ArrayType(ir.IntType(8), param_val)
             if name_up == 'ADRMEM':
                 return ir.PointerType(ir.IntType(8))
+            elif name_up == 'ADSMEM':
+                # Segmented address: {flat pointer, segment word}, matching how
+                # ADS pointers (ADS OF CHAR) lower.
+                return ir.LiteralStructType([ir.PointerType(ir.IntType(8)), ir.IntType(16)])
             elif name_up == 'INTEGER':
                 return ir.IntType(32)
             elif name_up == 'BOOLEAN':
@@ -360,6 +404,9 @@ class Codegen:
         if isinstance(decl.type_expr, EnumType):
             for ordinal, member in enumerate(decl.type_expr.values):
                 self.constants[member.upper()] = ordinal
+                # Remember which enum each member belongs to so WRITE can print
+                # the symbolic name of a bare member literal (checklist 9.8).
+                self.enum_member_names[member.upper()] = list(decl.type_expr.values)
 
     def get_string_type_info(self, t: Type) -> tuple[bool, int, bool]:
         """Returns (is_str, max_len, is_lstring) for any AST Type or Resolved Type."""
@@ -446,9 +493,15 @@ class Codegen:
                 flat_modes.append(param.mode)
         func_type = ir.FunctionType(ir.IntType(32), param_types)
 
-        # Create function
-        func = ir.Function(self.module, func_type, name=decl.name)
         attrs = {attr.upper() for attr in getattr(decl, 'attributes', [])}
+        existing = self.scope.lookup(decl.name)
+        if existing and isinstance(existing.llvm_value, ir.Function):
+            func = existing.llvm_value
+            if func.function_type != func_type:
+                raise CodegenError(f"Procedure '{decl.name}' already declared with a different signature")
+        else:
+            # Create function
+            func = ir.Function(self.module, func_type, name=decl.name)
         if attrs.intersection({'PUBLIC', 'EXTERN', 'EXTERNAL'}):
             func.linkage = 'external'
         self.proc_param_modes[decl.name.lower()] = flat_modes
@@ -731,6 +784,16 @@ class Codegen:
                 self.builtin_pack(stmt.args)
             elif lookup_name == 'UNPACK':
                 self.builtin_unpack(stmt.args)
+            elif lookup_name == 'MOVEL':
+                self.builtin_movel(stmt.args)
+            elif lookup_name == 'MOVER':
+                self.builtin_mover(stmt.args)
+            elif lookup_name == 'MOVESL':
+                self.builtin_movesl(stmt.args)
+            elif lookup_name == 'MOVESR':
+                self.builtin_movesr(stmt.args)
+            elif lookup_name == 'ABORT':
+                self.builtin_abort(stmt.args)
             else:
                 raise CodegenError(f'Undefined procedure: {stmt.name}')
         else:
@@ -1065,6 +1128,28 @@ class Codegen:
         vt = value.type
         if vt == target_type:
             return value
+
+        def _is_seg(t):
+            return (isinstance(t, ir.LiteralStructType) and len(t.elements) == 2 and isinstance(t.elements[0], ir.PointerType) and isinstance(t.elements[1], ir.IntType))
+
+        # Segmented address (ADS) reconciliation. ADS values lower to a
+        # {pointer, segment} pair whose pointer field is typed to the pointee
+        # (e.g. {[4 x i8]*, i16} for `ADS` of an array), which may not match a
+        # segmented parameter's {i8*, i16} or a flat pointer parameter.
+        if _is_seg(vt) and _is_seg(target_type):
+            ptr = self.builder.bitcast(self.builder.extract_value(value, 0), target_type.elements[0])
+            seg = self.builder.extract_value(value, 1)
+            out = self.builder.insert_value(ir.Constant(target_type, ir.Undefined), ptr, 0)
+            return self.builder.insert_value(out, seg, 1)
+        if _is_seg(vt) and isinstance(target_type, ir.PointerType):
+            # Segmented value into a flat pointer parameter: drop the segment.
+            return self.builder.bitcast(self.builder.extract_value(value, 0), target_type)
+        if isinstance(vt, ir.PointerType) and _is_seg(target_type):
+            # Flat pointer into a segmented parameter: segment zero.
+            ptr = self.builder.bitcast(value, target_type.elements[0])
+            out = self.builder.insert_value(ir.Constant(target_type, ir.Undefined), ptr, 0)
+            return self.builder.insert_value(out, ir.Constant(target_type.elements[1], 0), 1)
+
         if isinstance(target_type, ir.PointerType) and isinstance(vt, ir.PointerType):
             return self.builder.bitcast(value, target_type)
         if isinstance(target_type, ir.IntType) and isinstance(vt, ir.IntType):
@@ -1177,6 +1262,8 @@ class Codegen:
             symbol = self.scope.lookup(expr.name) or self.scope.lookup(key)
             if not symbol:
                 raise CodegenError(f'Undefined variable: {expr.name}')
+            if symbol.type_expr is None and getattr(symbol.llvm_value, 'function_type', None) and len(symbol.llvm_value.function_type.args) == 0:
+                return self.builder.call(symbol.llvm_value, [])
             # Parameters are passed by value, don't load them
             if symbol.is_parameter:
                 return symbol.llvm_value
@@ -1235,10 +1322,42 @@ class Codegen:
                     return sum(llvm_type_size(f) for f in ty.elements)
                 return 4
 
-            # 3. Get pointer to the memory representation of target size
-            if isinstance(val.type, ir.PointerType):
+            # 3. Get pointer to the memory representation of target size.
+            #
+            # An LLVM pointer reaching here is ambiguous (checklist 9.9): it is
+            # either the *address of* an aggregate value (STRING/LSTRING/ARRAY/
+            # RECORD), in which case RETYPE reinterprets the pointee by loading
+            # through the bitcast, OR it is a genuine Pascal pointer *value* (a
+            # ``^T`` variable, ADR/ADS, NIL), in which case RETYPE must
+            # reinterpret the address bits and must NOT dereference. We split on
+            # the Pascal type of the inner expression; only when that is
+            # inconclusive do we fall back to the LLVM type (a non-aggregate
+            # pointee can only be a scalar pointer value, so it is safe to treat
+            # as bits; an aggregate pointee defaults to the legacy load-through).
+            is_ptr_value = self.retype_source_is_pointer_value(expr.expr)
+            if is_ptr_value is None and isinstance(val.type, ir.PointerType):
+                is_ptr_value = not isinstance(val.type.pointee, (ir.ArrayType, ir.LiteralStructType, ir.IdentifiedStructType))
+
+            if isinstance(val.type, ir.PointerType) and not is_ptr_value:
+                # Aggregate address: reinterpret the bytes the pointer refers to.
                 ptr = val
                 casted_ptr = self.builder.bitcast(ptr, ir.PointerType(target_llvm_type))
+            elif isinstance(val.type, ir.PointerType):
+                # Genuine pointer value: reinterpret the address bits themselves
+                # by spilling the pointer to a slot and bitcasting the slot,
+                # exactly as a non-pointer scalar is handled below.
+                source_size = llvm_type_size(val.type)
+                target_size = llvm_type_size(target_llvm_type)
+                if source_size >= target_size:
+                    ptr = self.builder.alloca(val.type)
+                    self.builder.store(val, ptr)
+                    casted_ptr = self.builder.bitcast(ptr, ir.PointerType(target_llvm_type))
+                else:
+                    ptr = self.builder.alloca(target_llvm_type)
+                    self.builder.store(self.zero_initializer(target_llvm_type), ptr)
+                    source_ptr = self.builder.bitcast(ptr, ir.PointerType(val.type))
+                    self.builder.store(val, source_ptr)
+                    casted_ptr = ptr
             else:
                 source_size = llvm_type_size(val.type)
                 target_size = llvm_type_size(target_llvm_type)
@@ -1560,6 +1679,20 @@ class Codegen:
     def codegen_func_call(self, expr: FuncCall) -> ir.Value:
         """Codegen function call."""
         lookup_name = expr.name.upper()
+        symbol = self.scope.lookup(lookup_name) or self.scope.lookup(expr.name)
+
+        if symbol:
+            fn = symbol.llvm_value
+            param_types = fn.function_type.args
+            param_modes = self.proc_param_modes.get(expr.name.lower(), [])
+            args = []
+            for i, arg in enumerate(expr.args):
+                mode = param_modes[i] if i < len(param_modes) else None
+                v = self.codegen_actual_arg(arg, mode)
+                if i < len(param_types):
+                    v = self.coerce_arg(v, param_types[i])
+                args.append(v)
+            return self.builder.call(fn, args)
 
         # Inline built-in functions
         if lookup_name == 'CHR':
@@ -1700,21 +1833,7 @@ class Codegen:
                 raise CodegenError(f'FLOAT not supported for type {val.type}')
             return self.builder.sitofp(val, ir.DoubleType())
 
-        symbol = self.scope.lookup(lookup_name) or self.scope.lookup(expr.name)
-        if not symbol:
-            raise CodegenError(f'Undefined function: {expr.name}')
-
-        fn = symbol.llvm_value
-        param_types = fn.function_type.args
-        param_modes = self.proc_param_modes.get(expr.name.lower(), [])
-        args = []
-        for i, arg in enumerate(expr.args):
-            mode = param_modes[i] if i < len(param_modes) else None
-            v = self.codegen_actual_arg(arg, mode)
-            if i < len(param_types):
-                v = self.coerce_arg(v, param_types[i])
-            args.append(v)
-        return self.builder.call(fn, args)
+        raise CodegenError(f'Undefined function: {expr.name}')
 
     # ========================================================================
     # Built-in Functions
@@ -1756,6 +1875,17 @@ class Codegen:
                 precision = None
 
             val = self.codegen_expr(expr)
+
+            # Enum value printed by symbolic name (checklist 9.8): index the
+            # per-enum name table by the runtime ordinal and print the resulting
+            # i8* with %s. The i8* flows through the format logic below, which
+            # already maps a char pointer to %s.
+            enum_names = self.write_enum_names(expr)
+            if enum_names is not None:
+                table = self.enum_name_table(enum_names)
+                zero = ir.Constant(ir.IntType(32), 0)
+                name_ptr = self.builder.gep(table, [zero, val])
+                val = self.builder.load(name_ptr)
 
             # Check if it is a string variable (non-literal)
             is_string_var = False
@@ -2147,6 +2277,44 @@ class Codegen:
         self.builder.branch(end_block)
         self.builder.position_at_end(end_block)
 
+    def retype_source_is_pointer_value(self, expr) -> Optional[bool]:
+        """Classify the inner expression of a RETYPE for the pointer-vs-aggregate
+        conflation documented in checklist item 9.9.
+
+        ``codegen_expr`` returns an LLVM pointer for two unrelated reasons:
+
+        * the value *is* an aggregate (STRING/LSTRING/ARRAY/RECORD) and the
+          pointer is merely the address of those bytes — RETYPE should
+          reinterpret the *pointee* (load through the bitcast);
+        * the value is a genuine Pascal pointer scalar (a ``^T`` variable, an
+          ``ADR``/``ADS`` factor, ``NIL``) — RETYPE should reinterpret the
+          *address bits*, not dereference them.
+
+        Returns ``True`` if the inner expression is a genuine pointer value,
+        ``False`` if it is an aggregate address, and ``None`` if it cannot be
+        classified from the AST alone (caller falls back to the LLVM type).
+        """
+        # ADR/ADS factors and NIL are always pointer *values*.
+        if isinstance(expr, (AdrExpr, AdsExpr, NilLiteral)):
+            return True
+        # A nested RETYPE's value type is its declared target type.
+        if isinstance(expr, RetypeExpr):
+            t = self.resolve_type_alias(NamedType(expr.type_id, None))
+            return isinstance(t, PointerType)
+        # Named variables/designators: consult the declared Pascal type.
+        if isinstance(expr, (Identifier, Designator)):
+            sym = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
+            if sym is None or sym.type_expr is None:
+                return None
+            t = self.resolve_type_alias(sym.type_expr)
+            # A selector chain (field/index/deref) yields whatever the selected
+            # component is; that is not necessarily a pointer, so do not claim
+            # to know — let the caller fall back to the LLVM-type heuristic.
+            if getattr(expr, 'selectors', None):
+                return None
+            return isinstance(t, PointerType)
+        return None
+
     def resolve_type_alias(self, type_expr):
         """Unwrap NamedType aliases (e.g. ``TYPE arr = ARRAY[..]``) to the
         underlying declared type. Built-in names and unknown names are returned
@@ -2159,6 +2327,60 @@ class Codegen:
             seen.add(key)
             type_expr = self.type_aliases[key]
         return type_expr
+
+    # ------------------------------------------------------------------
+    # Enum support (checklist 9.8)
+    # ------------------------------------------------------------------
+    def enum_value_list(self, type_expr) -> Optional[List[str]]:
+        """Return the ordered member names if ``type_expr`` is (or aliases) an
+        enum type, else ``None``. Enums lower to i32 ordinals; this recovers the
+        symbolic names for WRITE."""
+        t = self.resolve_type_alias(type_expr)
+        if isinstance(t, EnumType):  # AST EnumType carries `.values`
+            return list(t.values)
+        return None
+
+    def write_enum_names(self, expr) -> Optional[List[str]]:
+        """If a WRITE argument denotes an enum value (an enum variable, an enum
+        designator without further selectors, or a bare enum member literal),
+        return the member-name list so it can be printed by name. Returns
+        ``None`` for anything else — notably arbitrary enum-typed *expressions*
+        (e.g. ``SUCC(c)``), which still print as their ordinal because codegen
+        does not carry per-expression Pascal types."""
+        if isinstance(expr, (Identifier, Designator)) and not getattr(expr, 'selectors', None):
+            sym = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
+            if sym is not None and sym.type_expr is not None:
+                names = self.enum_value_list(sym.type_expr)
+                if names:
+                    return names
+            # Bare enum member literal, e.g. WRITE(Red).
+            return self.enum_member_names.get(expr.name.upper())
+        return None
+
+    def enum_name_table(self, names: List[str]) -> ir.GlobalVariable:
+        """Get (or build once) a constant ``[n x i8*]`` table of pointers to the
+        null-terminated member-name strings for an enum, indexable by ordinal."""
+        key = '\x00'.join(names)
+        cached = self._enum_name_tables.get(key)
+        if cached is not None:
+            return cached
+        i8 = ir.IntType(8)
+        i8p = ir.PointerType(i8)
+        zero = ir.Constant(ir.IntType(32), 0)
+        ptrs = []
+        for nm in names:
+            data = bytearray(nm.encode('utf-8') + b'\0')
+            const = ir.Constant(ir.ArrayType(i8, len(data)), data)
+            g = ir.GlobalVariable(self.module, const.type, name=self.unique_name('enumname'))
+            g.initializer = const
+            g.global_constant = True
+            ptrs.append(g.gep([zero, zero]))
+        table_type = ir.ArrayType(i8p, len(names))
+        table = ir.GlobalVariable(self.module, table_type, name=self.unique_name('enumtab'))
+        table.global_constant = True
+        table.initializer = ir.Constant(table_type, ptrs)
+        self._enum_name_tables[key] = table
+        return table
 
     def array_lower_bound(self, type_expr) -> tuple[Optional[int], Any]:
         """For a (possibly aliased) array type, return ``(lower_bound, element_type)``.
@@ -2294,14 +2516,13 @@ class Codegen:
 
         self.builder.position_at_end(body_block)
 
-        # offset = j - low(Z): Z's 0-based storage slot.
         offset = self.builder.sub(j_val, ir.Constant(ir.IntType(32), z_low))
+        a_pascal = self.builder.add(offset, i_val)
+        a_slot = self.builder.sub(a_pascal, ir.Constant(ir.IntType(32), a_low))
+
         z_elem_ptr = self.builder.gep(z_ptr, [ir.Constant(ir.IntType(32), 0), offset])
         elem_val = self.builder.load(z_elem_ptr)
 
-        # A storage slot = (I + offset) - low(A).
-        a_pascal = self.builder.add(offset, i_val)
-        a_slot = self.builder.sub(a_pascal, ir.Constant(ir.IntType(32), a_low))
         a_elem_ptr = self.builder.gep(a_ptr, [ir.Constant(ir.IntType(32), 0), a_slot])
         self.builder.store(elem_val, a_elem_ptr)
 
@@ -2310,6 +2531,56 @@ class Codegen:
         self.builder.branch(loop_block)
 
         self.builder.position_at_end(end_block)
+
+    def _runtime_fillmove(self, name: str, args: List[Expression]) -> None:
+        src = self.codegen_expr(args[0])
+        dst = self.codegen_expr(args[1])
+        length = self.codegen_expr(args[2])
+        fn = self.scope.lookup(name)
+        if not fn:
+            raise CodegenError(f'Undefined procedure: {name}')
+        self.builder.call(fn.llvm_value, [src, dst, length])
+
+    def builtin_movel(self, args: List[Expression]) -> None:
+        self._runtime_fillmove('MOVEL', args)
+
+    def builtin_mover(self, args: List[Expression]) -> None:
+        self._runtime_fillmove('MOVER', args)
+
+    def builtin_movesl(self, args: List[Expression]) -> None:
+        self._runtime_fillmove('MOVESL', args)
+
+    def builtin_movesr(self, args: List[Expression]) -> None:
+        self._runtime_fillmove('MOVESR', args)
+
+    def pascal_abort_func(self) -> ir.Function:
+        """Declare or fetch the ABORT runtime: void pabort(i8* msg, i32 len, i16 code, i16 status)."""
+        for func in self.module.functions:
+            if func.name == 'pabort':
+                return func
+        fn_type = ir.FunctionType(ir.VoidType(), [ir.PointerType(ir.IntType(8)), ir.IntType(32), ir.IntType(16), ir.IntType(16)])
+        fn = ir.Function(self.module, fn_type, name='pabort')
+        fn.linkage = 'external'
+        return fn
+
+    def builtin_abort(self, args: List[Expression]) -> None:
+        # ABORT(CONST STRING, WORD, WORD): surface the message, error code, and
+        # STATUS word through the runtime rather than dropping them (manual:
+        # stops execution like an internal runtime error).
+        chars, length = self.get_string_chars_and_len(args[0])
+        code = self._coerce_to_word(self.codegen_expr(args[1]))
+        status = self._coerce_to_word(self.codegen_expr(args[2]))
+        self.builder.call(self.pascal_abort_func(), [chars, length, code, status])
+        self.builder.unreachable()
+
+    def _coerce_to_word(self, val: ir.Value) -> ir.Value:
+        """Coerce an integer value to i16 (WORD) for a runtime call."""
+        if isinstance(val.type, ir.IntType):
+            if val.type.width > 16:
+                return self.builder.trunc(val, ir.IntType(16))
+            if val.type.width < 16:
+                return self.builder.zext(val, ir.IntType(16))
+        return val
 
     def _designator_array_bounds(self, arg) -> tuple[int, int]:
         """(lower, upper) bounds of the array a designator names; (1, 10) fallback."""

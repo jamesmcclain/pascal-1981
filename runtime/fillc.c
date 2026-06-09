@@ -16,7 +16,8 @@
  */
 #include <stddef.h>
 
-int fillc(char *loc, unsigned short len, char val) {
+int fillc(char *loc, unsigned short len, char val)
+{
     for (unsigned short i = 0; i < len; i++) {
         loc[i] = val;
     }

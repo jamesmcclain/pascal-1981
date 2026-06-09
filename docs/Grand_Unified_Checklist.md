@@ -242,14 +242,67 @@ well. This is where `CHR`/`ORD`/`ODD`/`SUCC`/`SIZEOF`/`UPPER`/`ADR` already live
 
 C runtime, sibling to `runtime/fillc.c`. Loops/memory/OS, so not inline.
 
-- [ ] **5.1 — Promote `FILLC` to a real predeclared `extern`.** `[OBSERVED]` **S**
-  Today it only works because `primes.pas` hand-declares it and links `fillc.c`.
-  Auto-register it (manual: System Intrinsics) so user code needn't declare it.
-  This establishes the pattern for the rest of section 5.
-- [ ] **5.2 — `FILLSC`.** `[READ]` **S** Fill-with-shortcount sibling of `FILLC`.
-- [ ] **5.3 — `MOVEL` / `MOVER`.** `[READ]` **M** Block moves, left/right (overlap-aware → memmove direction).
-- [ ] **5.4 — `MOVESL` / `MOVESR`.** `[READ]` **M** Short-count move variants.
-- [ ] **5.5 — `ABORT`.** `[READ]` **S** Wrapper over `abort()`/`exit()`.
+- [x] **5.1 — Promote `FILLC` to a real predeclared `extern`.** `[OBSERVED]` **S**
+  Added `FILLC` to the shared predeclared registry and predeclared its runtime
+  symbol in codegen, so user code can call it without a manual declaration while
+  programmer-defined `FILLC` still shadows the builtin. Also handles the
+  reference-compiler case where source declares `PROCEDURE fillc ...; extern;`
+  by reusing the existing LLVM symbol instead of duplicating it. Verified by
+  `python -m unittest` (266 tests).
+- [x] **5.2 — `FILLSC`.** `[READ]` **S** Fill-with-shortcount sibling of `FILLC`.
+  Added `FILLSC` to the shared predeclared registry, predeclared its runtime
+  symbol in codegen, and added a runtime stub mirroring `FILLC` so source-level
+  `extern` declarations reuse the existing LLVM symbol instead of colliding.
+  CORRECTION to the original note: the leading **S** does NOT mean "shortcount".
+  Per the manual, `FILLSC`/`MOVESL`/`MOVESR` are "the corresponding segmented
+  address versions of these routines ... declared with `ADSMEM` instead of
+  `ADRMEM` parameters" — i.e. they are the compatibility forms of the 8088
+  segmented-memory builtins. `FILLSC` now takes an `ADSMEM` destination
+  (segmented address). `ADSMEM` is a first-class type (the `ADS` sibling of
+  `ADRMEM`) lowering to a `{flat pointer, segment word}` pair, matching `ADS`
+  pointers; the runtime stub takes the matching C `adsmem` struct by value (the
+  segment is always zero on this flat host, but is passed intact). Verified by
+  `python -m unittest`.
+- [x] **5.3 — `MOVEL` / `MOVER`.** `[READ]` **M** Block moves, left/right (overlap-aware → memmove direction).
+  Added both names to the shared predeclared registry, predeclared their runtime
+  externs in codegen, and implemented runtime stubs. CORRECTION to the original
+  note: these must NOT be `memmove`. The manual defines `MOVEL` as a forward
+  (left-start, ascending) byte copy and `MOVER` as a backward (right-start,
+  descending) copy, and the direction is observable for overlapping regions
+  (e.g. `MOVEL(p, p+1, n)` propagates the first byte across the buffer).
+  `memmove` copies as-if-through-a-temporary and erases that distinction, so the
+  stubs are now explicit forward/backward loops. Source-level `extern`
+  declarations reuse the existing LLVM symbol. Proven by `python -m unittest`,
+  including `TestMoveRuntimeDirection` (C-level overlap tests asserting
+  `movel`→`AAAAA`, `mover`→`AABCD`, and that they differ).
+- [x] **5.4 — `MOVESL` / `MOVESR`.** `[READ]` **M** Short-count move variants.
+  Added both names to the shared predeclared registry, predeclared their runtime
+  externs in codegen, and implemented runtime stubs. As with 5.3 the stubs are
+  explicit forward (`MOVESL`, left-start) / backward (`MOVESR`, right-start)
+  loops, not `memmove`. CORRECTION to the original note: these are NOT
+  "short-count" move variants. Per the manual they are the SEGMENTED-address
+  versions of `MOVEL`/`MOVER`, "declared with `ADSMEM` instead of `ADRMEM`
+  parameters" — the compatibility forms of the original 8088 segmented-memory
+  moves. Both `src`/`dst` are now `ADSMEM` (segmented `{pointer, segment}`
+  pairs); passing a flat `ADR` address is a type error, and the runtime stubs
+  take the matching C `adsmem` struct by value. There is no separate "short
+  count" length semantics — the explicit caller-supplied length is correct.
+  Source-level `extern` declarations (now with `ADSMEM` params) reuse the
+  existing LLVM symbol. Proven by `python -m unittest`: `TestMoveRuntimeDirection`
+  exercises the S variants (including a full Pascal→IR→runtime link asserting
+  `MOVESL(ADS a, ADS b, WRD 4)` copies correctly), plus typecheck coverage that
+  the segmented variants reject `ADR` and that `ADSMEM` resolves as a type.
+- [x] **5.5 — `ABORT`.** `[READ]` **S** Wrapper over `abort()`/`exit()`.
+  Added ABORT as a predeclared procedure. CORRECTION to the original note: the
+  manual signature is `ABORT(CONST STRING, WORD, WORD)` — an error message, an
+  error code, and a STATUS word — so the message param is typed `STRING` (not a
+  raw pointer) and the lowering no longer discards the arguments. `builtin_abort`
+  extracts the message chars/length, coerces the two WORD operands, and calls a
+  new runtime `pabort(msg, len, code, status)` that reports them on stderr and
+  aborts ("stops execution in the same way as an internal runtime error").
+  Proven by `python -m unittest`, including `TestAbortRuntime` (the handler
+  prints the message/code/status and aborts) and an IR test asserting the
+  `pabort` call carries all four operands.
 - [ ] **5.6 — `NEW` / `DISPOSE`.** `[READ]` **M** Heap alloc/free (`malloc`/`free`). Needs real pointer-type support to be meaningful.
 
 ---
@@ -369,12 +422,11 @@ the biggest single chunk; expect it to need its own design pass.
     not a correctness blocker. Proven by `python -m unittest tests.test_parser
     tests.test_typecheck tests.test_codegen` (157 tests, 8 new REAL-hardening
     run tests in `TestCodegenBuildRun`).
-- [ ] **9.2 — Predeclared-identifier registration mechanism.** `[INFERRED]` **S**
-  Today builtins are scattered (some in `_setup_builtins`, some as dedicated AST
-  nodes `AdrExpr`/`SizeofExpr`/`UpperExpr`, some hand-declared `extern`). Consider
-  one table the type checker and codegen share, so "registered but no codegen"
-  traps (1.1) can't recur. The manual says predeclared identifiers are
-  *re-definable* by the programmer — model that (don't hard-reserve the names).
+- [x] **9.2 — Predeclared-identifier registration mechanism.** `[INFERRED]` **S**
+  Centralized predeclared registration in `builtins_registry.py`; `type_checker`
+  now uses the shared table, predeclared symbols are tagged `is_builtin`, and
+  user-defined redeclarations are allowed to shadow builtins instead of tripping
+  redeclaration errors. Proven by `python -m unittest` (264 tests).
 - [ ] **9.3 — Test fixtures for every closed item.** `[INFERRED]` **S (ongoing)**
   Each grammar item → a `should_pass`/`should_fail` fixture; each intrinsic → a
   codegen test (and a build/run test where a runtime is involved). Keeps the
@@ -428,13 +480,64 @@ the biggest single chunk; expect it to need its own design pass.
   `ORIGIN(c)` and any `PORT(addr)`-style attribute syntax remain intentionally
   out of scope until the manual's prose and grammar are reconciled more fully.
 
-- [ ] **9.8 — Full Enum support.** `[INFERRED]` **M**
+- [x] **9.8 — Full Enum support.** `[INFERRED]` **M**
   Enum-based sets (9.6) now work because they resolve to `i32` ordinals, but
   the compiler lacks first-class enum support: `SUCC`/`PRED` on enums, `CASE`
   statements over enums, enum-controlled `FOR` loops, and `WRITE` of enum names
   all need dedicated paths to support the `EnumType` introduced in 9.6.
+  - Done: enums lower to `i32`, so the codegen for `SUCC`/`PRED`, `ORD`, `CASE`,
+    and `FOR` already operated correctly on the ordinal; the gaps were in the
+    type checker plus one real codegen feature (WRITE-by-name).
+    (1) **`SUCC`/`PRED`** now accept any ordinal type and return that same type
+    (so `c := SUCC(c)` keeps its enum type) instead of demanding `INTEGER`.
+    (2) **`CASE`** type-checking was a no-op `TODO`; it now infers the selector
+    type and checks every label (and range endpoint) for compatibility, so
+    `CASE c OF Red: ...` is validated and a wrong-enum label is rejected. The
+    check is lenient (silent on un-inferable types, bidirectional `can_assign`)
+    so existing INTEGER/CHAR cases are unaffected. (3) **`FOR`** now accepts any
+    ordinal control variable with assignment-compatible bounds (`FOR c := Red TO
+    Blue`), replacing the hard INTEGER-only rule. (4) **`WRITE`/`WRITELN`** of an
+    enum value now prints the symbolic member name: codegen emits a cached
+    per-enum `[n x i8*]` name table, indexes it by the runtime ordinal, and
+    prints the resulting pointer with `%s`. Covers enum variables, enum
+    designators, and bare member literals (`WRITE(Blue)`).
+  - Also in scope (necessary supporting fix, noted per the strike-don't-delete
+    convention): **`ORD`** previously accepted only `CHAR`; it now accepts any
+    ordinal type (enums included) and returns `INTEGER`. This is what makes an
+    enum `FOR` body able to use the ordinal and is core to first-class enum use.
+  - Does NOT cover: printing the *name* of an arbitrary enum-typed expression
+    such as `WRITE(SUCC(c))` — codegen has no per-expression Pascal type, so
+    only enum variables/designators/member-literals print by name; other
+    enum-typed expressions still print the ordinal. Also unchanged: `READ` of an
+    enum (no enum input parsing). These are intentionally out of scope here.
+  - Existing-behavior change: a non-ordinal `FOR` control variable (e.g. `REAL`)
+    is still rejected, but the message is now "FOR loop variable must be an
+    ordinal type" rather than "must be INTEGER"; the one test asserting the old
+    wording was updated accordingly.
+  - Proven by `python -m unittest tests.test_parser tests.test_typecheck
+    tests.test_codegen tests.test_integration tests.test_codegen_strings_bounds`
+    (262 tests). New tests: `TestEnumCodegen` (SUCC/PRED, CASE, FOR, WRITE-name
+    variable/loop/bare-literal runtime, plus an IR-level name-table check) and
+    `TestEnumValidation` (valid enum FOR/SUCC/PRED/ORD/CASE, plus
+    `SUCC` on REAL and wrong-enum CASE label rejections).
 
-- [ ] **9.9** `RETYPE` on a pointer value is ambiguous. When the inner expression is already a pointer type, the code bitcasts the pointer and loads through it — reinterpreting the pointee, not the pointer's address bits. That's correct when the "pointer" is an aggregate's address (array/string), but if someone retypes an actual Pascal `^T` variable, they'd reasonably expect the address bits reinterpreted, not a deref. This is the codebase's existing aggregate-vs-pointer-value conflation, but RETYPE makes it user-reachable, so at least a guard or comment is warranted.
+- [x] **9.9** `RETYPE` on a pointer value is ambiguous. When the inner expression is already a pointer type, the code bitcasts the pointer and loads through it — reinterpreting the pointee, not the pointer's address bits. That's correct when the "pointer" is an aggregate's address (array/string), but if someone retypes an actual Pascal `^T` variable, they'd reasonably expect the address bits reinterpreted, not a deref. This is the codebase's existing aggregate-vs-pointer-value conflation, but RETYPE makes it user-reachable, so at least a guard or comment is warranted.
+  - Done: the `RetypeExpr` codegen no longer branches on the LLVM type alone.
+    A new helper `retype_source_is_pointer_value` classifies the inner
+    expression from its Pascal type: `ADR`/`ADS`/`NIL` and `^T` variables are
+    genuine pointer *values* (reinterpret the address bits via a spill + slot
+    bitcast, no dereference), while STRING/LSTRING/ARRAY/RECORD addresses keep
+    the legacy load-through-pointee behavior. When the AST can't classify the
+    inner expression, the lowering falls back to the LLVM pointee type (a
+    non-aggregate pointee is treated as a scalar pointer; an aggregate pointee
+    defaults to load-through), so the silent null-deref miscompile is gone and
+    no case is left to guess wrongly. The branch carries a comment documenting
+    the conflation so it isn't re-collapsed later. Proven by
+    `python -m unittest tests.test_parser tests.test_typecheck tests.test_codegen`,
+    including new IR-level tests
+    `test_retype_pointer_value_reinterprets_bits_not_pointee` and
+    `test_retype_aggregate_address_still_loads_through`, plus the
+    `@requires_exe` `test_retype_nil_pointer_does_not_dereference`.
 
 - [x] **9.10** `wrd_real_arg.pas` is misfiled and self-contradictory. It sits in `parser/should_pass/`, its body comment says "must be rejected — ERROR: REAL is not an ordinal type," and the 4.7 checklist note cites it as `should_fail/wrd_real_arg.pas`. All three disagree. As a parser fixture it correctly passes (REAL rejection is a type error, not a parse error), and the parser-reject test only catches `LexerError`/`ParserError` anyway — so even in `should_fail/` it wouldn't assert what the comment claims. The good news: the REAL rejection is actually covered, by `TestWrdByword.test_wrd_real_is_error` in `test_typecheck`. So there's no real coverage gap — just an artifact that documents a guarantee it doesn't itself enforce. Move/rename it or fix the comment so it stops lying.
   - Done: Moved the test fixture to `tests/fixtures/typecheck/should_fail/wrd_real_arg.pas` and corrected its comment to clarify it's a type error, not a parse error.
