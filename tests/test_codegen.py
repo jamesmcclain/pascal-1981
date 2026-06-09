@@ -505,6 +505,13 @@ class TestCodegenBuildRun(unittest.TestCase):
         self.assertIn("malloc", ir)
         self.assertIn("free", ir)
 
+    def test_string_edit_intrinsics_codegen(self):
+        """INSERT/DELETE/POSITN should lower without crashing."""
+        src = "PROGRAM P; VAR s: STRING(10); VAR t: STRING(10); BEGIN INSERT(s, t, 1); DELETE(t, 1, 1); WRITELN(POSITN(t, s)) END."
+        ir = compile_to_ir(src)
+        self.assertIn("memmove", ir)
+        self.assertIn("positn", ir)
+
     def test_short_circuit_skips_rhs_runtime(self):
         """Short-circuit operators must not evaluate an unnecessary RHS call."""
         src = ("PROGRAM P; "

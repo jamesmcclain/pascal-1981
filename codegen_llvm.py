@@ -142,6 +142,14 @@ class Codegen:
         movesr = ir.Function(self.module, seg_mov_ty, name='movesr')
         movesr.linkage = 'external'
         self.scope.define('movesr', movesr, None)
+        memmove_ty = ir.FunctionType(ir.VoidType(), [ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer(), ir.IntType(64)])
+        memmove_fn = ir.Function(self.module, memmove_ty, name='memmove')
+        memmove_fn.linkage = 'external'
+        self.scope.define('memmove', memmove_fn, None)
+        positn_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer(), ir.IntType(32), ir.IntType(8).as_pointer(), ir.IntType(32)])
+        positn_fn = ir.Function(self.module, positn_ty, name='positn')
+        positn_fn.linkage = 'external'
+        self.scope.define('positn', positn_fn, None)
         malloc_ty = ir.FunctionType(ir.IntType(8).as_pointer(), [ir.IntType(64)])
         free_ty = ir.FunctionType(ir.VoidType(), [ir.IntType(8).as_pointer()])
         malloc_fn = ir.Function(self.module, malloc_ty, name='malloc')
@@ -788,6 +796,13 @@ class Codegen:
                 self.builtin_copylst(stmt.args)
             elif lookup_name == 'COPYSTR':
                 self.builtin_copystr(stmt.args)
+            elif lookup_name == 'INSERT':
+                self.builtin_insert(stmt.args)
+            elif lookup_name == 'DELETE':
+                self.builtin_delete(stmt.args)
+            elif lookup_name == 'POSITN':
+                self.codegen_expr_func_call(stmt)  # function call path
+                return
             elif lookup_name == 'PACK':
                 self.builtin_pack(stmt.args)
             elif lookup_name == 'UNPACK':
@@ -1691,6 +1706,10 @@ class Codegen:
     def codegen_func_call(self, expr: FuncCall) -> ir.Value:
         """Codegen function call."""
         lookup_name = expr.name.upper()
+
+        if lookup_name == 'POSITN':
+            return self.builtin_positn(expr.args)
+
         symbol = self.scope.lookup(lookup_name) or self.scope.lookup(expr.name)
 
         if symbol:
@@ -1715,6 +1734,8 @@ class Codegen:
                 return self.builder.trunc(val, ir.IntType(8))
             else:
                 return self.builder.zext(val, ir.IntType(8))
+        elif lookup_name == 'POSITN':
+            return self.builtin_positn(expr.args)
         elif lookup_name == 'ORD':
             val = self.codegen_expr(expr.args[0])
             if val.type.width == 32:
@@ -2288,6 +2309,58 @@ class Codegen:
 
         self.builder.branch(end_block)
         self.builder.position_at_end(end_block)
+
+    def builtin_insert(self, args: List[Expression]) -> None:
+        src_chars, src_len = self.get_string_chars_and_len(args[0])
+        dst_arg = args[1]
+        if isinstance(dst_arg, Identifier):
+            dst_arg = Designator(dst_arg.name, [])
+        dst_ptr = self.resolve_designator_ptr(dst_arg)
+        dst_chars, dst_len = self.get_string_chars_and_len(args[1])
+        pos = self.codegen_expr(args[2])
+        one = ir.Constant(ir.IntType(32), 1)
+        zero = ir.Constant(ir.IntType(32), 0)
+        new_len = self.builder.add(dst_len, src_len)
+        max_len = self._dest_string_max_len(args[1])
+        end_block = self._guard_string_capacity(new_len, max_len, 'insert')
+        tail_len = self.builder.sub(dst_len, self.builder.sub(pos, one))
+        memmove = self.scope.lookup('memmove').llvm_value
+        dst_start = self.builder.gep(dst_chars, [self.builder.sub(pos, one)])
+        src_start = self.builder.gep(dst_chars, [self.builder.sub(pos, one)])
+        self.builder.call(memmove, [self.builder.gep(dst_chars, [self.builder.add(self.builder.sub(pos, one), src_len)]), dst_start, self.builder.zext(tail_len, ir.IntType(64))])
+        self.builder.call(memmove, [dst_start, src_chars, self.builder.zext(src_len, ir.IntType(64))])
+        if isinstance(args[1], (Identifier, Designator)) and self.get_string_type_info(getattr(self.scope.lookup(args[1].name), 'type_expr', None))[2]:
+            len_ptr = self.builder.gep(dst_ptr, [zero, zero])
+            self.builder.store(self.builder.trunc(new_len, ir.IntType(8)), len_ptr)
+        self.builder.branch(end_block)
+        self.builder.position_at_end(end_block)
+
+    def builtin_delete(self, args: List[Expression]) -> None:
+        dst_arg = args[0]
+        if isinstance(dst_arg, Identifier):
+            dst_arg = Designator(dst_arg.name, [])
+        dst_ptr = self.resolve_designator_ptr(dst_arg)
+        dst_chars, dst_len = self.get_string_chars_and_len(args[0])
+        pos = self.codegen_expr(args[1])
+        count = self.codegen_expr(args[2])
+        one = ir.Constant(ir.IntType(32), 1)
+        zero = ir.Constant(ir.IntType(32), 0)
+        start = self.builder.sub(pos, one)
+        rem = self.builder.sub(dst_len, self.builder.add(start, count))
+        memmove = self.scope.lookup('memmove').llvm_value
+        self.builder.call(memmove, [self.builder.gep(dst_chars, [start]), self.builder.gep(dst_chars, [self.builder.add(start, count)]), self.builder.zext(rem, ir.IntType(64))])
+        new_len = self.builder.sub(dst_len, count)
+        if isinstance(args[0], (Identifier, Designator)) and self.get_string_type_info(getattr(self.scope.lookup(args[0].name), 'type_expr', None))[2]:
+            len_ptr = self.builder.gep(dst_ptr, [zero, zero])
+            self.builder.store(self.builder.trunc(new_len, ir.IntType(8)), len_ptr)
+
+    def builtin_positn(self, args: List[Expression]) -> ir.Value:
+        hay_chars, hay_len = self.get_string_chars_and_len(args[0])
+        needle_chars, needle_len = self.get_string_chars_and_len(args[1])
+        fn = self.scope.lookup('positn')
+        if not fn:
+            raise CodegenError('Undefined helper: positn')
+        return self.builder.call(fn.llvm_value, [hay_chars, hay_len, needle_chars, needle_len])
 
     def retype_source_is_pointer_value(self, expr) -> Optional[bool]:
         """Classify the inner expression of a RETYPE for the pointer-vs-aggregate

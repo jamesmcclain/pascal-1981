@@ -944,6 +944,15 @@ class PascalTypeChecker(TypeChecker):
             elif is_builtin and stmt.name.upper() == 'COPYSTR':
                 self._check_copystr_args(stmt)
                 return
+            elif is_builtin and stmt.name.upper() == 'INSERT':
+                self._check_insert_args(stmt)
+                return
+            elif is_builtin and stmt.name.upper() == 'DELETE':
+                self._check_delete_args(stmt)
+                return
+            elif is_builtin and stmt.name.upper() == 'POSITN':
+                self._check_positn_args(stmt)
+                return
             elif is_builtin and stmt.name.upper() == 'NEW':
                 self._check_new_args(stmt)
                 return
@@ -1190,6 +1199,59 @@ class PascalTypeChecker(TypeChecker):
 
         if not dest_sym.is_mutable:
             self.error(f"COPYSTR: second argument must be mutable (VAR parameter)", stmt)
+            return
+
+    def _check_insert_args(self, stmt: ProcCallStmt) -> None:
+        if len(stmt.args) != 3:
+            self.error(f"INSERT expects 3 arguments, got {len(stmt.args)}", stmt)
+            return
+        src_type = self.infer_expression_type(stmt.args[0])
+        dst_type = self.infer_expression_type(stmt.args[1])
+        pos_type = self.infer_expression_type(stmt.args[2])
+        if not isinstance(src_type, (StringType, LStringType)):
+            self.error(f"INSERT: first argument must be STRING or LSTRING, got {src_type}", stmt)
+            return
+        if not isinstance(dst_type, (StringType, LStringType)):
+            self.error(f"INSERT: second argument must be STRING or LSTRING, got {dst_type}", stmt)
+            return
+        if isinstance(stmt.args[1], (Identifier, Designator)):
+            sym = self.symbol_table.lookup(stmt.args[1].name) or self.symbol_table.lookup(stmt.args[1].name.upper())
+            if sym and not sym.is_mutable:
+                self.error("INSERT: second argument must be mutable (VAR parameter)", stmt)
+        if not pos_type or not pos_type.equivalent_to(INTEGER_TYPE):
+            self.error(f"INSERT: third argument must be INTEGER, got {pos_type}", stmt)
+            return
+
+    def _check_delete_args(self, stmt: ProcCallStmt) -> None:
+        if len(stmt.args) != 3:
+            self.error(f"DELETE expects 3 arguments, got {len(stmt.args)}", stmt)
+            return
+        dst_type = self.infer_expression_type(stmt.args[0])
+        pos_type = self.infer_expression_type(stmt.args[1])
+        count_type = self.infer_expression_type(stmt.args[2])
+        if not isinstance(dst_type, (StringType, LStringType)):
+            self.error(f"DELETE: first argument must be STRING or LSTRING, got {dst_type}", stmt)
+            return
+        if isinstance(stmt.args[0], (Identifier, Designator)):
+            sym = self.symbol_table.lookup(stmt.args[0].name) or self.symbol_table.lookup(stmt.args[0].name.upper())
+            if sym and not sym.is_mutable:
+                self.error("DELETE: first argument must be mutable (VAR parameter)", stmt)
+        if not pos_type or not pos_type.equivalent_to(INTEGER_TYPE):
+            self.error(f"DELETE: second argument must be INTEGER, got {pos_type}", stmt)
+            return
+        if not count_type or not count_type.equivalent_to(INTEGER_TYPE):
+            self.error(f"DELETE: third argument must be INTEGER, got {count_type}", stmt)
+            return
+
+    def _check_positn_args(self, stmt: ProcCallStmt) -> None:
+        if len(stmt.args) != 2:
+            self.error(f"POSITN expects 2 arguments, got {len(stmt.args)}", stmt)
+            return
+        if not isinstance(self.infer_expression_type(stmt.args[0]), (StringType, LStringType)):
+            self.error("POSITN: first argument must be STRING or LSTRING", stmt)
+            return
+        if not isinstance(self.infer_expression_type(stmt.args[1]), (StringType, LStringType)):
+            self.error("POSITN: second argument must be STRING or LSTRING", stmt)
             return
 
     def _check_new_args(self, stmt: ProcCallStmt) -> None:
@@ -1480,6 +1542,17 @@ class PascalTypeChecker(TypeChecker):
                 if arg_type:
                     self.error(f"Argument 1 type mismatch: expected INTEGER or WORD, got {arg_type}", expr)
                 return None
+            if lookup_name == 'POSITN':
+                if len(expr.args) != 2:
+                    self.error(f"POSITN expects 2 arguments, got {len(expr.args)}", expr)
+                    return None
+                if not isinstance(self.infer_expression_type(expr.args[0]), (StringType, LStringType)):
+                    self.error("POSITN: first argument must be STRING or LSTRING", expr)
+                    return None
+                if not isinstance(self.infer_expression_type(expr.args[1]), (StringType, LStringType)):
+                    self.error("POSITN: second argument must be STRING or LSTRING", expr)
+                    return None
+                return INTEGER_TYPE
             if lookup_name == 'WRD':
                 if len(expr.args) != 1:
                     self.error(f"WRD expects 1 argument, got {len(expr.args)}", expr)
