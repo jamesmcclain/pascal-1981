@@ -76,24 +76,34 @@ class TestCodegenIR(unittest.TestCase):
     """Test LLVM IR generation (requires llvmlite)."""
 
     def test_file_buffer_model_ir(self):
-        """FILE OF T lowers to an opaque runtime handle plus typed F^ buffer access."""
+        """FILE OF T lowers to an inline file-control block plus typed F^ buffer
+        access through pas_file_buffer; no heap allocation (so nothing leaks)."""
         src = "PROGRAM P; VAR f: FILE OF INTEGER; x: INTEGER; BEGIN f^ := 42; x := f^ END."
         ir = compile_to_ir(src)
-        self.assertIn("define i8* @\"pas_file_create\"", ir)
-        self.assertIn("define i8* @\"pas_file_buffer\"", ir)
-        self.assertIn("call i8* @\"pas_file_create\"(i32 4, i32 0)", ir)
-        self.assertIn("bitcast i8*", ir)
-        self.assertIn("to i32*", ir)
+        self.assertIn('define i8* @"pas_file_buffer"', ir)
+        # The control block and its buffer are stack/global allocations, not malloc.
+        self.assertNotIn('@"pas_file_create"', ir)
+        self.assertNotIn('call i8* @"malloc"', ir)
+        # F^ resolves to a typed pointer into the component buffer.
+        self.assertIn('bitcast i8*', ir)
+        self.assertIn('to i32*', ir)
+        # Binary FILE OF T records structure 0 in the FCB.
+        self.assertIn('store i32 0', ir)
 
     def test_text_buffer_touch_and_predeclared_files_ir(self):
-        """TEXT/INPUT/OUTPUT use ASCII file handles and TEXT^ touches lazy buffer."""
+        """TEXT/INPUT/OUTPUT are ASCII file handles; TEXT^ goes through the touch
+        hook, which now performs real bookkeeping (sets the touched flag) rather
+        than being an empty body."""
         src = "PROGRAM P; VAR t: TEXT; c: CHAR; BEGIN c := t^ END."
         ir = compile_to_ir(src)
-        self.assertIn('@\"input\" = global i8* null', ir)
-        self.assertIn('@\"output\" = global i8* null', ir)
-        self.assertIn("define void @\"pas_file_touch_buffer\"", ir)
-        self.assertIn("call i8* @\"pas_file_create\"(i32 1, i32 1)", ir)
-        self.assertIn("call void @\"pas_file_touch_buffer\"", ir)
+        self.assertIn('@"input" = global i8* null', ir)
+        self.assertIn('@"output" = global i8* null', ir)
+        self.assertIn('define void @"pas_file_touch_buffer"', ir)
+        self.assertIn('call void @"pas_file_touch_buffer"', ir)
+        # ASCII/TEXT records structure 1 in the FCB.
+        self.assertIn('store i32 1', ir)
+        # No per-file heap allocation.
+        self.assertNotIn('@"pas_file_create"', ir)
 
     def test_simple_writeln(self):
         """Simple WRITELN generates valid IR."""

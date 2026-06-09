@@ -181,21 +181,34 @@ class Codegen:
         free_fn = ir.Function(self.module, free_ty, name='free')
         free_fn.linkage = 'external'
         self.scope.define('free', free_fn, None)
-        file_create_ty = ir.FunctionType(ir.IntType(8).as_pointer(), [ir.IntType(32), ir.IntType(32)])
-        file_buffer_ty = ir.FunctionType(ir.IntType(8).as_pointer(), [ir.IntType(8).as_pointer()])
-        file_touch_ty = ir.FunctionType(ir.VoidType(), [ir.IntType(8).as_pointer()])
-        file_create = ir.Function(self.module, file_create_ty, name='pas_file_create')
-        b = IRBuilder(file_create.append_basic_block(name='entry'))
-        size64 = b.zext(file_create.args[0], ir.IntType(64))
-        mem = b.call(malloc_fn, [size64])
-        b.ret(mem)
-        self.scope.define('pas_file_create', file_create, None)
+        # File-control block, one fixed layout for every file type:
+        #   {i32 element-size, i32 structure (0=binary FILE OF T, 1=ASCII/TEXT),
+        #    i32 touched (buffer-accessed flag), i8* current-component buffer}.
+        # The FCB and its buffer are allocated inline at the file variable's
+        # storage site (see _init_file_storage), so there is no heap allocation
+        # to leak. The handle the rest of codegen passes around is just an i8*
+        # to this block; these helpers bitcast it back to the typed FCB.
+        fcb_ty = self.file_fcb_type()
+        fcb_ptr = fcb_ty.as_pointer()
+        file_buffer_ty = ir.FunctionType(ir.IntType(8).as_pointer(), [fcb_ptr])
+        file_touch_ty = ir.FunctionType(ir.VoidType(), [fcb_ptr])
+        i32 = ir.IntType(32)
         file_buffer = ir.Function(self.module, file_buffer_ty, name='pas_file_buffer')
         b = IRBuilder(file_buffer.append_basic_block(name='entry'))
-        b.ret(file_buffer.args[0])
+        # Return the file's current-component buffer, which is distinct from the
+        # handle itself (the previous version returned the handle, so F^ aliased
+        # the file control block).
+        buf_field = b.gep(file_buffer.args[0], [ir.Constant(i32, 0), ir.Constant(i32, 3)])
+        b.ret(b.load(buf_field))
         self.scope.define('pas_file_buffer', file_buffer, None)
         file_touch = ir.Function(self.module, file_touch_ty, name='pas_file_touch_buffer')
         b = IRBuilder(file_touch.append_basic_block(name='entry'))
+        # Lazy-touch seam: record that the current component buffer has been
+        # accessed. Device fill/flush attaches here in 8.2; for now this is the
+        # one piece of real bookkeeping the model owns (the previous body did
+        # nothing at all).
+        touched_field = b.gep(file_touch.args[0], [ir.Constant(i32, 0), ir.Constant(i32, 2)])
+        b.store(ir.Constant(i32, 1), touched_field)
         b.ret_void()
         self.scope.define('pas_file_touch_buffer', file_touch, None)
 
@@ -1177,19 +1190,46 @@ class Codegen:
             return 1, 1
         return 1, 0
 
+    def file_fcb_type(self) -> ir.LiteralStructType:
+        """The file-control-block layout shared by every file variable.
+
+        Fields: element size, structure (0 = binary FILE OF T, 1 = ASCII/TEXT),
+        a touched flag, and a pointer to the current-component buffer.
+        """
+        if not hasattr(self, '_fcb_ty'):
+            i32 = ir.IntType(32)
+            self._fcb_ty = ir.LiteralStructType([i32, i32, i32, ir.IntType(8).as_pointer()])
+        return self._fcb_ty
+
     def _init_file_storage(self, slot: ir.Value, type_expr: Type) -> None:
         elem_size, structure = self._file_element_size_and_structure(type_expr)
-        create_fn = self.scope.lookup('pas_file_create').llvm_value
-        handle = self.builder.call(create_fn, [ir.Constant(ir.IntType(32), elem_size), ir.Constant(ir.IntType(32), structure)])
-        self.builder.store(handle, slot)
+        i32 = ir.IntType(32)
+        zero = ir.Constant(i32, 0)
+        fcb_ty = self.file_fcb_type()
+        # Allocate the control block and its component buffer inline at the file
+        # variable's storage site. The element size is a compile-time constant,
+        # so no runtime malloc is needed (the previous model malloc'd per file
+        # and never freed). For locals this lives in the function frame; for
+        # program-level/predeclared files it lives in main's frame, i.e. for the
+        # whole program. Either way it is reclaimed automatically.
+        fcb = self.builder.alloca(fcb_ty, name='file_fcb')
+        buf = self.builder.alloca(ir.ArrayType(ir.IntType(8), max(1, elem_size)), name='file_buf')
+        self.builder.store(ir.Constant(i32, elem_size), self.builder.gep(fcb, [zero, ir.Constant(i32, 0)]))
+        self.builder.store(ir.Constant(i32, structure), self.builder.gep(fcb, [zero, ir.Constant(i32, 1)]))
+        self.builder.store(ir.Constant(i32, 0), self.builder.gep(fcb, [zero, ir.Constant(i32, 2)]))
+        buf_i8 = self.builder.bitcast(buf, ir.IntType(8).as_pointer())
+        self.builder.store(buf_i8, self.builder.gep(fcb, [zero, ir.Constant(i32, 3)]))
+        # The handle handed to the rest of codegen is an opaque i8* to the FCB.
+        self.builder.store(self.builder.bitcast(fcb, ir.IntType(8).as_pointer()), slot)
 
     def _file_buffer_ptr(self, file_slot: ir.Value, elem_type: Type, touch: bool) -> ir.Value:
         handle = self.builder.load(file_slot)
+        fptr = self.builder.bitcast(handle, self.file_fcb_type().as_pointer())
         if touch:
             touch_fn = self.scope.lookup('pas_file_touch_buffer').llvm_value
-            self.builder.call(touch_fn, [handle])
+            self.builder.call(touch_fn, [fptr])
         buf_fn = self.scope.lookup('pas_file_buffer').llvm_value
-        raw = self.builder.call(buf_fn, [handle])
+        raw = self.builder.call(buf_fn, [fptr])
         return self.builder.bitcast(raw, ir.PointerType(self.llvm_type(elem_type)))
 
     def null_lstring_ptr(self) -> ir.Value:

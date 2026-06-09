@@ -159,5 +159,18 @@ class TestRuntimeBehavior(unittest.TestCase):
         self.assertNotEqual(eq_line, ne_line)
 
 
+@requires_exe
+class TestFileBufferModel(unittest.TestCase):
+    def test_file_buffer_roundtrip(self):
+        """Writing then reading the buffer variable F^ round-trips through the
+        file-control block's own buffer, for both binary FILE OF T and TEXT.
+        This guards the FCB redesign (handle distinct from buffer, structure
+        retained, inline/leak-free) against breaking the basic F^ contract."""
+        src = ("PROGRAM P; VAR f: FILE OF INTEGER; x: INTEGER; t: TEXT; c: CHAR; "
+               "BEGIN f^ := 42; x := f^; WRITELN(x); t^ := 'Q'; c := t^; WRITELN(c) END.")
+        rc, out = build_run_linked(src, [])
+        self.assertEqual(out, "42\nQ\n")
+
+
 if __name__ == "__main__":
     unittest.main()

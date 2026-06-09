@@ -392,7 +392,21 @@ the biggest single chunk; expect it to need its own design pass.
 
 - [x] **8.1 — File-type runtime + buffer-variable model.** `[READ]` **XL**
   Backs everything below; tie to `TEXT`/`INPUT`/`OUTPUT` (3.4).
-  - Done: added `TEXT` vs binary `FILE OF T` metadata, real opaque file-handle lowering for file variables and predeclared `INPUT`/`OUTPUT`, typed buffer-variable access through `F^`, lazy-touch hooks for `TEXT` buffers, and whole-file assignment rejection. Proven by `python -m unittest tests.test_parser tests.test_typecheck tests.test_codegen`.
+  - Done: added `TEXT` vs binary `FILE OF T` metadata and an inline
+    file-control block (element size, structure flag, touched flag, and a
+    pointer to the current-component buffer) for file variables and predeclared
+    `INPUT`/`OUTPUT`. The FCB and its buffer are allocated inline at the
+    variable's storage site (no per-file `malloc`, so nothing leaks); the
+    `structure` flag is stored in the FCB rather than discarded; `F^` reads/
+    writes the FCB's own buffer (distinct from the handle) through
+    `pas_file_buffer`; and the `pas_file_touch_buffer` hook records buffer
+    access (sets the touched flag) instead of being an empty body. Whole-file
+    assignment is rejected. Proven by `python -m unittest tests.test_parser
+    tests.test_typecheck tests.test_codegen`.
+  - NOTE / does not cover: there is no device I/O yet. `INPUT`/`OUTPUT` are not
+    attached to stdin/stdout, and the FCB has no fd/position/mode — those, plus
+    the lazy fill/flush that the touch hook is a seam for, are 8.2 (`RESET`/
+    `REWRITE`/`GET`/`PUT`). 8.1 is the in-memory buffer-variable model only.
 - [ ] **8.2 — `RESET`, `REWRITE`, `GET`, `PUT`.** `[READ]` **L** Core file ops.
 - [ ] **8.3 — `READ`, and `READLN` beyond integer; `WRITE`/`WRITELN` for `REAL`.** `[OBSERVED]` **M**
   `READLN` currently reads integers only; `WRITE`/`WRITELN` don't handle `REAL`.
