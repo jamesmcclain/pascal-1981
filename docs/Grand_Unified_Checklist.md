@@ -192,6 +192,10 @@ Cheapest coverage of the manual's predeclared list. Pure registration work.
 
 - [x] **3.4 — Standard type / file names `TEXT`, `INPUT`, `OUTPUT`, `STRING`.** `[OBSERVED]` **S**
   Registered the names in the builtin symbol table so the parser/type checker can resolve them as predeclared identifiers. `TEXT` is modeled as a `TEXT OF CHAR` file type placeholder; `INPUT`/`OUTPUT` alias that placeholder; `STRING` is predeclared as a type name alongside the existing `STRING(n)` syntax. Proven by `python -m unittest tests.test_typecheck tests.test_codegen`.
+  - NOTE: the acceptance test (`tests/test_typecheck.py:76`) also asserts
+    `WRITELN(INPUT); WRITELN(OUTPUT); WRITELN(f)` typechecks, which is too
+    permissive — a whole file is not a `WRITE`/`WRITELN` data argument. Tracked
+    as a known gap under 8.3a.
 
 ---
 
@@ -411,6 +415,20 @@ the biggest single chunk; expect it to need its own design pass.
 - [ ] **8.3 — `READ`, and `READLN` beyond integer; `WRITE`/`WRITELN` for `REAL`.** `[OBSERVED]` **M**
   `READLN` currently reads integers only; `WRITE`/`WRITELN` don't handle `REAL`.
   Extend the existing printf/scanf hybrid path.
+- [ ] **8.3a — `WRITE`/`WRITELN` accept a whole file variable as a data argument.** `[OBSERVED]` **S**
+  Typecheck trap: a bare file variable in the argument list passes today, e.g.
+  `WRITE(f)` and `WRITELN(f)` for `f: FILE OF INTEGER` (a *binary* file) both
+  typecheck as success, as does `WRITELN(t)`/`WRITELN(INPUT)`/`WRITELN(OUTPUT)`.
+  This is wrong: `WRITE`/`WRITELN` apply to `TEXT` only, and a file is never a
+  data value. Proper semantics: an *optional leading* `TEXT`-file argument
+  selects the target stream and the remaining arguments are values; a binary
+  `FILE OF T`, or a whole file in the data position, must be rejected (parallel
+  to the whole-file *assignment* rejection already done in 8.1). The checker
+  currently models neither the file-selector role nor the binary rejection.
+  - Audit: `tests/test_typecheck.py:76` asserts
+    `WRITELN(INPUT); WRITELN(OUTPUT); WRITELN(f)` *succeeds* (a 3.4 artifact),
+    baking in this behavior; that assertion must be revisited when this is
+    fixed.
 - [ ] **8.4 — `EOF`, `EOL`, `EOLN`.** `[READ]` **M** Stream predicates.
 - [ ] **8.5 — `ASSIGN`, `CLOSE`, `DISCARD`, `READFN`, `READSET`.** `[READ]` **L** Extended I/O verbs.
 - [ ] **8.6 — `FILEMODES`, `SEQUENTIAL`, `TERMINAL`, `FCBFQQ`.** `[INFERRED]` **L**
