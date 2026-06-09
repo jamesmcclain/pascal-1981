@@ -513,7 +513,7 @@ class TestCodegenBuildRun(unittest.TestCase):
                "END.")
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
-        self.assertIn("42", stdout)
+        self.assertRegex(stdout, r"4\.2000000E\+01")
 
     def test_nil_codegen(self):
         """NIL lowers to a null pointer value."""
@@ -745,7 +745,7 @@ class TestCodegenBuildRun(unittest.TestCase):
         src = "PROGRAM P; BEGIN WRITELN(1 / 4) END."
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
-        self.assertIn("0.25", stdout)
+        self.assertRegex(stdout, r"2\.5000000E-01")
 
     def test_real_const_declaration_and_use(self):
         """REAL CONST can be declared and used in expressions without crashing."""

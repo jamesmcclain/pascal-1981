@@ -10,7 +10,9 @@ import llvmlite.ir as ir
 from typing import List, Union, Optional
 
 from ast_nodes import *
-from type_system import EnumType, LStringType, StringType, REAL_TYPE, WORD_TYPE, INTEGER_TYPE, CHAR_TYPE
+from type_system import EnumType as ResolvedEnumType, LStringType, StringType, REAL_TYPE, WORD_TYPE, INTEGER_TYPE, CHAR_TYPE
+from ast_nodes import LStringType as ASTLStringType
+from ast_nodes import EnumType as ASTEnumType
 
 
 class IoWriteReadMixin:
@@ -60,9 +62,9 @@ class IoWriteReadMixin:
                 val = self.builder.load(self.builder.gep(table, [zero, val]))
                 pas_ty = None
 
-            if isinstance(pas_ty, (StringType, LStringType)):
+            if isinstance(pas_ty, (StringType, LStringType, ASTLStringType)):
                 zero = ir.Constant(ir.IntType(32), 0)
-                if isinstance(pas_ty, LStringType):
+                if isinstance(pas_ty, (LStringType, ASTLStringType)):
                     length = self.builder.zext(self.builder.load(self.builder.gep(val, [zero, zero])), ir.IntType(32))
                     val = self.builder.gep(val, [zero, ir.Constant(ir.IntType(32), 1)])
                 else:
@@ -92,17 +94,23 @@ class IoWriteReadMixin:
                 continue
 
             if str(val.type) == 'i8':
-                fmt_parts.append('%c')
+                conv = 'c'
             elif str(val.type) == 'i1':
-                fmt_parts.append('%d')
+                conv = 'd'
                 val = self.builder.zext(val, ir.IntType(32))
             elif str(val.type) == 'i16':
-                fmt_parts.append('%u')
+                conv = 'u'
                 val = self.builder.zext(val, ir.IntType(32))
             elif str(val.type) == 'i32':
-                fmt_parts.append('%d')
+                conv = 'd'
             else:
-                fmt_parts.append('%s')
+                conv = 's'
+
+            if width is not None:
+                fmt_parts.append(f'%*{conv}')
+                printf_args.append(self.coerce_printf_int(self.codegen_expr(width)))
+            else:
+                fmt_parts.append(f'%{conv}')
             printf_args.append(val)
         return ''.join(fmt_parts), printf_args
 
@@ -156,7 +164,7 @@ class IoWriteReadMixin:
 
     def enum_value_list(self, type_expr) -> Optional[List[str]]:
         t = self.resolve_type_alias(type_expr)
-        if isinstance(t, EnumType):
+        if isinstance(t, (ResolvedEnumType, ASTEnumType)):
             return list(t.values)
         return None
 

@@ -86,7 +86,7 @@ class StringsMixin:
         return max_len
 
 
-    def _guard_string_capacity(self, need_len: ir.Value, max_len: int, label: str):
+    def _guard_string_capacity(self, need_len: ir.Value, max_len: int, label: str, enabled: bool = True):
         """Emit the manual's string range check (errors if upper(D) < need_len).
 
         If `need_len` exceeds `max_len`, call the runtime error handler (abort)
@@ -94,6 +94,8 @@ class StringsMixin:
         LSTRING assignment path. Returns the post-check block, which the caller
         must branch to once the guarded work is done.
         """
+        if not enabled:
+            return self.builder.block
         cond = self.builder.icmp_signed('<=', need_len, ir.Constant(ir.IntType(32), max_len))
         parent = self.builder.block.parent
         ok_block = parent.append_basic_block(label + '_ok')
@@ -107,7 +109,7 @@ class StringsMixin:
         return end_block
 
 
-    def builtin_concat(self, args: List[Expression]) -> None:
+    def builtin_concat(self, args: List[Expression], enabled: bool = True) -> None:
         """CONCAT(VAR D: LSTRING; CONST S: STRING).
 
         S is appended to D; D's length grows by length(S). Manual 11-20:
@@ -133,7 +135,7 @@ class StringsMixin:
         # Range check BEFORE writing: length(D) + length(S) must fit in upper(D).
         new_len = self.builder.add(dest_len, src_len)
         max_len = self._dest_string_max_len(args[0])
-        end_block = self._guard_string_capacity(new_len, max_len, 'concat')
+        end_block = self._guard_string_capacity(new_len, max_len, 'concat', enabled=enabled)
 
         # Append S at [1 + dest_len ..]
         dest_chars = self.builder.gep(D_ptr, [zero, one])
@@ -149,7 +151,7 @@ class StringsMixin:
         self.builder.position_at_end(end_block)
 
 
-    def builtin_copylst(self, args: List[Expression]) -> None:
+    def builtin_copylst(self, args: List[Expression], enabled: bool = True) -> None:
         """COPYLST(CONST S: STRING; VAR D: LSTRING).
 
         Copies S to D; D's length is set to length(S). Manual 11-20:
@@ -169,7 +171,7 @@ class StringsMixin:
 
         # Range check BEFORE writing: length(S) must fit in upper(D).
         max_len = self._dest_string_max_len(args[1])
-        end_block = self._guard_string_capacity(src_len, max_len, 'copylst')
+        end_block = self._guard_string_capacity(src_len, max_len, 'copylst', enabled=enabled)
 
         # Copy to bytes [1..n]
         dest_chars = self.builder.gep(D_ptr, [zero, one])
@@ -185,7 +187,7 @@ class StringsMixin:
         self.builder.position_at_end(end_block)
 
 
-    def builtin_copystr(self, args: List[Expression]) -> None:
+    def builtin_copystr(self, args: List[Expression], enabled: bool = True) -> None:
         """COPYSTR(CONST S: STRING; VAR D: STRING)"""
         src_chars, src_len = self.get_string_chars_and_len(args[0])
         src_len_64 = self.builder.zext(src_len, ir.IntType(64))
@@ -213,7 +215,7 @@ class StringsMixin:
 
         # Range check BEFORE writing (manual 11-20: error if upper(D) < upper(S)).
         # This also guarantees pad_len below is non-negative.
-        end_block = self._guard_string_capacity(src_len, max_len, 'copystr')
+        end_block = self._guard_string_capacity(src_len, max_len, 'copystr', enabled=enabled)
 
         # STRING has no length byte; copy to [0]
         dest_chars = self.builder.gep(D_ptr, [zero, zero])
@@ -229,7 +231,7 @@ class StringsMixin:
         self.builder.position_at_end(end_block)
 
 
-    def builtin_insert(self, args: List[Expression]) -> None:
+    def builtin_insert(self, args: List[Expression], enabled: bool = True) -> None:
         src_chars, src_len = self.get_string_chars_and_len(args[0])
         dst_arg = args[1]
         if isinstance(dst_arg, Identifier):
@@ -241,7 +243,7 @@ class StringsMixin:
         zero = ir.Constant(ir.IntType(32), 0)
         new_len = self.builder.add(dst_len, src_len)
         max_len = self._dest_string_max_len(args[1])
-        end_block = self._guard_string_capacity(new_len, max_len, 'insert')
+        end_block = self._guard_string_capacity(new_len, max_len, 'insert', enabled=enabled)
         tail_len = self.builder.sub(dst_len, self.builder.sub(pos, one))
         memmove = self.scope.lookup('memmove').llvm_value
         dst_start = self.builder.gep(dst_chars, [self.builder.sub(pos, one)])

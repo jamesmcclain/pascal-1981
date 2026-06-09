@@ -141,6 +141,7 @@ class CompoundStmt(ASTNode):
 class AssignStmt(ASTNode):
     target: Designator
     expr: Expression
+    rangeck: bool = True
 
 
 @dataclass
@@ -154,6 +155,7 @@ class WriteArg(ASTNode):
 class ProcCallStmt(ASTNode):
     name: str
     args: List[Union[Expression, WriteArg]]
+    rangeck: bool = True
 
 
 @dataclass
@@ -190,6 +192,7 @@ class CaseStmt(ASTNode):
     expr: Expression
     elements: List[CaseElement]
     otherwise: Optional[Statement]
+    rangeck: bool = True
 
 
 @dataclass

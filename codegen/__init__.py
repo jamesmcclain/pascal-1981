@@ -44,9 +44,9 @@ class Codegen(CodegenBase, TypesMapMixin, ConstFoldMixin, RuntimeBuiltinsMixin,
               DeclsMixin, ExprsMixin):
     """LLVM IR code generator."""
     
-    def __init__(self, verbose: bool = False, source_file: Optional[str] = None):
+    def __init__(self, verbose: bool = False, source_file: Optional[str] = None, force_rangeck: Optional[bool] = None):
         """Initialize Codegen with all mixins."""
-        super().__init__(verbose=verbose, source_file=source_file)
+        super().__init__(verbose=verbose, source_file=source_file, force_rangeck=force_rangeck)
 
     # ========================================================================
     # Type System
@@ -68,9 +68,9 @@ class Codegen(CodegenBase, TypesMapMixin, ConstFoldMixin, RuntimeBuiltinsMixin,
             ir.Function(self.module, fn_type, name=name)
         return next(f for f in self.module.functions if f.name == name)
 
-def compile_to_llvm(ast: Union[ProgramUnit, ModuleUnit, InterfaceUnit, ImplementationUnit], verbose: bool = False, source_file: Optional[str] = None) -> str:
+def compile_to_llvm(ast: Union[ProgramUnit, ModuleUnit, InterfaceUnit, ImplementationUnit], verbose: bool = False, source_file: Optional[str] = None, force_rangeck: Optional[bool] = None) -> str:
     """Compile AST to LLVM IR string."""
-    codegen = Codegen(verbose=verbose, source_file=source_file)
+    codegen = Codegen(verbose=verbose, source_file=source_file, force_rangeck=force_rangeck)
     module = codegen.codegen(ast)
     return str(module)
 

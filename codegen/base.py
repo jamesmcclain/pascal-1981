@@ -76,7 +76,7 @@ class CodegenBase:
     Initializes module state, builder, scope, and shared constants/tables.
     """
 
-    def __init__(self, verbose: bool = False, source_file: Optional[str] = None):
+    def __init__(self, verbose: bool = False, source_file: Optional[str] = None, force_rangeck: Optional[bool] = None):
         self.module = ir.Module(name="pascal_program")
         self.source_file = source_file
         self.module.triple = "x86_64-pc-linux-gnu"  # Standard Linux target
@@ -102,6 +102,7 @@ class CodegenBase:
         self.enum_member_names: Dict[str, List[str]] = {}
         self._enum_name_tables: Dict[str, ir.GlobalVariable] = {}
         self.verbose = verbose
+        self.force_rangeck = force_rangeck
         self._register_predeclared_externs()
         self._register_predeclared_files()
 

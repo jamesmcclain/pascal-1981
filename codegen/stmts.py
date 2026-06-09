@@ -101,6 +101,10 @@ class StmtsMixin:
                 elif value.type != target_type:
                     value = self.builder.bitcast(value, target_type)
 
+        rangeck_enabled = getattr(stmt, 'rangeck', True)
+        if self.force_rangeck is not None:
+            rangeck_enabled = self.force_rangeck
+
         if is_str:
             # ptr is now directly the aggregate pointer [n+1 x i8] or [n x i8]
             if isinstance(stmt.expr, NilLiteral) or (isinstance(stmt.expr, Identifier) and stmt.expr.name.upper() == 'NULL'):
@@ -123,14 +127,11 @@ class StmtsMixin:
                 success_block = self.builder.block.parent.append_basic_block('str_assign_ok')
                 error_block = self.builder.block.parent.append_basic_block('str_assign_overflow')
                 end_block = self.builder.block.parent.append_basic_block('str_assign_end')
-                self.builder.cbranch(cond, success_block, error_block)
-
-                # Error block: emit range-check failure
-                self.builder.position_at_end(error_block)
-                self.builder.call(self.runtime_error_func(), [])
-                self.builder.unreachable()
-
-                # Success block: perform assignment
+                if rangeck_enabled:
+                    self.builder.cbranch(cond, success_block, error_block)
+                    self.builder.position_at_end(error_block)
+                    self.builder.call(self.runtime_error_func(), [])
+                    self.builder.unreachable()
                 self.builder.position_at_end(success_block)
                 zero = ir.Constant(ir.IntType(32), 0)
                 one = ir.Constant(ir.IntType(32), 1)
@@ -182,13 +183,13 @@ class StmtsMixin:
             elif lookup_name == 'READLN':
                 self.builtin_readln(stmt.args)
             elif lookup_name == 'CONCAT':
-                self.builtin_concat(stmt.args)
+                self.builtin_concat(stmt.args, enabled=getattr(stmt, 'rangeck', True))
             elif lookup_name == 'COPYLST':
-                self.builtin_copylst(stmt.args)
+                self.builtin_copylst(stmt.args, enabled=getattr(stmt, 'rangeck', True))
             elif lookup_name == 'COPYSTR':
-                self.builtin_copystr(stmt.args)
+                self.builtin_copystr(stmt.args, enabled=getattr(stmt, 'rangeck', True))
             elif lookup_name == 'INSERT':
-                self.builtin_insert(stmt.args)
+                self.builtin_insert(stmt.args, enabled=getattr(stmt, 'rangeck', True))
             elif lookup_name == 'DELETE':
                 self.builtin_delete(stmt.args)
             elif lookup_name == 'POSITN':

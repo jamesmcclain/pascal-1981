@@ -123,6 +123,7 @@ class Token:
     value: Any
     line: int
     column: int
+    flags: dict[str, bool]
 
 
 class LexerError(Exception):
@@ -137,6 +138,7 @@ class Lexer:
         self.line = 1
         self.column = 1
         self.length = len(source)
+        self.meta_flags: dict[str, bool] = {'RANGECK': True}
 
     def current(self) -> str:
         return self.source[self.pos] if self.pos < self.length else ''
@@ -161,7 +163,7 @@ class Lexer:
                 self.column += 1
 
     def emit(self, kind: str, lexeme: str, value: Any, line: int, column: int) -> Token:
-        return Token(kind=kind, code=ALL_CODES[kind], lexeme=lexeme, value=value, line=line, column=column)
+        return Token(kind=kind, code=ALL_CODES[kind], lexeme=lexeme, value=value, line=line, column=column, flags=dict(self.meta_flags))
 
     def skip_whitespace(self) -> None:
         while self.current() and self.current() in ' \t\r\n':
@@ -170,6 +172,9 @@ class Lexer:
     def skip_comment(self) -> bool:
         if self.startswith('(*'):
             self.advance(2)
+            if self.current() == '$':
+                self.parse_metacommand_comment('*)')
+                return True
             while self.current() and not self.startswith('*)'):
                 self.advance()
             if not self.current():
@@ -179,6 +184,9 @@ class Lexer:
 
         if self.current() == '{':
             self.advance()
+            if self.current() == '$':
+                self.parse_metacommand_comment('}')
+                return True
             while self.current() and self.current() != '}':
                 self.advance()
             if not self.current():
@@ -189,34 +197,49 @@ class Lexer:
         return False
 
     def try_include_directive(self) -> Optional[Token]:
-        # The directive itself is a comment-like lexical unit.
-        if self.startswith('(*$INCLUDE:'):
+        if self.startswith('(*$INCLUDE:') or self.startswith('{$INCLUDE:'):
             line, column = self.line, self.column
-            self.advance(len('(*$INCLUDE:'))
+            opener = '(*$INCLUDE:' if self.startswith('(*$INCLUDE:') else '{$INCLUDE:'
+            closer = '*)' if opener.startswith('(*') else '}'
+            self.advance(len(opener))
             self.skip_whitespace()
             if self.current() != "'":
                 raise LexerError(f"Malformed include directive at line {self.line}, column {self.column}")
             filename = self.read_quoted_filename()
             self.skip_whitespace()
-            if not self.startswith('*)'):
+            if not self.startswith(closer):
                 raise LexerError(f"Malformed include directive at line {self.line}, column {self.column}")
-            self.advance(2)
+            self.advance(len(closer))
             return self.emit('INCLUDE_DIRECTIVE', filename, filename, line, column)
-
-        if self.startswith('{$INCLUDE:'):
-            line, column = self.line, self.column
-            self.advance(len('{$INCLUDE:'))
-            self.skip_whitespace()
-            if self.current() != "'":
-                raise LexerError(f"Malformed include directive at line {self.line}, column {self.column}")
-            filename = self.read_quoted_filename()
-            self.skip_whitespace()
-            if self.current() != '}':
-                raise LexerError(f"Malformed include directive at line {self.line}, column {self.column}")
-            self.advance()
-            return self.emit('INCLUDE_DIRECTIVE', filename, filename, line, column)
-
         return None
+
+    def parse_metacommand_comment(self, closer: str) -> None:
+        self.advance()  # consume '$'
+        while True:
+            self.skip_whitespace()
+            name_start = self.pos
+            while self.current().isalpha():
+                self.advance()
+            name = self.source[name_start:self.pos].upper()
+            if not name:
+                break
+            if name == 'RANGECK':
+                self.skip_whitespace()
+                if self.current() in '+-':
+                    self.meta_flags['RANGECK'] = (self.current() == '+')
+                    self.advance()
+                else:
+                    self.meta_flags['RANGECK'] = True
+            self.skip_whitespace()
+            if self.current() == ',':
+                self.advance()
+                continue
+            break
+        while self.current() and not self.startswith(closer):
+            self.advance()
+        if not self.current():
+            raise LexerError(f"Unterminated comment at line {self.line}, column {self.column}")
+        self.advance(len(closer))
 
     def read_quoted_filename(self) -> str:
         if self.current() != "'":
