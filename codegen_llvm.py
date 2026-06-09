@@ -159,7 +159,7 @@ class Codegen:
         positn_fn = ir.Function(self.module, positn_ty, name='positn')
         positn_fn.linkage = 'external'
         self.scope.define('positn', positn_fn, None)
-        scaneq_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(32), ir.IntType(8), ir.IntType(8).as_pointer(), ir.IntType(32), ir.IntType(32)])
+        scaneq_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(32), ir.IntType(8), ir.IntType(8).as_pointer(), ir.IntType(32), ir.IntType(32), ir.IntType(32)])
         scaneq_fn = ir.Function(self.module, scaneq_ty, name='scaneq')
         scaneq_fn.linkage = 'external'
         self.scope.define('scaneq', scaneq_fn, None)
@@ -2464,7 +2464,12 @@ class Codegen:
         if not fn:
             raise CodegenError(f'Undefined helper: {lookup_name.lower()}')
         stop_flag = ir.Constant(ir.IntType(32), 1 if lookup_name == 'SCANEQ' else 0)
-        return self.builder.call(fn.llvm_value, [L, P, S_chars, I, stop_flag])
+        # Pass the first-character pointer together with the explicit character
+        # count. The runtime indexes characters 0-based (Pascal position I maps
+        # to chars[I-1]); it must not treat the buffer as length-prefixed, since
+        # STRING has no length byte and the LSTRING char pointer already points
+        # past its own prefix.
+        return self.builder.call(fn.llvm_value, [L, P, S_chars, S_len, I, stop_flag])
 
     def builtin_encode(self, args: List[Expression]) -> ir.Value:
         dest = args[0].expr if isinstance(args[0], WriteArg) else args[0]

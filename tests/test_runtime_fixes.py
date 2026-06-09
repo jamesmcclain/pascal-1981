@@ -134,17 +134,29 @@ class TestRuntimeBehavior(unittest.TestCase):
         rc, out = build_run_linked(src, ["encode_decode.c"])
         self.assertEqual(out, "0\n")
 
+    def test_scan_counts_from_correct_position(self):
+        """Scans index characters 1-based from the real first character (not one
+        late, and not reading a length byte), and work for STRING too. For
+        'aXbb' scanning 'b' from position 1: SCANEQ skips 'a','X' and stops at
+        'b' (2); SCANNE stops immediately on 'a' (0)."""
+        src = ("PROGRAM P; VAR l: LSTRING(10); s: STRING(4); BEGIN "
+               "l := 'aXbb'; s := 'aXbb'; "
+               "WRITELN(SCANEQ(10, 'b', l, 1)); "   # 2
+               "WRITELN(SCANNE(10, 'b', l, 1)); "   # 0
+               "WRITELN(SCANNE(10, 'a', l, 1)); "   # 1 (single leading 'a')
+               "WRITELN(SCANEQ(10, 'b', s, 1)) "    # 2 (STRING path)
+               "END.")
+        rc, out = build_run_linked(src, ["scaneq.c"])
+        self.assertEqual(out.splitlines()[:4], ["2", "0", "1", "2"])
+
     def test_scanne_differs_from_scaneq(self):
-        """SCANNE must no longer mirror SCANEQ. For 'aXbb' scanning 'b', the
-        run-to-equal and run-to-not-equal counts differ; the exact magnitudes
-        are not asserted (they depend on the scan base convention), only that
-        the two builtins now disagree."""
+        """SCANNE must no longer mirror SCANEQ (it previously re-inverted its
+        stop flag and behaved identically)."""
         src = ("PROGRAM P; VAR s: LSTRING(10); BEGIN s := 'aXbb'; "
                "WRITELN(SCANEQ(10, 'b', s, 1)); WRITELN(SCANNE(10, 'b', s, 1)) END.")
         rc, out = build_run_linked(src, ["scaneq.c"])
         eq_line, ne_line = out.splitlines()[:2]
         self.assertNotEqual(eq_line, ne_line)
-        self.assertEqual(ne_line, "0")  # first scanned char is not 'b' -> stop now
 
 
 if __name__ == "__main__":
