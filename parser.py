@@ -674,7 +674,10 @@ class Parser:
                 self.pos += 1
                 args: List[Expression] = []
                 if self.current().kind != 'RPAREN':
-                    args = self.parse_actual_parameter_list()
+                    if name.upper() in {'WRITE', 'WRITELN', 'ENCODE', 'DECODE'}:
+                        args = self.parse_write_actual_parameter_list()
+                    else:
+                        args = self.parse_actual_parameter_list()
                 self.expect('RPAREN')
                 return FuncCall(name, args)
             elif self.next_kind() == 'LBRACKET' and self.bracket_payload_contains_range(self.pos + 1):

@@ -157,6 +157,13 @@ class Codegen:
         scanne_fn = ir.Function(self.module, scaneq_ty, name='scanne')
         scanne_fn.linkage = 'external'
         self.scope.define('scanne', scanne_fn, None)
+        encode_bool_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer(), ir.IntType(32), ir.IntType(8).as_pointer(), ir.IntType(32), ir.IntType(32), ir.IntType(32), ir.IntType(32)])
+        encode_fn = ir.Function(self.module, encode_bool_ty, name='encode_value')
+        encode_fn.linkage = 'external'
+        self.scope.define('encode_value', encode_fn, None)
+        decode_fn = ir.Function(self.module, encode_bool_ty, name='decode_value')
+        decode_fn.linkage = 'external'
+        self.scope.define('decode_value', decode_fn, None)
         malloc_ty = ir.FunctionType(ir.IntType(8).as_pointer(), [ir.IntType(64)])
         free_ty = ir.FunctionType(ir.VoidType(), [ir.IntType(8).as_pointer()])
         malloc_fn = ir.Function(self.module, malloc_ty, name='malloc')
@@ -1718,6 +1725,10 @@ class Codegen:
             return self.builtin_positn(expr.args)
         if lookup_name in {'SCANEQ', 'SCANNE'}:
             return self.builtin_scaneq_scanne(lookup_name, expr.args)
+        if lookup_name == 'ENCODE':
+            return self.builtin_encode(expr.args)
+        if lookup_name == 'DECODE':
+            return self.builtin_decode(expr.args)
 
         symbol = self.scope.lookup(lookup_name) or self.scope.lookup(expr.name)
 
@@ -2381,6 +2392,30 @@ class Codegen:
             raise CodegenError(f'Undefined helper: {lookup_name.lower()}')
         stop_flag = ir.Constant(ir.IntType(32), 1 if lookup_name == 'SCANEQ' else 0)
         return self.builder.call(fn.llvm_value, [L, P, S_chars, I, stop_flag])
+
+    def builtin_encode(self, args: List[Expression]) -> ir.Value:
+        dest = args[0].expr if isinstance(args[0], WriteArg) else args[0]
+        if isinstance(dest, Identifier):
+            dest = Designator(dest.name, [])
+        dest_ptr = self.resolve_designator_ptr(dest)
+        dest_chars, dest_len = self.get_string_chars_and_len(dest)
+        val = self.codegen_expr(args[1].expr if isinstance(args[1], WriteArg) else args[1])
+        fn = self.scope.lookup('encode_value')
+        if not fn:
+            raise CodegenError('Undefined helper: encode_value')
+        return self.builder.call(fn.llvm_value, [dest_chars, dest_len, self.builder.bitcast(dest_ptr, ir.IntType(8).as_pointer()), val, ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0)])
+
+    def builtin_decode(self, args: List[Expression]) -> ir.Value:
+        src = args[0].expr if isinstance(args[0], WriteArg) else args[0]
+        src_chars, src_len = self.get_string_chars_and_len(src)
+        dest = args[1].expr if isinstance(args[1], WriteArg) else args[1]
+        if isinstance(dest, Identifier):
+            dest = Designator(dest.name, [])
+        dest_ptr = self.resolve_designator_ptr(dest)
+        fn = self.scope.lookup('decode_value')
+        if not fn:
+            raise CodegenError('Undefined helper: decode_value')
+        return self.builder.call(fn.llvm_value, [src_chars, src_len, self.builder.bitcast(dest_ptr, ir.IntType(8).as_pointer()), ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0)])
 
     def retype_source_is_pointer_value(self, expr) -> Optional[bool]:
         """Classify the inner expression of a RETYPE for the pointer-vs-aggregate

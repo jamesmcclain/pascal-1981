@@ -9,7 +9,7 @@ from symbol_table import Symbol
 from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, FileType, FunctionType, LStringType, PointerType, ProcedureType, StringType)
 
 # Lists of all built-in function and procedure names
-BUILTIN_FUNCTIONS = {'ABS', 'SQR', 'SQRT', 'SIN', 'COS', 'LN', 'EXP', 'ARCTAN', 'CHR', 'ORD', 'ODD', 'SUCC', 'PRED', 'HIBYTE', 'LOBYTE', 'WRD', 'BYWORD', 'TRUNC', 'ROUND', 'FLOAT', 'SCANEQ', 'SCANNE'}
+BUILTIN_FUNCTIONS = {'ABS', 'SQR', 'SQRT', 'SIN', 'COS', 'LN', 'EXP', 'ARCTAN', 'CHR', 'ORD', 'ODD', 'SUCC', 'PRED', 'HIBYTE', 'LOBYTE', 'WRD', 'BYWORD', 'TRUNC', 'ROUND', 'FLOAT', 'SCANEQ', 'SCANNE', 'ENCODE', 'DECODE'}
 
 BUILTIN_PROCEDURES = {'WRITE', 'WRITELN', 'READLN', 'CONCAT', 'COPYLST', 'COPYSTR', 'INSERT', 'DELETE', 'POSITN', 'PACK', 'UNPACK', 'NEW', 'DISPOSE', 'FILLC', 'FILLSC', 'MOVEL', 'MOVER', 'MOVESL', 'MOVESR', 'ABORT'}
 
@@ -32,6 +32,8 @@ def register_builtins(symbol_table) -> None:
     define_builtin('POSITN', FunctionType('POSITN', [], INTEGER_TYPE), 'function')
     define_builtin('SCANEQ', FunctionType('SCANEQ', [], INTEGER_TYPE), 'function')
     define_builtin('SCANNE', FunctionType('SCANNE', [], INTEGER_TYPE), 'function')
+    define_builtin('ENCODE', FunctionType('ENCODE', [], BOOLEAN_TYPE), 'function')
+    define_builtin('DECODE', FunctionType('DECODE', [], BOOLEAN_TYPE), 'function')
     define_builtin('PACK', ProcedureType('PACK', []), 'procedure')
     define_builtin('UNPACK', ProcedureType('UNPACK', []), 'procedure')
     define_builtin('NEW', ProcedureType('NEW', []), 'procedure')

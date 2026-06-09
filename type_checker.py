@@ -1243,6 +1243,27 @@ class PascalTypeChecker(TypeChecker):
             self.error(f"DELETE: third argument must be INTEGER, got {count_type}", stmt)
             return
 
+    def _check_format_arg(self, arg, node, opname: str) -> None:
+        if isinstance(arg, WriteArg):
+            self.infer_expression_type(arg.expr)
+            if arg.width is not None:
+                self.infer_expression_type(arg.width)
+            if arg.precision is not None:
+                self.infer_expression_type(arg.precision)
+            return
+        self.infer_expression_type(arg)
+
+    def _check_decode_dest(self, arg, node) -> None:
+        if isinstance(arg, WriteArg):
+            self._check_format_arg(arg, node, 'DECODE')
+            return
+        if not isinstance(arg, (Identifier, Designator)):
+            self.error('DECODE: second argument must be a designator', node)
+            return
+        sym = self.symbol_table.lookup(arg.name) or self.symbol_table.lookup(arg.name.upper())
+        if not sym or not sym.is_mutable:
+            self.error('DECODE: second argument must be mutable', node)
+
     def _check_positn_args(self, stmt: ProcCallStmt) -> None:
         if len(stmt.args) != 2:
             self.error(f"POSITN expects 2 arguments, got {len(stmt.args)}", stmt)
@@ -1553,6 +1574,26 @@ class PascalTypeChecker(TypeChecker):
                     self.error("POSITN: second argument must be STRING or LSTRING", expr)
                     return None
                 return INTEGER_TYPE
+            if lookup_name == 'ENCODE':
+                if len(expr.args) != 2:
+                    self.error(f"ENCODE expects 2 arguments, got {len(expr.args)}", expr)
+                    return None
+                dest = expr.args[0].expr if isinstance(expr.args[0], WriteArg) else expr.args[0]
+                if not isinstance(self.infer_expression_type(dest), LStringType):
+                    self.error("ENCODE: first argument must be LSTRING", expr)
+                    return None
+                self._check_format_arg(expr.args[1], expr, 'ENCODE')
+                return BOOLEAN_TYPE
+            if lookup_name == 'DECODE':
+                if len(expr.args) != 2:
+                    self.error(f"DECODE expects 2 arguments, got {len(expr.args)}", expr)
+                    return None
+                src = expr.args[0].expr if isinstance(expr.args[0], WriteArg) else expr.args[0]
+                if not isinstance(self.infer_expression_type(src), (StringType, LStringType)):
+                    self.error("DECODE: first argument must be STRING or LSTRING", expr)
+                    return None
+                self._check_decode_dest(expr.args[1], expr)
+                return BOOLEAN_TYPE
             if lookup_name in {'SCANEQ', 'SCANNE'}:
                 if len(expr.args) != 4:
                     self.error(f"{lookup_name} expects 4 arguments, got {len(expr.args)}", expr)
