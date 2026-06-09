@@ -142,6 +142,14 @@ class Codegen:
         movesr = ir.Function(self.module, seg_mov_ty, name='movesr')
         movesr.linkage = 'external'
         self.scope.define('movesr', movesr, None)
+        malloc_ty = ir.FunctionType(ir.IntType(8).as_pointer(), [ir.IntType(64)])
+        free_ty = ir.FunctionType(ir.VoidType(), [ir.IntType(8).as_pointer()])
+        malloc_fn = ir.Function(self.module, malloc_ty, name='malloc')
+        malloc_fn.linkage = 'external'
+        self.scope.define('malloc', malloc_fn, None)
+        free_fn = ir.Function(self.module, free_ty, name='free')
+        free_fn.linkage = 'external'
+        self.scope.define('free', free_fn, None)
 
     # ========================================================================
     # Type System
@@ -792,6 +800,10 @@ class Codegen:
                 self.builtin_movesl(stmt.args)
             elif lookup_name == 'MOVESR':
                 self.builtin_movesr(stmt.args)
+            elif lookup_name == 'NEW':
+                self.builtin_new(stmt.args)
+            elif lookup_name == 'DISPOSE':
+                self.builtin_dispose(stmt.args)
             elif lookup_name == 'ABORT':
                 self.builtin_abort(stmt.args)
             else:
@@ -2552,6 +2564,43 @@ class Codegen:
 
     def builtin_movesr(self, args: List[Expression]) -> None:
         self._runtime_fillmove('MOVESR', args)
+
+    def builtin_new(self, args: List[Expression]) -> None:
+        if len(args) != 1:
+            raise CodegenError(f'NEW expects 1 argument, got {len(args)}')
+        target = args[0]
+        if isinstance(target, Identifier):
+            target = Designator(target.name, [])
+        ptr_addr = self.resolve_designator_ptr(target)
+        sym = self.scope.lookup(target.name) if isinstance(target, (Identifier, Designator)) else None
+        if not sym or not isinstance(sym.type_expr, PointerType):
+            raise CodegenError('NEW requires a pointer variable')
+        pointee = getattr(sym.type_expr, 'target_type', None) or getattr(sym.type_expr, 'base', None)
+        alloc_ty = self.llvm_type(pointee)
+        alloc_size = 8
+        if getattr(self.module, 'data_layout', None):
+            try:
+                alloc_size = self.module.data_layout.get_type_alloc_size(alloc_ty)
+            except Exception:
+                alloc_size = 8
+        raw = self.builder.call(self.scope.lookup('malloc').llvm_value, [ir.Constant(ir.IntType(64), alloc_size)])
+        casted = self.builder.bitcast(raw, self.llvm_type(sym.type_expr))
+        self.builder.store(casted, ptr_addr)
+
+    def builtin_dispose(self, args: List[Expression]) -> None:
+        if len(args) != 1:
+            raise CodegenError(f'DISPOSE expects 1 argument, got {len(args)}')
+        target = args[0]
+        if isinstance(target, Identifier):
+            target = Designator(target.name, [])
+        ptr_addr = self.resolve_designator_ptr(target)
+        sym = self.scope.lookup(target.name) if isinstance(target, (Identifier, Designator)) else None
+        if not sym or not isinstance(sym.type_expr, PointerType):
+            raise CodegenError('DISPOSE requires a pointer variable')
+        ptr_val = self.builder.load(ptr_addr)
+        raw = self.builder.bitcast(ptr_val, ir.IntType(8).as_pointer())
+        self.builder.call(self.scope.lookup('free').llvm_value, [raw])
+        self.builder.store(ir.Constant(self.llvm_type(sym.type_expr), None), ptr_addr)
 
     def pascal_abort_func(self) -> ir.Function:
         """Declare or fetch the ABORT runtime: void pabort(i8* msg, i32 len, i16 code, i16 status)."""

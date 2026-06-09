@@ -229,6 +229,14 @@ class TestTypeCompatibility(unittest.TestCase):
         result = typecheck_source("PROGRAM P; VAR x: INTEGER; a: ADR OF INTEGER; s: ADS OF INTEGER; BEGIN a := ADR x; s := ADS x END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
+    def test_new_dispose_typecheck(self):
+        """NEW/DISPOSE require mutable pointer variables."""
+        ok = typecheck_source("PROGRAM P; VAR p: ^INTEGER; BEGIN NEW(p); DISPOSE(p) END.")
+        self.assertTrue(ok.success, msg=" ".join(str(e) for e in ok.errors))
+        bad = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN NEW(x) END.")
+        self.assertFalse(bad.success)
+        self.assertTrue(any('pointer' in str(e).lower() for e in bad.errors), msg=" ".join(str(e) for e in bad.errors))
+
     def test_parameter_modes_typecheck(self):
         """VAR/VARS are writable references; CONST/CONSTS are read-only references."""
         ok = typecheck_source(

@@ -498,6 +498,13 @@ class TestCodegenBuildRun(unittest.TestCase):
         self.assertIn("{i32*,i16}", ir.replace(" ", ""))
         self.assertIn("i16 0", ir)
 
+    def test_new_dispose_codegen(self):
+        """NEW allocates and DISPOSE frees a pointer variable."""
+        src = "PROGRAM P; VAR p: ^INTEGER; BEGIN NEW(p); DISPOSE(p) END."
+        ir = compile_to_ir(src)
+        self.assertIn("malloc", ir)
+        self.assertIn("free", ir)
+
     def test_short_circuit_skips_rhs_runtime(self):
         """Short-circuit operators must not evaluate an unnecessary RHS call."""
         src = ("PROGRAM P; "

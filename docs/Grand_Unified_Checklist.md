@@ -303,7 +303,8 @@ C runtime, sibling to `runtime/fillc.c`. Loops/memory/OS, so not inline.
   Proven by `python -m unittest`, including `TestAbortRuntime` (the handler
   prints the message/code/status and aborts) and an IR test asserting the
   `pabort` call carries all four operands.
-- [ ] **5.6 — `NEW` / `DISPOSE`.** `[READ]` **M** Heap alloc/free (`malloc`/`free`). Needs real pointer-type support to be meaningful.
+- [x] **5.6 — `NEW` / `DISPOSE`.** `[READ]` **M** Heap alloc/free (`malloc`/`free`). Needs real pointer-type support to be meaningful.
+  - Done: added NEW/DISPOSE as predeclared procedures, type-checked them against mutable pointer variables, and lowered them to `malloc`/`free` with a null reset on DISPOSE. Proven by `python -m unittest tests.test_typecheck tests.test_codegen`.
 
 ---
 

@@ -944,10 +944,17 @@ class PascalTypeChecker(TypeChecker):
             elif is_builtin and stmt.name.upper() == 'COPYSTR':
                 self._check_copystr_args(stmt)
                 return
+            elif is_builtin and stmt.name.upper() == 'NEW':
+                self._check_new_args(stmt)
+                return
+            elif is_builtin and stmt.name.upper() == 'DISPOSE':
+                self._check_dispose_args(stmt)
+                return
 
-            # For built-in procedures like WRITELN/WRITE/READLN, skip count/type checks but still
-            # check that the arguments are valid expressions (e.g., defined variables)
-            if not is_builtin or stmt.name.upper() not in ['WRITELN', 'WRITE', 'READLN']:
+            # For built-in procedures like WRITELN/WRITE/READLN/NEW/DISPOSE,
+            # skip count/type checks but still check that the arguments are valid
+            # expressions (e.g., defined variables)
+            if not is_builtin or stmt.name.upper() not in ['WRITELN', 'WRITE', 'READLN', 'NEW', 'DISPOSE']:
                 # For user-defined procedures, check argument count
                 expected_args = len(sym.type.params)
                 actual_args = len(stmt.args)
@@ -1183,6 +1190,46 @@ class PascalTypeChecker(TypeChecker):
 
         if not dest_sym.is_mutable:
             self.error(f"COPYSTR: second argument must be mutable (VAR parameter)", stmt)
+            return
+
+    def _check_new_args(self, stmt: ProcCallStmt) -> None:
+        """Type check NEW(VAR P: ^T)."""
+        if len(stmt.args) != 1:
+            self.error(f"NEW expects 1 argument, got {len(stmt.args)}", stmt)
+            return
+        arg = stmt.args[0]
+        if not isinstance(arg, (Identifier, Designator)):
+            self.error("NEW: argument must be a designator (variable)", stmt)
+            return
+        sym = self.symbol_table.lookup(arg.name) or self.symbol_table.lookup(arg.name.upper())
+        if not sym:
+            self.error(f"NEW: undefined variable '{arg.name}'", stmt)
+            return
+        if not isinstance(sym.type, PointerType):
+            self.error(f"NEW: argument must be a pointer type, got {sym.type}", stmt)
+            return
+        if not sym.is_mutable:
+            self.error("NEW: argument must be mutable (VAR parameter)", stmt)
+            return
+
+    def _check_dispose_args(self, stmt: ProcCallStmt) -> None:
+        """Type check DISPOSE(VAR P: ^T)."""
+        if len(stmt.args) != 1:
+            self.error(f"DISPOSE expects 1 argument, got {len(stmt.args)}", stmt)
+            return
+        arg = stmt.args[0]
+        if not isinstance(arg, (Identifier, Designator)):
+            self.error("DISPOSE: argument must be a designator (variable)", stmt)
+            return
+        sym = self.symbol_table.lookup(arg.name) or self.symbol_table.lookup(arg.name.upper())
+        if not sym:
+            self.error(f"DISPOSE: undefined variable '{arg.name}'", stmt)
+            return
+        if not isinstance(sym.type, PointerType):
+            self.error(f"DISPOSE: argument must be a pointer type, got {sym.type}", stmt)
+            return
+        if not sym.is_mutable:
+            self.error("DISPOSE: argument must be mutable (VAR parameter)", stmt)
             return
 
     def _decode_pascal_string(self, value: str) -> str:
