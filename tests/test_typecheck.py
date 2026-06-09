@@ -76,6 +76,24 @@ class TestVariableScope(unittest.TestCase):
         result = typecheck_source("PROGRAM P; VAR f: TEXT; BEGIN WRITELN(INPUT); WRITELN(OUTPUT); WRITELN(f) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
+    def test_file_buffer_variable_has_element_type(self):
+        """F^ is the current component buffer of FILE OF T; TEXT^ is CHAR."""
+        src = "PROGRAM P; VAR f: FILE OF INTEGER; t: TEXT; x: INTEGER; c: CHAR; BEGIN f^ := 42; x := f^; t^ := 'A'; c := t^ END."
+        result = typecheck_source(src)
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_whole_file_assignment_rejected(self):
+        """Files are not ordinary assignable values."""
+        result = typecheck_source("PROGRAM P; VAR f,g: FILE OF INTEGER; BEGIN f := g END.")
+        self.assertFalse(result.success)
+        self.assertIn("Cannot assign whole file", " ".join(str(e) for e in result.errors))
+
+    def test_non_file_non_pointer_deref_rejected(self):
+        """The buffer-variable/deref selector only applies to files and pointers."""
+        result = typecheck_source("PROGRAM P; VAR i: INTEGER; BEGIN i := i^ END.")
+        self.assertFalse(result.success)
+        self.assertIn("Cannot dereference", " ".join(str(e) for e in result.errors))
+
     def test_shadowing_nested_scope(self):
         """Variable shadowing in nested scope is allowed."""
         result = typecheck_source("PROGRAM P; "

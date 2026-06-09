@@ -58,7 +58,7 @@ def register_builtins(symbol_table) -> None:
     define_builtin('NULL', LStringType(0), 'const')
 
     # Types
-    text_type = FileType(CHAR_TYPE)
+    text_type = FileType(CHAR_TYPE, structure='ASCII')
     define_builtin('TEXT', text_type, 'type')
     define_builtin('STRING', StringType(256), 'type')
 

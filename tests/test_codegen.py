@@ -75,6 +75,26 @@ def build_and_run(src: str, stdin: str = "") -> tuple:
 class TestCodegenIR(unittest.TestCase):
     """Test LLVM IR generation (requires llvmlite)."""
 
+    def test_file_buffer_model_ir(self):
+        """FILE OF T lowers to an opaque runtime handle plus typed F^ buffer access."""
+        src = "PROGRAM P; VAR f: FILE OF INTEGER; x: INTEGER; BEGIN f^ := 42; x := f^ END."
+        ir = compile_to_ir(src)
+        self.assertIn("define i8* @\"pas_file_create\"", ir)
+        self.assertIn("define i8* @\"pas_file_buffer\"", ir)
+        self.assertIn("call i8* @\"pas_file_create\"(i32 4, i32 0)", ir)
+        self.assertIn("bitcast i8*", ir)
+        self.assertIn("to i32*", ir)
+
+    def test_text_buffer_touch_and_predeclared_files_ir(self):
+        """TEXT/INPUT/OUTPUT use ASCII file handles and TEXT^ touches lazy buffer."""
+        src = "PROGRAM P; VAR t: TEXT; c: CHAR; BEGIN c := t^ END."
+        ir = compile_to_ir(src)
+        self.assertIn('@\"input\" = global i8* null', ir)
+        self.assertIn('@\"output\" = global i8* null', ir)
+        self.assertIn("define void @\"pas_file_touch_buffer\"", ir)
+        self.assertIn("call i8* @\"pas_file_create\"(i32 1, i32 1)", ir)
+        self.assertIn("call void @\"pas_file_touch_buffer\"", ir)
+
     def test_simple_writeln(self):
         """Simple WRITELN generates valid IR."""
         src = "PROGRAM P; BEGIN WRITELN(42) END."

@@ -382,6 +382,7 @@ class SetType(ASTNode):
 @dataclass
 class FileType(ASTNode):
     element_type: Type
+    structure: str = 'BINARY'  # BINARY for FILE OF T, ASCII for TEXT
 
 
 @dataclass

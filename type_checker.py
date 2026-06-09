@@ -19,6 +19,7 @@ from ast_nodes import ArrayType as ASTArrayType
 from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, CharLiteral, ConstDecl, Designator)
 from ast_nodes import EnumType as ASTEnumType
 from ast_nodes import (Expression, ForStmt, FuncCall, FuncDecl, Identifier, IfStmt, ImplementationUnit, InterfaceUnit, IntLiteral, LabelStmt, LowerExpr)
+from ast_nodes import FileType as ASTFileType
 from ast_nodes import LStringType as ASTLStringType
 from ast_nodes import ModuleUnit, NamedType, NilLiteral
 from ast_nodes import PointerType as ASTPointerType
@@ -872,6 +873,9 @@ class PascalTypeChecker(TypeChecker):
                 self.error(f"Cannot assign to immutable {sym.kind}: {stmt.target.name}", stmt)
             target_type = self.infer_designator_type(stmt.target)
             if target_type:
+                if isinstance(target_type, FileType) and not stmt.target.selectors:
+                    self.error("Cannot assign whole file variables; use the file buffer variable (F^) or file I/O procedures", stmt)
+                    return
                 # Type check successful - target_type is now the element/field type
                 value_type = self.infer_expression_type(stmt.expr)
                 if value_type and not can_assign(value_type, target_type):
@@ -899,6 +903,10 @@ class PascalTypeChecker(TypeChecker):
         # Check mutability (only for variables, not designators)
         if sym and not sym.is_mutable:
             self.error(f"Cannot assign to immutable {sym.kind}: {target_name}", stmt)
+
+        if isinstance(target_type, FileType):
+            self.error("Cannot assign whole file variables; use the file buffer variable (F^) or file I/O procedures", stmt)
+            return
 
         # Check type compatibility
         value_type = self.infer_expression_type(stmt.expr)
@@ -1748,11 +1756,14 @@ class PascalTypeChecker(TypeChecker):
                     current_type = field_type
 
                 elif selector.kind == 'DEREF':
-                    # Pointer dereference
-                    if not isinstance(current_type, PointerType):
-                        self.error(f"Cannot dereference non-pointer type {current_type}", designator)
+                    # Pointer dereference, or Pascal file buffer variable F^.
+                    if isinstance(current_type, FileType):
+                        current_type = current_type.element_type
+                    elif isinstance(current_type, PointerType):
+                        current_type = current_type.target_type
+                    else:
+                        self.error(f"Cannot dereference non-pointer/non-file type {current_type}", designator)
                         return None
-                    current_type = current_type.target_type
 
         return current_type
 
@@ -1833,6 +1844,9 @@ class PascalTypeChecker(TypeChecker):
         elif isinstance(type_expr, ASTSetType):
             base_type = self.resolve_type(type_expr.base)
             return SetType(base_type) if base_type else None
+        elif isinstance(type_expr, ASTFileType):
+            element_type = self.resolve_type(type_expr.element_type)
+            return FileType(element_type, structure=getattr(type_expr, 'structure', 'BINARY')) if element_type else None
         elif isinstance(type_expr, ASTSubrangeType):
             if type_expr.host:
                 host = self.resolve_type(NamedType(type_expr.host, None))

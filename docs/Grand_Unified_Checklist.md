@@ -390,8 +390,9 @@ first or these will be built on sand.
 The grammar doc already flags `FILE OF` runtime I/O as unverified/blocked. This is
 the biggest single chunk; expect it to need its own design pass.
 
-- [ ] **8.1 — File-type runtime + buffer-variable model.** `[READ]` **XL**
+- [x] **8.1 — File-type runtime + buffer-variable model.** `[READ]` **XL**
   Backs everything below; tie to `TEXT`/`INPUT`/`OUTPUT` (3.4).
+  - Done: added `TEXT` vs binary `FILE OF T` metadata, real opaque file-handle lowering for file variables and predeclared `INPUT`/`OUTPUT`, typed buffer-variable access through `F^`, lazy-touch hooks for `TEXT` buffers, and whole-file assignment rejection. Proven by `python -m unittest tests.test_parser tests.test_typecheck tests.test_codegen`.
 - [ ] **8.2 — `RESET`, `REWRITE`, `GET`, `PUT`.** `[READ]` **L** Core file ops.
 - [ ] **8.3 — `READ`, and `READLN` beyond integer; `WRITE`/`WRITELN` for `REAL`.** `[OBSERVED]` **M**
   `READLN` currently reads integers only; `WRITE`/`WRITELN` don't handle `REAL`.

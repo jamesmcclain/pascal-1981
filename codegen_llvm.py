@@ -106,12 +106,21 @@ class Codegen:
         self._enum_name_tables: Dict[str, ir.GlobalVariable] = {}
         self.verbose = verbose
         self._register_predeclared_externs()
+        self._register_predeclared_files()
 
     def _log(self, msg: str) -> None:
         """Emit a diagnostic line to stderr when verbose mode is on."""
         if self.verbose:
             import sys
             print(f'[codegen] {msg}', file=sys.stderr)
+
+    def _register_predeclared_files(self) -> None:
+        """Declare INPUT and OUTPUT as real predeclared TEXT file handles."""
+        text_type = FileType(NamedType('CHAR', None), structure='ASCII')
+        for name in ('INPUT', 'OUTPUT'):
+            gv = ir.GlobalVariable(self.module, ir.IntType(8).as_pointer(), name=name.lower())
+            gv.initializer = ir.Constant(ir.IntType(8).as_pointer(), None)
+            self.scope.define(name, gv, text_type)
 
     def _register_predeclared_externs(self) -> None:
         """Predeclare runtime externs that behave like builtins.
@@ -172,6 +181,23 @@ class Codegen:
         free_fn = ir.Function(self.module, free_ty, name='free')
         free_fn.linkage = 'external'
         self.scope.define('free', free_fn, None)
+        file_create_ty = ir.FunctionType(ir.IntType(8).as_pointer(), [ir.IntType(32), ir.IntType(32)])
+        file_buffer_ty = ir.FunctionType(ir.IntType(8).as_pointer(), [ir.IntType(8).as_pointer()])
+        file_touch_ty = ir.FunctionType(ir.VoidType(), [ir.IntType(8).as_pointer()])
+        file_create = ir.Function(self.module, file_create_ty, name='pas_file_create')
+        b = IRBuilder(file_create.append_basic_block(name='entry'))
+        size64 = b.zext(file_create.args[0], ir.IntType(64))
+        mem = b.call(malloc_fn, [size64])
+        b.ret(mem)
+        self.scope.define('pas_file_create', file_create, None)
+        file_buffer = ir.Function(self.module, file_buffer_ty, name='pas_file_buffer')
+        b = IRBuilder(file_buffer.append_basic_block(name='entry'))
+        b.ret(file_buffer.args[0])
+        self.scope.define('pas_file_buffer', file_buffer, None)
+        file_touch = ir.Function(self.module, file_touch_ty, name='pas_file_touch_buffer')
+        b = IRBuilder(file_touch.append_basic_block(name='entry'))
+        b.ret_void()
+        self.scope.define('pas_file_touch_buffer', file_touch, None)
 
     # ========================================================================
     # Type System
@@ -222,6 +248,8 @@ class Codegen:
                 return ir.DoubleType()
             elif name_up == 'CHAR':
                 return ir.IntType(8)
+            elif name_up == 'TEXT':
+                return ir.PointerType(ir.IntType(8))
             if name_up in self.type_aliases:
                 return self.llvm_type(self.type_aliases[name_up])
             return ir.IntType(32)
@@ -229,6 +257,11 @@ class Codegen:
             return ir.IntType(32)
         elif isinstance(type_expr, SetType):
             return self.set_llvm_type()
+        elif isinstance(type_expr, FileType):
+            # File variables are opaque runtime handles. Their element type and
+            # TEXT-vs-binary structure remain in the Pascal type metadata; the
+            # runtime owns the actual file-control block and current buffer.
+            return ir.PointerType(ir.IntType(8))
         elif isinstance(type_expr, LStringType):
             # LSTRING(n) is PACKED ARRAY [0..n] OF CHAR = [n+1 x i8]
             return ir.ArrayType(ir.IntType(8), type_expr.max_len + 1)
@@ -314,6 +347,14 @@ class Codegen:
             entry_block = main_func.append_basic_block(name='entry')
             self.builder = IRBuilder(entry_block)
             self.current_function = main_func
+
+            # Predeclared TEXT files exist even when not listed in the PROGRAM
+            # heading. IBM Pascal automatically initializes INPUT/OUTPUT; the
+            # later I/O primitives will attach devices, while 8.1 establishes
+            # the concrete file-control block and buffer model.
+            for sym in list(self.scope.symbols.values()):
+                if isinstance(self.resolve_type_alias(sym.type_expr), FileType):
+                    self._init_file_storage(sym.llvm_value, sym.type_expr)
 
             # Execute the program body
             self.codegen_stmt_list(unit.block.body)
@@ -476,6 +517,8 @@ class Codegen:
             for name in decl.names:
                 alloca = self.builder.alloca(llvm_type, name=name)
                 self.scope.define(name, alloca, decl.type_expr)
+                if isinstance(decl.type_expr, FileType) or (isinstance(decl.type_expr, NamedType) and decl.type_expr.name.upper() == 'TEXT'):
+                    self._init_file_storage(alloca, decl.type_expr)
 
                 if is_str:
                     # Initialize length byte to 0 for LSTRING
@@ -1089,10 +1132,17 @@ class Codegen:
                     ptr = self.builder.gep(ptr, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), fidx)])
                     cur_type = ftype
                 elif selector.kind == 'DEREF':
-                    # Pointer dereference
-                    ptr = self.builder.load(ptr)
                     base = self.resolve_type_alias(cur_type) if cur_type is not None else None
-                    cur_type = getattr(base, 'base', None) or getattr(base, 'target_type', None)
+                    if isinstance(base, FileType):
+                        # File buffer variable F^: access the runtime-owned
+                        # current-component buffer. TEXT buffer loads go
+                        # through a lazy-touch hook, per the manual model.
+                        ptr = self._file_buffer_ptr(ptr, base.element_type, getattr(base, 'structure', 'BINARY') == 'ASCII')
+                        cur_type = base.element_type
+                    else:
+                        # Pointer dereference
+                        ptr = self.builder.load(ptr)
+                        cur_type = getattr(base, 'base', None) or getattr(base, 'target_type', None)
         return ptr
 
     # ========================================================================
@@ -1118,6 +1168,29 @@ class Codegen:
         if isinstance(llvm_type, ir.IntType):
             return ir.Constant(llvm_type, 0)
         return ir.Constant(llvm_type, None)
+
+    def _file_element_size_and_structure(self, type_expr: Type) -> tuple[int, int]:
+        resolved = self.resolve_type_alias(type_expr)
+        if isinstance(resolved, FileType):
+            return self.get_type_size(resolved.element_type), (1 if getattr(resolved, 'structure', 'BINARY') == 'ASCII' else 0)
+        if isinstance(type_expr, NamedType) and type_expr.name.upper() == 'TEXT':
+            return 1, 1
+        return 1, 0
+
+    def _init_file_storage(self, slot: ir.Value, type_expr: Type) -> None:
+        elem_size, structure = self._file_element_size_and_structure(type_expr)
+        create_fn = self.scope.lookup('pas_file_create').llvm_value
+        handle = self.builder.call(create_fn, [ir.Constant(ir.IntType(32), elem_size), ir.Constant(ir.IntType(32), structure)])
+        self.builder.store(handle, slot)
+
+    def _file_buffer_ptr(self, file_slot: ir.Value, elem_type: Type, touch: bool) -> ir.Value:
+        handle = self.builder.load(file_slot)
+        if touch:
+            touch_fn = self.scope.lookup('pas_file_touch_buffer').llvm_value
+            self.builder.call(touch_fn, [handle])
+        buf_fn = self.scope.lookup('pas_file_buffer').llvm_value
+        raw = self.builder.call(buf_fn, [handle])
+        return self.builder.bitcast(raw, ir.PointerType(self.llvm_type(elem_type)))
 
     def null_lstring_ptr(self) -> ir.Value:
         """Return a pointer to the empty LSTRING constant."""
@@ -2462,6 +2535,8 @@ class Codegen:
         seen = set()
         while isinstance(type_expr, NamedType):
             key = type_expr.name.upper()
+            if key == 'TEXT':
+                return FileType(NamedType('CHAR', None), structure='ASCII')
             if key in seen or key not in self.type_aliases:
                 break
             seen.add(key)
