@@ -1645,6 +1645,23 @@ class TestMoveRuntimeDirection(unittest.TestCase):
 
 
 @requires_exe
+class TestWriteRealFormatting(unittest.TestCase):
+    def test_real_default_format_emits_exponential(self):
+        src = "PROGRAM P; VAR x: REAL; BEGIN x := 1.5; WRITELN(x) END."
+        ir = compile_to_ir(src)
+        self.assertIn('c"%14.7E', ir)
+
+    def test_real_width_only_uses_exponential(self):
+        src = "PROGRAM P; VAR x: REAL; BEGIN x := 1.5; WRITELN(x:10) END."
+        ir = compile_to_ir(src)
+        self.assertIn("%*E", ir)
+
+    def test_real_width_and_precision_use_fixed_point(self):
+        src = "PROGRAM P; VAR x: REAL; BEGIN x := 1.5; WRITELN(x:8:3) END."
+        ir = compile_to_ir(src)
+        self.assertIn("%*.*f", ir)
+
+
 class TestAbortRuntime(unittest.TestCase):
     """ABORT's runtime must surface the message, error code, and status, then
     abort (manual: stops like an internal runtime error)."""

@@ -103,6 +103,27 @@ class TestVariableScope(unittest.TestCase):
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
 
+class TestReadWriteTypecheck(unittest.TestCase):
+    def test_readln_empty_is_allowed(self):
+        result = typecheck_source("PROGRAM P; BEGIN READLN() END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_read_rejects_literal(self):
+        result = typecheck_source("PROGRAM P; BEGIN READ(5) END.")
+        self.assertFalse(result.success)
+        self.assertIn("designator", " ".join(str(e) for e in result.errors))
+
+    def test_read_rejects_const(self):
+        result = typecheck_source("PROGRAM P; CONST c = 1; BEGIN READ(c) END.")
+        self.assertFalse(result.success)
+        self.assertIn("assignable", " ".join(str(e) for e in result.errors))
+
+    def test_write_precision_rejected_for_non_integer(self):
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN WRITE(x:1.5) END.")
+        self.assertFalse(result.success)
+        self.assertIn("INTEGER-compatible", " ".join(str(e) for e in result.errors))
+
+
 class TestTypeCompatibility(unittest.TestCase):
     """Type compatibility and assignment rules."""
 

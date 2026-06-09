@@ -177,6 +177,8 @@ class StmtsMixin:
                 self.builtin_writeln(stmt.args)
             elif lookup_name == 'WRITE':
                 self.builtin_write(stmt.args)
+            elif lookup_name == 'READ':
+                self.builtin_read(stmt.args)
             elif lookup_name == 'READLN':
                 self.builtin_readln(stmt.args)
             elif lookup_name == 'CONCAT':

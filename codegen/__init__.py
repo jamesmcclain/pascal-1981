@@ -6,7 +6,7 @@ Walks the AST and emits LLVM IR. Supports:
 - Procedure and function declarations
 - All statement types (IF, FOR, WHILE, REPEAT, CASE, etc.)
 - Integer expressions and operators
-- Built-in I/O: WRITELN(integer), READLN(var integer)
+- Built-in I/O: WRITE/WRITELN and READ/READLN
 """
 
 from __future__ import annotations

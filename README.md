@@ -99,8 +99,8 @@ This compiler implements the full IBM Pascal 2.0 language, including all semanti
 - Built-ins: `CHR`, `ORD`
 
 ### Built-in I/O
-- `WRITELN(...)` — accepts a mix of integers, characters, booleans, and string literals (mapped to `printf`)
-- `READLN(var)` — reads an integer (mapped to `scanf`)
+- `WRITELN(...)` — accepts a mix of integers, characters, booleans, REALs, and string literals (mapped to `printf`)
+- `READ(...)` / `READLN(...)` — reads scalar and string targets (mapped to the runtime reader helpers)
 
 ## Systems-Programming Extensions
 

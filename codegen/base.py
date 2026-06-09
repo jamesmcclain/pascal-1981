@@ -152,6 +152,16 @@ class CodegenBase:
         memmove_fn = ir.Function(self.module, memmove_ty, name='memmove')
         memmove_fn.linkage = 'external'
         self.scope.define('memmove', memmove_fn, None)
+        read_int_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(32).as_pointer()])
+        read_word_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(16).as_pointer()])
+        read_real_ty = ir.FunctionType(ir.IntType(32), [ir.DoubleType().as_pointer()])
+        read_char_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer()])
+        read_lstr_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer(), ir.IntType(32)])
+        read_skip_ty = ir.FunctionType(ir.VoidType(), [])
+        for name, ty in [('pas_read_int', read_int_ty), ('pas_read_word', read_word_ty), ('pas_read_real', read_real_ty), ('pas_read_char', read_char_ty), ('pas_read_lstring', read_lstr_ty), ('pas_readln_skip', read_skip_ty)]:
+            fn = ir.Function(self.module, ty, name=name)
+            fn.linkage = 'external'
+            self.scope.define(name, fn, None)
         positn_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer(), ir.IntType(32), ir.IntType(8).as_pointer(), ir.IntType(32)])
         positn_fn = ir.Function(self.module, positn_ty, name='positn')
         positn_fn.linkage = 'external'

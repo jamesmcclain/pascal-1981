@@ -11,7 +11,7 @@ from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_
 # Lists of all built-in function and procedure names
 BUILTIN_FUNCTIONS = {'ABS', 'SQR', 'SQRT', 'SIN', 'COS', 'LN', 'EXP', 'ARCTAN', 'CHR', 'ORD', 'ODD', 'SUCC', 'PRED', 'HIBYTE', 'LOBYTE', 'WRD', 'BYWORD', 'TRUNC', 'ROUND', 'FLOAT', 'SCANEQ', 'SCANNE', 'ENCODE', 'DECODE'}
 
-BUILTIN_PROCEDURES = {'WRITE', 'WRITELN', 'READLN', 'CONCAT', 'COPYLST', 'COPYSTR', 'INSERT', 'DELETE', 'POSITN', 'PACK', 'UNPACK', 'NEW', 'DISPOSE', 'FILLC', 'FILLSC', 'MOVEL', 'MOVER', 'MOVESL', 'MOVESR', 'ABORT'}
+BUILTIN_PROCEDURES = {'WRITE', 'WRITELN', 'READ', 'READLN', 'CONCAT', 'COPYLST', 'COPYSTR', 'INSERT', 'DELETE', 'POSITN', 'PACK', 'UNPACK', 'NEW', 'DISPOSE', 'FILLC', 'FILLSC', 'MOVEL', 'MOVER', 'MOVESL', 'MOVESR', 'ABORT'}
 
 
 def register_builtins(symbol_table) -> None:
@@ -23,6 +23,7 @@ def register_builtins(symbol_table) -> None:
     # Procedures
     define_builtin('WRITELN', ProcedureType('WRITELN', []), 'procedure')
     define_builtin('WRITE', ProcedureType('WRITE', []), 'procedure')
+    define_builtin('READ', ProcedureType('READ', []), 'procedure')
     define_builtin('READLN', ProcedureType('READLN', []), 'procedure')
     define_builtin('CONCAT', ProcedureType('CONCAT', []), 'procedure')
     define_builtin('COPYLST', ProcedureType('COPYLST', []), 'procedure')

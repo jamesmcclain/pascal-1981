@@ -931,6 +931,12 @@ class PascalTypeChecker(TypeChecker):
             elif lookup_name == 'UNPACK':
                 self._check_unpack_args(stmt)
                 return
+            elif lookup_name == 'WRITE':
+                self._check_write_args(stmt)
+                return
+            elif lookup_name in {'READ', 'READLN'}:
+                self._check_read_args(stmt, is_readln=(lookup_name == 'READLN'))
+                return
 
         if not sym:
             self.error(f"Undefined procedure: {stmt.name}", stmt)
@@ -995,6 +1001,53 @@ class PascalTypeChecker(TypeChecker):
                         if not can_assign(arg_type, param_type):
                             self.error(f"Argument {i+1} type mismatch: expected {param_type}, got {arg_type}", stmt)
             return
+
+    def _check_write_args(self, stmt: ProcCallStmt) -> None:
+        """Type check WRITE/WRITELN arguments."""
+        for i, arg in enumerate(stmt.args):
+            value_arg = arg.expr if isinstance(arg, WriteArg) else arg
+            value_type = self.infer_expression_type(value_arg)
+            if isinstance(arg, WriteArg):
+                if arg.width is not None:
+                    width_type = self.infer_expression_type(arg.width)
+                    if width_type and not can_assign(width_type, INTEGER_TYPE):
+                        self.error(f"WRITE width {i+1} must be INTEGER-compatible, got {width_type}", stmt)
+                if arg.precision is not None:
+                    precision_type = self.infer_expression_type(arg.precision)
+                    if precision_type and not can_assign(precision_type, INTEGER_TYPE):
+                        self.error(f"WRITE precision {i+1} must be INTEGER-compatible, got {precision_type}", stmt)
+            if value_type is None:
+                continue
+            if isinstance(value_type, FileType):
+                self.error("WRITE/WRITELN do not accept whole file variables here; see checklist 8.3a", stmt)
+                continue
+            if not self._is_writable_type(value_type):
+                self.error(f"WRITE argument {i+1} has unwritable type {value_type}", stmt)
+
+    def _check_read_args(self, stmt: ProcCallStmt, is_readln: bool) -> None:
+        """Type check READ/READLN arguments."""
+        if not stmt.args:
+            return
+        for i, arg in enumerate(stmt.args):
+            if not isinstance(arg, (Identifier, Designator)):
+                self.error(f"READ argument {i+1} must be a designator", stmt)
+                continue
+            sym = self.symbol_table.lookup(arg.name) or self.symbol_table.lookup(arg.name.upper())
+            if not sym:
+                self.error(f"READ argument {i+1} refers to undefined variable '{arg.name}'", stmt)
+                continue
+            if sym.kind == 'const' or not sym.is_mutable:
+                self.error(f"READ argument {i+1} must be assignable", stmt)
+                continue
+            target_type = self.infer_designator_type(arg) if isinstance(arg, Designator) else sym.type
+            if target_type is None or not self._is_readable_type(target_type):
+                self.error(f"READ argument {i+1} has unreadable type {target_type}", stmt)
+
+    def _is_writable_type(self, t: Type) -> bool:
+        return isinstance(t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), EnumType, StringType, LStringType))
+
+    def _is_readable_type(self, t: Type) -> bool:
+        return self._is_writable_type(t)
 
     def _check_concat_args(self, stmt: ProcCallStmt) -> None:
         """Type check CONCAT(VAR D: LSTRING; CONST S: STRING).
