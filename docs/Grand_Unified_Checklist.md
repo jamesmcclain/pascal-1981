@@ -349,7 +349,8 @@ first or these will be built on sand.
     three procedures, which 7.3 omitted.
 - [x] **7.4 — `INSERT`, `DELETE`, `POSITN`.** `[READ]` **M** Edit/search.
   - Done: added builtin registration and type checking for all three, lowered INSERT/DELETE with `memmove`, and implemented POSITN via a runtime search helper returning the 1-based match offset or 0 when not found. Proven by `python -m unittest tests.test_typecheck tests.test_codegen`.
-- [ ] **7.5 — `SCANEQ`, `SCANNE`.** `[READ]` **M** Scan-while-equal / not-equal.
+- [x] **7.5 — `SCANEQ`, `SCANNE`.** `[READ]` **M** Scan-while-equal / not-equal.
+  - Done: added builtin registration, type checking, runtime lowering, and tests for the scan intrinsics. Proven by `python -m unittest tests.test_typecheck tests.test_codegen`.
 - [ ] **7.6 — `ENCODE` / `DECODE`.** `[READ]` **L** Number↔string formatting (libc `sprintf`/`sscanf` under the hood).
 - [x] **7.7 — String-correctness hardening (post-7.2/7.3 follow-ups).** `[OBSERVED]` **M**
   Three defects in the shipped LSTRING/STRING codegen, found reviewing 7.2/7.3

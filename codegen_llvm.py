@@ -150,6 +150,13 @@ class Codegen:
         positn_fn = ir.Function(self.module, positn_ty, name='positn')
         positn_fn.linkage = 'external'
         self.scope.define('positn', positn_fn, None)
+        scaneq_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(32), ir.IntType(8), ir.IntType(8).as_pointer(), ir.IntType(32), ir.IntType(32)])
+        scaneq_fn = ir.Function(self.module, scaneq_ty, name='scaneq')
+        scaneq_fn.linkage = 'external'
+        self.scope.define('scaneq', scaneq_fn, None)
+        scanne_fn = ir.Function(self.module, scaneq_ty, name='scanne')
+        scanne_fn.linkage = 'external'
+        self.scope.define('scanne', scanne_fn, None)
         malloc_ty = ir.FunctionType(ir.IntType(8).as_pointer(), [ir.IntType(64)])
         free_ty = ir.FunctionType(ir.VoidType(), [ir.IntType(8).as_pointer()])
         malloc_fn = ir.Function(self.module, malloc_ty, name='malloc')
@@ -1709,6 +1716,8 @@ class Codegen:
 
         if lookup_name == 'POSITN':
             return self.builtin_positn(expr.args)
+        if lookup_name in {'SCANEQ', 'SCANNE'}:
+            return self.builtin_scaneq_scanne(lookup_name, expr.args)
 
         symbol = self.scope.lookup(lookup_name) or self.scope.lookup(expr.name)
 
@@ -2361,6 +2370,17 @@ class Codegen:
         if not fn:
             raise CodegenError('Undefined helper: positn')
         return self.builder.call(fn.llvm_value, [hay_chars, hay_len, needle_chars, needle_len])
+
+    def builtin_scaneq_scanne(self, lookup_name: str, args: List[Expression]) -> ir.Value:
+        L = self.codegen_expr(args[0])
+        P = self.codegen_expr(args[1])
+        S_chars, S_len = self.get_string_chars_and_len(args[2])
+        I = self.codegen_expr(args[3])
+        fn = self.scope.lookup(lookup_name.lower())
+        if not fn:
+            raise CodegenError(f'Undefined helper: {lookup_name.lower()}')
+        stop_flag = ir.Constant(ir.IntType(32), 1 if lookup_name == 'SCANEQ' else 0)
+        return self.builder.call(fn.llvm_value, [L, P, S_chars, I, stop_flag])
 
     def retype_source_is_pointer_value(self, expr) -> Optional[bool]:
         """Classify the inner expression of a RETYPE for the pointer-vs-aggregate

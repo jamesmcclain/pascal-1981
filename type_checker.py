@@ -1553,6 +1553,25 @@ class PascalTypeChecker(TypeChecker):
                     self.error("POSITN: second argument must be STRING or LSTRING", expr)
                     return None
                 return INTEGER_TYPE
+            if lookup_name in {'SCANEQ', 'SCANNE'}:
+                if len(expr.args) != 4:
+                    self.error(f"{lookup_name} expects 4 arguments, got {len(expr.args)}", expr)
+                    return None
+                l_type = self.infer_expression_type(expr.args[0])
+                if l_type not in (INTEGER_TYPE, WORD_TYPE):
+                    self.error(f"{lookup_name}: first argument must be INTEGER or WORD, got {l_type}", expr)
+                    return None
+                if self.infer_expression_type(expr.args[1]) != CHAR_TYPE:
+                    self.error(f"{lookup_name}: second argument must be CHAR", expr)
+                    return None
+                if not isinstance(self.infer_expression_type(expr.args[2]), (StringType, LStringType)):
+                    self.error(f"{lookup_name}: third argument must be STRING or LSTRING", expr)
+                    return None
+                i_type = self.infer_expression_type(expr.args[3])
+                if i_type not in (INTEGER_TYPE, WORD_TYPE):
+                    self.error(f"{lookup_name}: fourth argument must be INTEGER or WORD, got {i_type}", expr)
+                    return None
+                return INTEGER_TYPE
             if lookup_name == 'WRD':
                 if len(expr.args) != 1:
                     self.error(f"WRD expects 1 argument, got {len(expr.args)}", expr)

@@ -408,8 +408,8 @@ class TestCallValidation(unittest.TestCase):
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_string_edit_intrinsics_typecheck(self):
-        """INSERT, DELETE, and POSITN should typecheck on string operands."""
-        result = typecheck_source("PROGRAM P; VAR s: STRING(10); VAR t: STRING(10); BEGIN INSERT(s, t, 1); DELETE(t, 1, 1); WRITELN(POSITN(t, s)) END.")
+        """INSERT, DELETE, POSITN, SCANEQ, and SCANNE should typecheck."""
+        result = typecheck_source("PROGRAM P; VAR s: STRING(10); VAR t: STRING(10); BEGIN INSERT(s, t, 1); DELETE(t, 1, 1); WRITELN(POSITN(t, s)); WRITELN(SCANEQ(1, 'a', s, 1)); WRITELN(SCANNE(1, 'a', s, 1)) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
 
