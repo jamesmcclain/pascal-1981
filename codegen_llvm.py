@@ -2471,12 +2471,31 @@ class Codegen:
         if isinstance(dest, Identifier):
             dest = Designator(dest.name, [])
         dest_ptr = self.resolve_designator_ptr(dest)
-        dest_chars, dest_len = self.get_string_chars_and_len(dest)
-        val = self.codegen_expr(args[1].expr if isinstance(args[1], WriteArg) else args[1])
+        dest_chars, _dest_cur_len = self.get_string_chars_and_len(dest)
+        # Bound the write by the LSTRING's declared CAPACITY, not its current
+        # length. get_string_chars_and_len returns the live length byte, which
+        # is 0 for a freshly-initialized LSTRING, so the old code told the
+        # runtime it had room for 0 characters and ENCODE silently produced an
+        # empty string.
+        dest_cap = self._dest_string_max_len(dest)
+        value_arg = args[1]
+        width = ir.Constant(ir.IntType(32), 0)
+        precision = ir.Constant(ir.IntType(32), 0)
+        if isinstance(value_arg, WriteArg):
+            val = self.codegen_expr(value_arg.expr)
+            if value_arg.width is not None:
+                width = self.coerce_arg(self.codegen_expr(value_arg.width), ir.IntType(32))
+            if value_arg.precision is not None:
+                precision = self.coerce_arg(self.codegen_expr(value_arg.precision), ir.IntType(32))
+        else:
+            val = self.codegen_expr(value_arg)
         fn = self.scope.lookup('encode_value')
         if not fn:
             raise CodegenError('Undefined helper: encode_value')
-        return self.builder.call(fn.llvm_value, [dest_chars, dest_len, self.builder.bitcast(dest_ptr, ir.IntType(8).as_pointer()), val, ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0)])
+        # encode_value(dest_chars, dest_capacity, dest_raw, value, width, precision, _)
+        # dest_raw points at the aggregate base so the runtime can set the
+        # LSTRING length-prefix byte after writing the characters.
+        return self.builder.call(fn.llvm_value, [dest_chars, ir.Constant(ir.IntType(32), dest_cap), self.builder.bitcast(dest_ptr, ir.IntType(8).as_pointer()), val, width, precision, ir.Constant(ir.IntType(32), 0)])
 
     def builtin_decode(self, args: List[Expression]) -> ir.Value:
         src = args[0].expr if isinstance(args[0], WriteArg) else args[0]
@@ -2485,10 +2504,26 @@ class Codegen:
         if isinstance(dest, Identifier):
             dest = Designator(dest.name, [])
         dest_ptr = self.resolve_designator_ptr(dest)
+        # Tell the runtime how many bytes the destination holds so the parsed
+        # value is written back at the right width (CHAR=1, WORD=2, INTEGER=4)
+        # instead of being discarded. For a plain scalar variable we know the
+        # size from its declared type; for a selected component (record field /
+        # array element) we conservatively fall back to INTEGER width.
+        dest_size = 4
+        if isinstance(dest, (Identifier, Designator)) and not getattr(dest, 'selectors', None):
+            dsym = self.scope.lookup(dest.name) or self.scope.lookup(dest.name.upper())
+            if dsym is not None and dsym.type_expr is not None:
+                try:
+                    sz = self.get_type_size(self.resolve_type_alias(dsym.type_expr))
+                    if sz in (1, 2, 4):
+                        dest_size = sz
+                except Exception:
+                    dest_size = 4
         fn = self.scope.lookup('decode_value')
         if not fn:
             raise CodegenError('Undefined helper: decode_value')
-        return self.builder.call(fn.llvm_value, [src_chars, src_len, self.builder.bitcast(dest_ptr, ir.IntType(8).as_pointer()), ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0)])
+        # decode_value(src_chars, src_len, dest_raw, dest_size, ...)
+        return self.builder.call(fn.llvm_value, [src_chars, src_len, self.builder.bitcast(dest_ptr, ir.IntType(8).as_pointer()), ir.Constant(ir.IntType(32), dest_size), ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0)])
 
     def retype_source_is_pointer_value(self, expr) -> Optional[bool]:
         """Classify the inner expression of a RETYPE for the pointer-vs-aggregate
@@ -2780,12 +2815,24 @@ class Codegen:
             raise CodegenError('NEW requires a pointer variable')
         pointee = getattr(sym.type_expr, 'target_type', None) or getattr(sym.type_expr, 'base', None)
         alloc_ty = self.llvm_type(pointee)
-        alloc_size = 8
-        if getattr(self.module, 'data_layout', None):
+        # Size the heap block from the pointee's real byte size. The module
+        # carries an empty target datalayout, so DataLayout.get_type_alloc_size()
+        # silently fell back to a hard-coded 8 here and under-allocated for any
+        # pointee larger than 8 bytes (e.g. a multi-field RECORD), corrupting the
+        # heap on the first full write. get_type_size() resolves array bounds and
+        # record layouts the same way SIZEOF does.
+        alloc_size = 0
+        try:
+            alloc_size = self.get_type_size(self.resolve_type_alias(pointee))
+        except Exception:
+            alloc_size = 0
+        if alloc_size <= 0 and getattr(self.module, 'data_layout', None):
             try:
                 alloc_size = self.module.data_layout.get_type_alloc_size(alloc_ty)
             except Exception:
-                alloc_size = 8
+                alloc_size = 0
+        if alloc_size <= 0:
+            alloc_size = 8
         raw = self.builder.call(self.scope.lookup('malloc').llvm_value, [ir.Constant(ir.IntType(64), alloc_size)])
         casted = self.builder.bitcast(raw, self.llvm_type(sym.type_expr))
         self.builder.store(casted, ptr_addr)

@@ -24,6 +24,13 @@ int32_t scaneq(int32_t L, char P, const char *S, int32_t I, int32_t stop_on_equa
     return scan_impl(L, P, S, I, stop_on_equal);
 }
 
+/*
+ * SCANNE and SCANEQ differ only in the stop condition, which the caller
+ * already encodes in `stop_on_equal` (codegen passes 1 for SCANEQ, 0 for
+ * SCANNE). The previous body re-inverted that flag (`stop_on_equal ? 0 : 1`),
+ * which folded SCANNE's 0 back into 1 and made SCANNE behave identically to
+ * SCANEQ. Forward the flag unchanged.
+ */
 int32_t scanne(int32_t L, char P, const char *S, int32_t I, int32_t stop_on_equal) {
-    return scan_impl(L, P, S, I, stop_on_equal ? 0 : 1);
+    return scan_impl(L, P, S, I, stop_on_equal);
 }
