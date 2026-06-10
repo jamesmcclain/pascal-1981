@@ -89,13 +89,11 @@ class StringsMixin:
     def _guard_string_capacity(self, need_len: ir.Value, max_len: int, label: str, enabled: bool = True):
         """Emit the manual's string range check (errors if upper(D) < need_len).
 
-        If `need_len` exceeds `max_len`, call the runtime error handler (abort)
-        and mark the block unreachable; otherwise fall through. Mirrors the
-        LSTRING assignment path. Returns the post-check block, which the caller
-        must branch to once the guarded work is done.
+        If disabled, emit no guard blocks and return None so callers can skip
+        the continuation branch entirely.
         """
         if not enabled:
-            return self.builder.block
+            return None
         cond = self.builder.icmp_signed('<=', need_len, ir.Constant(ir.IntType(32), max_len))
         parent = self.builder.block.parent
         ok_block = parent.append_basic_block(label + '_ok')
@@ -147,8 +145,9 @@ class StringsMixin:
         new_len_byte = self.builder.trunc(new_len, ir.IntType(8))
         self.builder.store(new_len_byte, len_ptr)
 
-        self.builder.branch(end_block)
-        self.builder.position_at_end(end_block)
+        if end_block is not None:
+            self.builder.branch(end_block)
+            self.builder.position_at_end(end_block)
 
 
     def builtin_copylst(self, args: List[Expression], enabled: bool = True) -> None:
@@ -183,8 +182,9 @@ class StringsMixin:
         src_len_byte = self.builder.trunc(src_len, ir.IntType(8))
         self.builder.store(src_len_byte, len_ptr)
 
-        self.builder.branch(end_block)
-        self.builder.position_at_end(end_block)
+        if end_block is not None:
+            self.builder.branch(end_block)
+            self.builder.position_at_end(end_block)
 
 
     def builtin_copystr(self, args: List[Expression], enabled: bool = True) -> None:
@@ -227,8 +227,9 @@ class StringsMixin:
         pad_len_64 = self.builder.zext(pad_len, ir.IntType(64))
         self.builder.call(self.memset_func(), [pad_ptr, ir.Constant(ir.IntType(32), 0x20), pad_len_64])
 
-        self.builder.branch(end_block)
-        self.builder.position_at_end(end_block)
+        if end_block is not None:
+            self.builder.branch(end_block)
+            self.builder.position_at_end(end_block)
 
 
     def builtin_insert(self, args: List[Expression], enabled: bool = True) -> None:

@@ -29,6 +29,7 @@ import unittest
 
 from tests.support import requires_exe, requires_llvm
 from tests.test_codegen import build_and_run, compile_to_ir
+from tests.support import parse_source, typecheck_source
 
 
 @requires_llvm
@@ -181,6 +182,14 @@ class TestWriteFieldWidthOrdering(unittest.TestCase):
 
 @requires_llvm
 class TestStringIntrinsicCapacityIR(unittest.TestCase):
+    def _compile_to_ir_force(self, src: str, force_rangeck):
+        from codegen_llvm import compile_to_llvm
+        ast = parse_source(src)
+        result = typecheck_source(src)
+        if not result.success:
+            raise RuntimeError(f"Type check failed: {result.errors}")
+        return compile_to_llvm(ast, force_rangeck=force_rangeck)
+
     """CONCAT/COPYLST/COPYSTR must emit a capacity range check (manual 11-20).
 
     These only need IR generation (no clang): the guard lowers to a call to
@@ -198,6 +207,18 @@ class TestStringIntrinsicCapacityIR(unittest.TestCase):
     def test_copystr_emits_range_check(self):
         src = "PROGRAM P; VAR d: STRING(5); BEGIN COPYSTR('abc', d) END."
         self.assertIn("abort", compile_to_ir(src))
+
+    def test_rangeck_off_removes_string_guards(self):
+        src = "PROGRAM P; VAR d: LSTRING(3); BEGIN {$RANGECK-} d := 'ab'; CONCAT(d, 'cd') END."
+        ir = self._compile_to_ir_force(src, force_rangeck=False)
+        self.assertNotIn("str_assign_overflow", ir)
+        self.assertNotIn("concat_overflow", ir)
+
+    def test_rangeck_force_on_overrides_source_off(self):
+        src = "PROGRAM P; VAR d: LSTRING(3); BEGIN {$RANGECK-} d := 'ab'; CONCAT(d, 'cd') END."
+        ir = self._compile_to_ir_force(src, force_rangeck=True)
+        self.assertIn("str_assign_overflow", ir)
+        self.assertIn("concat_overflow", ir)
 
 
 @requires_exe

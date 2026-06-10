@@ -147,20 +147,26 @@ class IoWriteReadMixin:
         for arg in args:
             target = arg if isinstance(arg, Designator) else Designator(arg.name, [])
             ptr = self.resolve_designator_ptr(target)
-            ty = self._pas_type(arg)
-            if isinstance(ty, type(INTEGER_TYPE)):
+            ty = self.resolve_type_alias(self._pas_type(arg)) if self._pas_type(arg) is not None else None
+            if ty is INTEGER_TYPE:
                 fn = self._read_helper('pas_read_int', ptr.type)
-            elif isinstance(ty, type(WORD_TYPE)):
+                call_args = [ptr]
+            elif ty is WORD_TYPE:
                 fn = self._read_helper('pas_read_word', ptr.type)
-            elif isinstance(ty, type(REAL_TYPE)):
+                call_args = [ptr]
+            elif ty is REAL_TYPE:
                 fn = self._read_helper('pas_read_real', ptr.type)
-            elif isinstance(ty, type(CHAR_TYPE)):
+                call_args = [ptr]
+            elif ty is CHAR_TYPE:
                 fn = self._read_helper('pas_read_char', ptr.type)
+                call_args = [ptr]
             else:
-                fn = self._read_helper('pas_read_lstring', ptr.type, [ir.IntType(32)])
-            self.builder.call(fn, [ptr] + ([ir.Constant(ir.IntType(32), 256)] if fn.name == 'pas_read_lstring' else []))
+                fn = self._read_helper('pas_read_lstring', ir.IntType(8).as_pointer(), [ir.IntType(32)])
+                is_str, max_len, is_lstring = self.get_string_type_info(ty)
+                call_args = [self.builder.bitcast(ptr, ir.IntType(8).as_pointer()), ir.Constant(ir.IntType(32), max_len)]
+            self.builder.call(fn, call_args)
         if consume_eol:
-            self._read_helper('pas_readln_skip', ir.VoidType())
+            self.builder.call(self._read_helper('pas_readln_skip', ir.VoidType()), [])
 
     def enum_value_list(self, type_expr) -> Optional[List[str]]:
         t = self.resolve_type_alias(type_expr)

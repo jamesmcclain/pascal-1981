@@ -26,6 +26,12 @@ class StmtsMixin:
             self.codegen_stmt(stmt)
 
 
+    def effective_rangeck(self, stmt: Statement) -> bool:
+        if self.force_rangeck is not None:
+            return self.force_rangeck
+        return getattr(stmt, 'rangeck', True)
+
+
     def codegen_stmt(self, stmt: Statement) -> None:
         """Codegen a statement."""
         self._log(f'stmt  {type(stmt).__name__}')
@@ -101,9 +107,7 @@ class StmtsMixin:
                 elif value.type != target_type:
                     value = self.builder.bitcast(value, target_type)
 
-        rangeck_enabled = getattr(stmt, 'rangeck', True)
-        if self.force_rangeck is not None:
-            rangeck_enabled = self.force_rangeck
+        rangeck_enabled = self.effective_rangeck(stmt)
 
         if is_str:
             # ptr is now directly the aggregate pointer [n+1 x i8] or [n x i8]
@@ -122,17 +126,7 @@ class StmtsMixin:
             else:
                 src_chars, src_len = self.get_string_chars_and_len(stmt.expr)
 
-                # Range check: src_len <= max_len
-                cond = self.builder.icmp_signed('<=', src_len, ir.Constant(ir.IntType(32), max_len))
-                success_block = self.builder.block.parent.append_basic_block('str_assign_ok')
-                error_block = self.builder.block.parent.append_basic_block('str_assign_overflow')
-                end_block = self.builder.block.parent.append_basic_block('str_assign_end')
-                if rangeck_enabled:
-                    self.builder.cbranch(cond, success_block, error_block)
-                    self.builder.position_at_end(error_block)
-                    self.builder.call(self.runtime_error_func(), [])
-                    self.builder.unreachable()
-                self.builder.position_at_end(success_block)
+                end_block = self._guard_string_capacity(src_len, max_len, 'str_assign', enabled=rangeck_enabled)
                 zero = ir.Constant(ir.IntType(32), 0)
                 one = ir.Constant(ir.IntType(32), 1)
                 src_len_64 = self.builder.zext(src_len, ir.IntType(64))
@@ -162,8 +156,9 @@ class StmtsMixin:
                     pad_len_64 = self.builder.zext(pad_len, ir.IntType(64))
                     self.builder.call(self.memset_func(), [pad_start, ir.Constant(ir.IntType(32), 0x20), pad_len_64])
 
-                self.builder.branch(end_block)
-                self.builder.position_at_end(end_block)
+                if end_block is not None:
+                    self.builder.branch(end_block)
+                    self.builder.position_at_end(end_block)
         else:
             self.builder.store(value, ptr)
 
@@ -183,13 +178,13 @@ class StmtsMixin:
             elif lookup_name == 'READLN':
                 self.builtin_readln(stmt.args)
             elif lookup_name == 'CONCAT':
-                self.builtin_concat(stmt.args, enabled=getattr(stmt, 'rangeck', True))
+                self.builtin_concat(stmt.args, enabled=self.effective_rangeck(stmt))
             elif lookup_name == 'COPYLST':
-                self.builtin_copylst(stmt.args, enabled=getattr(stmt, 'rangeck', True))
+                self.builtin_copylst(stmt.args, enabled=self.effective_rangeck(stmt))
             elif lookup_name == 'COPYSTR':
-                self.builtin_copystr(stmt.args, enabled=getattr(stmt, 'rangeck', True))
+                self.builtin_copystr(stmt.args, enabled=self.effective_rangeck(stmt))
             elif lookup_name == 'INSERT':
-                self.builtin_insert(stmt.args, enabled=getattr(stmt, 'rangeck', True))
+                self.builtin_insert(stmt.args, enabled=self.effective_rangeck(stmt))
             elif lookup_name == 'DELETE':
                 self.builtin_delete(stmt.args)
             elif lookup_name == 'POSITN':
