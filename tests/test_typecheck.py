@@ -73,8 +73,26 @@ class TestVariableScope(unittest.TestCase):
 
     def test_predeclared_text_input_output_string_names(self):
         """TEXT, INPUT, OUTPUT, and STRING are predeclared names."""
-        result = typecheck_source("PROGRAM P; VAR f: TEXT; BEGIN WRITELN(INPUT); WRITELN(OUTPUT); WRITELN(f) END.")
+        result = typecheck_source("PROGRAM P; VAR f: TEXT; BEGIN WRITELN(OUTPUT, 'ok'); WRITELN(f, 'ok') END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_file_buffer_variable_has_element_type(self):
+        """F^ is the current component buffer of FILE OF T; TEXT^ is CHAR."""
+        src = "PROGRAM P; VAR f: FILE OF INTEGER; t: TEXT; x: INTEGER; c: CHAR; BEGIN f^ := 42; x := f^; t^ := 'A'; c := t^ END."
+        result = typecheck_source(src)
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_whole_file_assignment_rejected(self):
+        """Files are not ordinary assignable values."""
+        result = typecheck_source("PROGRAM P; VAR f,g: FILE OF INTEGER; BEGIN f := g END.")
+        self.assertFalse(result.success)
+        self.assertIn("Cannot assign whole file", " ".join(str(e) for e in result.errors))
+
+    def test_non_file_non_pointer_deref_rejected(self):
+        """The buffer-variable/deref selector only applies to files and pointers."""
+        result = typecheck_source("PROGRAM P; VAR i: INTEGER; BEGIN i := i^ END.")
+        self.assertFalse(result.success)
+        self.assertIn("Cannot dereference", " ".join(str(e) for e in result.errors))
 
     def test_shadowing_nested_scope(self):
         """Variable shadowing in nested scope is allowed."""
@@ -83,6 +101,64 @@ class TestVariableScope(unittest.TestCase):
                                   "PROCEDURE P1; VAR x: INTEGER; BEGIN x := 1 END; "
                                   "BEGIN x := 2 END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+
+class TestReadWriteTypecheck(unittest.TestCase):
+    def test_readln_empty_is_allowed(self):
+        result = typecheck_source("PROGRAM P; BEGIN READLN() END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_read_rejects_literal(self):
+        result = typecheck_source("PROGRAM P; BEGIN READ(5) END.")
+        self.assertFalse(result.success)
+        self.assertIn("designator", " ".join(str(e) for e in result.errors))
+
+    def test_read_rejects_const(self):
+        result = typecheck_source("PROGRAM P; CONST c = 1; BEGIN READ(c) END.")
+        self.assertFalse(result.success)
+        self.assertIn("assignable", " ".join(str(e) for e in result.errors))
+
+    def test_write_precision_rejected_for_non_integer(self):
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN WRITE(x:1.5) END.")
+        self.assertFalse(result.success)
+        self.assertIn("INTEGER-compatible", " ".join(str(e) for e in result.errors))
+
+    def test_read_boolean_rejected(self):
+        result = typecheck_source("PROGRAM P; VAR b: BOOLEAN; BEGIN READLN(b) END.")
+        self.assertFalse(result.success)
+        self.assertIn("unreadable", " ".join(str(e) for e in result.errors))
+
+    def test_read_enum_rejected(self):
+        result = typecheck_source("PROGRAM P; TYPE C = (Red, Green); VAR c: C; BEGIN READLN(c) END.")
+        self.assertFalse(result.success)
+        errors = " ".join(str(e) for e in result.errors)
+        self.assertIn("unreadable", errors)
+        self.assertIn("C", errors)
+
+    def test_write_enum_still_allowed(self):
+        result = typecheck_source("PROGRAM P; TYPE C = (Red, Green); VAR c: C; BEGIN WRITELN(c) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_writeln_accepts_leading_text_file_selector(self):
+        result = typecheck_source("PROGRAM P; VAR t: TEXT; BEGIN WRITELN(t, 'ok'); WRITE(OUTPUT, 1) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_writeln_rejects_whole_text_file_as_data(self):
+        result = typecheck_source("PROGRAM P; VAR t: TEXT; BEGIN WRITELN('x', t) END.")
+        self.assertFalse(result.success)
+        self.assertIn("whole file", " ".join(str(e) for e in result.errors))
+
+    def test_writeln_rejects_binary_file_selector(self):
+        result = typecheck_source("PROGRAM P; VAR f: FILE OF INTEGER; BEGIN WRITELN(f, 1) END.")
+        self.assertFalse(result.success)
+        self.assertIn("TEXT", " ".join(str(e) for e in result.errors))
+
+    def test_writeln_rejects_unformatted_file_alone(self):
+        result = typecheck_source("PROGRAM P; VAR t: TEXT; BEGIN WRITELN(t) END.")
+        self.assertTrue(result.success, msg="A leading TEXT selector with no data is a valid empty-line write")
+        bad = typecheck_source("PROGRAM P; VAR f: FILE OF INTEGER; BEGIN WRITELN(f) END.")
+        self.assertFalse(bad.success)
+        self.assertIn("TEXT", " ".join(str(e) for e in bad.errors))
 
 
 class TestTypeCompatibility(unittest.TestCase):
@@ -228,6 +304,14 @@ class TestTypeCompatibility(unittest.TestCase):
         """ADR OF and ADS OF variables accept matching address-of expressions."""
         result = typecheck_source("PROGRAM P; VAR x: INTEGER; a: ADR OF INTEGER; s: ADS OF INTEGER; BEGIN a := ADR x; s := ADS x END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_new_dispose_typecheck(self):
+        """NEW/DISPOSE require mutable pointer variables."""
+        ok = typecheck_source("PROGRAM P; VAR p: ^INTEGER; BEGIN NEW(p); DISPOSE(p) END.")
+        self.assertTrue(ok.success, msg=" ".join(str(e) for e in ok.errors))
+        bad = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN NEW(x) END.")
+        self.assertFalse(bad.success)
+        self.assertTrue(any('pointer' in str(e).lower() for e in bad.errors), msg=" ".join(str(e) for e in bad.errors))
 
     def test_parameter_modes_typecheck(self):
         """VAR/VARS are writable references; CONST/CONSTS are read-only references."""
@@ -397,6 +481,11 @@ class TestCallValidation(unittest.TestCase):
     def test_predeclared_abort_procedure(self):
         """ABORT should be available without a manual declaration."""
         result = typecheck_source("PROGRAM P; VAR s: STRING(10); BEGIN s := 'oops'; ABORT(s, WRD(0), WRD(0)) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_string_edit_intrinsics_typecheck(self):
+        """INSERT, DELETE, POSITN, SCANEQ, SCANNE, ENCODE, and DECODE should typecheck."""
+        result = typecheck_source("PROGRAM P; VAR s: STRING(10); VAR t: STRING(10); VAR l: LSTRING(10); VAR n: INTEGER; BEGIN INSERT(s, t, 1); DELETE(t, 1, 1); WRITELN(POSITN(t, s)); WRITELN(SCANEQ(1, 'a', s, 1)); WRITELN(SCANNE(1, 'a', s, 1)); WRITELN(ENCODE(l, n)); WRITELN(DECODE(s, n)) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
 

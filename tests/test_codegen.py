@@ -75,6 +75,36 @@ def build_and_run(src: str, stdin: str = "") -> tuple:
 class TestCodegenIR(unittest.TestCase):
     """Test LLVM IR generation (requires llvmlite)."""
 
+    def test_file_buffer_model_ir(self):
+        """FILE OF T lowers to an inline file-control block plus typed F^ buffer
+        access through pas_file_buffer; no heap allocation (so nothing leaks)."""
+        src = "PROGRAM P; VAR f: FILE OF INTEGER; x: INTEGER; BEGIN f^ := 42; x := f^ END."
+        ir = compile_to_ir(src)
+        self.assertIn('define i8* @"pas_file_buffer"', ir)
+        # The control block and its buffer are stack/global allocations, not malloc.
+        self.assertNotIn('@"pas_file_create"', ir)
+        self.assertNotIn('call i8* @"malloc"', ir)
+        # F^ resolves to a typed pointer into the component buffer.
+        self.assertIn('bitcast i8*', ir)
+        self.assertIn('to i32*', ir)
+        # Binary FILE OF T records structure 0 in the FCB.
+        self.assertIn('store i32 0', ir)
+
+    def test_text_buffer_touch_and_predeclared_files_ir(self):
+        """TEXT/INPUT/OUTPUT are ASCII file handles; TEXT^ goes through the touch
+        hook, which now performs real bookkeeping (sets the touched flag) rather
+        than being an empty body."""
+        src = "PROGRAM P; VAR t: TEXT; c: CHAR; BEGIN c := t^ END."
+        ir = compile_to_ir(src)
+        self.assertIn('@"input" = global i8* null', ir)
+        self.assertIn('@"output" = global i8* null', ir)
+        self.assertIn('define void @"pas_file_touch_buffer"', ir)
+        self.assertIn('call void @"pas_file_touch_buffer"', ir)
+        # ASCII/TEXT records structure 1 in the FCB.
+        self.assertIn('store i32 1', ir)
+        # No per-file heap allocation.
+        self.assertNotIn('@"pas_file_create"', ir)
+
     def test_simple_writeln(self):
         """Simple WRITELN generates valid IR."""
         src = "PROGRAM P; BEGIN WRITELN(42) END."
@@ -483,7 +513,7 @@ class TestCodegenBuildRun(unittest.TestCase):
                "END.")
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
-        self.assertIn("42", stdout)
+        self.assertRegex(stdout, r"4\.2000000E\+01")
 
     def test_nil_codegen(self):
         """NIL lowers to a null pointer value."""
@@ -497,6 +527,24 @@ class TestCodegenBuildRun(unittest.TestCase):
         ir = compile_to_ir(src)
         self.assertIn("{i32*,i16}", ir.replace(" ", ""))
         self.assertIn("i16 0", ir)
+
+    def test_new_dispose_codegen(self):
+        """NEW allocates and DISPOSE frees a pointer variable."""
+        src = "PROGRAM P; VAR p: ^INTEGER; BEGIN NEW(p); DISPOSE(p) END."
+        ir = compile_to_ir(src)
+        self.assertIn("malloc", ir)
+        self.assertIn("free", ir)
+
+    def test_string_edit_intrinsics_codegen(self):
+        """INSERT/DELETE/POSITN/SCANEQ/SCANNE/ENCODE/DECODE should lower without crashing."""
+        src = "PROGRAM P; VAR s: STRING(10); VAR t: STRING(10); VAR l: LSTRING(10); VAR n: INTEGER; BEGIN INSERT(s, t, 1); DELETE(t, 1, 1); WRITELN(POSITN(t, s)); WRITELN(SCANEQ(1, 'a', s, 1)); WRITELN(SCANNE(1, 'a', s, 1)); WRITELN(ENCODE(l, n)); WRITELN(DECODE(s, n)) END."
+        ir = compile_to_ir(src)
+        self.assertIn("memmove", ir)
+        self.assertIn("positn", ir)
+        self.assertIn("scaneq", ir)
+        self.assertIn("scanne", ir)
+        self.assertIn("encode_value", ir)
+        self.assertIn("decode_value", ir)
 
     def test_short_circuit_skips_rhs_runtime(self):
         """Short-circuit operators must not evaluate an unnecessary RHS call."""
@@ -697,7 +745,7 @@ class TestCodegenBuildRun(unittest.TestCase):
         src = "PROGRAM P; BEGIN WRITELN(1 / 4) END."
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
-        self.assertIn("0.25", stdout)
+        self.assertRegex(stdout, r"2\.5000000E-01")
 
     def test_real_const_declaration_and_use(self):
         """REAL CONST can be declared and used in expressions without crashing."""
@@ -1597,6 +1645,23 @@ class TestMoveRuntimeDirection(unittest.TestCase):
 
 
 @requires_exe
+class TestWriteRealFormatting(unittest.TestCase):
+    def test_real_default_format_emits_exponential(self):
+        src = "PROGRAM P; VAR x: REAL; BEGIN x := 1.5; WRITELN(x) END."
+        ir = compile_to_ir(src)
+        self.assertIn('c"%14.7E', ir)
+
+    def test_real_width_only_uses_exponential(self):
+        src = "PROGRAM P; VAR x: REAL; BEGIN x := 1.5; WRITELN(x:10) END."
+        ir = compile_to_ir(src)
+        self.assertIn("%*E", ir)
+
+    def test_real_width_and_precision_use_fixed_point(self):
+        src = "PROGRAM P; VAR x: REAL; BEGIN x := 1.5; WRITELN(x:8:3) END."
+        ir = compile_to_ir(src)
+        self.assertIn("%*.*f", ir)
+
+
 class TestAbortRuntime(unittest.TestCase):
     """ABORT's runtime must surface the message, error code, and status, then
     abort (manual: stops like an internal runtime error)."""

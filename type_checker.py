@@ -19,6 +19,7 @@ from ast_nodes import ArrayType as ASTArrayType
 from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, CharLiteral, ConstDecl, Designator)
 from ast_nodes import EnumType as ASTEnumType
 from ast_nodes import (Expression, ForStmt, FuncCall, FuncDecl, Identifier, IfStmt, ImplementationUnit, InterfaceUnit, IntLiteral, LabelStmt, LowerExpr)
+from ast_nodes import FileType as ASTFileType
 from ast_nodes import LStringType as ASTLStringType
 from ast_nodes import ModuleUnit, NamedType, NilLiteral
 from ast_nodes import PointerType as ASTPointerType
@@ -872,6 +873,9 @@ class PascalTypeChecker(TypeChecker):
                 self.error(f"Cannot assign to immutable {sym.kind}: {stmt.target.name}", stmt)
             target_type = self.infer_designator_type(stmt.target)
             if target_type:
+                if isinstance(target_type, FileType) and not stmt.target.selectors:
+                    self.error("Cannot assign whole file variables; use the file buffer variable (F^) or file I/O procedures", stmt)
+                    return
                 # Type check successful - target_type is now the element/field type
                 value_type = self.infer_expression_type(stmt.expr)
                 if value_type and not can_assign(value_type, target_type):
@@ -900,6 +904,10 @@ class PascalTypeChecker(TypeChecker):
         if sym and not sym.is_mutable:
             self.error(f"Cannot assign to immutable {sym.kind}: {target_name}", stmt)
 
+        if isinstance(target_type, FileType):
+            self.error("Cannot assign whole file variables; use the file buffer variable (F^) or file I/O procedures", stmt)
+            return
+
         # Check type compatibility
         value_type = self.infer_expression_type(stmt.expr)
         if value_type:
@@ -923,6 +931,12 @@ class PascalTypeChecker(TypeChecker):
             elif lookup_name == 'UNPACK':
                 self._check_unpack_args(stmt)
                 return
+            elif lookup_name in {'WRITE', 'WRITELN'}:
+                self._check_write_args(stmt)
+                return
+            elif lookup_name in {'READ', 'READLN'}:
+                self._check_read_args(stmt, is_readln=(lookup_name == 'READLN'))
+                return
 
         if not sym:
             self.error(f"Undefined procedure: {stmt.name}", stmt)
@@ -944,10 +958,26 @@ class PascalTypeChecker(TypeChecker):
             elif is_builtin and stmt.name.upper() == 'COPYSTR':
                 self._check_copystr_args(stmt)
                 return
+            elif is_builtin and stmt.name.upper() == 'INSERT':
+                self._check_insert_args(stmt)
+                return
+            elif is_builtin and stmt.name.upper() == 'DELETE':
+                self._check_delete_args(stmt)
+                return
+            elif is_builtin and stmt.name.upper() == 'POSITN':
+                self._check_positn_args(stmt)
+                return
+            elif is_builtin and stmt.name.upper() == 'NEW':
+                self._check_new_args(stmt)
+                return
+            elif is_builtin and stmt.name.upper() == 'DISPOSE':
+                self._check_dispose_args(stmt)
+                return
 
-            # For built-in procedures like WRITELN/WRITE/READLN, skip count/type checks but still
-            # check that the arguments are valid expressions (e.g., defined variables)
-            if not is_builtin or stmt.name.upper() not in ['WRITELN', 'WRITE', 'READLN']:
+            # For built-in procedures like WRITELN/WRITE/READLN/NEW/DISPOSE,
+            # skip count/type checks but still check that the arguments are valid
+            # expressions (e.g., defined variables)
+            if not is_builtin or stmt.name.upper() not in ['WRITELN', 'WRITE', 'READLN', 'NEW', 'DISPOSE']:
                 # For user-defined procedures, check argument count
                 expected_args = len(sym.type.params)
                 actual_args = len(stmt.args)
@@ -971,6 +1001,77 @@ class PascalTypeChecker(TypeChecker):
                         if not can_assign(arg_type, param_type):
                             self.error(f"Argument {i+1} type mismatch: expected {param_type}, got {arg_type}", stmt)
             return
+
+    def _is_text_file_type(self, t: Type) -> bool:
+        return isinstance(t, FileType) and t.structure == 'ASCII' and t.element_type.equivalent_to(CHAR_TYPE)
+
+    def _check_write_args(self, stmt: ProcCallStmt) -> None:
+        """Type check WRITE/WRITELN arguments."""
+        start = 0
+        if stmt.args:
+            first_arg = stmt.args[0]
+            first_value = first_arg.expr if isinstance(first_arg, WriteArg) else first_arg
+            first_type = self.infer_expression_type(first_value)
+            if isinstance(first_type, FileType):
+                formatted_selector = isinstance(first_arg, WriteArg) and (first_arg.width is not None or first_arg.precision is not None)
+                if formatted_selector:
+                    self.error("WRITE/WRITELN file selector must be an unformatted leading TEXT file", stmt)
+                    start = 1
+                elif self._is_text_file_type(first_type):
+                    start = 1
+                else:
+                    self.error("WRITE/WRITELN file selector must be TEXT, not binary FILE", stmt)
+                    start = 1
+
+        for i, arg in enumerate(stmt.args[start:], start=start):
+            value_arg = arg.expr if isinstance(arg, WriteArg) else arg
+            value_type = self.infer_expression_type(value_arg)
+            if isinstance(arg, WriteArg):
+                if arg.width is not None:
+                    width_type = self.infer_expression_type(arg.width)
+                    if width_type and not can_assign(width_type, INTEGER_TYPE):
+                        self.error(f"WRITE width {i+1} must be INTEGER-compatible, got {width_type}", stmt)
+                if arg.precision is not None:
+                    precision_type = self.infer_expression_type(arg.precision)
+                    if precision_type and not can_assign(precision_type, INTEGER_TYPE):
+                        self.error(f"WRITE precision {i+1} must be INTEGER-compatible, got {precision_type}", stmt)
+            if value_type is None:
+                continue
+            if isinstance(value_type, FileType):
+                self.error("WRITE/WRITELN do not accept whole file variables as data arguments", stmt)
+                continue
+            if not self._is_writable_type(value_type):
+                self.error(f"WRITE argument {i+1} has unwritable type {value_type}", stmt)
+
+    def _check_read_args(self, stmt: ProcCallStmt, is_readln: bool) -> None:
+        """Type check READ/READLN arguments."""
+        if not stmt.args:
+            return
+        for i, arg in enumerate(stmt.args):
+            if not isinstance(arg, (Identifier, Designator)):
+                self.error(f"READ argument {i+1} must be a designator", stmt)
+                continue
+            sym = self.symbol_table.lookup(arg.name) or self.symbol_table.lookup(arg.name.upper())
+            if not sym:
+                self.error(f"READ argument {i+1} refers to undefined variable '{arg.name}'", stmt)
+                continue
+            if sym.kind == 'const' or not sym.is_mutable:
+                self.error(f"READ argument {i+1} must be assignable", stmt)
+                continue
+            target_type = self.infer_designator_type(arg) if isinstance(arg, Designator) else sym.type
+            if target_type is None:
+                self.error(f"READ argument {i+1} has unresolvable type", stmt)
+                continue
+            if not self._is_readable_type(target_type):
+                self.error(f"READ argument {i+1} has unreadable type {target_type}", stmt)
+
+    def _is_writable_type(self, t: Type) -> bool:
+        # WRITE supports printable BOOLEAN and enum values; READ input parsing for those is intentionally absent.
+        return isinstance(t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), EnumType, StringType, LStringType))
+
+    def _is_readable_type(self, t: Type) -> bool:
+        # READ is narrower than WRITE: enum input is deferred to 9.8 follow-on work, and BOOLEAN input is unsupported.
+        return isinstance(t, (type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), StringType, LStringType))
 
     def _check_concat_args(self, stmt: ProcCallStmt) -> None:
         """Type check CONCAT(VAR D: LSTRING; CONST S: STRING).
@@ -1183,6 +1284,120 @@ class PascalTypeChecker(TypeChecker):
 
         if not dest_sym.is_mutable:
             self.error(f"COPYSTR: second argument must be mutable (VAR parameter)", stmt)
+            return
+
+    def _check_insert_args(self, stmt: ProcCallStmt) -> None:
+        if len(stmt.args) != 3:
+            self.error(f"INSERT expects 3 arguments, got {len(stmt.args)}", stmt)
+            return
+        src_type = self.infer_expression_type(stmt.args[0])
+        dst_type = self.infer_expression_type(stmt.args[1])
+        pos_type = self.infer_expression_type(stmt.args[2])
+        if not isinstance(src_type, (StringType, LStringType)):
+            self.error(f"INSERT: first argument must be STRING or LSTRING, got {src_type}", stmt)
+            return
+        if not isinstance(dst_type, (StringType, LStringType)):
+            self.error(f"INSERT: second argument must be STRING or LSTRING, got {dst_type}", stmt)
+            return
+        if isinstance(stmt.args[1], (Identifier, Designator)):
+            sym = self.symbol_table.lookup(stmt.args[1].name) or self.symbol_table.lookup(stmt.args[1].name.upper())
+            if sym and not sym.is_mutable:
+                self.error("INSERT: second argument must be mutable (VAR parameter)", stmt)
+        if not pos_type or not pos_type.equivalent_to(INTEGER_TYPE):
+            self.error(f"INSERT: third argument must be INTEGER, got {pos_type}", stmt)
+            return
+
+    def _check_delete_args(self, stmt: ProcCallStmt) -> None:
+        if len(stmt.args) != 3:
+            self.error(f"DELETE expects 3 arguments, got {len(stmt.args)}", stmt)
+            return
+        dst_type = self.infer_expression_type(stmt.args[0])
+        pos_type = self.infer_expression_type(stmt.args[1])
+        count_type = self.infer_expression_type(stmt.args[2])
+        if not isinstance(dst_type, (StringType, LStringType)):
+            self.error(f"DELETE: first argument must be STRING or LSTRING, got {dst_type}", stmt)
+            return
+        if isinstance(stmt.args[0], (Identifier, Designator)):
+            sym = self.symbol_table.lookup(stmt.args[0].name) or self.symbol_table.lookup(stmt.args[0].name.upper())
+            if sym and not sym.is_mutable:
+                self.error("DELETE: first argument must be mutable (VAR parameter)", stmt)
+        if not pos_type or not pos_type.equivalent_to(INTEGER_TYPE):
+            self.error(f"DELETE: second argument must be INTEGER, got {pos_type}", stmt)
+            return
+        if not count_type or not count_type.equivalent_to(INTEGER_TYPE):
+            self.error(f"DELETE: third argument must be INTEGER, got {count_type}", stmt)
+            return
+
+    def _check_format_arg(self, arg, node, opname: str) -> None:
+        if isinstance(arg, WriteArg):
+            self.infer_expression_type(arg.expr)
+            if arg.width is not None:
+                self.infer_expression_type(arg.width)
+            if arg.precision is not None:
+                self.infer_expression_type(arg.precision)
+            return
+        self.infer_expression_type(arg)
+
+    def _check_decode_dest(self, arg, node) -> None:
+        if isinstance(arg, WriteArg):
+            self._check_format_arg(arg, node, 'DECODE')
+            return
+        if not isinstance(arg, (Identifier, Designator)):
+            self.error('DECODE: second argument must be a designator', node)
+            return
+        sym = self.symbol_table.lookup(arg.name) or self.symbol_table.lookup(arg.name.upper())
+        if not sym or not sym.is_mutable:
+            self.error('DECODE: second argument must be mutable', node)
+
+    def _check_positn_args(self, stmt: ProcCallStmt) -> None:
+        if len(stmt.args) != 2:
+            self.error(f"POSITN expects 2 arguments, got {len(stmt.args)}", stmt)
+            return
+        if not isinstance(self.infer_expression_type(stmt.args[0]), (StringType, LStringType)):
+            self.error("POSITN: first argument must be STRING or LSTRING", stmt)
+            return
+        if not isinstance(self.infer_expression_type(stmt.args[1]), (StringType, LStringType)):
+            self.error("POSITN: second argument must be STRING or LSTRING", stmt)
+            return
+
+    def _check_new_args(self, stmt: ProcCallStmt) -> None:
+        """Type check NEW(VAR P: ^T)."""
+        if len(stmt.args) != 1:
+            self.error(f"NEW expects 1 argument, got {len(stmt.args)}", stmt)
+            return
+        arg = stmt.args[0]
+        if not isinstance(arg, (Identifier, Designator)):
+            self.error("NEW: argument must be a designator (variable)", stmt)
+            return
+        sym = self.symbol_table.lookup(arg.name) or self.symbol_table.lookup(arg.name.upper())
+        if not sym:
+            self.error(f"NEW: undefined variable '{arg.name}'", stmt)
+            return
+        if not isinstance(sym.type, PointerType):
+            self.error(f"NEW: argument must be a pointer type, got {sym.type}", stmt)
+            return
+        if not sym.is_mutable:
+            self.error("NEW: argument must be mutable (VAR parameter)", stmt)
+            return
+
+    def _check_dispose_args(self, stmt: ProcCallStmt) -> None:
+        """Type check DISPOSE(VAR P: ^T)."""
+        if len(stmt.args) != 1:
+            self.error(f"DISPOSE expects 1 argument, got {len(stmt.args)}", stmt)
+            return
+        arg = stmt.args[0]
+        if not isinstance(arg, (Identifier, Designator)):
+            self.error("DISPOSE: argument must be a designator (variable)", stmt)
+            return
+        sym = self.symbol_table.lookup(arg.name) or self.symbol_table.lookup(arg.name.upper())
+        if not sym:
+            self.error(f"DISPOSE: undefined variable '{arg.name}'", stmt)
+            return
+        if not isinstance(sym.type, PointerType):
+            self.error(f"DISPOSE: argument must be a pointer type, got {sym.type}", stmt)
+            return
+        if not sym.is_mutable:
+            self.error("DISPOSE: argument must be mutable (VAR parameter)", stmt)
             return
 
     def _decode_pascal_string(self, value: str) -> str:
@@ -1433,6 +1648,56 @@ class PascalTypeChecker(TypeChecker):
                 if arg_type:
                     self.error(f"Argument 1 type mismatch: expected INTEGER or WORD, got {arg_type}", expr)
                 return None
+            if lookup_name == 'POSITN':
+                if len(expr.args) != 2:
+                    self.error(f"POSITN expects 2 arguments, got {len(expr.args)}", expr)
+                    return None
+                if not isinstance(self.infer_expression_type(expr.args[0]), (StringType, LStringType)):
+                    self.error("POSITN: first argument must be STRING or LSTRING", expr)
+                    return None
+                if not isinstance(self.infer_expression_type(expr.args[1]), (StringType, LStringType)):
+                    self.error("POSITN: second argument must be STRING or LSTRING", expr)
+                    return None
+                return INTEGER_TYPE
+            if lookup_name == 'ENCODE':
+                if len(expr.args) != 2:
+                    self.error(f"ENCODE expects 2 arguments, got {len(expr.args)}", expr)
+                    return None
+                dest = expr.args[0].expr if isinstance(expr.args[0], WriteArg) else expr.args[0]
+                if not isinstance(self.infer_expression_type(dest), LStringType):
+                    self.error("ENCODE: first argument must be LSTRING", expr)
+                    return None
+                self._check_format_arg(expr.args[1], expr, 'ENCODE')
+                return BOOLEAN_TYPE
+            if lookup_name == 'DECODE':
+                if len(expr.args) != 2:
+                    self.error(f"DECODE expects 2 arguments, got {len(expr.args)}", expr)
+                    return None
+                src = expr.args[0].expr if isinstance(expr.args[0], WriteArg) else expr.args[0]
+                if not isinstance(self.infer_expression_type(src), (StringType, LStringType)):
+                    self.error("DECODE: first argument must be STRING or LSTRING", expr)
+                    return None
+                self._check_decode_dest(expr.args[1], expr)
+                return BOOLEAN_TYPE
+            if lookup_name in {'SCANEQ', 'SCANNE'}:
+                if len(expr.args) != 4:
+                    self.error(f"{lookup_name} expects 4 arguments, got {len(expr.args)}", expr)
+                    return None
+                l_type = self.infer_expression_type(expr.args[0])
+                if l_type not in (INTEGER_TYPE, WORD_TYPE):
+                    self.error(f"{lookup_name}: first argument must be INTEGER or WORD, got {l_type}", expr)
+                    return None
+                if self.infer_expression_type(expr.args[1]) != CHAR_TYPE:
+                    self.error(f"{lookup_name}: second argument must be CHAR", expr)
+                    return None
+                if not isinstance(self.infer_expression_type(expr.args[2]), (StringType, LStringType)):
+                    self.error(f"{lookup_name}: third argument must be STRING or LSTRING", expr)
+                    return None
+                i_type = self.infer_expression_type(expr.args[3])
+                if i_type not in (INTEGER_TYPE, WORD_TYPE):
+                    self.error(f"{lookup_name}: fourth argument must be INTEGER or WORD, got {i_type}", expr)
+                    return None
+                return INTEGER_TYPE
             if lookup_name == 'WRD':
                 if len(expr.args) != 1:
                     self.error(f"WRD expects 1 argument, got {len(expr.args)}", expr)
@@ -1568,11 +1833,14 @@ class PascalTypeChecker(TypeChecker):
                     current_type = field_type
 
                 elif selector.kind == 'DEREF':
-                    # Pointer dereference
-                    if not isinstance(current_type, PointerType):
-                        self.error(f"Cannot dereference non-pointer type {current_type}", designator)
+                    # Pointer dereference, or Pascal file buffer variable F^.
+                    if isinstance(current_type, FileType):
+                        current_type = current_type.element_type
+                    elif isinstance(current_type, PointerType):
+                        current_type = current_type.target_type
+                    else:
+                        self.error(f"Cannot dereference non-pointer/non-file type {current_type}", designator)
                         return None
-                    current_type = current_type.target_type
 
         return current_type
 
@@ -1653,6 +1921,9 @@ class PascalTypeChecker(TypeChecker):
         elif isinstance(type_expr, ASTSetType):
             base_type = self.resolve_type(type_expr.base)
             return SetType(base_type) if base_type else None
+        elif isinstance(type_expr, ASTFileType):
+            element_type = self.resolve_type(type_expr.element_type)
+            return FileType(element_type, structure=getattr(type_expr, 'structure', 'BINARY')) if element_type else None
         elif isinstance(type_expr, ASTSubrangeType):
             if type_expr.host:
                 host = self.resolve_type(NamedType(type_expr.host, None))

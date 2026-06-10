@@ -28,7 +28,13 @@ re-declared.
 import unittest
 
 from tests.support import requires_exe, requires_llvm
-from tests.test_codegen import build_and_run, compile_to_ir
+import os
+import subprocess
+import tempfile
+
+from tests.support import requires_exe, requires_llvm
+from tests.test_codegen import build_and_run, compile_to_ir, _build_pascal_with_runtime, RUNTIME_DIR
+from tests.support import parse_source, typecheck_source
 
 
 @requires_llvm
@@ -181,6 +187,14 @@ class TestWriteFieldWidthOrdering(unittest.TestCase):
 
 @requires_llvm
 class TestStringIntrinsicCapacityIR(unittest.TestCase):
+    def _compile_to_ir_force(self, src: str, force_rangeck):
+        from codegen_llvm import compile_to_llvm
+        ast = parse_source(src)
+        result = typecheck_source(src)
+        if not result.success:
+            raise RuntimeError(f"Type check failed: {result.errors}")
+        return compile_to_llvm(ast, force_rangeck=force_rangeck)
+
     """CONCAT/COPYLST/COPYSTR must emit a capacity range check (manual 11-20).
 
     These only need IR generation (no clang): the guard lowers to a call to
@@ -198,6 +212,41 @@ class TestStringIntrinsicCapacityIR(unittest.TestCase):
     def test_copystr_emits_range_check(self):
         src = "PROGRAM P; VAR d: STRING(5); BEGIN COPYSTR('abc', d) END."
         self.assertIn("abort", compile_to_ir(src))
+
+    def test_rangeck_off_removes_string_guards(self):
+        src = "PROGRAM P; VAR d: LSTRING(3); BEGIN {$RANGECK-} d := 'ab'; CONCAT(d, 'cd') END."
+        ir = self._compile_to_ir_force(src, force_rangeck=False)
+        self.assertNotIn("str_assign_overflow", ir)
+        self.assertNotIn("concat_overflow", ir)
+
+    def test_rangeck_force_on_overrides_source_off(self):
+        src = "PROGRAM P; VAR d: LSTRING(3); BEGIN {$RANGECK-} d := 'ab'; CONCAT(d, 'cd') END."
+        ir = self._compile_to_ir_force(src, force_rangeck=True)
+        self.assertIn("str_assign_overflow", ir)
+        self.assertIn("concat_overflow", ir)
+
+
+@requires_llvm
+class TestReadDispatchCodegen(unittest.TestCase):
+    def test_read_non_string_fallthrough_raises_codegen_error(self):
+        """Pin the _builtin_read else branch itself, independent of the checker."""
+        from codegen_llvm import compile_to_llvm
+        from codegen.base import CodegenError
+        src = "PROGRAM P; TYPE C = (Red, Green); VAR c: C; BEGIN READLN(c) END."
+        with self.assertRaisesRegex(CodegenError, "READ/READLN cannot read"):
+            compile_to_llvm(parse_source(src))
+
+    def test_lstring_read_uses_declared_capacity(self):
+        src = "PROGRAM P; VAR s: LSTRING(5); BEGIN READLN(s) END."
+        ir = compile_to_ir(src)
+        self.assertIn('call i32 @"pas_read_lstring"(i8* %', ir)
+        self.assertIn('i32 5)', ir)
+
+    def test_writeln_leading_text_selector_is_not_data(self):
+        """A leading TEXT selector chooses the stream; it is not emitted as printf data."""
+        ir = compile_to_ir("PROGRAM P; BEGIN WRITELN(OUTPUT, 'ok') END.")
+        self.assertIn("ok", ir)
+        self.assertNotIn("@output", ir)
 
 
 @requires_exe
@@ -241,6 +290,121 @@ class TestStringIntrinsicCapacityRuntime(unittest.TestCase):
         src = "PROGRAM P; VAR d: STRING(2); BEGIN COPYSTR('abc', d) END."
         rc, _ = build_and_run(src)
         self.assertNotEqual(rc, 0)
+
+
+@requires_llvm
+class TestReadCodegenIR(unittest.TestCase):
+    def test_readln_emits_skip_call(self):
+        src = "PROGRAM P; VAR i: INTEGER; BEGIN READLN(i); READLN() END."
+        ir = compile_to_ir(src)
+        # Must assert an actual *call*: base.py predeclares the reader
+        # externs, so a bare substring match is vacuous.
+        self.assertIn('call i32 @"pas_read_int"', ir)
+        self.assertIn('call void @"pas_readln_skip"', ir)
+
+    def test_read_does_not_emit_skip_call(self):
+        src = "PROGRAM P; VAR i: INTEGER; BEGIN READ(i) END."
+        ir = compile_to_ir(src)
+        self.assertIn('call i32 @"pas_read_int"', ir)
+        self.assertNotIn('call void @"pas_readln_skip"', ir)
+
+    def test_read_int_does_not_call_lstring_reader(self):
+        # Regression: the dispatch previously matched str() of the AST
+        # NamedType, so every scalar fell through to pas_read_lstring and
+        # corrupted the integer's storage with a length-prefixed string.
+        src = "PROGRAM P; VAR i: INTEGER; BEGIN READLN(i) END."
+        ir = compile_to_ir(src)
+        self.assertNotIn('call i32 @"pas_read_lstring"', ir)
+
+
+@requires_exe
+class TestReadPascalEndToEnd(unittest.TestCase):
+    """Piped-stdin run tests through a compiled Pascal executable. These are
+    the only tests that can see a READ dispatch bug: IR tests show which
+    helper is called, C driver tests verify readq.c in isolation, but only a
+    full Pascal run proves the value lands intact in the variable."""
+
+    def test_readln_integer_roundtrip(self):
+        src = ("PROGRAM P; VAR i: INTEGER; "
+               "BEGIN READLN(i); WRITELN(i*2) END.")
+        rc, out = _build_pascal_with_runtime(src, ["readq.c"], stdin="21\n")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), "42")
+
+    def test_readln_two_integers_sum(self):
+        src = ("PROGRAM P; VAR i, j: INTEGER; "
+               "BEGIN READLN(i); READLN(j); WRITELN(i+j) END.")
+        rc, out = _build_pascal_with_runtime(src, ["readq.c"], stdin="40\n2\n")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), "42")
+
+
+def _compile_and_run_c_with_stdin(driver_src: str, runtime_files: list, stdin: str) -> tuple:
+    tmpdir = tempfile.mkdtemp()
+    try:
+        driver_path = os.path.join(tmpdir, "driver.c")
+        with open(driver_path, "w") as f:
+            f.write(driver_src)
+        exe_path = os.path.join(tmpdir, "prog")
+        sources = [driver_path] + [os.path.join(RUNTIME_DIR, rf) for rf in runtime_files]
+        result = subprocess.run(["clang", *sources, "-o", exe_path], capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"clang failed: {result.stderr}")
+        run_result = subprocess.run([exe_path], input=stdin, capture_output=True, text=True)
+        return run_result.returncode, run_result.stdout, run_result.stderr
+    finally:
+        import shutil
+        shutil.rmtree(tmpdir)
+
+
+@requires_exe
+class TestReadRuntimeSemantics(unittest.TestCase):
+    def test_pas_readln_skip_discards_trailing_junk(self):
+        driver = ("#include <stdio.h>\n"
+                  "#include <stdint.h>\n"
+                  "extern int pas_read_int(int32_t *out);\n"
+                  "extern void pas_readln_skip(void);\n"
+                  "int main(void) {\n"
+                  "    int32_t a = 0, b = 0;\n"
+                  "    pas_read_int(&a);\n"
+                  "    pas_readln_skip();\n"
+                  "    pas_read_int(&b);\n"
+                  "    printf(\"%d %d\\n\", (int)a, (int)b);\n"
+                  "    return 0;\n"
+                  "}\n")
+        rc, out, _ = _compile_and_run_c_with_stdin(driver, ["readq.c"], "12 junk\n34\n")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "12 34\n")
+
+    def test_pas_read_char_preserves_blank(self):
+        driver = ("#include <stdio.h>\n"
+                  "#include <stdint.h>\n"
+                  "extern int pas_read_char(uint8_t *out);\n"
+                  "int main(void) {\n"
+                  "    uint8_t c = 0;\n"
+                  "    pas_read_char(&c);\n"
+                  "    printf(\"%u\\n\", (unsigned)c);\n"
+                  "    return 0;\n"
+                  "}\n")
+        rc, out, _ = _compile_and_run_c_with_stdin(driver, ["readq.c"], " \n")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "32\n")
+
+    def test_pas_read_lstring_uses_declared_capacity(self):
+        driver = ("#include <stdio.h>\n"
+                  "#include <stdint.h>\n"
+                  "extern int pas_read_lstring(uint8_t *buf, int cap);\n"
+                  "extern void pas_readln_skip(void);\n"
+                  "int main(void) {\n"
+                  "    uint8_t buf[4] = {0};\n"
+                  "    pas_read_lstring(buf, 3);\n"
+                  "    pas_readln_skip();\n"
+                  "    printf(\"%u %c%c%c\\n\", (unsigned)buf[0], buf[1], buf[2], buf[3]);\n"
+                  "    return 0;\n"
+                  "}\n")
+        rc, out, _ = _compile_and_run_c_with_stdin(driver, ["readq.c"], "abcdef\n")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "3 abc\n")
 
 
 if __name__ == "__main__":

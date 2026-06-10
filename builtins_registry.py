@@ -9,9 +9,9 @@ from symbol_table import Symbol
 from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, FileType, FunctionType, LStringType, PointerType, ProcedureType, StringType)
 
 # Lists of all built-in function and procedure names
-BUILTIN_FUNCTIONS = {'ABS', 'SQR', 'SQRT', 'SIN', 'COS', 'LN', 'EXP', 'ARCTAN', 'CHR', 'ORD', 'ODD', 'SUCC', 'PRED', 'HIBYTE', 'LOBYTE', 'WRD', 'BYWORD', 'TRUNC', 'ROUND', 'FLOAT'}
+BUILTIN_FUNCTIONS = {'ABS', 'SQR', 'SQRT', 'SIN', 'COS', 'LN', 'EXP', 'ARCTAN', 'CHR', 'ORD', 'ODD', 'SUCC', 'PRED', 'HIBYTE', 'LOBYTE', 'WRD', 'BYWORD', 'TRUNC', 'ROUND', 'FLOAT', 'SCANEQ', 'SCANNE', 'ENCODE', 'DECODE'}
 
-BUILTIN_PROCEDURES = {'WRITE', 'WRITELN', 'READLN', 'CONCAT', 'COPYLST', 'COPYSTR', 'PACK', 'UNPACK', 'FILLC', 'FILLSC', 'MOVEL', 'MOVER', 'MOVESL', 'MOVESR', 'ABORT'}
+BUILTIN_PROCEDURES = {'WRITE', 'WRITELN', 'READ', 'READLN', 'CONCAT', 'COPYLST', 'COPYSTR', 'INSERT', 'DELETE', 'POSITN', 'PACK', 'UNPACK', 'NEW', 'DISPOSE', 'FILLC', 'FILLSC', 'MOVEL', 'MOVER', 'MOVESL', 'MOVESR', 'ABORT'}
 
 
 def register_builtins(symbol_table) -> None:
@@ -23,12 +23,22 @@ def register_builtins(symbol_table) -> None:
     # Procedures
     define_builtin('WRITELN', ProcedureType('WRITELN', []), 'procedure')
     define_builtin('WRITE', ProcedureType('WRITE', []), 'procedure')
+    define_builtin('READ', ProcedureType('READ', []), 'procedure')
     define_builtin('READLN', ProcedureType('READLN', []), 'procedure')
     define_builtin('CONCAT', ProcedureType('CONCAT', []), 'procedure')
     define_builtin('COPYLST', ProcedureType('COPYLST', []), 'procedure')
     define_builtin('COPYSTR', ProcedureType('COPYSTR', []), 'procedure')
+    define_builtin('INSERT', ProcedureType('INSERT', []), 'procedure')
+    define_builtin('DELETE', ProcedureType('DELETE', []), 'procedure')
+    define_builtin('POSITN', FunctionType('POSITN', [], INTEGER_TYPE), 'function')
+    define_builtin('SCANEQ', FunctionType('SCANEQ', [], INTEGER_TYPE), 'function')
+    define_builtin('SCANNE', FunctionType('SCANNE', [], INTEGER_TYPE), 'function')
+    define_builtin('ENCODE', FunctionType('ENCODE', [], BOOLEAN_TYPE), 'function')
+    define_builtin('DECODE', FunctionType('DECODE', [], BOOLEAN_TYPE), 'function')
     define_builtin('PACK', ProcedureType('PACK', []), 'procedure')
     define_builtin('UNPACK', ProcedureType('UNPACK', []), 'procedure')
+    define_builtin('NEW', ProcedureType('NEW', []), 'procedure')
+    define_builtin('DISPOSE', ProcedureType('DISPOSE', []), 'procedure')
     fill_proc = ProcedureType('FILLC', [('loc', PointerType(CHAR_TYPE)), ('len', WORD_TYPE), ('val', CHAR_TYPE)])
     define_builtin('FILLC', fill_proc, 'procedure')
     # FILLSC/MOVESL/MOVESR are the SEGMENTED-address siblings of FILLC/MOVEL/
@@ -49,7 +59,7 @@ def register_builtins(symbol_table) -> None:
     define_builtin('NULL', LStringType(0), 'const')
 
     # Types
-    text_type = FileType(CHAR_TYPE)
+    text_type = FileType(CHAR_TYPE, structure='ASCII')
     define_builtin('TEXT', text_type, 'type')
     define_builtin('STRING', StringType(256), 'type')
 

@@ -192,6 +192,10 @@ Cheapest coverage of the manual's predeclared list. Pure registration work.
 
 - [x] **3.4 — Standard type / file names `TEXT`, `INPUT`, `OUTPUT`, `STRING`.** `[OBSERVED]` **S**
   Registered the names in the builtin symbol table so the parser/type checker can resolve them as predeclared identifiers. `TEXT` is modeled as a `TEXT OF CHAR` file type placeholder; `INPUT`/`OUTPUT` alias that placeholder; `STRING` is predeclared as a type name alongside the existing `STRING(n)` syntax. Proven by `python -m unittest tests.test_typecheck tests.test_codegen`.
+  - NOTE: the acceptance test (`tests/test_typecheck.py:76`) also asserts
+    `WRITELN(INPUT); WRITELN(OUTPUT); WRITELN(f)` typechecks, which is too
+    permissive — a whole file is not a `WRITE`/`WRITELN` data argument. Tracked
+    as a known gap under 8.3a.
 
 ---
 
@@ -303,7 +307,8 @@ C runtime, sibling to `runtime/fillc.c`. Loops/memory/OS, so not inline.
   Proven by `python -m unittest`, including `TestAbortRuntime` (the handler
   prints the message/code/status and aborts) and an IR test asserting the
   `pabort` call carries all four operands.
-- [ ] **5.6 — `NEW` / `DISPOSE`.** `[READ]` **M** Heap alloc/free (`malloc`/`free`). Needs real pointer-type support to be meaningful.
+- [x] **5.6 — `NEW` / `DISPOSE`.** `[READ]` **M** Heap alloc/free (`malloc`/`free`). Needs real pointer-type support to be meaningful.
+  - Done: added NEW/DISPOSE as predeclared procedures, type-checked them against mutable pointer variables, and lowered them to `malloc`/`free` with a null reset on DISPOSE. Proven by `python -m unittest tests.test_typecheck tests.test_codegen`.
 
 ---
 
@@ -346,9 +351,12 @@ first or these will be built on sand.
   - CORRECTION (see 7.7): the "dynamic null-termination" noted above is removed
     (non-spec), and the manual's capacity error (11-20) is now enforced on all
     three procedures, which 7.3 omitted.
-- [ ] **7.4 — `INSERT`, `DELETE`, `POSITN`.** `[READ]` **M** Edit/search.
-- [ ] **7.5 — `SCANEQ`, `SCANNE`.** `[READ]` **M** Scan-while-equal / not-equal.
-- [ ] **7.6 — `ENCODE` / `DECODE`.** `[READ]` **L** Number↔string formatting (libc `sprintf`/`sscanf` under the hood).
+- [x] **7.4 — `INSERT`, `DELETE`, `POSITN`.** `[READ]` **M** Edit/search.
+  - Done: added builtin registration and type checking for all three, lowered INSERT/DELETE with `memmove`, and implemented POSITN via a runtime search helper returning the 1-based match offset or 0 when not found. Proven by `python -m unittest tests.test_typecheck tests.test_codegen`.
+- [x] **7.5 — `SCANEQ`, `SCANNE`.** `[READ]` **M** Scan-while-equal / not-equal.
+  - Done: added builtin registration, type checking, runtime lowering, and tests for the scan intrinsics. Proven by `python -m unittest tests.test_typecheck tests.test_codegen`.
+- [x] **7.6 — `ENCODE` / `DECODE`.** `[READ]` **L** Number↔string formatting (libc `sprintf`/`sscanf` under the hood).
+  - Done: registered the builtins, added parser support for `X:M:N`-style calls, typechecked the destination/source and formattable argument, lowered to runtime helpers, and added tests.
 - [x] **7.7 — String-correctness hardening (post-7.2/7.3 follow-ups).** `[OBSERVED]` **M**
   Three defects in the shipped LSTRING/STRING codegen, found reviewing 7.2/7.3
   against the manual, are fixed:
@@ -386,12 +394,103 @@ first or these will be built on sand.
 The grammar doc already flags `FILE OF` runtime I/O as unverified/blocked. This is
 the biggest single chunk; expect it to need its own design pass.
 
-- [ ] **8.1 — File-type runtime + buffer-variable model.** `[READ]` **XL**
+- [x] **8.1 — File-type runtime + buffer-variable model.** `[READ]` **XL**
   Backs everything below; tie to `TEXT`/`INPUT`/`OUTPUT` (3.4).
+  - Done: added `TEXT` vs binary `FILE OF T` metadata and an inline
+    file-control block (element size, structure flag, touched flag, and a
+    pointer to the current-component buffer) for file variables and predeclared
+    `INPUT`/`OUTPUT`. The FCB and its buffer are allocated inline at the
+    variable's storage site (no per-file `malloc`, so nothing leaks); the
+    `structure` flag is stored in the FCB rather than discarded; `F^` reads/
+    writes the FCB's own buffer (distinct from the handle) through
+    `pas_file_buffer`; and the `pas_file_touch_buffer` hook records buffer
+    access (sets the touched flag) instead of being an empty body. Whole-file
+    assignment is rejected. Proven by `python -m unittest tests.test_parser
+    tests.test_typecheck tests.test_codegen`.
+  - NOTE / does not cover: there is no device I/O yet. `INPUT`/`OUTPUT` are not
+    attached to stdin/stdout, and the FCB has no fd/position/mode — those, plus
+    the lazy fill/flush that the touch hook is a seam for, are 8.2 (`RESET`/
+    `REWRITE`/`GET`/`PUT`). 8.1 is the in-memory buffer-variable model only.
 - [ ] **8.2 — `RESET`, `REWRITE`, `GET`, `PUT`.** `[READ]` **L** Core file ops.
-- [ ] **8.3 — `READ`, and `READLN` beyond integer; `WRITE`/`WRITELN` for `REAL`.** `[OBSERVED]` **M**
+- [x] **8.3 — `READ`, and `READLN` beyond integer; `WRITE`/`WRITELN` for `REAL`.** `[OBSERVED]` **M**
   `READLN` currently reads integers only; `WRITE`/`WRITELN` don't handle `REAL`.
   Extend the existing printf/scanf hybrid path.
+  - REOPENED: the previous "Done" note claimed dispatch resolved semantic
+    types, but the dispatch matched `str()` of the AST `NamedType` (a
+    dataclass repr), so every scalar fell through to `pas_read_lstring` and
+    corrupted the variable's storage. The cited tests only matched the
+    predeclared externs, not calls — the claim was `[INFERRED]` at best.
+  - Done so far: `_builtin_read` now dispatches on the resolved type's
+    `.name` (never `str()` of AST nodes); IR tests assert `call`-level
+    patterns; piped-stdin Pascal run tests (`READLN(i); WRITELN(i*2)` with
+    input `21` → `42`, and two-READLN sum) pass end to end. `READLN` emits
+    `pas_readln_skip`; BOOLEAN reads are rejected at typecheck.
+    `[OBSERVED]` via `python -m unittest tests.test_codegen_strings_bounds -q`.
+  - Still open before re-closing: REAL/CHAR/WORD piped-stdin run coverage,
+    and the porous readable/writable gate (`infer_expression_type` returning
+    `None` lets unwritable types through the validator).
+  - NOTE / does not cover: file-directed I/O, the optional leading file
+    argument, or the remaining runtime-reader semantics for bounded string
+    input. Those remain for 8.2/8.3a/8.4.
+  - CLOSED: `_builtin_read` now has a strict non-scalar branch: it uses
+    `get_string_type_info` for the declared LSTRING capacity and raises
+    `CodegenError` for unknown, non-string, or STRING(n) read targets instead
+    of falling through to `pas_read_lstring`; `READ` readable types are now
+    decoupled from `WRITE` writable types, so enum and BOOLEAN reads are
+    rejected while enum/BOOLEAN writes remain supported (enum input remains a
+    9.8 follow-on); READ arguments with unresolvable types now error; and
+    `tests/test_read_end_to_end.py` was added. `[OBSERVED]`
+  - Evidence: strict codegen fallthrough and LSTRING capacity are covered by
+    `tests.test_codegen_strings_bounds.TestReadDispatchCodegen.test_read_non_string_fallthrough_raises_codegen_error`
+    and `test_lstring_read_uses_declared_capacity`; enum/BOOLEAN READ rejection
+    and enum WRITE acceptance are covered by
+    `tests.test_typecheck.TestReadWriteTypecheck.test_read_enum_rejected`,
+    `test_read_boolean_rejected`, and `test_write_enum_still_allowed`; the
+    multi-type runtime READ/READLN path is covered by
+    `tests.test_read_end_to_end.TestReadEndToEnd.*`. Full suite:
+    `python3 -m unittest discover -s tests` ran 335 tests OK. `[OBSERVED]`
+  - Evidence: IBM Pascal manual text states default REAL field width M is 14
+    and shows `WRITE (123.456)` as `' 1.2345600E+02'`; current no-width REAL
+    output uses `%14.7E`. Source text: `IBM_Pascal_Compiler_Aug81_djvu.txt`,
+    manual page 12-24. `[READ]`
+  - Does NOT cover: file-directed I/O or the leading file argument (8.2/8.3a),
+    `EOF`/`EOLN` (8.4), enum input parsing (9.8 follow-on), STRING(n) input
+    blank-pad semantics (currently rejected loudly), the WRITE-side `None` gate,
+    or any broader REAL formatting beyond the documented default width/example.
+    `[OBSERVED]`
+- [x] **8.3a — `WRITE`/`WRITELN` accept a whole file variable as a data argument.** `[OBSERVED]` **S**
+  Still open. This item is the file-selector / whole-file-argument split, and
+  should stay separate from 8.3's ordinary data-argument type checking.
+  Typecheck trap: a bare file variable in the argument list passes today, e.g.
+  `WRITE(f)` and `WRITELN(f)` for `f: FILE OF INTEGER` (a *binary* file) both
+  typecheck as success, as does `WRITELN(t)`/`WRITELN(INPUT)`/`WRITELN(OUTPUT)`.
+  This is wrong: `WRITE`/`WRITELN` apply to `TEXT` only, and a file is never a
+  data value. Proper semantics: an *optional leading* `TEXT`-file argument
+  selects the target stream and the remaining arguments are values; a binary
+  `FILE OF T`, or a whole file in the data position, must be rejected (parallel
+  to the whole-file *assignment* rejection already done in 8.1). The checker
+  currently models neither the file-selector role nor the binary rejection.
+  - Audit: `tests/test_typecheck.py:76` asserts
+    `WRITELN(INPUT); WRITELN(OUTPUT); WRITELN(f)` *succeeds* (a 3.4 artifact),
+    baking in this behavior; that assertion must be revisited when this is
+    fixed.
+  - CLOSED: `WRITE` and `WRITELN` now share the special checker path. A leading
+    unformatted `TEXT` file argument is accepted as the stream selector; binary
+    `FILE OF T` selectors are rejected; whole files after the selector position
+    are rejected as data values. Codegen skips a leading `TEXT` selector rather
+    than emitting it as printf data; current output still goes through stdout,
+    so this closes the type/model split but not real file-directed output.
+    `[OBSERVED]`
+  - Evidence: `tests.test_typecheck.TestReadWriteTypecheck.test_writeln_accepts_leading_text_file_selector`,
+    `test_writeln_rejects_whole_text_file_as_data`,
+    `test_writeln_rejects_binary_file_selector`, and
+    `test_writeln_rejects_unformatted_file_alone`; codegen guard
+    `tests.test_codegen_strings_bounds.TestReadDispatchCodegen.test_writeln_leading_text_selector_is_not_data`.
+    Full suite `python3 -m unittest discover -s tests` ran 340 tests OK.
+    `[OBSERVED]`
+  - Does NOT cover: runtime file-directed writes, file open/position/mode state
+    (`RESET`/`REWRITE`/`GET`/`PUT`, 8.2), or stream predicates (`EOF`/`EOLN`,
+    8.4). `[OBSERVED]`
 - [ ] **8.4 — `EOF`, `EOL`, `EOLN`.** `[READ]` **M** Stream predicates.
 - [ ] **8.5 — `ASSIGN`, `CLOSE`, `DISCARD`, `READFN`, `READSET`.** `[READ]` **L** Extended I/O verbs.
 - [ ] **8.6 — `FILEMODES`, `SEQUENTIAL`, `TERMINAL`, `FCBFQQ`.** `[INFERRED]` **L**

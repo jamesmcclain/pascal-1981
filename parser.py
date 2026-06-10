@@ -383,8 +383,12 @@ class Parser:
         self.expect('END')
         return CompoundStmt(stmts)
 
+    def current_flags(self) -> dict[str, bool]:
+        return dict(getattr(self.current(), 'flags', {}))
+
     def parse_statement(self) -> Statement:
         kind = self.current().kind
+        flags = self.current_flags()
         if kind == 'BEGIN':
             return self.parse_compound_statement()
         if kind == 'IF':
@@ -423,6 +427,7 @@ class Parser:
         self.error('expected statement')
 
     def parse_assignment_or_proc_call(self) -> Statement:
+        flags = self.current_flags()
         name = self.expect('IDENTIFIER').lexeme
         selectors: List[Selector] = []
         while self.current().kind in {'LBRACKET', 'DOT', 'POINTER'}:
@@ -432,7 +437,7 @@ class Parser:
             self.pos += 1
             expr = self.parse_expression()
             target = Designator(name, selectors)
-            return AssignStmt(target, expr)
+            return AssignStmt(target, expr, rangeck=flags.get('RANGECK', True))
 
         if selectors:
             self.error('designator statement must be an assignment')
@@ -447,7 +452,7 @@ class Parser:
                     args = self.parse_actual_parameter_list()
             self.expect('RPAREN')
         # Bare procedure call is allowed.
-        return ProcCallStmt(name, args)
+        return ProcCallStmt(name, args, rangeck=flags.get('RANGECK', True))
 
     def parse_actual_parameter_list(self) -> List[Expression]:
         exprs: List[Expression] = []
@@ -537,7 +542,7 @@ class Parser:
         if self.match('OTHERWISE'):
             otherwise = self.parse_statement()
         self.expect('END')
-        return CaseStmt(expr, elements, otherwise)
+        return CaseStmt(expr, elements, otherwise, rangeck=self.current_flags().get('RANGECK', True))
 
     def parse_case_element(self) -> CaseElement:
         constants = self.parse_case_constant_list()
@@ -674,7 +679,10 @@ class Parser:
                 self.pos += 1
                 args: List[Expression] = []
                 if self.current().kind != 'RPAREN':
-                    args = self.parse_actual_parameter_list()
+                    if name.upper() in {'WRITE', 'WRITELN', 'ENCODE', 'DECODE'}:
+                        args = self.parse_write_actual_parameter_list()
+                    else:
+                        args = self.parse_actual_parameter_list()
                 self.expect('RPAREN')
                 return FuncCall(name, args)
             elif self.next_kind() == 'LBRACKET' and self.bracket_payload_contains_range(self.pos + 1):

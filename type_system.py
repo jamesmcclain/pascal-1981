@@ -217,15 +217,16 @@ class SetType(Type):
 
 @dataclass
 class FileType(Type):
-    """File type placeholder: FILE OF element_type."""
+    """File type: FILE OF element_type, with TEXT marked as ASCII."""
 
     element_type: Type
+    structure: str = 'BINARY'
 
     def __str__(self) -> str:
-        return f"FILE OF {self.element_type}"
+        return "TEXT" if self.structure == 'ASCII' and self.element_type.equivalent_to(CHAR_TYPE) else f"FILE OF {self.element_type}"
 
     def equivalent_to(self, other: Type) -> bool:
-        return isinstance(other, FileType) and self.element_type.equivalent_to(other.element_type)
+        return isinstance(other, FileType) and self.structure == other.structure and self.element_type.equivalent_to(other.element_type)
 
 
 @dataclass

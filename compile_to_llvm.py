@@ -28,6 +28,7 @@ def main() -> int:
         default=None,
         help='Output LLVM IR file to write to.')
     parser.add_argument('-v', '--verbose', action='store_true', help='Log each declaration/statement and print a full traceback on failure.')
+    parser.add_argument('--rangeck', choices=['on', 'off', 'source'], default='source', help='Force RANGECK checks on/off, or use source metacommands (default).')
     args = parser.parse_args()
 
     source_file = args.source_file
@@ -63,7 +64,8 @@ def main() -> int:
 
         # Codegen
         print(f'Generating LLVM IR...', file=sys.stderr)
-        ir = compile_to_llvm(ast, verbose=verbose, source_file=source_file)
+        force_rangeck = None if args.rangeck == 'source' else (args.rangeck == 'on')
+        ir = compile_to_llvm(ast, verbose=verbose, source_file=source_file, force_rangeck=force_rangeck)
 
         # Output
         if output_file:
