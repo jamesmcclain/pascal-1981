@@ -274,14 +274,46 @@ class TestReadCodegenIR(unittest.TestCase):
     def test_readln_emits_skip_call(self):
         src = "PROGRAM P; VAR i: INTEGER; BEGIN READLN(i); READLN() END."
         ir = compile_to_ir(src)
-        self.assertIn("pas_read_int", ir)
-        self.assertIn("pas_readln_skip", ir)
+        # Must assert an actual *call*: base.py predeclares the reader
+        # externs, so a bare substring match is vacuous.
+        self.assertIn('call i32 @"pas_read_int"', ir)
+        self.assertIn('call void @"pas_readln_skip"', ir)
 
     def test_read_does_not_emit_skip_call(self):
         src = "PROGRAM P; VAR i: INTEGER; BEGIN READ(i) END."
         ir = compile_to_ir(src)
-        self.assertIn("pas_read_int", ir)
-        self.assertNotIn("call void @\"pas_readln_skip\"", ir)
+        self.assertIn('call i32 @"pas_read_int"', ir)
+        self.assertNotIn('call void @"pas_readln_skip"', ir)
+
+    def test_read_int_does_not_call_lstring_reader(self):
+        # Regression: the dispatch previously matched str() of the AST
+        # NamedType, so every scalar fell through to pas_read_lstring and
+        # corrupted the integer's storage with a length-prefixed string.
+        src = "PROGRAM P; VAR i: INTEGER; BEGIN READLN(i) END."
+        ir = compile_to_ir(src)
+        self.assertNotIn('call i32 @"pas_read_lstring"', ir)
+
+
+@requires_exe
+class TestReadPascalEndToEnd(unittest.TestCase):
+    """Piped-stdin run tests through a compiled Pascal executable. These are
+    the only tests that can see a READ dispatch bug: IR tests show which
+    helper is called, C driver tests verify readq.c in isolation, but only a
+    full Pascal run proves the value lands intact in the variable."""
+
+    def test_readln_integer_roundtrip(self):
+        src = ("PROGRAM P; VAR i: INTEGER; "
+               "BEGIN READLN(i); WRITELN(i*2) END.")
+        rc, out = _build_pascal_with_runtime(src, ["readq.c"], stdin="21\n")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), "42")
+
+    def test_readln_two_integers_sum(self):
+        src = ("PROGRAM P; VAR i, j: INTEGER; "
+               "BEGIN READLN(i); READLN(j); WRITELN(i+j) END.")
+        rc, out = _build_pascal_with_runtime(src, ["readq.c"], stdin="40\n2\n")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), "42")
 
 
 def _compile_and_run_c_with_stdin(driver_src: str, runtime_files: list, stdin: str) -> tuple:

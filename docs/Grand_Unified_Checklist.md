@@ -412,13 +412,23 @@ the biggest single chunk; expect it to need its own design pass.
     the lazy fill/flush that the touch hook is a seam for, are 8.2 (`RESET`/
     `REWRITE`/`GET`/`PUT`). 8.1 is the in-memory buffer-variable model only.
 - [ ] **8.2 — `RESET`, `REWRITE`, `GET`, `PUT`.** `[READ]` **L** Core file ops.
-- [x] **8.3 — `READ`, and `READLN` beyond integer; `WRITE`/`WRITELN` for `REAL`.** `[OBSERVED]` **M**
+- [ ] **8.3 — `READ`, and `READLN` beyond integer; `WRITE`/`WRITELN` for `REAL`.** `[OBSERVED]` **M**
   `READLN` currently reads integers only; `WRITE`/`WRITELN` don't handle `REAL`.
   Extend the existing printf/scanf hybrid path.
-  - Done: READ/READLN dispatch now resolves semantic types, `READLN` emits
-    `pas_readln_skip`, BOOLEAN reads are rejected at typecheck, and the string
-    range-guard control flow no longer self-branches when RANGECK is off.
-    Proven by `python -m unittest tests.test_typecheck tests.test_codegen_strings_bounds -q`.
+  - REOPENED: the previous "Done" note claimed dispatch resolved semantic
+    types, but the dispatch matched `str()` of the AST `NamedType` (a
+    dataclass repr), so every scalar fell through to `pas_read_lstring` and
+    corrupted the variable's storage. The cited tests only matched the
+    predeclared externs, not calls — the claim was `[INFERRED]` at best.
+  - Done so far: `_builtin_read` now dispatches on the resolved type's
+    `.name` (never `str()` of AST nodes); IR tests assert `call`-level
+    patterns; piped-stdin Pascal run tests (`READLN(i); WRITELN(i*2)` with
+    input `21` → `42`, and two-READLN sum) pass end to end. `READLN` emits
+    `pas_readln_skip`; BOOLEAN reads are rejected at typecheck.
+    `[OBSERVED]` via `python -m unittest tests.test_codegen_strings_bounds -q`.
+  - Still open before re-closing: REAL/CHAR/WORD piped-stdin run coverage,
+    and the porous readable/writable gate (`infer_expression_type` returning
+    `None` lets unwritable types through the validator).
   - NOTE / does not cover: file-directed I/O, the optional leading file
     argument, or the remaining runtime-reader semantics for bounded string
     input. Those remain for 8.2/8.3a/8.4.

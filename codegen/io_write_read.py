@@ -148,7 +148,16 @@ class IoWriteReadMixin:
             target = arg if isinstance(arg, Designator) else Designator(arg.name, [])
             ptr = self.resolve_designator_ptr(target)
             ty = self.resolve_type_alias(self._pas_type(arg)) if self._pas_type(arg) is not None else None
-            ty_name = str(ty).upper() if ty is not None else ''
+            # Dispatch on the *resolved* type. After resolve_type_alias a
+            # built-in scalar is still an AST NamedType whose str() is the
+            # dataclass repr ("NamedType(name='INTEGER')"), so we must use
+            # its .name attribute -- never str() of the node.
+            if isinstance(ty, NamedType):
+                ty_name = ty.name.upper()
+            elif ty is not None:
+                ty_name = getattr(ty, 'name', type(ty).__name__).upper()
+            else:
+                ty_name = ''
             if ty is INTEGER_TYPE or ty_name == 'INTEGER':
                 fn = self._read_helper('pas_read_int', ptr.type)
                 call_args = [ptr]
