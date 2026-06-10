@@ -8,9 +8,10 @@ Part of Plan 1 refactoring (mixin-based architecture).
 
 from __future__ import annotations
 
+from typing import Any, List, Optional, Tuple, Union
+
 import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
-from typing import Optional, List, Union, Any, Tuple
 
 from ast_nodes import *
 
@@ -21,7 +22,6 @@ class SetsMixin:
     def set_llvm_type(self) -> ir.Type:
         """LLVM representation for all Pascal sets: 256 bits as four i64 words."""
         return ir.ArrayType(ir.IntType(64), 4)
-
 
     def codegen_set_constructor(self, expr: SetConstructor) -> ir.Value:
         """Codegen a set constructor as a 256-bit bitvector.
@@ -66,7 +66,6 @@ class SetsMixin:
                 self._set_runtime_bit(slot, self.codegen_expr(element))
         return self.builder.load(slot)
 
-
     def codegen_set_binop(self, op: str, left: ir.Value, right: ir.Value) -> ir.Value:
         """Lower Pascal set operators over the fixed [4 x i64] representation."""
         if op == 'IN':
@@ -94,7 +93,6 @@ class SetsMixin:
             return self.builder.and_(subset, self.builder.not_(self.codegen_set_equal(left, right)))
         raise CodegenError(f'Unknown set operator: {op}')
 
-
     def codegen_set_member(self, ordinal: ir.Value, set_value: ir.Value) -> ir.Value:
         """Lower ordinal IN set to a bit test."""
         if isinstance(ordinal.type, ir.IntType) and ordinal.type.width < 32:
@@ -112,14 +110,12 @@ class SetsMixin:
         masked = self.builder.and_(word, mask)
         return self.builder.icmp_unsigned('!=', masked, ir.Constant(ir.IntType(64), 0))
 
-
     def codegen_set_equal(self, left: ir.Value, right: ir.Value) -> ir.Value:
         result = self.builder.icmp_unsigned('==', self.set_word(left, 0), self.set_word(right, 0))
         for i in range(1, 4):
             eq = self.builder.icmp_unsigned('==', self.set_word(left, i), self.set_word(right, i))
             result = self.builder.and_(result, eq)
         return result
-
 
     def codegen_set_subset(self, left: ir.Value, right: ir.Value) -> ir.Value:
         """Return left <= right for sets: every bit in left is also in right."""
@@ -131,7 +127,6 @@ class SetsMixin:
             result = included if result is None else self.builder.and_(result, included)
         return result if result is not None else ir.Constant(ir.IntType(1), 1)
 
-
     def _set_runtime_bit(self, slot: ir.Value, ordinal: ir.Value) -> None:
         """OR one runtime ordinal bit into the set stored at ``slot``."""
         ordinal = self._normalize_ordinal(ordinal)
@@ -142,7 +137,6 @@ class SetsMixin:
         bit_index64 = self.builder.zext(bit_index, ir.IntType(64))
         mask = self.builder.shl(ir.Constant(ir.IntType(64), 1), bit_index64)
         self.builder.store(self.builder.or_(word, mask), word_ptr)
-
 
     def _set_runtime_range(self, slot: ir.Value, low_expr: Expression, high_expr: Expression) -> None:
         """Set every bit in [low, high] at runtime via a counted loop."""
@@ -167,13 +161,11 @@ class SetsMixin:
 
         self.builder.position_at_end(end_block)
 
-
     def _set_constant_bit(self, words: List[int], value: int) -> None:
         """Set one ordinal bit in a four-word set constant."""
         if value < 0 or value > 255:
             raise CodegenError(f'Set element ordinal out of range 0..255: {value}')
         words[value // 64] |= 1 << (value % 64)
-
 
     def _normalize_ordinal(self, value: ir.Value) -> ir.Value:
         """Coerce a set element/ordinal value to i32."""
@@ -184,21 +176,16 @@ class SetsMixin:
                 return self.builder.trunc(value, ir.IntType(32))
         return value
 
-
     def is_set_value(self, value: ir.Value) -> bool:
         """Return True for the fixed Pascal set aggregate representation."""
         typ = value.type
         return isinstance(typ, ir.ArrayType) and typ.count == 4 and isinstance(typ.element, ir.IntType) and typ.element.width == 64
 
-
     def set_word(self, value: ir.Value, index: int) -> ir.Value:
         return self.builder.extract_value(value, index)
-
 
     def set_from_words(self, words: List[ir.Value]) -> ir.Value:
         result: ir.Value = ir.Constant(self.set_llvm_type(), None)
         for index, word in enumerate(words):
             result = self.builder.insert_value(result, word, index)
         return result
-
-

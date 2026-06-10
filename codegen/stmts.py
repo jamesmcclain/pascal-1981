@@ -8,11 +8,13 @@ Part of Plan 1 refactoring (mixin-based architecture).
 
 from __future__ import annotations
 
+from typing import Any, List, Optional, Tuple, Union
+
 import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
-from typing import Optional, List, Union, Any, Tuple
 
 from ast_nodes import *
+
 from .base import LoopContext
 
 
@@ -25,12 +27,10 @@ class StmtsMixin:
                 break
             self.codegen_stmt(stmt)
 
-
     def effective_rangeck(self, stmt: Statement) -> bool:
         if self.force_rangeck is not None:
             return self.force_rangeck
         return getattr(stmt, 'rangeck', True)
-
 
     def codegen_stmt(self, stmt: Statement) -> None:
         """Codegen a statement."""
@@ -69,7 +69,6 @@ class StmtsMixin:
             pass
         else:
             raise CodegenError(f'Unknown statement: {type(stmt).__name__}')
-
 
     def codegen_assign_stmt(self, stmt: AssignStmt) -> None:
         """Codegen for assignment statement."""
@@ -162,7 +161,6 @@ class StmtsMixin:
         else:
             self.builder.store(value, ptr)
 
-
     def codegen_proc_call_stmt(self, stmt: ProcCallStmt) -> None:
         """Codegen for procedure call statement."""
         lookup_name = stmt.name.upper()
@@ -224,7 +222,6 @@ class StmtsMixin:
                 args.append(v)
             self.builder.call(fn, args)
 
-
     def codegen_if_stmt(self, stmt: IfStmt) -> None:
         """Codegen for IF statement."""
         cond = self.codegen_expr(stmt.cond)
@@ -255,7 +252,6 @@ class StmtsMixin:
                 self.builder.branch(end_block)
 
         self.builder.position_at_end(end_block)
-
 
     def codegen_for_stmt(self, stmt: ForStmt) -> None:
         """Codegen for FOR loop."""
@@ -312,7 +308,6 @@ class StmtsMixin:
         self.loop_stack.pop()
         self.builder.position_at_end(end_block)
 
-
     def codegen_while_stmt(self, stmt: WhileStmt) -> None:
         """Codegen for WHILE loop."""
         loop_block = self.current_function.append_basic_block(name='while_loop')
@@ -332,7 +327,6 @@ class StmtsMixin:
         self.loop_stack.pop()
         self.builder.position_at_end(end_block)
 
-
     def codegen_repeat_stmt(self, stmt: RepeatStmt) -> None:
         """Codegen for REPEAT..UNTIL loop."""
         loop_block = self.current_function.append_basic_block(name='repeat_loop')
@@ -347,7 +341,6 @@ class StmtsMixin:
             self.builder.cbranch(self.to_bool(cond), end_block, loop_block)
         self.loop_stack.pop()
         self.builder.position_at_end(end_block)
-
 
     def codegen_case_stmt(self, stmt: CaseStmt) -> None:
         """Codegen for CASE statement."""
@@ -387,21 +380,17 @@ class StmtsMixin:
         self.builder.branch(end_block)
         self.builder.position_at_end(end_block)
 
-
     def codegen_return_stmt(self, stmt: ReturnStmt) -> None:
         """Codegen for RETURN statement."""
         self.builder.ret(ir.Constant(ir.IntType(32), 0))
-
 
     def codegen_break_stmt(self, stmt: BreakStmt) -> None:
         ctx = self.resolve_loop_context(stmt.label)
         self.builder.branch(ctx.break_block)
 
-
     def codegen_cycle_stmt(self, stmt: CycleStmt) -> None:
         ctx = self.resolve_loop_context(stmt.label)
         self.builder.branch(ctx.cycle_block)
-
 
     def codegen_label_stmt(self, stmt: LabelStmt) -> None:
         inner = stmt.stmt
@@ -409,12 +398,10 @@ class StmtsMixin:
             setattr(inner, 'label', self.normalize_label(stmt.label))
         self.codegen_stmt(inner)
 
-
     def normalize_label(self, label: Optional[Union[int, str]]) -> Optional[Union[int, str]]:
         if isinstance(label, str):
             return label.lower()
         return label
-
 
     def resolve_loop_context(self, label: Optional[Union[int, str]]) -> LoopContext:
         if not self.loop_stack:
@@ -426,5 +413,3 @@ class StmtsMixin:
             if ctx.label == label:
                 return ctx
         raise CodegenError(f'Unknown loop label: {label}')
-
-

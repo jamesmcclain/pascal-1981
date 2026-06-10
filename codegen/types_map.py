@@ -10,8 +10,9 @@ Checklist: 4.1 (type system), 4.4 (RETYPE intrinsic)
 
 from __future__ import annotations
 
+from typing import Any, List, Optional, Union
+
 import llvmlite.ir as ir
-from typing import Optional, List, Union, Any
 
 from ast_nodes import *
 from type_system import LStringType as ResolvedLStringType
@@ -122,7 +123,6 @@ class TypesMapMixin:
         else:
             raise CodegenError(f'Type {type(type_expr).__name__} not yet supported')
 
-
     def param_llvm_type(self, param: Param) -> ir.Type:
         base = self.llvm_type(param.type_expr)
         if param.mode in {'VAR', 'VARS', 'CONST', 'CONSTS'}:
@@ -135,7 +135,6 @@ class TypesMapMixin:
     # ========================================================================
     # Main Entry Point
     # ========================================================================
-
 
     def get_type_size(self, t: Type) -> int:
         """Size in bytes of an AST type node (consults constants for bounds)."""
@@ -167,7 +166,6 @@ class TypesMapMixin:
         else:
             return 4  # fallback
 
-
     def zero_initializer(self, llvm_type: ir.Type) -> ir.Value:
         """Produce a valid zero initializer for any LLVM type.
 
@@ -179,7 +177,6 @@ class TypesMapMixin:
         if isinstance(llvm_type, ir.IntType):
             return ir.Constant(llvm_type, 0)
         return ir.Constant(llvm_type, None)
-
 
     def coerce_arg(self, value: ir.Value, target_type: ir.Type) -> ir.Value:
         """Coerce a call argument to the callee's declared parameter type.
@@ -226,7 +223,6 @@ class TypesMapMixin:
             return self.builder.fptosi(value, target_type)
         return value
 
-
     def to_bool(self, cond: ir.Value) -> ir.Value:
         """Reduce a condition value to an i1 for a branch.
 
@@ -242,7 +238,6 @@ class TypesMapMixin:
     # ========================================================================
     # Expressions
     # ========================================================================
-
 
     def get_string_type_info(self, t: Type) -> tuple[bool, int, bool]:
         """Returns (is_str, max_len, is_lstring) for any AST Type or Resolved Type."""
@@ -267,7 +262,6 @@ class TypesMapMixin:
                 return self.get_string_type_info(self.type_aliases[name_up])
 
         return False, 256, False
-
 
     def resolve_designator_ptr(self, designator: Designator) -> ir.Value:
         """Resolve a designator to its LLVM pointer (handles arrays/selectors)."""
@@ -323,7 +317,6 @@ class TypesMapMixin:
     # Type-size, argument coercion, and boolean helpers
     # ========================================================================
 
-
     def resolve_type_alias(self, type_expr):
         """Unwrap NamedType aliases (e.g. ``TYPE arr = ARRAY[..]``) to the
         underlying declared type. Built-in names and unknown names are returned
@@ -351,7 +344,6 @@ class TypesMapMixin:
             if val.type.width > 32:
                 return self.builder.trunc(val, ir.IntType(32))
         return val
-
 
     def retype_source_is_pointer_value(self, expr) -> Optional[bool]:
         """Classify the inner expression of a RETYPE for the pointer-vs-aggregate
@@ -390,5 +382,3 @@ class TypesMapMixin:
                 return None
             return isinstance(t, PointerType)
         return None
-
-

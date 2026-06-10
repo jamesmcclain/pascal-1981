@@ -8,9 +8,10 @@ Part of Plan 1 refactoring (mixin-based architecture).
 
 from __future__ import annotations
 
+from typing import Any, List, Optional, Tuple, Union
+
 import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
-from typing import Optional, List, Union, Any, Tuple
 
 from ast_nodes import *
 from type_system import LStringType as ResolvedLStringType
@@ -74,7 +75,6 @@ class StringsMixin:
 
         return chars_ptr, length
 
-
     def _dest_string_max_len(self, arg: Expression) -> int:
         """Resolve the declared capacity (max length) of a string destination."""
         t = None
@@ -84,7 +84,6 @@ class StringsMixin:
                 t = symbol.type_expr
         _is_str, max_len, _is_lstring = self.get_string_type_info(t)
         return max_len
-
 
     def _guard_string_capacity(self, need_len: ir.Value, max_len: int, label: str, enabled: bool = True):
         """Emit the manual's string range check (errors if upper(D) < need_len).
@@ -105,7 +104,6 @@ class StringsMixin:
         self.builder.unreachable()
         self.builder.position_at_end(ok_block)
         return end_block
-
 
     def builtin_concat(self, args: List[Expression], enabled: bool = True) -> None:
         """CONCAT(VAR D: LSTRING; CONST S: STRING).
@@ -149,7 +147,6 @@ class StringsMixin:
             self.builder.branch(end_block)
             self.builder.position_at_end(end_block)
 
-
     def builtin_copylst(self, args: List[Expression], enabled: bool = True) -> None:
         """COPYLST(CONST S: STRING; VAR D: LSTRING).
 
@@ -185,7 +182,6 @@ class StringsMixin:
         if end_block is not None:
             self.builder.branch(end_block)
             self.builder.position_at_end(end_block)
-
 
     def builtin_copystr(self, args: List[Expression], enabled: bool = True) -> None:
         """COPYSTR(CONST S: STRING; VAR D: STRING)"""
@@ -231,7 +227,6 @@ class StringsMixin:
             self.builder.branch(end_block)
             self.builder.position_at_end(end_block)
 
-
     def builtin_insert(self, args: List[Expression], enabled: bool = True) -> None:
         src_chars, src_len = self.get_string_chars_and_len(args[0])
         dst_arg = args[1]
@@ -257,7 +252,6 @@ class StringsMixin:
         self.builder.branch(end_block)
         self.builder.position_at_end(end_block)
 
-
     def builtin_delete(self, args: List[Expression]) -> None:
         dst_arg = args[0]
         if isinstance(dst_arg, Identifier):
@@ -277,7 +271,6 @@ class StringsMixin:
             len_ptr = self.builder.gep(dst_ptr, [zero, zero])
             self.builder.store(self.builder.trunc(new_len, ir.IntType(8)), len_ptr)
 
-
     def builtin_positn(self, args: List[Expression]) -> ir.Value:
         hay_chars, hay_len = self.get_string_chars_and_len(args[0])
         needle_chars, needle_len = self.get_string_chars_and_len(args[1])
@@ -285,7 +278,6 @@ class StringsMixin:
         if not fn:
             raise CodegenError('Undefined helper: positn')
         return self.builder.call(fn.llvm_value, [hay_chars, hay_len, needle_chars, needle_len])
-
 
     def builtin_scaneq_scanne(self, lookup_name: str, args: List[Expression]) -> ir.Value:
         L = self.codegen_expr(args[0])
@@ -302,7 +294,6 @@ class StringsMixin:
         # STRING has no length byte and the LSTRING char pointer already points
         # past its own prefix.
         return self.builder.call(fn.llvm_value, [L, P, S_chars, S_len, I, stop_flag])
-
 
     def builtin_encode(self, args: List[Expression]) -> ir.Value:
         dest = args[0].expr if isinstance(args[0], WriteArg) else args[0]
@@ -333,8 +324,13 @@ class StringsMixin:
         # encode_value(dest_chars, dest_capacity, dest_raw, value, width, precision, _)
         # dest_raw points at the aggregate base so the runtime can set the
         # LSTRING length-prefix byte after writing the characters.
-        return self.builder.call(fn.llvm_value, [dest_chars, ir.Constant(ir.IntType(32), dest_cap), self.builder.bitcast(dest_ptr, ir.IntType(8).as_pointer()), val, width, precision, ir.Constant(ir.IntType(32), 0)])
-
+        return self.builder.call(
+            fn.llvm_value,
+            [dest_chars,
+             ir.Constant(ir.IntType(32), dest_cap),
+             self.builder.bitcast(dest_ptr,
+                                  ir.IntType(8).as_pointer()), val, width, precision,
+             ir.Constant(ir.IntType(32), 0)])
 
     def builtin_decode(self, args: List[Expression]) -> ir.Value:
         src = args[0].expr if isinstance(args[0], WriteArg) else args[0]
@@ -362,6 +358,12 @@ class StringsMixin:
         if not fn:
             raise CodegenError('Undefined helper: decode_value')
         # decode_value(src_chars, src_len, dest_raw, dest_size, ...)
-        return self.builder.call(fn.llvm_value, [src_chars, src_len, self.builder.bitcast(dest_ptr, ir.IntType(8).as_pointer()), ir.Constant(ir.IntType(32), dest_size), ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0)])
-
-
+        return self.builder.call(fn.llvm_value, [
+            src_chars, src_len,
+            self.builder.bitcast(dest_ptr,
+                                 ir.IntType(8).as_pointer()),
+            ir.Constant(ir.IntType(32), dest_size),
+            ir.Constant(ir.IntType(32), 0),
+            ir.Constant(ir.IntType(32), 0),
+            ir.Constant(ir.IntType(32), 0)
+        ])

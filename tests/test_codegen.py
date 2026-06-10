@@ -1646,6 +1646,7 @@ class TestMoveRuntimeDirection(unittest.TestCase):
 
 @requires_exe
 class TestWriteRealFormatting(unittest.TestCase):
+
     def test_real_default_format_emits_exponential(self):
         src = "PROGRAM P; VAR x: REAL; BEGIN x := 1.5; WRITELN(x) END."
         ir = compile_to_ir(src)

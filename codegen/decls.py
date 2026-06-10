@@ -8,11 +8,13 @@ Part of Plan 1 refactoring (mixin-based architecture).
 
 from __future__ import annotations
 
+from typing import Any, List, Optional, Tuple, Union
+
 import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
-from typing import Optional, List, Union, Any, Tuple
 
 from ast_nodes import *
+
 from .base import Scope
 
 
@@ -31,7 +33,6 @@ class DeclsMixin:
             return self.codegen_implementation(unit)
         else:
             raise CodegenError(f'Unknown unit type: {type(unit).__name__}')
-
 
     def codegen_program(self, unit: ProgramUnit) -> ir.Module:
         """Codegen for PROGRAM unit."""
@@ -68,20 +69,17 @@ class DeclsMixin:
 
         return self.module
 
-
     def codegen_module(self, unit: ModuleUnit) -> ir.Module:
         """Codegen for MODULE unit."""
         for decl in unit.decls:
             self.codegen_decl(decl)
         return self.module
 
-
     def codegen_interface(self, unit: InterfaceUnit) -> ir.Module:
         """Codegen for INTERFACE unit (declarations only)."""
         for decl in unit.decls:
             self.codegen_decl(decl)
         return self.module
-
 
     def codegen_implementation(self, unit: ImplementationUnit) -> ir.Module:
         """Codegen for IMPLEMENTATION unit."""
@@ -113,7 +111,6 @@ class DeclsMixin:
     # Declarations
     # ========================================================================
 
-
     def codegen_use_clause(self, use_clause: UseClause) -> None:
         """Import declarations from a USES module as external symbols."""
         module_path = None
@@ -138,7 +135,6 @@ class DeclsMixin:
                     ProcDecl(decl.name, decl.params, getattr(decl, 'attributes', []), body=None
                              ) if isinstance(decl, ProcDecl) else FuncDecl(decl.name, decl.params, decl.return_type, getattr(decl, 'attributes', []), body=None))
 
-
     def codegen_decl(self, decl: Declaration) -> None:
         """Codegen a declaration."""
         names = getattr(decl, 'names', None) or getattr(decl, 'name', '')
@@ -162,14 +158,12 @@ class DeclsMixin:
         else:
             raise CodegenError(f'Unknown declaration: {type(decl).__name__}')
 
-
     def codegen_const_decl(self, decl: ConstDecl) -> None:
         """Codegen for CONST declaration."""
         # Evaluate constant at compile time and remember it so that later
         # uses (array bounds, sizeof, and plain value references) can resolve it.
         value = self.eval_const_expr(decl.value)
         self.constants[decl.name.upper()] = value
-
 
     def codegen_type_decl(self, decl: TypeDecl) -> None:
         """Record a type declaration for later codegen lookups."""
@@ -181,7 +175,6 @@ class DeclsMixin:
                 # Remember which enum each member belongs to so WRITE can print
                 # the symbolic name of a bare member literal (checklist 9.8).
                 self.enum_member_names[member.upper()] = list(decl.type_expr.values)
-
 
     def codegen_var_decl(self, decl: VarDecl) -> None:
         """Codegen for VAR declaration."""
@@ -228,7 +221,6 @@ class DeclsMixin:
                     global_var.initializer = self.zero_initializer(llvm_type)
 
                 self.scope.define(name, global_var, decl.type_expr)
-
 
     def codegen_proc_decl(self, decl: ProcDecl) -> None:
         """Codegen for PROCEDURE declaration."""
@@ -297,7 +289,6 @@ class DeclsMixin:
         self.builder = prev_builder
         self.current_function = prev_func
         self.scope = prev_scope
-
 
     def codegen_func_decl(self, decl: FuncDecl) -> None:
         """Codegen for FUNCTION declaration."""
@@ -371,5 +362,3 @@ class DeclsMixin:
     # ========================================================================
     # Statements
     # ========================================================================
-
-

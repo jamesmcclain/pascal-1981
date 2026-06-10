@@ -10,10 +10,12 @@ Checklist: 4.2 (constant folding)
 
 from __future__ import annotations
 
-import llvmlite.ir as ir
 from typing import Optional
 
+import llvmlite.ir as ir
+
 from ast_nodes import *
+
 from .base import CodegenError
 
 
@@ -27,14 +29,12 @@ class ConstFoldMixin:
             return ir.Constant(ir.DoubleType(), v)
         return ir.Constant(ir.IntType(32), int(v))
 
-
     def _try_const(self, expr: Expression) -> Optional[int]:
         """Evaluate an expression as a constant ordinal, or None if not constant."""
         try:
             return self.eval_const_expr(expr)
         except CodegenError:
             return None
-
 
     def eval_const_expr(self, expr: Expression):
         """Evaluate a constant expression at compile time.
@@ -112,7 +112,3 @@ class ConstFoldMixin:
             elif func_name == 'CHR':
                 return int(self.eval_const_expr(expr.args[0])) & 0xFF
         raise CodegenError(f'Cannot evaluate constant expression: {type(expr).__name__}')
-
-
-
-

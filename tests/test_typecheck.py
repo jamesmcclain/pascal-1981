@@ -104,6 +104,7 @@ class TestVariableScope(unittest.TestCase):
 
 
 class TestReadWriteTypecheck(unittest.TestCase):
+
     def test_readln_empty_is_allowed(self):
         result = typecheck_source("PROGRAM P; BEGIN READLN() END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
@@ -485,7 +486,9 @@ class TestCallValidation(unittest.TestCase):
 
     def test_string_edit_intrinsics_typecheck(self):
         """INSERT, DELETE, POSITN, SCANEQ, SCANNE, ENCODE, and DECODE should typecheck."""
-        result = typecheck_source("PROGRAM P; VAR s: STRING(10); VAR t: STRING(10); VAR l: LSTRING(10); VAR n: INTEGER; BEGIN INSERT(s, t, 1); DELETE(t, 1, 1); WRITELN(POSITN(t, s)); WRITELN(SCANEQ(1, 'a', s, 1)); WRITELN(SCANNE(1, 'a', s, 1)); WRITELN(ENCODE(l, n)); WRITELN(DECODE(s, n)) END.")
+        result = typecheck_source(
+            "PROGRAM P; VAR s: STRING(10); VAR t: STRING(10); VAR l: LSTRING(10); VAR n: INTEGER; BEGIN INSERT(s, t, 1); DELETE(t, 1, 1); WRITELN(POSITN(t, s)); WRITELN(SCANEQ(1, 'a', s, 1)); WRITELN(SCANNE(1, 'a', s, 1)); WRITELN(ENCODE(l, n)); WRITELN(DECODE(s, n)) END."
+        )
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
 
