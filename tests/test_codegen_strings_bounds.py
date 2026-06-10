@@ -287,6 +287,12 @@ class TestReadCodegenRuntime(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(out, "")
 
+    def test_readln_lstring_uses_declared_capacity(self):
+        src = "PROGRAM P; VAR s: LSTRING(3); BEGIN READLN(s); WRITELN(s) END."
+        rc, out = _build_pascal_with_runtime(src, ["readq.c"], stdin="abcdef\n")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "abc\n")
+
 
 if __name__ == "__main__":
     unittest.main()
