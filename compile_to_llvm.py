@@ -85,48 +85,6 @@ def main() -> int:
         else:
             print('(re-run with -v for a full traceback)', file=sys.stderr)
         return 1
-    try:
-        # Parse
-        print(f'Parsing {source_file}...', file=sys.stderr)
-        ast = parse_file(source_file)
-
-        # Type check
-        print(f'Type checking...', file=sys.stderr)
-        type_checker = PascalTypeChecker(source_file=source_file)
-        check_result = type_checker.check(ast)
-
-        if not check_result.success:
-            print(f'Type checking failed:', file=sys.stderr)
-            for error in check_result.errors:
-                print(f'  {error}', file=sys.stderr)
-            return 1
-
-        if check_result.warnings:
-            for warning in check_result.warnings:
-                print(f'Warning: {warning}', file=sys.stderr)
-
-        # Codegen
-        print(f'Generating LLVM IR...', file=sys.stderr)
-        ir = compile_to_llvm(ast, verbose=verbose)
-
-        # Output
-        if output_file:
-            with open(output_file, 'w') as f:
-                f.write(ir)
-            print(f'Wrote {output_file}', file=sys.stderr)
-        else:
-            print(ir)
-
-        return 0
-
-    except Exception as exc:
-        print(f'Error: {exc}', file=sys.stderr)
-        if verbose:
-            print('--- traceback ---', file=sys.stderr)
-            traceback.print_exc()
-        else:
-            print('(re-run with -v for a full traceback)', file=sys.stderr)
-        return 1
 
 
 if __name__ == '__main__':
