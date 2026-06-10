@@ -458,7 +458,7 @@ the biggest single chunk; expect it to need its own design pass.
     blank-pad semantics (currently rejected loudly), the WRITE-side `None` gate,
     or any broader REAL formatting beyond the documented default width/example.
     `[OBSERVED]`
-- [ ] **8.3a — `WRITE`/`WRITELN` accept a whole file variable as a data argument.** `[OBSERVED]` **S**
+- [x] **8.3a — `WRITE`/`WRITELN` accept a whole file variable as a data argument.** `[OBSERVED]` **S**
   Still open. This item is the file-selector / whole-file-argument split, and
   should stay separate from 8.3's ordinary data-argument type checking.
   Typecheck trap: a bare file variable in the argument list passes today, e.g.
@@ -474,6 +474,23 @@ the biggest single chunk; expect it to need its own design pass.
     `WRITELN(INPUT); WRITELN(OUTPUT); WRITELN(f)` *succeeds* (a 3.4 artifact),
     baking in this behavior; that assertion must be revisited when this is
     fixed.
+  - CLOSED: `WRITE` and `WRITELN` now share the special checker path. A leading
+    unformatted `TEXT` file argument is accepted as the stream selector; binary
+    `FILE OF T` selectors are rejected; whole files after the selector position
+    are rejected as data values. Codegen skips a leading `TEXT` selector rather
+    than emitting it as printf data; current output still goes through stdout,
+    so this closes the type/model split but not real file-directed output.
+    `[OBSERVED]`
+  - Evidence: `tests.test_typecheck.TestReadWriteTypecheck.test_writeln_accepts_leading_text_file_selector`,
+    `test_writeln_rejects_whole_text_file_as_data`,
+    `test_writeln_rejects_binary_file_selector`, and
+    `test_writeln_rejects_unformatted_file_alone`; codegen guard
+    `tests.test_codegen_strings_bounds.TestReadDispatchCodegen.test_writeln_leading_text_selector_is_not_data`.
+    Full suite `python3 -m unittest discover -s tests` ran 340 tests OK.
+    `[OBSERVED]`
+  - Does NOT cover: runtime file-directed writes, file open/position/mode state
+    (`RESET`/`REWRITE`/`GET`/`PUT`, 8.2), or stream predicates (`EOF`/`EOLN`,
+    8.4). `[OBSERVED]`
 - [ ] **8.4 — `EOF`, `EOL`, `EOLN`.** `[READ]` **M** Stream predicates.
 - [ ] **8.5 — `ASSIGN`, `CLOSE`, `DISCARD`, `READFN`, `READSET`.** `[READ]` **L** Extended I/O verbs.
 - [ ] **8.6 — `FILEMODES`, `SEQUENTIAL`, `TERMINAL`, `FCBFQQ`.** `[INFERRED]` **L**

@@ -931,7 +931,7 @@ class PascalTypeChecker(TypeChecker):
             elif lookup_name == 'UNPACK':
                 self._check_unpack_args(stmt)
                 return
-            elif lookup_name == 'WRITE':
+            elif lookup_name in {'WRITE', 'WRITELN'}:
                 self._check_write_args(stmt)
                 return
             elif lookup_name in {'READ', 'READLN'}:
@@ -1002,9 +1002,28 @@ class PascalTypeChecker(TypeChecker):
                             self.error(f"Argument {i+1} type mismatch: expected {param_type}, got {arg_type}", stmt)
             return
 
+    def _is_text_file_type(self, t: Type) -> bool:
+        return isinstance(t, FileType) and t.structure == 'ASCII' and t.element_type.equivalent_to(CHAR_TYPE)
+
     def _check_write_args(self, stmt: ProcCallStmt) -> None:
         """Type check WRITE/WRITELN arguments."""
-        for i, arg in enumerate(stmt.args):
+        start = 0
+        if stmt.args:
+            first_arg = stmt.args[0]
+            first_value = first_arg.expr if isinstance(first_arg, WriteArg) else first_arg
+            first_type = self.infer_expression_type(first_value)
+            if isinstance(first_type, FileType):
+                formatted_selector = isinstance(first_arg, WriteArg) and (first_arg.width is not None or first_arg.precision is not None)
+                if formatted_selector:
+                    self.error("WRITE/WRITELN file selector must be an unformatted leading TEXT file", stmt)
+                    start = 1
+                elif self._is_text_file_type(first_type):
+                    start = 1
+                else:
+                    self.error("WRITE/WRITELN file selector must be TEXT, not binary FILE", stmt)
+                    start = 1
+
+        for i, arg in enumerate(stmt.args[start:], start=start):
             value_arg = arg.expr if isinstance(arg, WriteArg) else arg
             value_type = self.infer_expression_type(value_arg)
             if isinstance(arg, WriteArg):
@@ -1019,7 +1038,7 @@ class PascalTypeChecker(TypeChecker):
             if value_type is None:
                 continue
             if isinstance(value_type, FileType):
-                self.error("WRITE/WRITELN do not accept whole file variables here; see checklist 8.3a", stmt)
+                self.error("WRITE/WRITELN do not accept whole file variables as data arguments", stmt)
                 continue
             if not self._is_writable_type(value_type):
                 self.error(f"WRITE argument {i+1} has unwritable type {value_type}", stmt)

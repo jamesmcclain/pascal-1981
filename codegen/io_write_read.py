@@ -10,7 +10,7 @@ import llvmlite.ir as ir
 from typing import List, Union, Optional
 
 from ast_nodes import *
-from type_system import EnumType as ResolvedEnumType, LStringType, StringType, REAL_TYPE, WORD_TYPE, INTEGER_TYPE, CHAR_TYPE
+from type_system import EnumType as ResolvedEnumType, LStringType, StringType, REAL_TYPE, WORD_TYPE, INTEGER_TYPE, CHAR_TYPE, FileType as ResolvedFileType
 from ast_nodes import LStringType as ASTLStringType
 from ast_nodes import EnumType as ASTEnumType
 from codegen.base import CodegenError
@@ -49,7 +49,15 @@ class IoWriteReadMixin:
     def build_write_format_and_args(self, args: List[Union[Expression, WriteArg]]) -> tuple[str, List[ir.Value]]:
         fmt_parts: List[str] = []
         printf_args: List[ir.Value] = []
-        for arg in args:
+        start = 0
+        if args:
+            first = args[0]
+            first_expr = first.expr if isinstance(first, WriteArg) else first
+            first_ty = self.resolve_type_alias(self._pas_type(first_expr)) if self._pas_type(first_expr) is not None else None
+            if isinstance(first_ty, (ResolvedFileType, FileType)) and getattr(first_ty, 'structure', None) == 'ASCII':
+                # Leading TEXT file selector is accepted by the checker; current codegen still writes to stdout.
+                start = 1
+        for arg in args[start:]:
             expr = arg.expr if isinstance(arg, WriteArg) else arg
             width = arg.width if isinstance(arg, WriteArg) else None
             precision = arg.precision if isinstance(arg, WriteArg) else None

@@ -242,6 +242,12 @@ class TestReadDispatchCodegen(unittest.TestCase):
         self.assertIn('call i32 @"pas_read_lstring"(i8* %', ir)
         self.assertIn('i32 5)', ir)
 
+    def test_writeln_leading_text_selector_is_not_data(self):
+        """A leading TEXT selector chooses the stream; it is not emitted as printf data."""
+        ir = compile_to_ir("PROGRAM P; BEGIN WRITELN(OUTPUT, 'ok') END.")
+        self.assertIn("ok", ir)
+        self.assertNotIn("@output", ir)
+
 
 @requires_exe
 class TestStringIntrinsicCapacityRuntime(unittest.TestCase):

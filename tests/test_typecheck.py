@@ -73,7 +73,7 @@ class TestVariableScope(unittest.TestCase):
 
     def test_predeclared_text_input_output_string_names(self):
         """TEXT, INPUT, OUTPUT, and STRING are predeclared names."""
-        result = typecheck_source("PROGRAM P; VAR f: TEXT; BEGIN WRITELN(INPUT); WRITELN(OUTPUT); WRITELN(f) END.")
+        result = typecheck_source("PROGRAM P; VAR f: TEXT; BEGIN WRITELN(OUTPUT, 'ok'); WRITELN(f, 'ok') END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_file_buffer_variable_has_element_type(self):
@@ -138,6 +138,27 @@ class TestReadWriteTypecheck(unittest.TestCase):
     def test_write_enum_still_allowed(self):
         result = typecheck_source("PROGRAM P; TYPE C = (Red, Green); VAR c: C; BEGIN WRITELN(c) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_writeln_accepts_leading_text_file_selector(self):
+        result = typecheck_source("PROGRAM P; VAR t: TEXT; BEGIN WRITELN(t, 'ok'); WRITE(OUTPUT, 1) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_writeln_rejects_whole_text_file_as_data(self):
+        result = typecheck_source("PROGRAM P; VAR t: TEXT; BEGIN WRITELN('x', t) END.")
+        self.assertFalse(result.success)
+        self.assertIn("whole file", " ".join(str(e) for e in result.errors))
+
+    def test_writeln_rejects_binary_file_selector(self):
+        result = typecheck_source("PROGRAM P; VAR f: FILE OF INTEGER; BEGIN WRITELN(f, 1) END.")
+        self.assertFalse(result.success)
+        self.assertIn("TEXT", " ".join(str(e) for e in result.errors))
+
+    def test_writeln_rejects_unformatted_file_alone(self):
+        result = typecheck_source("PROGRAM P; VAR t: TEXT; BEGIN WRITELN(t) END.")
+        self.assertTrue(result.success, msg="A leading TEXT selector with no data is a valid empty-line write")
+        bad = typecheck_source("PROGRAM P; VAR f: FILE OF INTEGER; BEGIN WRITELN(f) END.")
+        self.assertFalse(bad.success)
+        self.assertIn("TEXT", " ".join(str(e) for e in bad.errors))
 
 
 class TestTypeCompatibility(unittest.TestCase):
