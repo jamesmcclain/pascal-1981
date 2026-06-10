@@ -127,6 +127,12 @@ class RuntimeBuiltinsMixin:
         ptr = self.resolve_designator_ptr(target)
         handle = self.builder.load(ptr)
         fcb_ptr = self.builder.bitcast(handle, self.file_fcb_type().as_pointer())
+        if getattr(target, 'name', '').upper() in {'INPUT', 'OUTPUT'}:
+            in_sym = self.scope.lookup('INPUT')
+            out_sym = self.scope.lookup('OUTPUT')
+            in_fcb = self.builder.bitcast(self.builder.load(in_sym.llvm_value), self.file_fcb_type().as_pointer())
+            out_fcb = self.builder.bitcast(self.builder.load(out_sym.llvm_value), self.file_fcb_type().as_pointer())
+            self.builder.call(self._file_helper('pas_file_attach_std'), [in_fcb, out_fcb])
         self.builder.call(self._file_helper(helper_name), [fcb_ptr])
 
     def builtin_reset(self, args: List[Expression]) -> None:

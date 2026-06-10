@@ -101,6 +101,15 @@ class ExprsMixin:
                 return self._const_ir(key)
             if key == 'NULL':
                 return self.null_lstring_ptr()
+            if key in {'EOF', 'EOLN'}:
+                sym = self.scope.lookup('INPUT')
+                out_sym = self.scope.lookup('OUTPUT')
+                handle = self.builder.load(sym.llvm_value)
+                fcb_ptr = self.builder.bitcast(handle, self.file_fcb_type().as_pointer())
+                out_fcb = self.builder.bitcast(self.builder.load(out_sym.llvm_value), self.file_fcb_type().as_pointer())
+                self.builder.call(self.scope.lookup('pas_file_attach_std').llvm_value, [fcb_ptr, out_fcb])
+                fn = self.scope.lookup('pas_file_eof' if key == 'EOF' else 'pas_file_eoln').llvm_value
+                return self.builder.icmp_unsigned('!=', self.builder.call(fn, [fcb_ptr]), ir.Constant(ir.IntType(32), 0))
             symbol = self.scope.lookup(expr.name) or self.scope.lookup(key)
             if not symbol:
                 raise CodegenError(f'Undefined variable: {expr.name}')
@@ -348,6 +357,25 @@ class ExprsMixin:
         """Codegen function call."""
         lookup_name = expr.name.upper()
 
+        if lookup_name in {'EOF', 'EOLN'}:
+            if len(expr.args) == 0:
+                sym = self.scope.lookup('INPUT')
+                slot = sym.llvm_value
+            elif len(expr.args) == 1:
+                target = expr.args[0] if isinstance(expr.args[0], Designator) else Designator(expr.args[0].name, [])
+                slot = self.resolve_designator_ptr(target)
+            else:
+                raise CodegenError(f'{lookup_name} expects 0 or 1 arguments')
+            handle = self.builder.load(slot)
+            fcb_ptr = self.builder.bitcast(handle, self.file_fcb_type().as_pointer())
+            if (len(expr.args) == 0) or (len(expr.args) == 1 and getattr(expr.args[0], 'name', '').upper() in {'INPUT', 'OUTPUT'}):
+                in_sym = self.scope.lookup('INPUT')
+                out_sym = self.scope.lookup('OUTPUT')
+                in_fcb = self.builder.bitcast(self.builder.load(in_sym.llvm_value), self.file_fcb_type().as_pointer())
+                out_fcb = self.builder.bitcast(self.builder.load(out_sym.llvm_value), self.file_fcb_type().as_pointer())
+                self.builder.call(self.scope.lookup('pas_file_attach_std').llvm_value, [in_fcb, out_fcb])
+            fn = self.scope.lookup('pas_file_eof' if lookup_name == 'EOF' else 'pas_file_eoln').llvm_value
+            return self.builder.icmp_unsigned('!=', self.builder.call(fn, [fcb_ptr]), ir.Constant(ir.IntType(32), 0))
         if lookup_name == 'POSITN':
             return self.builtin_positn(expr.args)
         if lookup_name in {'SCANEQ', 'SCANNE'}:

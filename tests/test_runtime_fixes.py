@@ -197,13 +197,37 @@ class TestFileBufferModel(unittest.TestCase):
         self.assertEqual(out, "1001\n-7\n42\n")
 
     def test_rewrite_truncates_and_get_past_eof_aborts(self):
-        """A second REWRITE truncates prior content. With no EOF predicate yet,
-        prove truncation by driving GET past the only surviving component."""
+        """A second REWRITE truncates prior content. Prove truncation by driving
+        GET past the only surviving component."""
         src = ("PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
                "REWRITE(f); f^ := 'A'; PUT(f); f^ := 'B'; PUT(f); "
                "REWRITE(f); f^ := 'C'; PUT(f); RESET(f); c := f^; WRITELN(c); GET(f); GET(f) END.")
         rc, out = build_run_linked(src, ["fileops.c"])
         self.assertNotEqual(rc, 0)
+
+    def test_eof_loop_counts_text_components(self):
+        src = ("PROGRAM P; VAR f: TEXT; n: INTEGER; BEGIN "
+               "REWRITE(f); f^ := 'A'; PUT(f); f^ := 'B'; PUT(f); "
+               "RESET(f); n := 0; WHILE NOT EOF(f) DO BEGIN n := n + 1; GET(f) END; "
+               "WRITELN(n) END.")
+        rc, out = build_run_linked(src, ["fileops.c"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "2\n")
+
+    def test_eoln_line_marker_presents_blank(self):
+        src = ("PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
+               "REWRITE(f); WRITELN(f, 'A'); RESET(f); c := f^; WRITELN(c); "
+               "GET(f); IF EOLN(f) THEN WRITELN(1); c := f^; WRITELN(c) END.")
+        rc, out = build_run_linked(src, ["fileops.c"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "A\n1\n \n")
+
+    def test_eof_without_argument_uses_input(self):
+        src = ("PROGRAM P; VAR n: INTEGER; BEGIN n := 0; "
+               "WHILE NOT EOF DO BEGIN n := n + 1; GET(INPUT) END; WRITELN(n) END.")
+        rc, out = build_run_linked(src, ["fileops.c"], stdin="XY")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "2\n")
 
 
 if __name__ == "__main__":

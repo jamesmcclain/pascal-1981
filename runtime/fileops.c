@@ -1,16 +1,27 @@
+#include <ctype.h>
+#include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 /* Must match codegen/base.py and codegen/files.py:
  * { i32 elem_size, i32 structure, i32 touched, i32 mode, i8* buffer, i8* handle }
  * mode low bits: 0 = closed/unopened, 1 = inspection/read, 2 = generation/write
- * mode bit 2 (0x4): eof recorded for future EOF/EOLN support.
+ * mode flags: EOF=0x4, STD=0x8, PENDING=0x10, EOLN=0x20, OWNS_HANDLE=0x40.
+ * TEXT line-marker host mapping: '\n' in the stream; EOLN presents F^ as blank.
  */
 #define MODE_CLOSED 0
 #define MODE_READ   1
 #define MODE_WRITE  2
 #define MODE_BITS   3
 #define MODE_EOF    4
+#define MODE_STD    8
+#define MODE_PENDING 16
+#define MODE_EOLN   32
+#define MODE_OWNS_HANDLE 64
+
+#define STRUCT_BINARY 0
+#define STRUCT_TEXT   1
 
 struct pas_file_fcb {
     int elem_size;
@@ -30,16 +41,13 @@ static size_t elem_size(struct pas_file_fcb *f) {
     return (size_t)(f->elem_size > 0 ? f->elem_size : 1);
 }
 
-static int current_mode(struct pas_file_fcb *f) {
-    return f->mode & MODE_BITS;
-}
+static int current_mode(struct pas_file_fcb *f) { return f->mode & MODE_BITS; }
+static int is_eof(struct pas_file_fcb *f) { return (f->mode & MODE_EOF) != 0; }
+static int is_pending(struct pas_file_fcb *f) { return (f->mode & MODE_PENDING) != 0; }
 
-static void set_mode(struct pas_file_fcb *f, int mode, int eof) {
-    f->mode = mode | (eof ? MODE_EOF : 0);
-}
-
-static int is_eof(struct pas_file_fcb *f) {
-    return (f->mode & MODE_EOF) != 0;
+static void set_mode_flags(struct pas_file_fcb *f, int mode, int eof, int eoln, int pending) {
+    int keep = f->mode & (MODE_STD | MODE_OWNS_HANDLE);
+    f->mode = keep | mode | (eof ? MODE_EOF : 0) | (eoln ? MODE_EOLN : 0) | (pending ? MODE_PENDING : 0);
 }
 
 static FILE *ensure_handle(struct pas_file_fcb *f) {
@@ -47,6 +55,7 @@ static FILE *ensure_handle(struct pas_file_fcb *f) {
     if (f->handle) return f->handle;
     f->handle = tmpfile();
     if (!f->handle) die("file runtime: tmpfile failed");
+    f->mode |= MODE_OWNS_HANDLE;
     return f->handle;
 }
 
@@ -54,7 +63,48 @@ static void checked_buffer(struct pas_file_fcb *f) {
     if (!f || !f->buffer) die("file runtime: null buffer");
 }
 
+static void raw_get(struct pas_file_fcb *f, int allow_eof) {
+    FILE *h = ensure_handle(f);
+    checked_buffer(f);
+    if (current_mode(f) != MODE_READ) die("file runtime: GET requires RESET/read mode");
+    if (!allow_eof && is_eof(f)) die("file runtime: GET past eof");
+
+    size_t n = f->structure == STRUCT_TEXT ? 1 : elem_size(f);
+    size_t got = fread(f->buffer, 1, n, h);
+    if (got != n) {
+        if (feof(h)) {
+            set_mode_flags(f, MODE_READ, 1, 0, 0);
+            f->touched = 0;
+            return;
+        }
+        die("file runtime: read failed");
+    }
+    int eoln = (f->structure == STRUCT_TEXT && *((unsigned char *)f->buffer) == '\n');
+    if (eoln) *((unsigned char *)f->buffer) = ' ';
+    set_mode_flags(f, MODE_READ, 0, eoln, 0);
+    f->touched = 0;
+}
+
+static void force_fill(struct pas_file_fcb *f) {
+    if (!f) return;
+    if (is_pending(f)) raw_get(f, 1);
+}
+
+void pas_file_attach_std(struct pas_file_fcb *in, struct pas_file_fcb *out) {
+    if (in && !(in->mode & MODE_STD)) {
+        in->handle = stdin;
+        set_mode_flags(in, MODE_READ, 0, 0, 1);
+        in->mode |= MODE_STD;
+    }
+    if (out && !(out->mode & MODE_STD)) {
+        out->handle = stdout;
+        set_mode_flags(out, MODE_WRITE, 1, 0, 0);
+        out->mode |= MODE_STD;
+    }
+}
+
 void *pas_file_buffer(struct pas_file_fcb *f) {
+    force_fill(f);
     return f ? f->buffer : NULL;
 }
 
@@ -62,43 +112,28 @@ void pas_file_touch_buffer(struct pas_file_fcb *f) {
     if (f) f->touched = 1;
 }
 
-void pas_file_get(struct pas_file_fcb *f) {
-    FILE *h = ensure_handle(f);
-    checked_buffer(f);
-    if (current_mode(f) != MODE_READ) die("file runtime: GET requires RESET/read mode");
-    if (is_eof(f)) die("file runtime: GET past eof");
-
-    size_t n = f->structure == 1 ? 1 : elem_size(f);
-    size_t got = fread(f->buffer, 1, n, h);
-    if (got != n) {
-        if (feof(h)) {
-            set_mode(f, MODE_READ, 1);
-            f->touched = 0;
-            return;
-        }
-        die("file runtime: read failed");
-    }
-    set_mode(f, MODE_READ, 0);
-    f->touched = 0;
-}
+void pas_file_get(struct pas_file_fcb *f) { raw_get(f, 0); }
 
 void pas_file_reset(struct pas_file_fcb *f) {
     FILE *h = ensure_handle(f);
     if (current_mode(f) == MODE_WRITE && fflush(h) != 0) die("file runtime: flush failed");
     rewind(h);
-    set_mode(f, MODE_READ, 0);
-    f->touched = 0;
-    pas_file_get(f); /* manual-required implicit first GET */
+    set_mode_flags(f, MODE_READ, 0, 0, 0);
+    raw_get(f, 1); /* manual-required implicit first GET */
 }
 
 void pas_file_rewrite(struct pas_file_fcb *f) {
     if (!f) die("file runtime: null fcb");
-    if (f->handle) {
-        fclose(f->handle);
+    if (f->handle && (f->mode & MODE_OWNS_HANDLE)) fclose(f->handle);
+    if (f->mode & MODE_STD) {
+        if (f->handle && fflush(f->handle) != 0) die("file runtime: flush failed");
+        set_mode_flags(f, MODE_WRITE, 1, 0, 0);
+        return;
     }
     f->handle = tmpfile();
     if (!f->handle) die("file runtime: tmpfile failed");
-    set_mode(f, MODE_WRITE, 1);
+    f->mode |= MODE_OWNS_HANDLE;
+    set_mode_flags(f, MODE_WRITE, 1, 0, 0);
     f->touched = 0;
 }
 
@@ -107,8 +142,103 @@ void pas_file_put(struct pas_file_fcb *f) {
     checked_buffer(f);
     if (current_mode(f) != MODE_WRITE) die("file runtime: PUT requires REWRITE/write mode");
 
-    size_t n = f->structure == 1 ? 1 : elem_size(f);
+    size_t n = f->structure == STRUCT_TEXT ? 1 : elem_size(f);
     if (fwrite(f->buffer, 1, n, h) != n) die("file runtime: write failed");
-    set_mode(f, MODE_WRITE, 1);
+    set_mode_flags(f, MODE_WRITE, 1, 0, 0);
     f->touched = 0;
+}
+
+int pas_file_eof(struct pas_file_fcb *f) {
+    if (!f) return 1;
+    force_fill(f);
+    return current_mode(f) == MODE_WRITE || is_eof(f);
+}
+
+int pas_file_eoln(struct pas_file_fcb *f) {
+    if (!f) die("file runtime: EOLN null file");
+    force_fill(f);
+    if (pas_file_eof(f)) die("file runtime: EOLN at eof");
+    if (f->structure != STRUCT_TEXT) die("file runtime: EOLN requires TEXT file");
+    return (f->mode & MODE_EOLN) != 0;
+}
+
+static FILE *stream_for(struct pas_file_fcb *f, int writing) {
+    if (!f) return writing ? stdout : stdin;
+    if (writing && current_mode(f) != MODE_WRITE) set_mode_flags(f, MODE_WRITE, 1, 0, 0);
+    if (!writing && current_mode(f) == MODE_CLOSED) set_mode_flags(f, MODE_READ, 0, 0, 0);
+    return ensure_handle(f);
+}
+
+int pas_write_fmt(struct pas_file_fcb *f, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int r = vfprintf(stream_for(f, 1), fmt, ap);
+    va_end(ap);
+    return r;
+}
+
+static int skip_ws_except_nl(FILE *h) {
+    int ch;
+    while ((ch = fgetc(h)) != EOF) {
+        if (ch == '\n' || !isspace((unsigned char) ch)) return ch;
+    }
+    return EOF;
+}
+
+static void unread_to(FILE *h, int ch) { if (ch != EOF) ungetc(ch, h); }
+
+int pas_fread_int(struct pas_file_fcb *f, int32_t *out) {
+    FILE *h = stream_for(f, 0);
+    int ch = skip_ws_except_nl(h);
+    if (ch == EOF) die("runtime error: unexpected EOF while reading integer");
+    unread_to(h, ch);
+    long v;
+    if (fscanf(h, "%ld", &v) != 1) die("runtime error: malformed integer input");
+    *out = (int32_t)v;
+    return 0;
+}
+
+int pas_fread_word(struct pas_file_fcb *f, uint16_t *out) {
+    int32_t v = 0;
+    pas_fread_int(f, &v);
+    if (v < 0 || v > 65535) die("runtime error: word out of range");
+    *out = (uint16_t)v;
+    return 0;
+}
+
+int pas_fread_real(struct pas_file_fcb *f, double *out) {
+    FILE *h = stream_for(f, 0);
+    int ch = skip_ws_except_nl(h);
+    if (ch == EOF) die("runtime error: unexpected EOF while reading real");
+    unread_to(h, ch);
+    if (fscanf(h, "%lf", out) != 1) die("runtime error: malformed real input");
+    return 0;
+}
+
+int pas_fread_char(struct pas_file_fcb *f, uint8_t *out) {
+    FILE *h = stream_for(f, 0);
+    int ch = fgetc(h);
+    if (ch == EOF) die("runtime error: unexpected EOF while reading char");
+    *out = (ch == '\n') ? ' ' : (uint8_t)ch;
+    return 0;
+}
+
+int pas_fread_lstring(struct pas_file_fcb *f, uint8_t *buf, int cap) {
+    FILE *h = stream_for(f, 0);
+    int ch, n = 0;
+    while ((ch = fgetc(h)) != EOF && ch != '\n') {
+        if (n < cap) buf[1 + n] = (uint8_t)ch;
+        n++;
+    }
+    if (ch == EOF) die("runtime error: unexpected EOF while reading string");
+    if (ch == '\n') unread_to(h, ch);
+    if (cap < 0) cap = 0;
+    buf[0] = (uint8_t)(n < cap ? n : cap);
+    return 0;
+}
+
+void pas_freadln_skip(struct pas_file_fcb *f) {
+    FILE *h = stream_for(f, 0);
+    int ch;
+    while ((ch = fgetc(h)) != EOF && ch != '\n') {}
 }

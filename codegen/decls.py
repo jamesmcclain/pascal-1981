@@ -59,7 +59,6 @@ class DeclsMixin:
             for sym in list(self.scope.symbols.values()):
                 if isinstance(self.resolve_type_alias(sym.type_expr), FileType):
                     self._init_file_storage(sym.llvm_value, sym.type_expr)
-
             # Execute the program body
             self.codegen_stmt_list(unit.block.body)
 

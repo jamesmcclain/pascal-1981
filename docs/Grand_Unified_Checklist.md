@@ -504,7 +504,32 @@ the biggest single chunk; expect it to need its own design pass.
   - Does NOT cover: runtime file-directed writes, file open/position/mode state
     (`RESET`/`REWRITE`/`GET`/`PUT`, 8.2), or stream predicates (`EOF`/`EOLN`,
     8.4). `[OBSERVED]`
-- [ ] **8.4 — `EOF`, `EOL`, `EOLN`.** `[READ]` **M** Stream predicates.
+- [x] **8.4 — `EOF`, `EOL`, `EOLN`.** `[READ]` **M** Stream predicates.
+  - Done: verified `EOF` and `EOLN` are implemented as real stream predicates
+    over the FCB runtime. `EOF` accepts zero args (`INPUT`) or one file arg and
+    is true in write/generation mode or after the last `GET` reaches end of
+    file; `EOLN` accepts zero args or a TEXT file arg, forces pending lazy
+    buffer fill, errors at EOF/binary files, and uses host `\n` as the TEXT
+    line marker while presenting `F^` as blank at EOLN. Standard `INPUT` and
+    `OUTPUT` are attached to stdin/stdout lazily at the file-variable use sites,
+    avoiding the implicit-GET-eats-first-character trap and avoiding a global
+    runtime dependency for programs that only use ordinary stdout `WRITELN`.
+  - Done: file-directed formatted output/input now routes through an FCB when
+    a leading TEXT selector is present (`pas_write_fmt`, `pas_fread_*`,
+    `pas_freadln_skip`), while the no-selector `READ`/`WRITE` path remains the
+    existing stdin/stdout runtime path.
+  - Proof: `tests.test_runtime_fixes.TestFileBufferModel` covers `WHILE NOT
+    EOF(f)` over a two-component TEXT file, EOLN at a written line marker with
+    blank `F^`, zero-arg `EOF` over piped `INPUT`, and the existing 8.2
+    RESET/REWRITE/GET/PUT round trips; `tests.test_typecheck.TestReadWriteTypecheck`
+    rejects `EOLN` on binary files; `tests.test_read_end_to_end` proves the
+    legacy stdin READ/READLN path still works. Full suite: `python3 -m unittest
+    discover -s tests` ran 347 tests OK. `[OBSERVED]`
+  - Does NOT cover: named-file binding (`ASSIGN`/`READFN`) or closing/deleting
+    files (8.5), DIRECT/TERMINAL mode behavior (8.6), DOS CR/LF translation, or
+    a documented `EOL` constant. Manual grep found `EOL` in the predeclared
+    identifier table only, with no body semantics; do not infer it until 8.6 or
+    a deeper manual pass verifies meaning. `[READ]`
 - [ ] **8.5 — `ASSIGN`, `CLOSE`, `DISCARD`, `READFN`, `READSET`.** `[READ]` **L** Extended I/O verbs.
 - [ ] **8.6 — `FILEMODES`, `SEQUENTIAL`, `TERMINAL`, `FCBFQQ`.** `[INFERRED]` **L**
   Confirm each one's meaning from the manual body before implementing — several

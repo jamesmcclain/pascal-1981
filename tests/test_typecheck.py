@@ -161,6 +161,11 @@ class TestReadWriteTypecheck(unittest.TestCase):
         self.assertFalse(bad.success)
         self.assertIn("TEXT", " ".join(str(e) for e in bad.errors))
 
+    def test_eoln_rejects_binary_file(self):
+        result = typecheck_source("PROGRAM P; VAR f: FILE OF INTEGER; VAR b: BOOLEAN; BEGIN b := EOLN(f) END.")
+        self.assertFalse(result.success)
+        self.assertIn("TEXT", " ".join(str(e) for e in result.errors))
+
 
 class TestTypeCompatibility(unittest.TestCase):
     """Type compatibility and assignment rules."""

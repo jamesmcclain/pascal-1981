@@ -3,6 +3,27 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+struct pas_file_fcb {
+    int elem_size;
+    int structure;
+    int touched;
+    int mode;
+    void *buffer;
+    FILE *handle;
+};
+
+__attribute__((weak)) void pas_file_attach_std(struct pas_file_fcb *in, struct pas_file_fcb *out)
+{
+    if (in && !(in->mode & 8)) {
+        in->handle = stdin;
+        in->mode = 1 | 8 | 16;
+    }
+    if (out && !(out->mode & 8)) {
+        out->handle = stdout;
+        out->mode = 2 | 4 | 8;
+    }
+}
+
 static int skip_ws_except_nl(void)
 {
     int ch;

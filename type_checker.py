@@ -1595,6 +1595,20 @@ class PascalTypeChecker(TypeChecker):
                     return sym.type.return_type
                 return None
 
+            if lookup_name in {'EOF', 'EOLN'}:
+                argc = len(expr.args) if expr.args else 0
+                if argc > 1:
+                    self.error(f"Function '{lookup_name}' expects 0 or 1 arguments, got {argc}", expr)
+                    return None
+                if argc == 1:
+                    arg_type = self.infer_expression_type(expr.args[0])
+                    if not isinstance(arg_type, FileType):
+                        self.error(f"Argument 1 type mismatch: {lookup_name} expects a file variable, got {arg_type}", expr)
+                        return None
+                    if lookup_name == 'EOLN' and not self._is_text_file_type(arg_type):
+                        self.error("EOLN expects a TEXT file", expr)
+                        return None
+                return BOOLEAN_TYPE
             if lookup_name == 'ABS':
                 if len(expr.args) != 1:
                     self.error(f"Function 'ABS' expects 1 argument, got {len(expr.args)}", expr)
