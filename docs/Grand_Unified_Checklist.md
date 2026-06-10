@@ -411,7 +411,8 @@ the biggest single chunk; expect it to need its own design pass.
     attached to stdin/stdout, and the FCB has no fd/position/mode — those, plus
     the lazy fill/flush that the touch hook is a seam for, are 8.2 (`RESET`/
     `REWRITE`/`GET`/`PUT`). 8.1 is the in-memory buffer-variable model only.
-- [ ] **8.2 — `RESET`, `REWRITE`, `GET`, `PUT`.** `[READ]` **L** Core file ops.
+- [x] **8.2 — `RESET`, `REWRITE`, `GET`, `PUT`.** `[READ]` **L** Core file ops.
+  - DEFERRED: file-directed I/O stays punted until 8.4 so the stream-predicate work can land alongside it; filename binding stays punted until 8.5 (`ASSIGN`/`READFN`). The 8.1 buffer-variable + touch hook seam remains the implementation boundary for now.
 - [x] **8.3 — `READ`, and `READLN` beyond integer; `WRITE`/`WRITELN` for `REAL`.** `[OBSERVED]` **M**
   `READLN` currently reads integers only; `WRITE`/`WRITELN` don't handle `REAL`.
   Extend the existing printf/scanf hybrid path.
