@@ -28,7 +28,7 @@ re-declared.
 import unittest
 
 from tests.support import requires_exe, requires_llvm
-from tests.test_codegen import build_and_run, compile_to_ir
+from tests.test_codegen import build_and_run, compile_to_ir, _build_pascal_with_runtime
 from tests.support import parse_source, typecheck_source
 
 
@@ -262,6 +262,30 @@ class TestStringIntrinsicCapacityRuntime(unittest.TestCase):
         src = "PROGRAM P; VAR d: STRING(2); BEGIN COPYSTR('abc', d) END."
         rc, _ = build_and_run(src)
         self.assertNotEqual(rc, 0)
+
+
+@requires_llvm
+class TestReadCodegenIR(unittest.TestCase):
+    def test_readln_emits_skip_call(self):
+        src = "PROGRAM P; VAR i: INTEGER; BEGIN READLN(i); READLN() END."
+        ir = compile_to_ir(src)
+        self.assertIn("pas_read_int", ir)
+        self.assertIn("pas_readln_skip", ir)
+
+    def test_read_does_not_emit_skip_call(self):
+        src = "PROGRAM P; VAR i: INTEGER; BEGIN READ(i) END."
+        ir = compile_to_ir(src)
+        self.assertIn("pas_read_int", ir)
+        self.assertNotIn("call void @\"pas_readln_skip\"", ir)
+
+
+@requires_exe
+class TestReadCodegenRuntime(unittest.TestCase):
+    def test_readln_empty_ok(self):
+        src = "PROGRAM P; BEGIN READLN() END."
+        rc, out = _build_pascal_with_runtime(src, ["readq.c"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "")
 
 
 if __name__ == "__main__":

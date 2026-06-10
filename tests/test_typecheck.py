@@ -123,6 +123,11 @@ class TestReadWriteTypecheck(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("INTEGER-compatible", " ".join(str(e) for e in result.errors))
 
+    def test_read_boolean_rejected(self):
+        result = typecheck_source("PROGRAM P; VAR b: BOOLEAN; BEGIN READLN(b) END.")
+        self.assertFalse(result.success)
+        self.assertIn("unreadable", " ".join(str(e) for e in result.errors))
+
 
 class TestTypeCompatibility(unittest.TestCase):
     """Type compatibility and assignment rules."""

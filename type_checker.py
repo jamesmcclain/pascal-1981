@@ -1044,7 +1044,7 @@ class PascalTypeChecker(TypeChecker):
                 self.error(f"READ argument {i+1} has unreadable type {target_type}", stmt)
 
     def _is_writable_type(self, t: Type) -> bool:
-        return isinstance(t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), EnumType, StringType, LStringType))
+        return isinstance(t, (type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), EnumType, StringType, LStringType))
 
     def _is_readable_type(self, t: Type) -> bool:
         return self._is_writable_type(t)

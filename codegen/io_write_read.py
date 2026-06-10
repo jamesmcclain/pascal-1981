@@ -148,16 +148,17 @@ class IoWriteReadMixin:
             target = arg if isinstance(arg, Designator) else Designator(arg.name, [])
             ptr = self.resolve_designator_ptr(target)
             ty = self.resolve_type_alias(self._pas_type(arg)) if self._pas_type(arg) is not None else None
-            if ty is INTEGER_TYPE:
+            ty_name = str(ty).upper() if ty is not None else ''
+            if ty is INTEGER_TYPE or ty_name == 'INTEGER':
                 fn = self._read_helper('pas_read_int', ptr.type)
                 call_args = [ptr]
-            elif ty is WORD_TYPE:
+            elif ty is WORD_TYPE or ty_name == 'WORD':
                 fn = self._read_helper('pas_read_word', ptr.type)
                 call_args = [ptr]
-            elif ty is REAL_TYPE:
+            elif ty is REAL_TYPE or ty_name == 'REAL':
                 fn = self._read_helper('pas_read_real', ptr.type)
                 call_args = [ptr]
-            elif ty is CHAR_TYPE:
+            elif ty is CHAR_TYPE or ty_name == 'CHAR':
                 fn = self._read_helper('pas_read_char', ptr.type)
                 call_args = [ptr]
             else:
