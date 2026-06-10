@@ -23,11 +23,12 @@ class FilesMixin:
         """The file-control-block layout shared by every file variable.
 
         Fields: element size, structure (0 = binary FILE OF T, 1 = ASCII/TEXT),
-        a touched flag, and a pointer to the current-component buffer.
+        a touched flag, a mode/eof bookkeeping word, and a pointer to the
+        current-component buffer. The runtime handle lives in the final slot.
         """
         if not hasattr(self, '_fcb_ty'):
             i32 = ir.IntType(32)
-            self._fcb_ty = ir.LiteralStructType([i32, i32, i32, ir.IntType(8).as_pointer()])
+            self._fcb_ty = ir.LiteralStructType([i32, i32, i32, i32, ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer()])
         return self._fcb_ty
 
     def _register_file_helpers(self) -> None:
@@ -42,10 +43,14 @@ class FilesMixin:
         fcb_ptr = fcb_ty.as_pointer()
         file_buffer_ty = ir.FunctionType(ir.IntType(8).as_pointer(), [fcb_ptr])
         file_touch_ty = ir.FunctionType(ir.VoidType(), [fcb_ptr])
+        file_reset_ty = ir.FunctionType(ir.VoidType(), [fcb_ptr])
+        file_rewrite_ty = ir.FunctionType(ir.VoidType(), [fcb_ptr])
+        file_get_ty = ir.FunctionType(ir.VoidType(), [fcb_ptr])
+        file_put_ty = ir.FunctionType(ir.VoidType(), [fcb_ptr])
         i32 = ir.IntType(32)
         file_buffer = ir.Function(self.module, file_buffer_ty, name='pas_file_buffer')
         b = IRBuilder(file_buffer.append_basic_block(name='entry'))
-        buf_field = b.gep(file_buffer.args[0], [ir.Constant(i32, 0), ir.Constant(i32, 3)])
+        buf_field = b.gep(file_buffer.args[0], [ir.Constant(i32, 0), ir.Constant(i32, 4)])
         b.ret(b.load(buf_field))
         self.scope.define('pas_file_buffer', file_buffer, None)
         file_touch = ir.Function(self.module, file_touch_ty, name='pas_file_touch_buffer')
@@ -54,6 +59,10 @@ class FilesMixin:
         b.store(ir.Constant(i32, 1), touched_field)
         b.ret_void()
         self.scope.define('pas_file_touch_buffer', file_touch, None)
+        for name, ty in [('pas_file_reset', file_reset_ty), ('pas_file_rewrite', file_rewrite_ty), ('pas_file_get', file_get_ty), ('pas_file_put', file_put_ty)]:
+            fn = ir.Function(self.module, ty, name=name)
+            fn.linkage = 'external'
+            self.scope.define(name, fn, None)
 
     def _init_file_storage(self, slot: ir.Value, type_expr: Type) -> None:
         elem_size, structure = self._file_element_size_and_structure(type_expr)
@@ -71,8 +80,10 @@ class FilesMixin:
         self.builder.store(ir.Constant(i32, elem_size), self.builder.gep(fcb, [zero, ir.Constant(i32, 0)]))
         self.builder.store(ir.Constant(i32, structure), self.builder.gep(fcb, [zero, ir.Constant(i32, 1)]))
         self.builder.store(ir.Constant(i32, 0), self.builder.gep(fcb, [zero, ir.Constant(i32, 2)]))
+        self.builder.store(ir.Constant(i32, 0), self.builder.gep(fcb, [zero, ir.Constant(i32, 3)]))
         buf_i8 = self.builder.bitcast(buf, ir.IntType(8).as_pointer())
-        self.builder.store(buf_i8, self.builder.gep(fcb, [zero, ir.Constant(i32, 3)]))
+        self.builder.store(buf_i8, self.builder.gep(fcb, [zero, ir.Constant(i32, 4)]))
+        self.builder.store(ir.Constant(ir.IntType(8).as_pointer(), None), self.builder.gep(fcb, [zero, ir.Constant(i32, 5)]))
         # The handle handed to the rest of codegen is an opaque i8* to the FCB.
         self.builder.store(self.builder.bitcast(fcb, ir.IntType(8).as_pointer()), slot)
 

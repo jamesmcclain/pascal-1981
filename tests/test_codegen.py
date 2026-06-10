@@ -80,7 +80,7 @@ class TestCodegenIR(unittest.TestCase):
         access through pas_file_buffer; no heap allocation (so nothing leaks)."""
         src = "PROGRAM P; VAR f: FILE OF INTEGER; x: INTEGER; BEGIN f^ := 42; x := f^ END."
         ir = compile_to_ir(src)
-        self.assertIn('define i8* @"pas_file_buffer"', ir)
+        self.assertIn('declare external i8* @"pas_file_buffer"', ir)
         # The control block and its buffer are stack/global allocations, not malloc.
         self.assertNotIn('@"pas_file_create"', ir)
         self.assertNotIn('call i8* @"malloc"', ir)
@@ -98,7 +98,7 @@ class TestCodegenIR(unittest.TestCase):
         ir = compile_to_ir(src)
         self.assertIn('@"input" = global i8* null', ir)
         self.assertIn('@"output" = global i8* null', ir)
-        self.assertIn('define void @"pas_file_touch_buffer"', ir)
+        self.assertIn('declare external void @"pas_file_touch_buffer"', ir)
         self.assertIn('call void @"pas_file_touch_buffer"', ir)
         # ASCII/TEXT records structure 1 in the FCB.
         self.assertIn('store i32 1', ir)

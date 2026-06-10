@@ -14,6 +14,7 @@ import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
 from ast_nodes import *
+from codegen.base import CodegenError
 
 
 class RuntimeBuiltinsMixin:
@@ -112,6 +113,40 @@ class RuntimeBuiltinsMixin:
         raw = self.builder.bitcast(ptr_val, ir.IntType(8).as_pointer())
         self.builder.call(self.scope.lookup('free').llvm_value, [raw])
         self.builder.store(ir.Constant(self.llvm_type(sym.type_expr), None), ptr_addr)
+
+    def _file_helper(self, name: str) -> ir.Function:
+        fn = self.scope.lookup(name)
+        if not fn:
+            raise CodegenError(f'Undefined runtime helper: {name}')
+        return fn.llvm_value
+
+    def builtin_reset(self, args: List[Expression]) -> None:
+        if len(args) != 1:
+            raise CodegenError(f'RESET expects 1 argument, got {len(args)}')
+        target = args[0] if isinstance(args[0], Designator) else Designator(args[0].name, [])
+        ptr = self.resolve_designator_ptr(target)
+        self.builder.call(self._file_helper('pas_file_reset'), [self.builder.bitcast(ptr, self.file_fcb_type().as_pointer())])
+
+    def builtin_rewrite(self, args: List[Expression]) -> None:
+        if len(args) != 1:
+            raise CodegenError(f'REWRITE expects 1 argument, got {len(args)}')
+        target = args[0] if isinstance(args[0], Designator) else Designator(args[0].name, [])
+        ptr = self.resolve_designator_ptr(target)
+        self.builder.call(self._file_helper('pas_file_rewrite'), [self.builder.bitcast(ptr, self.file_fcb_type().as_pointer())])
+
+    def builtin_get(self, args: List[Expression]) -> None:
+        if len(args) != 1:
+            raise CodegenError(f'GET expects 1 argument, got {len(args)}')
+        target = args[0] if isinstance(args[0], Designator) else Designator(args[0].name, [])
+        ptr = self.resolve_designator_ptr(target)
+        self.builder.call(self._file_helper('pas_file_get'), [self.builder.bitcast(ptr, self.file_fcb_type().as_pointer())])
+
+    def builtin_put(self, args: List[Expression]) -> None:
+        if len(args) != 1:
+            raise CodegenError(f'PUT expects 1 argument, got {len(args)}')
+        target = args[0] if isinstance(args[0], Designator) else Designator(args[0].name, [])
+        ptr = self.resolve_designator_ptr(target)
+        self.builder.call(self._file_helper('pas_file_put'), [self.builder.bitcast(ptr, self.file_fcb_type().as_pointer())])
 
     def builtin_abort(self, args: List[Expression]) -> None:
         # ABORT(CONST STRING, WORD, WORD): surface the message, error code, and

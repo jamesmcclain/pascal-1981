@@ -196,29 +196,30 @@ class CodegenBase:
         self.scope.define('free', free_fn, None)
         # File-control block, one fixed layout for every file type:
         #   {i32 element-size, i32 structure (0=binary FILE OF T, 1=ASCII/TEXT),
-        #    i32 touched (buffer-accessed flag), i8* current-component buffer}.
+        #    i32 touched (buffer-accessed flag), i32 mode/eof bookkeeping,
+        #    i8* current-component buffer}.
         fcb_ty = self.file_fcb_type()
         fcb_ptr = fcb_ty.as_pointer()
         file_buffer_ty = ir.FunctionType(ir.IntType(8).as_pointer(), [fcb_ptr])
         file_touch_ty = ir.FunctionType(ir.VoidType(), [fcb_ptr])
         i32 = ir.IntType(32)
         file_buffer = ir.Function(self.module, file_buffer_ty, name='pas_file_buffer')
-        b = IRBuilder(file_buffer.append_basic_block(name='entry'))
-        buf_field = b.gep(file_buffer.args[0], [ir.Constant(i32, 0), ir.Constant(i32, 3)])
-        b.ret(b.load(buf_field))
+        file_buffer.linkage = 'external'
         self.scope.define('pas_file_buffer', file_buffer, None)
         file_touch = ir.Function(self.module, file_touch_ty, name='pas_file_touch_buffer')
-        b = IRBuilder(file_touch.append_basic_block(name='entry'))
-        touched_field = b.gep(file_touch.args[0], [ir.Constant(i32, 0), ir.Constant(i32, 2)])
-        b.store(ir.Constant(i32, 1), touched_field)
-        b.ret_void()
+        file_touch.linkage = 'external'
         self.scope.define('pas_file_touch_buffer', file_touch, None)
+        for name, ty in [('pas_file_reset', ir.FunctionType(ir.VoidType(), [fcb_ptr])), ('pas_file_rewrite', ir.FunctionType(ir.VoidType(), [fcb_ptr])), ('pas_file_get', ir.FunctionType(ir.VoidType(), [fcb_ptr])), ('pas_file_put', ir.FunctionType(ir.VoidType(), [fcb_ptr]))]:
+            fn = ir.Function(self.module, ty, name=name)
+            fn.linkage = 'external'
+            self.scope.define(name, fn, None)
 
     def file_fcb_type(self) -> ir.Type:
-        """The file-control-block layout: [i32 element-size, i32 structure, i32 touched, i8* buffer]."""
+        """The file-control-block layout: [i32 element-size, i32 structure,
+        i32 touched, i32 mode/eof, i8* buffer, i8* handle]."""
         if not hasattr(self, '_fcb_ty'):
             i32 = ir.IntType(32)
-            self._fcb_ty = ir.LiteralStructType([i32, i32, i32, ir.IntType(8).as_pointer()])
+            self._fcb_ty = ir.LiteralStructType([i32, i32, i32, i32, ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer()])
         return self._fcb_ty
 
     def _scalar_size(self, name: str) -> int:

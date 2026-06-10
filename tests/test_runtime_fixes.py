@@ -172,8 +172,17 @@ class TestFileBufferModel(unittest.TestCase):
         retained, inline/leak-free) against breaking the basic F^ contract."""
         src = ("PROGRAM P; VAR f: FILE OF INTEGER; x: INTEGER; t: TEXT; c: CHAR; "
                "BEGIN f^ := 42; x := f^; WRITELN(x); t^ := 'Q'; c := t^; WRITELN(c) END.")
-        rc, out = build_run_linked(src, [])
+        rc, out = build_run_linked(src, ["fileops.c"])
         self.assertEqual(out, "42\nQ\n")
+
+    def test_reset_rewrite_get_put_roundtrip(self):
+        """RESET/REWRITE/GET/PUT should move data through the runtime file handle.
+        This intentionally uses the new runtime C helper rather than just F^."""
+        src = ("PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
+               "REWRITE(f); f^ := 'Z'; PUT(f); RESET(f); GET(f); c := f^; WRITELN(c) END.")
+        rc, out = build_run_linked(src, ["fileops.c"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "Z\n")
 
 
 if __name__ == "__main__":
