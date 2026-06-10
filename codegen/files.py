@@ -8,9 +8,10 @@ Part of Plan 1 refactoring (mixin-based architecture).
 
 from __future__ import annotations
 
+from typing import Any, List, Optional, Tuple, Union
+
 import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
-from typing import Optional, List, Union, Any, Tuple
 
 from ast_nodes import *
 
@@ -36,7 +37,7 @@ class FilesMixin:
         """
         import llvmlite.ir as ir
         from llvmlite.ir import IRBuilder
-        
+
         fcb_ty = self.file_fcb_type()
         fcb_ptr = fcb_ty.as_pointer()
         file_buffer_ty = ir.FunctionType(ir.IntType(8).as_pointer(), [fcb_ptr])
@@ -53,7 +54,6 @@ class FilesMixin:
         b.store(ir.Constant(i32, 1), touched_field)
         b.ret_void()
         self.scope.define('pas_file_touch_buffer', file_touch, None)
-
 
     def _init_file_storage(self, slot: ir.Value, type_expr: Type) -> None:
         elem_size, structure = self._file_element_size_and_structure(type_expr)
@@ -76,7 +76,6 @@ class FilesMixin:
         # The handle handed to the rest of codegen is an opaque i8* to the FCB.
         self.builder.store(self.builder.bitcast(fcb, ir.IntType(8).as_pointer()), slot)
 
-
     def _file_buffer_ptr(self, file_slot: ir.Value, elem_type: Type, touch: bool) -> ir.Value:
         handle = self.builder.load(file_slot)
         fptr = self.builder.bitcast(handle, self.file_fcb_type().as_pointer())
@@ -87,7 +86,6 @@ class FilesMixin:
         raw = self.builder.call(buf_fn, [fptr])
         return self.builder.bitcast(raw, ir.PointerType(self.llvm_type(elem_type)))
 
-
     def _file_element_size_and_structure(self, type_expr: Type) -> tuple[int, int]:
         resolved = self.resolve_type_alias(type_expr)
         if isinstance(resolved, FileType):
@@ -95,5 +93,3 @@ class FilesMixin:
         if isinstance(type_expr, NamedType) and type_expr.name.upper() == 'TEXT':
             return 1, 1
         return 1, 0
-
-

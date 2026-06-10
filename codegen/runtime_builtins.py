@@ -8,9 +8,10 @@ Part of Plan 1 refactoring (mixin-based architecture).
 
 from __future__ import annotations
 
+from typing import Any, List, Optional, Tuple, Union
+
 import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
-from typing import Optional, List, Union, Any, Tuple
 
 from ast_nodes import *
 
@@ -25,14 +26,12 @@ class RuntimeBuiltinsMixin:
         memcpy_type = ir.FunctionType(ir.PointerType(ir.IntType(8)), [ir.PointerType(ir.IntType(8)), ir.PointerType(ir.IntType(8)), ir.IntType(64)])
         return ir.Function(self.module, memcpy_type, name='memcpy')
 
-
     def memset_func(self) -> ir.Function:
         for func in self.module.functions:
             if func.name == 'memset':
                 return func
         memset_type = ir.FunctionType(ir.PointerType(ir.IntType(8)), [ir.PointerType(ir.IntType(8)), ir.IntType(32), ir.IntType(64)])
         return ir.Function(self.module, memset_type, name='memset')
-
 
     def runtime_error_func(self) -> ir.Function:
         """Declare or fetch a runtime error handler (calls abort)."""
@@ -42,7 +41,6 @@ class RuntimeBuiltinsMixin:
         # abort() takes no arguments and returns never (noreturn), but we declare void
         abort_type = ir.FunctionType(ir.VoidType(), [])
         return ir.Function(self.module, abort_type, name='abort')
-
 
     def pascal_abort_func(self) -> ir.Function:
         """Declare or fetch the ABORT runtime: void pabort(i8* msg, i32 len, i16 code, i16 status)."""
@@ -54,22 +52,17 @@ class RuntimeBuiltinsMixin:
         fn.linkage = 'external'
         return fn
 
-
     def builtin_movel(self, args: List[Expression]) -> None:
         self._runtime_fillmove('MOVEL', args)
-
 
     def builtin_mover(self, args: List[Expression]) -> None:
         self._runtime_fillmove('MOVER', args)
 
-
     def builtin_movesl(self, args: List[Expression]) -> None:
         self._runtime_fillmove('MOVESL', args)
 
-
     def builtin_movesr(self, args: List[Expression]) -> None:
         self._runtime_fillmove('MOVESR', args)
-
 
     def builtin_new(self, args: List[Expression]) -> None:
         if len(args) != 1:
@@ -105,7 +98,6 @@ class RuntimeBuiltinsMixin:
         casted = self.builder.bitcast(raw, self.llvm_type(sym.type_expr))
         self.builder.store(casted, ptr_addr)
 
-
     def builtin_dispose(self, args: List[Expression]) -> None:
         if len(args) != 1:
             raise CodegenError(f'DISPOSE expects 1 argument, got {len(args)}')
@@ -121,7 +113,6 @@ class RuntimeBuiltinsMixin:
         self.builder.call(self.scope.lookup('free').llvm_value, [raw])
         self.builder.store(ir.Constant(self.llvm_type(sym.type_expr), None), ptr_addr)
 
-
     def builtin_abort(self, args: List[Expression]) -> None:
         # ABORT(CONST STRING, WORD, WORD): surface the message, error code, and
         # STATUS word through the runtime rather than dropping them (manual:
@@ -131,7 +122,6 @@ class RuntimeBuiltinsMixin:
         status = self._coerce_to_word(self.codegen_expr(args[2]))
         self.builder.call(self.pascal_abort_func(), [chars, length, code, status])
         self.builder.unreachable()
-
 
     def builtin_pack(self, args: List[Expression]) -> None:
         """PACK(CONST A: unpacked-array; I: index; VAR Z: packed-array)
@@ -184,7 +174,6 @@ class RuntimeBuiltinsMixin:
 
         self.builder.position_at_end(end_block)
 
-
     def builtin_unpack(self, args: List[Expression]) -> None:
         """UNPACK(CONST Z: packed-array; VAR A: unpacked-array; I: index)
 
@@ -233,7 +222,6 @@ class RuntimeBuiltinsMixin:
 
         self.builder.position_at_end(end_block)
 
-
     def _runtime_fillmove(self, name: str, args: List[Expression]) -> None:
         src = self.codegen_expr(args[0])
         dst = self.codegen_expr(args[1])
@@ -243,7 +231,6 @@ class RuntimeBuiltinsMixin:
             raise CodegenError(f'Undefined procedure: {name}')
         self.builder.call(fn.llvm_value, [src, dst, length])
 
-
     def _coerce_to_word(self, val: ir.Value) -> ir.Value:
         """Coerce an integer value to i16 (WORD) for a runtime call."""
         if isinstance(val.type, ir.IntType):
@@ -252,5 +239,3 @@ class RuntimeBuiltinsMixin:
             if val.type.width < 16:
                 return self.builder.zext(val, ir.IntType(16))
         return val
-
-

@@ -27,15 +27,13 @@ class TestReadAllTypesEndToEnd(unittest.TestCase):
         whitespace skip; READLN() consuming the remainder of a line (the 'x'
         after the char); and LSTRING input truncated to its declared capacity.
         """
-        src = (
-            "PROGRAM full;\n"
-            "VAR i: INTEGER; w: WORD; r: REAL; c: CHAR; s: LSTRING(5);\n"
-            "BEGIN\n"
-            "  READLN(i); READLN(w); READLN(r); READ(c); READLN(); READLN(s);\n"
-            "  WRITELN('i=', i); WRITELN('w=', w); WRITELN(r:10:3);\n"
-            "  WRITELN('c=', c); WRITELN('s=', s)\n"
-            "END.\n"
-        )
+        src = ("PROGRAM full;\n"
+               "VAR i: INTEGER; w: WORD; r: REAL; c: CHAR; s: LSTRING(5);\n"
+               "BEGIN\n"
+               "  READLN(i); READLN(w); READLN(r); READ(c); READLN(); READLN(s);\n"
+               "  WRITELN('i=', i); WRITELN('w=', w); WRITELN(r:10:3);\n"
+               "  WRITELN('c=', c); WRITELN('s=', s)\n"
+               "END.\n")
         stdin = "-7\n65535\n3.5\nQx\nhello world\n"
         rc, out = _build_pascal_with_runtime(src, ["readq.c"], stdin=stdin)
         self.assertEqual(rc, 0)
@@ -60,12 +58,9 @@ class TestReadAllTypesEndToEnd(unittest.TestCase):
         self.assertNotEqual(rc, 0)
 
     def test_readln_skips_trailing_junk_on_line(self):
-        src = (
-            "PROGRAM P; VAR i, j: INTEGER;\n"
-            "BEGIN READLN(i); READLN(j); WRITELN(i + j) END.\n"
-        )
-        rc, out = _build_pascal_with_runtime(
-            src, ["readq.c"], stdin="40 junk on this line\n2\n")
+        src = ("PROGRAM P; VAR i, j: INTEGER;\n"
+               "BEGIN READLN(i); READLN(j); WRITELN(i + j) END.\n")
+        rc, out = _build_pascal_with_runtime(src, ["readq.c"], stdin="40 junk on this line\n2\n")
         self.assertEqual(rc, 0)
         self.assertEqual(out.strip(), "42")
 

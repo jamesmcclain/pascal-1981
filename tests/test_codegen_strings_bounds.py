@@ -25,16 +25,13 @@ otherwise. The compile_to_ir helper is reused from test_codegen.py rather than
 re-declared.
 """
 
-import unittest
-
-from tests.support import requires_exe, requires_llvm
 import os
 import subprocess
 import tempfile
+import unittest
 
-from tests.support import requires_exe, requires_llvm
-from tests.test_codegen import build_and_run, compile_to_ir, _build_pascal_with_runtime, RUNTIME_DIR
-from tests.support import parse_source, typecheck_source
+from tests.support import (parse_source, requires_exe, requires_llvm, typecheck_source)
+from tests.test_codegen import (RUNTIME_DIR, _build_pascal_with_runtime, build_and_run, compile_to_ir)
 
 
 @requires_llvm
@@ -187,6 +184,7 @@ class TestWriteFieldWidthOrdering(unittest.TestCase):
 
 @requires_llvm
 class TestStringIntrinsicCapacityIR(unittest.TestCase):
+
     def _compile_to_ir_force(self, src: str, force_rangeck):
         from codegen_llvm import compile_to_llvm
         ast = parse_source(src)
@@ -228,10 +226,11 @@ class TestStringIntrinsicCapacityIR(unittest.TestCase):
 
 @requires_llvm
 class TestReadDispatchCodegen(unittest.TestCase):
+
     def test_read_non_string_fallthrough_raises_codegen_error(self):
         """Pin the _builtin_read else branch itself, independent of the checker."""
-        from codegen_llvm import compile_to_llvm
         from codegen.base import CodegenError
+        from codegen_llvm import compile_to_llvm
         src = "PROGRAM P; TYPE C = (Red, Green); VAR c: C; BEGIN READLN(c) END."
         with self.assertRaisesRegex(CodegenError, "READ/READLN cannot read"):
             compile_to_llvm(parse_source(src))
@@ -294,6 +293,7 @@ class TestStringIntrinsicCapacityRuntime(unittest.TestCase):
 
 @requires_llvm
 class TestReadCodegenIR(unittest.TestCase):
+
     def test_readln_emits_skip_call(self):
         src = "PROGRAM P; VAR i: INTEGER; BEGIN READLN(i); READLN() END."
         ir = compile_to_ir(src)
@@ -359,6 +359,7 @@ def _compile_and_run_c_with_stdin(driver_src: str, runtime_files: list, stdin: s
 
 @requires_exe
 class TestReadRuntimeSemantics(unittest.TestCase):
+
     def test_pas_readln_skip_discards_trailing_junk(self):
         driver = ("#include <stdio.h>\n"
                   "#include <stdint.h>\n"

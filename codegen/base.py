@@ -159,7 +159,8 @@ class CodegenBase:
         read_char_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer()])
         read_lstr_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer(), ir.IntType(32)])
         read_skip_ty = ir.FunctionType(ir.VoidType(), [])
-        for name, ty in [('pas_read_int', read_int_ty), ('pas_read_word', read_word_ty), ('pas_read_real', read_real_ty), ('pas_read_char', read_char_ty), ('pas_read_lstring', read_lstr_ty), ('pas_readln_skip', read_skip_ty)]:
+        for name, ty in [('pas_read_int', read_int_ty), ('pas_read_word', read_word_ty), ('pas_read_real', read_real_ty), ('pas_read_char', read_char_ty),
+                         ('pas_read_lstring', read_lstr_ty), ('pas_readln_skip', read_skip_ty)]:
             fn = ir.Function(self.module, ty, name=name)
             fn.linkage = 'external'
             self.scope.define(name, fn, None)
@@ -174,7 +175,11 @@ class CodegenBase:
         scanne_fn = ir.Function(self.module, scaneq_ty, name='scanne')
         scanne_fn.linkage = 'external'
         self.scope.define('scanne', scanne_fn, None)
-        encode_bool_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer(), ir.IntType(32), ir.IntType(8).as_pointer(), ir.IntType(32), ir.IntType(32), ir.IntType(32), ir.IntType(32)])
+        encode_bool_ty = ir.FunctionType(
+            ir.IntType(32),
+            [ir.IntType(8).as_pointer(), ir.IntType(32),
+             ir.IntType(8).as_pointer(), ir.IntType(32),
+             ir.IntType(32), ir.IntType(32), ir.IntType(32)])
         encode_fn = ir.Function(self.module, encode_bool_ty, name='encode_value')
         encode_fn.linkage = 'external'
         self.scope.define('encode_value', encode_fn, None)
@@ -228,4 +233,3 @@ class CodegenBase:
             self._name_counter[prefix] = 0
         self._name_counter[prefix] += 1
         return f'{prefix}_{self._name_counter[prefix]}'
-

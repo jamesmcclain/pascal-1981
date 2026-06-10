@@ -6,17 +6,22 @@ I/O operations: WRITE, WRITELN, READ, READLN
 
 from __future__ import annotations
 
-import llvmlite.ir as ir
-from typing import List, Union, Optional
+from typing import List, Optional, Union
 
-from ast_nodes import *
-from type_system import EnumType as ResolvedEnumType, LStringType, StringType, REAL_TYPE, WORD_TYPE, INTEGER_TYPE, CHAR_TYPE, FileType as ResolvedFileType
-from ast_nodes import LStringType as ASTLStringType
+import llvmlite.ir as ir
+
 from ast_nodes import EnumType as ASTEnumType
+from ast_nodes import LStringType as ASTLStringType
+from ast_nodes import *
 from codegen.base import CodegenError
+from type_system import CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE
+from type_system import EnumType as ResolvedEnumType
+from type_system import FileType as ResolvedFileType
+from type_system import LStringType, StringType
 
 
 class IoWriteReadMixin:
+
     def printf_func(self) -> ir.Function:
         if 'printf' not in [f.name for f in self.module.functions]:
             ty = ir.FunctionType(ir.IntType(32), [ir.PointerType(ir.IntType(8))], var_arg=True)
@@ -87,7 +92,10 @@ class IoWriteReadMixin:
                     printf_args.extend([self.coerce_printf_int(self.codegen_expr(width)), length, val])
                 else:
                     fmt_parts.append('%*.*s')
-                    printf_args.extend([self.coerce_printf_int(self.codegen_expr(width)) if width is not None else ir.Constant(ir.IntType(32), 0), self.coerce_printf_int(self.codegen_expr(precision)) if precision is not None else length, val])
+                    printf_args.extend([
+                        self.coerce_printf_int(self.codegen_expr(width)) if width is not None else ir.Constant(ir.IntType(32), 0),
+                        self.coerce_printf_int(self.codegen_expr(precision)) if precision is not None else length, val
+                    ])
                 continue
 
             if isinstance(pas_ty, type(REAL_TYPE)) or str(val.type) in {'double', 'float'}:
@@ -99,7 +107,11 @@ class IoWriteReadMixin:
                     printf_args.extend([self.coerce_printf_int(self.codegen_expr(width)), self.builder.sitofp(val, ir.DoubleType()) if str(val.type) != 'double' else val])
                 else:
                     fmt_parts.append('%*.*f')
-                    printf_args.extend([self.coerce_printf_int(self.codegen_expr(width)) if width is not None else ir.Constant(ir.IntType(32), 0), self.coerce_printf_int(self.codegen_expr(precision)) if precision is not None else ir.Constant(ir.IntType(32), 0), self.builder.sitofp(val, ir.DoubleType()) if str(val.type) != 'double' else val])
+                    printf_args.extend([
+                        self.coerce_printf_int(self.codegen_expr(width)) if width is not None else ir.Constant(ir.IntType(32), 0),
+                        self.coerce_printf_int(self.codegen_expr(precision)) if precision is not None else ir.Constant(ir.IntType(32), 0),
+                        self.builder.sitofp(val, ir.DoubleType()) if str(val.type) != 'double' else val
+                    ])
                 continue
 
             if str(val.type) == 'i8':

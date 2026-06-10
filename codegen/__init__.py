@@ -24,26 +24,23 @@ from type_system import LStringType as ResolvedLStringType
 from type_system import StringType as ResolvedStringType
 
 # Import base classes and support classes
-from .base import CodegenError, CodegenBase, Symbol, LoopContext, Scope, _SCALAR_SIZES
-
-# Import mixin classes
-from .types_map import TypesMapMixin
+from .base import (_SCALAR_SIZES, CodegenBase, CodegenError, LoopContext, Scope, Symbol)
 from .constfold import ConstFoldMixin
-from .runtime_builtins import RuntimeBuiltinsMixin
-from .files import FilesMixin
-from .sets import SetsMixin
-from .strings import StringsMixin
-from .io_write_read import IoWriteReadMixin
-from .stmts import StmtsMixin
 from .decls import DeclsMixin
 from .exprs import ExprsMixin
+from .files import FilesMixin
+from .io_write_read import IoWriteReadMixin
+from .runtime_builtins import RuntimeBuiltinsMixin
+from .sets import SetsMixin
+from .stmts import StmtsMixin
+from .strings import StringsMixin
+# Import mixin classes
+from .types_map import TypesMapMixin
 
 
-class Codegen(CodegenBase, TypesMapMixin, ConstFoldMixin, RuntimeBuiltinsMixin, 
-              FilesMixin, SetsMixin, StringsMixin, IoWriteReadMixin, StmtsMixin,
-              DeclsMixin, ExprsMixin):
+class Codegen(CodegenBase, TypesMapMixin, ConstFoldMixin, RuntimeBuiltinsMixin, FilesMixin, SetsMixin, StringsMixin, IoWriteReadMixin, StmtsMixin, DeclsMixin, ExprsMixin):
     """LLVM IR code generator."""
-    
+
     def __init__(self, verbose: bool = False, source_file: Optional[str] = None, force_rangeck: Optional[bool] = None):
         """Initialize Codegen with all mixins."""
         super().__init__(verbose=verbose, source_file=source_file, force_rangeck=force_rangeck)
@@ -68,7 +65,11 @@ class Codegen(CodegenBase, TypesMapMixin, ConstFoldMixin, RuntimeBuiltinsMixin,
             ir.Function(self.module, fn_type, name=name)
         return next(f for f in self.module.functions if f.name == name)
 
-def compile_to_llvm(ast: Union[ProgramUnit, ModuleUnit, InterfaceUnit, ImplementationUnit], verbose: bool = False, source_file: Optional[str] = None, force_rangeck: Optional[bool] = None) -> str:
+
+def compile_to_llvm(ast: Union[ProgramUnit, ModuleUnit, InterfaceUnit, ImplementationUnit],
+                    verbose: bool = False,
+                    source_file: Optional[str] = None,
+                    force_rangeck: Optional[bool] = None) -> str:
     """Compile AST to LLVM IR string."""
     codegen = Codegen(verbose=verbose, source_file=source_file, force_rangeck=force_rangeck)
     module = codegen.codegen(ast)
@@ -76,4 +77,3 @@ def compile_to_llvm(ast: Union[ProgramUnit, ModuleUnit, InterfaceUnit, Implement
 
 
 __all__ = ['Codegen', 'CodegenError', 'Symbol', 'LoopContext', 'Scope', 'compile_to_llvm']
-

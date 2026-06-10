@@ -18,8 +18,9 @@ from ast_nodes import AdrExpr, AdsExpr
 from ast_nodes import ArrayType as ASTArrayType
 from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, CharLiteral, ConstDecl, Designator)
 from ast_nodes import EnumType as ASTEnumType
-from ast_nodes import (Expression, ForStmt, FuncCall, FuncDecl, Identifier, IfStmt, ImplementationUnit, InterfaceUnit, IntLiteral, LabelStmt, LowerExpr)
+from ast_nodes import Expression
 from ast_nodes import FileType as ASTFileType
+from ast_nodes import (ForStmt, FuncCall, FuncDecl, Identifier, IfStmt, ImplementationUnit, InterfaceUnit, IntLiteral, LabelStmt, LowerExpr)
 from ast_nodes import LStringType as ASTLStringType
 from ast_nodes import ModuleUnit, NamedType, NilLiteral
 from ast_nodes import PointerType as ASTPointerType

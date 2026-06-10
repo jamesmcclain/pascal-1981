@@ -20,7 +20,7 @@ import subprocess
 import tempfile
 import unittest
 
-from tests.support import parse_source, requires_exe, requires_llvm, typecheck_source
+from tests.support import (parse_source, requires_exe, requires_llvm, typecheck_source)
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _RUNTIME = os.path.join(_REPO_ROOT, "runtime")
@@ -49,8 +49,7 @@ def build_run_linked(src: str, runtime_files, stdin: str = "") -> tuple:
             f.write(ir)
         exe_path = os.path.join(tmpdir, "prog")
         cfiles = [os.path.join(_RUNTIME, name) for name in runtime_files]
-        cc = subprocess.run(["clang", ll_path, *cfiles, "-o", exe_path, "-lm"],
-                            capture_output=True, text=True)
+        cc = subprocess.run(["clang", ll_path, *cfiles, "-o", exe_path, "-lm"], capture_output=True, text=True)
         if cc.returncode != 0:
             raise RuntimeError(f"clang failed: {cc.stderr}")
         run = subprocess.run([exe_path], input=stdin, capture_output=True, text=True)
@@ -69,6 +68,7 @@ def _call_line(ir: str, callee: str) -> str:
 
 @requires_llvm
 class TestNewAllocationSize(unittest.TestCase):
+
     def test_new_sizes_record_pointee(self):
         """NEW(^RECORD) must allocate the whole record, not a fixed 8 bytes."""
         src = ("PROGRAM P; TYPE R = RECORD a, b, c: INTEGER END; "
@@ -86,6 +86,7 @@ class TestNewAllocationSize(unittest.TestCase):
 
 @requires_llvm
 class TestEncodeDecodeArgs(unittest.TestCase):
+
     def test_encode_passes_capacity_and_width(self):
         """ENCODE bounds by declared capacity and threads the field width."""
         src = ("PROGRAM P; VAR l: LSTRING(20); ok: BOOLEAN; "
@@ -108,6 +109,7 @@ class TestEncodeDecodeArgs(unittest.TestCase):
 
 @requires_exe
 class TestRuntimeBehavior(unittest.TestCase):
+
     def test_encode_sets_length_and_is_readable(self):
         """ENCODE into a fresh LSTRING produces a string WRITELN can print."""
         src = ("PROGRAM P; VAR l: LSTRING(20); ok: BOOLEAN; "
@@ -139,13 +141,14 @@ class TestRuntimeBehavior(unittest.TestCase):
         late, and not reading a length byte), and work for STRING too. For
         'aXbb' scanning 'b' from position 1: SCANEQ skips 'a','X' and stops at
         'b' (2); SCANNE stops immediately on 'a' (0)."""
-        src = ("PROGRAM P; VAR l: LSTRING(10); s: STRING(4); BEGIN "
-               "l := 'aXbb'; s := 'aXbb'; "
-               "WRITELN(SCANEQ(10, 'b', l, 1)); "   # 2
-               "WRITELN(SCANNE(10, 'b', l, 1)); "   # 0
-               "WRITELN(SCANNE(10, 'a', l, 1)); "   # 1 (single leading 'a')
-               "WRITELN(SCANEQ(10, 'b', s, 1)) "    # 2 (STRING path)
-               "END.")
+        src = (
+            "PROGRAM P; VAR l: LSTRING(10); s: STRING(4); BEGIN "
+            "l := 'aXbb'; s := 'aXbb'; "
+            "WRITELN(SCANEQ(10, 'b', l, 1)); "  # 2
+            "WRITELN(SCANNE(10, 'b', l, 1)); "  # 0
+            "WRITELN(SCANNE(10, 'a', l, 1)); "  # 1 (single leading 'a')
+            "WRITELN(SCANEQ(10, 'b', s, 1)) "  # 2 (STRING path)
+            "END.")
         rc, out = build_run_linked(src, ["scaneq.c"])
         self.assertEqual(out.splitlines()[:4], ["2", "0", "1", "2"])
 
@@ -161,6 +164,7 @@ class TestRuntimeBehavior(unittest.TestCase):
 
 @requires_exe
 class TestFileBufferModel(unittest.TestCase):
+
     def test_file_buffer_roundtrip(self):
         """Writing then reading the buffer variable F^ round-trips through the
         file-control block's own buffer, for both binary FILE OF T and TEXT.

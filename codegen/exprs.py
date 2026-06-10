@@ -8,9 +8,10 @@ Part of Plan 1 refactoring (mixin-based architecture).
 
 from __future__ import annotations
 
+from typing import Any, List, Optional, Tuple, Union
+
 import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
-from typing import Optional, List, Union, Any, Tuple
 
 from ast_nodes import *
 from type_system import LStringType as ResolvedLStringType
@@ -249,7 +250,6 @@ class ExprsMixin:
         else:
             raise CodegenError(f'Expression type {type(expr).__name__} not yet supported')
 
-
     def codegen_binop(self, expr: BinOp) -> ir.Value:
         """Codegen binary operation."""
         if expr.op in {'AND_THEN', 'OR_ELSE'}:
@@ -301,7 +301,6 @@ class ExprsMixin:
         else:
             raise CodegenError(f'Unknown binary operator: {expr.op}')
 
-
     def codegen_unaryop(self, expr: UnaryOp) -> ir.Value:
         """Codegen unary operation."""
         operand = self.codegen_expr(expr.operand)
@@ -315,7 +314,6 @@ class ExprsMixin:
             return self.builder.not_(operand)
         else:
             raise CodegenError(f'Unknown unary operator: {expr.op}')
-
 
     def codegen_short_circuit_binop(self, expr: BinOp) -> ir.Value:
         """Codegen short-circuit boolean AND THEN / OR ELSE."""
@@ -345,7 +343,6 @@ class ExprsMixin:
         result.add_incoming(short_value, left_block)
         result.add_incoming(right, right_block)
         return result
-
 
     def codegen_func_call(self, expr: FuncCall) -> ir.Value:
         """Codegen function call."""
@@ -522,7 +519,6 @@ class ExprsMixin:
     # Built-in Functions
     # ========================================================================
 
-
     def codegen_actual_arg(self, arg: Expression, mode: Optional[str]) -> ir.Value:
         if mode in {'VAR', 'VARS', 'CONST', 'CONSTS'}:
             if isinstance(arg, Identifier):
@@ -531,7 +527,6 @@ class ExprsMixin:
                 return self.resolve_designator_ptr(arg)
             raise CodegenError(f'{mode} parameter requires a designator argument')
         return self.codegen_expr(arg)
-
 
     def array_lower_bound(self, type_expr) -> tuple[Optional[int], Any]:
         """For a (possibly aliased) array type, return ``(lower_bound, element_type)``.
@@ -556,7 +551,6 @@ class ExprsMixin:
             return t.lower_bound, t.element_type
         return None, None
 
-
     def record_field_index(self, type_expr, field_name: str) -> tuple[Optional[int], Any]:
         """For a (possibly aliased) record type, return ``(llvm_struct_index,
         field_ast_type)`` for ``field_name``, matching the layout in
@@ -575,7 +569,6 @@ class ExprsMixin:
                 idx += 1
         return None, None
 
-
     def get_array_bounds(self, type_expr) -> tuple[int, int]:
         type_expr = self.resolve_type_alias(type_expr)
         if hasattr(type_expr, 'index_range') and type_expr.index_range:
@@ -586,7 +579,6 @@ class ExprsMixin:
             return type_expr.lower_bound, type_expr.upper_bound
         return 1, 10
 
-
     def _designator_array_bounds(self, arg) -> tuple[int, int]:
         """(lower, upper) bounds of the array a designator names; (1, 10) fallback."""
         name = arg.name if isinstance(arg, (Identifier, Designator)) else ""
@@ -594,7 +586,6 @@ class ExprsMixin:
         if sym and sym.type_expr:
             return self.get_array_bounds(sym.type_expr)
         return 1, 10
-
 
     def _designator_array_low(self, arg) -> int:
         """Lower bound of the array a designator names; 0 fallback (no shift)."""
@@ -609,5 +600,3 @@ class ExprsMixin:
     # ========================================================================
     # Utilities
     # ========================================================================
-
-
