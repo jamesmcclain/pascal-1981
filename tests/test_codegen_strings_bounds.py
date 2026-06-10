@@ -28,7 +28,12 @@ re-declared.
 import unittest
 
 from tests.support import requires_exe, requires_llvm
-from tests.test_codegen import build_and_run, compile_to_ir, _build_pascal_with_runtime
+import os
+import subprocess
+import tempfile
+
+from tests.support import requires_exe, requires_llvm
+from tests.test_codegen import build_and_run, compile_to_ir, _build_pascal_with_runtime, RUNTIME_DIR
 from tests.support import parse_source, typecheck_source
 
 
@@ -279,19 +284,70 @@ class TestReadCodegenIR(unittest.TestCase):
         self.assertNotIn("call void @\"pas_readln_skip\"", ir)
 
 
-@requires_exe
-class TestReadCodegenRuntime(unittest.TestCase):
-    def test_readln_empty_ok(self):
-        src = "PROGRAM P; BEGIN READLN() END."
-        rc, out = _build_pascal_with_runtime(src, ["readq.c"])
-        self.assertEqual(rc, 0)
-        self.assertEqual(out, "")
+def _compile_and_run_c_with_stdin(driver_src: str, runtime_files: list, stdin: str) -> tuple:
+    tmpdir = tempfile.mkdtemp()
+    try:
+        driver_path = os.path.join(tmpdir, "driver.c")
+        with open(driver_path, "w") as f:
+            f.write(driver_src)
+        exe_path = os.path.join(tmpdir, "prog")
+        sources = [driver_path] + [os.path.join(RUNTIME_DIR, rf) for rf in runtime_files]
+        result = subprocess.run(["clang", *sources, "-o", exe_path], capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"clang failed: {result.stderr}")
+        run_result = subprocess.run([exe_path], input=stdin, capture_output=True, text=True)
+        return run_result.returncode, run_result.stdout, run_result.stderr
+    finally:
+        import shutil
+        shutil.rmtree(tmpdir)
 
-    def test_readln_lstring_uses_declared_capacity(self):
-        src = "PROGRAM P; VAR s: LSTRING(3); BEGIN READLN(s); WRITELN(s) END."
-        rc, out = _build_pascal_with_runtime(src, ["readq.c"], stdin="abcdef\n")
+
+@requires_exe
+class TestReadRuntimeSemantics(unittest.TestCase):
+    def test_pas_readln_skip_discards_trailing_junk(self):
+        driver = ("#include <stdio.h>\n"
+                  "#include <stdint.h>\n"
+                  "extern int pas_read_int(int32_t *out);\n"
+                  "extern void pas_readln_skip(void);\n"
+                  "int main(void) {\n"
+                  "    int32_t a = 0, b = 0;\n"
+                  "    pas_read_int(&a);\n"
+                  "    pas_readln_skip();\n"
+                  "    pas_read_int(&b);\n"
+                  "    printf(\"%d %d\\n\", (int)a, (int)b);\n"
+                  "    return 0;\n"
+                  "}\n")
+        rc, out, _ = _compile_and_run_c_with_stdin(driver, ["readq.c"], "12 junk\n34\n")
         self.assertEqual(rc, 0)
-        self.assertEqual(out, "abc\n")
+        self.assertEqual(out, "12 34\n")
+
+    def test_pas_read_char_preserves_blank(self):
+        driver = ("#include <stdio.h>\n"
+                  "#include <stdint.h>\n"
+                  "extern int pas_read_char(uint8_t *out);\n"
+                  "int main(void) {\n"
+                  "    uint8_t c = 0;\n"
+                  "    pas_read_char(&c);\n"
+                  "    printf(\"%u\\n\", (unsigned)c);\n"
+                  "    return 0;\n"
+                  "}\n")
+        rc, out, _ = _compile_and_run_c_with_stdin(driver, ["readq.c"], " \n")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "32\n")
+
+    def test_pas_read_lstring_uses_declared_capacity(self):
+        driver = ("#include <stdio.h>\n"
+                  "#include <stdint.h>\n"
+                  "extern int pas_read_lstring(uint8_t *buf, int cap);\n"
+                  "int main(void) {\n"
+                  "    uint8_t buf[4] = {0};\n"
+                  "    pas_read_lstring(buf, 3);\n"
+                  "    printf(\"%u %c%c%c\\n\", (unsigned)buf[0], buf[1], buf[2], buf[3]);\n"
+                  "    return 0;\n"
+                  "}\n")
+        rc, out, _ = _compile_and_run_c_with_stdin(driver, ["readq.c"], "abcdef\n")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "3 abc\n")
 
 
 if __name__ == "__main__":
