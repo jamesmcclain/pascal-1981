@@ -175,14 +175,35 @@ class TestFileBufferModel(unittest.TestCase):
         rc, out = build_run_linked(src, ["fileops.c"])
         self.assertEqual(out, "42\nQ\n")
 
-    def test_reset_rewrite_get_put_roundtrip(self):
-        """RESET/REWRITE/GET/PUT should move data through the runtime file handle.
-        This intentionally uses the new runtime C helper rather than just F^."""
-        src = ("PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
-               "REWRITE(f); f^ := 'Z'; PUT(f); RESET(f); GET(f); c := f^; WRITELN(c) END.")
+    def test_text_reset_rewrite_get_put_roundtrip(self):
+        """TEXT file primitives must move distinct components through the stream.
+        RESET supplies the first component via its implicit GET; explicit GET
+        then advances to the second component."""
+        src = ("PROGRAM P; VAR f: TEXT; c1, c2: CHAR; BEGIN "
+               "REWRITE(f); f^ := 'A'; PUT(f); f^ := 'B'; PUT(f); "
+               "RESET(f); c1 := f^; GET(f); c2 := f^; WRITELN(c1); WRITELN(c2) END.")
         rc, out = build_run_linked(src, ["fileops.c"])
         self.assertEqual(rc, 0)
-        self.assertEqual(out, "Z\n")
+        self.assertEqual(out, "A\nB\n")
+
+    def test_binary_reset_rewrite_get_put_roundtrip(self):
+        """Binary FILE OF INTEGER uses elem_size transfers, not byte-sized TEXT I/O."""
+        src = ("PROGRAM P; VAR f: FILE OF INTEGER; x, y, z: INTEGER; BEGIN "
+               "REWRITE(f); f^ := 1001; PUT(f); f^ := -7; PUT(f); f^ := 42; PUT(f); "
+               "RESET(f); x := f^; GET(f); y := f^; GET(f); z := f^; "
+               "WRITELN(x); WRITELN(y); WRITELN(z) END.")
+        rc, out = build_run_linked(src, ["fileops.c"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "1001\n-7\n42\n")
+
+    def test_rewrite_truncates_and_get_past_eof_aborts(self):
+        """A second REWRITE truncates prior content. With no EOF predicate yet,
+        prove truncation by driving GET past the only surviving component."""
+        src = ("PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
+               "REWRITE(f); f^ := 'A'; PUT(f); f^ := 'B'; PUT(f); "
+               "REWRITE(f); f^ := 'C'; PUT(f); RESET(f); c := f^; WRITELN(c); GET(f); GET(f) END.")
+        rc, out = build_run_linked(src, ["fileops.c"])
+        self.assertNotEqual(rc, 0)
 
 
 if __name__ == "__main__":

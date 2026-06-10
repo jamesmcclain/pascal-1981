@@ -120,33 +120,26 @@ class RuntimeBuiltinsMixin:
             raise CodegenError(f'Undefined runtime helper: {name}')
         return fn.llvm_value
 
-    def builtin_reset(self, args: List[Expression]) -> None:
+    def _builtin_file_op(self, pas_name: str, helper_name: str, args: List[Expression]) -> None:
         if len(args) != 1:
-            raise CodegenError(f'RESET expects 1 argument, got {len(args)}')
+            raise CodegenError(f'{pas_name} expects 1 argument, got {len(args)}')
         target = args[0] if isinstance(args[0], Designator) else Designator(args[0].name, [])
         ptr = self.resolve_designator_ptr(target)
-        self.builder.call(self._file_helper('pas_file_reset'), [self.builder.bitcast(ptr, self.file_fcb_type().as_pointer())])
+        handle = self.builder.load(ptr)
+        fcb_ptr = self.builder.bitcast(handle, self.file_fcb_type().as_pointer())
+        self.builder.call(self._file_helper(helper_name), [fcb_ptr])
+
+    def builtin_reset(self, args: List[Expression]) -> None:
+        self._builtin_file_op('RESET', 'pas_file_reset', args)
 
     def builtin_rewrite(self, args: List[Expression]) -> None:
-        if len(args) != 1:
-            raise CodegenError(f'REWRITE expects 1 argument, got {len(args)}')
-        target = args[0] if isinstance(args[0], Designator) else Designator(args[0].name, [])
-        ptr = self.resolve_designator_ptr(target)
-        self.builder.call(self._file_helper('pas_file_rewrite'), [self.builder.bitcast(ptr, self.file_fcb_type().as_pointer())])
+        self._builtin_file_op('REWRITE', 'pas_file_rewrite', args)
 
     def builtin_get(self, args: List[Expression]) -> None:
-        if len(args) != 1:
-            raise CodegenError(f'GET expects 1 argument, got {len(args)}')
-        target = args[0] if isinstance(args[0], Designator) else Designator(args[0].name, [])
-        ptr = self.resolve_designator_ptr(target)
-        self.builder.call(self._file_helper('pas_file_get'), [self.builder.bitcast(ptr, self.file_fcb_type().as_pointer())])
+        self._builtin_file_op('GET', 'pas_file_get', args)
 
     def builtin_put(self, args: List[Expression]) -> None:
-        if len(args) != 1:
-            raise CodegenError(f'PUT expects 1 argument, got {len(args)}')
-        target = args[0] if isinstance(args[0], Designator) else Designator(args[0].name, [])
-        ptr = self.resolve_designator_ptr(target)
-        self.builder.call(self._file_helper('pas_file_put'), [self.builder.bitcast(ptr, self.file_fcb_type().as_pointer())])
+        self._builtin_file_op('PUT', 'pas_file_put', args)
 
     def builtin_abort(self, args: List[Expression]) -> None:
         # ABORT(CONST STRING, WORD, WORD): surface the message, error code, and

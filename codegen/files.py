@@ -19,51 +19,6 @@ from ast_nodes import *
 class FilesMixin:
     """Mixin for files functionality."""
 
-    def file_fcb_type(self) -> ir.LiteralStructType:
-        """The file-control-block layout shared by every file variable.
-
-        Fields: element size, structure (0 = binary FILE OF T, 1 = ASCII/TEXT),
-        a touched flag, a mode/eof bookkeeping word, and a pointer to the
-        current-component buffer. The runtime handle lives in the final slot.
-        """
-        if not hasattr(self, '_fcb_ty'):
-            i32 = ir.IntType(32)
-            self._fcb_ty = ir.LiteralStructType([i32, i32, i32, i32, ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer()])
-        return self._fcb_ty
-
-    def _register_file_helpers(self) -> None:
-        """Register file helper functions (pas_file_buffer, pas_file_touch_buffer).
-        
-        This is called after __init__ to avoid initialization order issues with mixins.
-        """
-        import llvmlite.ir as ir
-        from llvmlite.ir import IRBuilder
-
-        fcb_ty = self.file_fcb_type()
-        fcb_ptr = fcb_ty.as_pointer()
-        file_buffer_ty = ir.FunctionType(ir.IntType(8).as_pointer(), [fcb_ptr])
-        file_touch_ty = ir.FunctionType(ir.VoidType(), [fcb_ptr])
-        file_reset_ty = ir.FunctionType(ir.VoidType(), [fcb_ptr])
-        file_rewrite_ty = ir.FunctionType(ir.VoidType(), [fcb_ptr])
-        file_get_ty = ir.FunctionType(ir.VoidType(), [fcb_ptr])
-        file_put_ty = ir.FunctionType(ir.VoidType(), [fcb_ptr])
-        i32 = ir.IntType(32)
-        file_buffer = ir.Function(self.module, file_buffer_ty, name='pas_file_buffer')
-        b = IRBuilder(file_buffer.append_basic_block(name='entry'))
-        buf_field = b.gep(file_buffer.args[0], [ir.Constant(i32, 0), ir.Constant(i32, 4)])
-        b.ret(b.load(buf_field))
-        self.scope.define('pas_file_buffer', file_buffer, None)
-        file_touch = ir.Function(self.module, file_touch_ty, name='pas_file_touch_buffer')
-        b = IRBuilder(file_touch.append_basic_block(name='entry'))
-        touched_field = b.gep(file_touch.args[0], [ir.Constant(i32, 0), ir.Constant(i32, 2)])
-        b.store(ir.Constant(i32, 1), touched_field)
-        b.ret_void()
-        self.scope.define('pas_file_touch_buffer', file_touch, None)
-        for name, ty in [('pas_file_reset', file_reset_ty), ('pas_file_rewrite', file_rewrite_ty), ('pas_file_get', file_get_ty), ('pas_file_put', file_put_ty)]:
-            fn = ir.Function(self.module, ty, name=name)
-            fn.linkage = 'external'
-            self.scope.define(name, fn, None)
-
     def _init_file_storage(self, slot: ir.Value, type_expr: Type) -> None:
         elem_size, structure = self._file_element_size_and_structure(type_expr)
         i32 = ir.IntType(32)

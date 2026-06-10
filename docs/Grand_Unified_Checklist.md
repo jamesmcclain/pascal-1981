@@ -408,12 +408,23 @@ the biggest single chunk; expect it to need its own design pass.
     assignment is rejected. Proven by `python -m unittest tests.test_parser
     tests.test_typecheck tests.test_codegen`.
   - NOTE / does not cover: there is no device I/O yet. `INPUT`/`OUTPUT` are not
-    attached to stdin/stdout, and the FCB has no fd/position/mode — those, plus
-    the lazy fill/flush that the touch hook is a seam for, are 8.2 (`RESET`/
-    `REWRITE`/`GET`/`PUT`). 8.1 is the in-memory buffer-variable model only.
+    attached to stdin/stdout. 8.1 is the in-memory buffer-variable model only;
+    8.2 adds anonymous backing streams and mode/eof bookkeeping for core file
+    primitives.
 - [x] **8.2 — `RESET`, `REWRITE`, `GET`, `PUT`.** `[READ]` **L** Core file ops.
-  - Done: codegen now lowers these four calls to runtime helpers, the FCB carries mode/eof/handle bookkeeping, the touch hook remains the lazy-eval seam, and `runtime/fileops.c` provides the executable-side helpers used by the test suite.
-  - DEFERRED: file-directed I/O stays punted until 8.4 so the stream-predicate work can land alongside it; filename binding stays punted until 8.5 (`ASSIGN`/`READFN`).
+  - Done: codegen lowers these four calls to runtime helpers; `runtime/fileops.c`
+    now uses a real `tmpfile()` backing stream with `fread`/`fwrite`, `RESET`
+    performs the required implicit first `GET`, `REWRITE` truncates by replacing
+    the anonymous backing stream, and the FCB records mode plus an eof bit for
+    8.4 to consume. The FCB layout is now defined in one live codegen site.
+  - Proof: hostile run tests in `tests.test_runtime_fixes.TestFileBufferModel`
+    cover TEXT two-component round-trip, binary `FILE OF INTEGER` element-sized
+    round-trip, and `REWRITE` truncation via GET-past-eof abort; IR shape tests
+    in `tests.test_codegen.TestCodegenIR` still verify the extern helper seam.
+  - DEFERRED: `EOF`/`EOLN` predicates and TEXT line-marker semantics remain
+    8.4; filename binding (`ASSIGN`/`READFN`) and `INPUT`/`OUTPUT` attachment
+    remain 8.4/8.5 territory. Until then, unbound files use anonymous tmpfile
+    backing stores.
 - [x] **8.3 — `READ`, and `READLN` beyond integer; `WRITE`/`WRITELN` for `REAL`.** `[OBSERVED]` **M**
   `READLN` currently reads integers only; `WRITE`/`WRITELN` don't handle `REAL`.
   Extend the existing printf/scanf hybrid path.

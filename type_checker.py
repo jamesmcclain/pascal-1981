@@ -938,6 +938,9 @@ class PascalTypeChecker(TypeChecker):
             elif lookup_name in {'READ', 'READLN'}:
                 self._check_read_args(stmt, is_readln=(lookup_name == 'READLN'))
                 return
+            elif lookup_name in {'RESET', 'REWRITE', 'GET', 'PUT'}:
+                self._check_file_primitive_args(stmt, lookup_name)
+                return
 
         if not sym:
             self.error(f"Undefined procedure: {stmt.name}", stmt)
@@ -1002,6 +1005,15 @@ class PascalTypeChecker(TypeChecker):
                         if not can_assign(arg_type, param_type):
                             self.error(f"Argument {i+1} type mismatch: expected {param_type}, got {arg_type}", stmt)
             return
+
+    def _check_file_primitive_args(self, stmt: ProcCallStmt, name: str) -> None:
+        if len(stmt.args) != 1:
+            self.error(f"Procedure '{stmt.name}' expects 1 argument, got {len(stmt.args)}", stmt)
+            return
+        arg = stmt.args[0]
+        arg_type = self.infer_expression_type(arg)
+        if not isinstance(arg_type, FileType):
+            self.error(f"Argument 1 type mismatch: {name} expects a file variable, got {arg_type}", stmt)
 
     def _is_text_file_type(self, t: Type) -> bool:
         return isinstance(t, FileType) and t.structure == 'ASCII' and t.element_type.equivalent_to(CHAR_TYPE)
