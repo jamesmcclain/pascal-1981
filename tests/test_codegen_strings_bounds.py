@@ -339,9 +339,11 @@ class TestReadRuntimeSemantics(unittest.TestCase):
         driver = ("#include <stdio.h>\n"
                   "#include <stdint.h>\n"
                   "extern int pas_read_lstring(uint8_t *buf, int cap);\n"
+                  "extern void pas_readln_skip(void);\n"
                   "int main(void) {\n"
                   "    uint8_t buf[4] = {0};\n"
                   "    pas_read_lstring(buf, 3);\n"
+                  "    pas_readln_skip();\n"
                   "    printf(\"%u %c%c%c\\n\", (unsigned)buf[0], buf[1], buf[2], buf[3]);\n"
                   "    return 0;\n"
                   "}\n")

@@ -61,6 +61,7 @@ int pas_read_lstring(uint8_t *buf, int cap) {
         n++;
     }
     if (ch == EOF) die("unexpected EOF while reading string");
+    if (ch == '\n') unread(ch);
     if (cap < 0) cap = 0;
     buf[0] = (uint8_t)(n < cap ? n : cap);
     return 0;
