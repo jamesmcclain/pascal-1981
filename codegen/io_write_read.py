@@ -13,6 +13,7 @@ from ast_nodes import *
 from type_system import EnumType as ResolvedEnumType, LStringType, StringType, REAL_TYPE, WORD_TYPE, INTEGER_TYPE, CHAR_TYPE
 from ast_nodes import LStringType as ASTLStringType
 from ast_nodes import EnumType as ASTEnumType
+from codegen.base import CodegenError
 
 
 class IoWriteReadMixin:
@@ -171,8 +172,12 @@ class IoWriteReadMixin:
                 fn = self._read_helper('pas_read_char', ptr.type)
                 call_args = [ptr]
             else:
-                fn = self._read_helper('pas_read_lstring', ir.IntType(8).as_pointer(), [ir.IntType(32)])
                 is_str, max_len, is_lstring = self.get_string_type_info(ty)
+                # Unknown or unsupported READ targets must fail loudly, never fall through to a memory write.
+                if not is_str or not is_lstring:
+                    type_label = ty_name or (getattr(ty, 'name', type(ty).__name__) if ty is not None else 'UNKNOWN')
+                    raise CodegenError(f"READ/READLN cannot read a value of type {type_label}")
+                fn = self._read_helper('pas_read_lstring', ir.IntType(8).as_pointer(), [ir.IntType(32)])
                 call_args = [self.builder.bitcast(ptr, ir.IntType(8).as_pointer()), ir.Constant(ir.IntType(32), max_len)]
             self.builder.call(fn, call_args)
         if consume_eol:

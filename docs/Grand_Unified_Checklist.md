@@ -412,7 +412,7 @@ the biggest single chunk; expect it to need its own design pass.
     the lazy fill/flush that the touch hook is a seam for, are 8.2 (`RESET`/
     `REWRITE`/`GET`/`PUT`). 8.1 is the in-memory buffer-variable model only.
 - [ ] **8.2 — `RESET`, `REWRITE`, `GET`, `PUT`.** `[READ]` **L** Core file ops.
-- [ ] **8.3 — `READ`, and `READLN` beyond integer; `WRITE`/`WRITELN` for `REAL`.** `[OBSERVED]` **M**
+- [x] **8.3 — `READ`, and `READLN` beyond integer; `WRITE`/`WRITELN` for `REAL`.** `[OBSERVED]` **M**
   `READLN` currently reads integers only; `WRITE`/`WRITELN` don't handle `REAL`.
   Extend the existing printf/scanf hybrid path.
   - REOPENED: the previous "Done" note claimed dispatch resolved semantic
@@ -432,6 +432,32 @@ the biggest single chunk; expect it to need its own design pass.
   - NOTE / does not cover: file-directed I/O, the optional leading file
     argument, or the remaining runtime-reader semantics for bounded string
     input. Those remain for 8.2/8.3a/8.4.
+  - CLOSED: `_builtin_read` now has a strict non-scalar branch: it uses
+    `get_string_type_info` for the declared LSTRING capacity and raises
+    `CodegenError` for unknown, non-string, or STRING(n) read targets instead
+    of falling through to `pas_read_lstring`; `READ` readable types are now
+    decoupled from `WRITE` writable types, so enum and BOOLEAN reads are
+    rejected while enum/BOOLEAN writes remain supported (enum input remains a
+    9.8 follow-on); READ arguments with unresolvable types now error; and
+    `tests/test_read_end_to_end.py` was added. `[OBSERVED]`
+  - Evidence: strict codegen fallthrough and LSTRING capacity are covered by
+    `tests.test_codegen_strings_bounds.TestReadDispatchCodegen.test_read_non_string_fallthrough_raises_codegen_error`
+    and `test_lstring_read_uses_declared_capacity`; enum/BOOLEAN READ rejection
+    and enum WRITE acceptance are covered by
+    `tests.test_typecheck.TestReadWriteTypecheck.test_read_enum_rejected`,
+    `test_read_boolean_rejected`, and `test_write_enum_still_allowed`; the
+    multi-type runtime READ/READLN path is covered by
+    `tests.test_read_end_to_end.TestReadEndToEnd.*`. Full suite:
+    `python3 -m unittest discover -s tests` ran 335 tests OK. `[OBSERVED]`
+  - Evidence: IBM Pascal manual text states default REAL field width M is 14
+    and shows `WRITE (123.456)` as `' 1.2345600E+02'`; current no-width REAL
+    output uses `%14.7E`. Source text: `IBM_Pascal_Compiler_Aug81_djvu.txt`,
+    manual page 12-24. `[READ]`
+  - Does NOT cover: file-directed I/O or the leading file argument (8.2/8.3a),
+    `EOF`/`EOLN` (8.4), enum input parsing (9.8 follow-on), STRING(n) input
+    blank-pad semantics (currently rejected loudly), the WRITE-side `None` gate,
+    or any broader REAL formatting beyond the documented default width/example.
+    `[OBSERVED]`
 - [ ] **8.3a — `WRITE`/`WRITELN` accept a whole file variable as a data argument.** `[OBSERVED]` **S**
   Still open. This item is the file-selector / whole-file-argument split, and
   should stay separate from 8.3's ordinary data-argument type checking.

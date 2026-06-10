@@ -226,6 +226,23 @@ class TestStringIntrinsicCapacityIR(unittest.TestCase):
         self.assertIn("concat_overflow", ir)
 
 
+@requires_llvm
+class TestReadDispatchCodegen(unittest.TestCase):
+    def test_read_non_string_fallthrough_raises_codegen_error(self):
+        """Pin the _builtin_read else branch itself, independent of the checker."""
+        from codegen_llvm import compile_to_llvm
+        from codegen.base import CodegenError
+        src = "PROGRAM P; TYPE C = (Red, Green); VAR c: C; BEGIN READLN(c) END."
+        with self.assertRaisesRegex(CodegenError, "READ/READLN cannot read"):
+            compile_to_llvm(parse_source(src))
+
+    def test_lstring_read_uses_declared_capacity(self):
+        src = "PROGRAM P; VAR s: LSTRING(5); BEGIN READLN(s) END."
+        ir = compile_to_ir(src)
+        self.assertIn('call i32 @"pas_read_lstring"(i8* %', ir)
+        self.assertIn('i32 5)', ir)
+
+
 @requires_exe
 class TestStringIntrinsicCapacityRuntime(unittest.TestCase):
     """End-to-end: in-capacity calls succeed; over-capacity calls abort."""

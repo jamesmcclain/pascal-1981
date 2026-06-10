@@ -1040,14 +1040,19 @@ class PascalTypeChecker(TypeChecker):
                 self.error(f"READ argument {i+1} must be assignable", stmt)
                 continue
             target_type = self.infer_designator_type(arg) if isinstance(arg, Designator) else sym.type
-            if target_type is None or not self._is_readable_type(target_type):
+            if target_type is None:
+                self.error(f"READ argument {i+1} has unresolvable type", stmt)
+                continue
+            if not self._is_readable_type(target_type):
                 self.error(f"READ argument {i+1} has unreadable type {target_type}", stmt)
 
     def _is_writable_type(self, t: Type) -> bool:
-        return isinstance(t, (type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), EnumType, StringType, LStringType))
+        # WRITE supports printable BOOLEAN and enum values; READ input parsing for those is intentionally absent.
+        return isinstance(t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), EnumType, StringType, LStringType))
 
     def _is_readable_type(self, t: Type) -> bool:
-        return self._is_writable_type(t)
+        # READ is narrower than WRITE: enum input is deferred to 9.8 follow-on work, and BOOLEAN input is unsupported.
+        return isinstance(t, (type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), StringType, LStringType))
 
     def _check_concat_args(self, stmt: ProcCallStmt) -> None:
         """Type check CONCAT(VAR D: LSTRING; CONST S: STRING).
