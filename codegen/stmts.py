@@ -27,10 +27,19 @@ class StmtsMixin:
                 break
             self.codegen_stmt(stmt)
 
+    def effective_flag(self, flag: str, stmt: Statement) -> bool:
+        """Return the effective boolean value of a runtime-check flag.
+
+        CLI force_flags take priority over the per-statement source value
+        (which was stamped onto the token by the lexer at parse time).
+        """
+        if flag in self.force_flags:
+            return self.force_flags[flag]
+        return getattr(stmt, flag.lower(), True)
+
     def effective_rangeck(self, stmt: Statement) -> bool:
-        if self.force_rangeck is not None:
-            return self.force_rangeck
-        return getattr(stmt, 'rangeck', True)
+        """Convenience wrapper for the RANGECK flag."""
+        return self.effective_flag('RANGECK', stmt)
 
     def codegen_stmt(self, stmt: Statement) -> None:
         """Codegen a statement."""
