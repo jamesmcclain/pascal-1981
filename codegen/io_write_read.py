@@ -48,7 +48,15 @@ class IoWriteReadMixin:
     def _pas_type(self, expr) -> Optional[object]:
         if isinstance(expr, (Identifier, Designator)):
             sym = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
-            return getattr(sym, 'type_expr', None) if sym else None
+            ty = getattr(sym, 'type_expr', None) if sym else None
+            if isinstance(expr, Designator) and expr.selectors and ty is not None:
+                cur = ty
+                for sel in expr.selectors:
+                    if sel.kind == 'FIELD' and isinstance(self.resolve_type_alias(cur), (ResolvedFileType, FileType)):
+                        if str(sel.index_or_field).upper() == 'MODE':
+                            return NamedType('FILEMODES', None)
+                    # Fall back to the base type for complex selectors this helper does not model.
+            return ty
         return self.infer_expression_type(expr) if hasattr(self, 'infer_expression_type') else None
 
     def _file_selector_fcb(self, expr) -> ir.Value:

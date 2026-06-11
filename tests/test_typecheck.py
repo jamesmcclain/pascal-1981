@@ -202,6 +202,16 @@ class TestReadWriteTypecheck(unittest.TestCase):
         self.assertFalse(bad_src.success)
         self.assertIn("TEXT", " ".join(str(e) for e in bad_src.errors))
 
+    def test_filemodes_and_fcb_mode_typecheck(self):
+        ok = typecheck_source("PROGRAM P; VAR f: TEXT; m: FILEMODES; BEGIN m := f.MODE; f.MODE := DIRECT END.")
+        self.assertTrue(ok.success, msg=" ".join(str(e) for e in ok.errors))
+        bad = typecheck_source("PROGRAM P; VAR f: TEXT; BEGIN f.MODE := 1 END.")
+        self.assertFalse(bad.success)
+        self.assertIn("FILEMODES", " ".join(str(e) for e in bad.errors))
+        bad_field = typecheck_source("PROGRAM P; VAR f: TEXT; BEGIN f.NOPE := DIRECT END.")
+        self.assertFalse(bad_field.success)
+        self.assertIn("File control block", " ".join(str(e) for e in bad_field.errors))
+
 
 class TestTypeCompatibility(unittest.TestCase):
     """Type compatibility and assignment rules."""

@@ -286,6 +286,22 @@ class TestFileBufferModel(unittest.TestCase):
             self.assertEqual(out, "eol\nR\n")
             self.assertEqual(path.read_text(), "R\n")
 
+    def test_file_mode_field_defaults_and_assignment(self):
+        src = ("PROGRAM P; VAR f: TEXT; BEGIN "
+               "IF f.MODE = SEQUENTIAL THEN WRITELN('seq'); "
+               "IF INPUT.MODE = TERMINAL THEN WRITELN('term'); "
+               "f.MODE := DIRECT; IF f.MODE = DIRECT THEN WRITELN('direct') END.")
+        rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "seq\nterm\ndirect\n")
+
+    def test_fcbfqq_record_mode_field_codegen(self):
+        src = ("PROGRAM P; VAR b: FCBFQQ; BEGIN "
+               "b.MODE := TERMINAL; IF b.MODE = TERMINAL THEN WRITELN('fcb') END.")
+        rc, out = build_run_linked(src, [])
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "fcb\n")
+
 
 if __name__ == "__main__":
     unittest.main()

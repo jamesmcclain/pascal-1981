@@ -1611,15 +1611,27 @@ class PascalTypeChecker(TypeChecker):
                                 self.error(f"Array index must be {expected}, got {index_type}", expr)
                         current_type = current_type.element_type
                     elif selector.kind == 'FIELD':
-                        if not isinstance(current_type, RecordType):
-                            self.error(f"Cannot access field on non-record type {current_type}", expr)
-                            return None
-                        field_name = selector.index_or_field
-                        field_type = current_type.get_field_type(field_name)
-                        if field_type is None:
-                            self.error(f"Record has no field '{field_name}'", expr)
-                            return None
-                        current_type = field_type
+                        field_name = str(selector.index_or_field).upper()
+                        if isinstance(current_type, FileType):
+                            if field_name == 'MODE':
+                                current_type = EnumType(['SEQUENTIAL', 'TERMINAL', 'DIRECT'], name='FILEMODES')
+                            elif field_name == 'TRAP':
+                                current_type = BOOLEAN_TYPE
+                            elif field_name == 'ERRS':
+                                current_type = INTEGER_TYPE
+                            else:
+                                self.error(f"File control block has no field '{selector.index_or_field}'", expr)
+                                return None
+                        else:
+                            if not isinstance(current_type, RecordType):
+                                self.error(f"Cannot access field on non-record type {current_type}", expr)
+                                return None
+                            field_name_orig = selector.index_or_field
+                            field_type = current_type.get_field_type(field_name_orig)
+                            if field_type is None:
+                                self.error(f"Record has no field '{field_name_orig}'", expr)
+                                return None
+                            current_type = field_type
                     elif selector.kind == 'DEREF':
                         if not isinstance(current_type, PointerType):
                             self.error(f"Cannot dereference non-pointer type {current_type}", expr)
@@ -1928,16 +1940,28 @@ class PascalTypeChecker(TypeChecker):
                     current_type = current_type.element_type
 
                 elif selector.kind == 'FIELD':
-                    # Record field access
-                    if not isinstance(current_type, RecordType):
-                        self.error(f"Cannot access field on non-record type {current_type}", designator)
-                        return None
-                    field_name = selector.index_or_field
-                    field_type = current_type.get_field_type(field_name)
-                    if not field_type:
-                        self.error(f"Record has no field '{field_name}'", designator)
-                        return None
-                    current_type = field_type
+                    field_name = str(selector.index_or_field).upper()
+                    if isinstance(current_type, FileType):
+                        if field_name == 'MODE':
+                            current_type = EnumType(['SEQUENTIAL', 'TERMINAL', 'DIRECT'], name='FILEMODES')
+                        elif field_name == 'TRAP':
+                            current_type = BOOLEAN_TYPE
+                        elif field_name == 'ERRS':
+                            current_type = INTEGER_TYPE
+                        else:
+                            self.error(f"File control block has no field '{selector.index_or_field}'", designator)
+                            return None
+                    else:
+                        # Record field access
+                        if not isinstance(current_type, RecordType):
+                            self.error(f"Cannot access field on non-record type {current_type}", designator)
+                            return None
+                        field_name_orig = selector.index_or_field
+                        field_type = current_type.get_field_type(field_name_orig)
+                        if not field_type:
+                            self.error(f"Record has no field '{field_name_orig}'", designator)
+                            return None
+                        current_type = field_type
 
                 elif selector.kind == 'DEREF':
                     # Pointer dereference, or Pascal file buffer variable F^.

@@ -90,6 +90,9 @@ class CodegenBase:
         self.constants: Dict[str, object] = {
             'MAXINT': 2147483647,
             'MAXWORD': 65535,
+            'SEQUENTIAL': 0,
+            'TERMINAL': 1,
+            'DIRECT': 2,
         }
         self.type_aliases: Dict[str, Type] = {}  # compile-time type aliases, keyed UPPER
         self.current_interface_decls: Dict[str, Declaration] = {}
@@ -230,10 +233,11 @@ class CodegenBase:
 
     def file_fcb_type(self) -> ir.Type:
         """The file-control-block layout: [i32 element-size, i32 structure,
-        i32 touched, i32 mode/eof, i8* buffer, i8* handle, i8* bound name]."""
+        i32 touched, i32 mode/eof, i8* buffer, i8* handle, i8* bound name,
+        i32 FILEMODES user mode]."""
         if not hasattr(self, '_fcb_ty'):
             i32 = ir.IntType(32)
-            self._fcb_ty = ir.LiteralStructType([i32, i32, i32, i32, ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer()])
+            self._fcb_ty = ir.LiteralStructType([i32, i32, i32, i32, ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer(), i32])
         return self._fcb_ty
 
     def _scalar_size(self, name: str) -> int:

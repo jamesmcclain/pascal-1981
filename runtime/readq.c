@@ -11,6 +11,7 @@ struct pas_file_fcb {
     void *buffer;
     FILE *handle;
     char *name;
+    int filemode;
 };
 
 __attribute__((weak)) void pas_file_attach_std(struct pas_file_fcb *in, struct pas_file_fcb *out)

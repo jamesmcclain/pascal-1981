@@ -6,7 +6,7 @@ This is shared between the type checker and code generator to prevent
 """
 
 from symbol_table import Symbol
-from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, FileType, FunctionType, LStringType, PointerType, ProcedureType, StringType)
+from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, EnumType, FileType, FunctionType, LStringType, PointerType, ProcedureType, RecordType, StringType)
 
 # Lists of all built-in function and procedure names
 BUILTIN_FUNCTIONS = {
@@ -75,11 +75,17 @@ def register_builtins(symbol_table) -> None:
     define_builtin('MAXINT', INTEGER_TYPE, 'const')
     define_builtin('MAXWORD', WORD_TYPE, 'const')
     define_builtin('NULL', LStringType(0), 'const')
+    filemodes_type = EnumType(['SEQUENTIAL', 'TERMINAL', 'DIRECT'], name='FILEMODES')
+    define_builtin('SEQUENTIAL', filemodes_type, 'const')
+    define_builtin('TERMINAL', filemodes_type, 'const')
+    define_builtin('DIRECT', filemodes_type, 'const')
 
     # Types
     text_type = FileType(CHAR_TYPE, structure='ASCII')
     define_builtin('TEXT', text_type, 'type')
     define_builtin('STRING', StringType(256), 'type')
+    define_builtin('FILEMODES', filemodes_type, 'type')
+    define_builtin('FCBFQQ', RecordType('FCBFQQ', {'MODE': filemodes_type, 'TRAP': BOOLEAN_TYPE, 'ERRS': INTEGER_TYPE}), 'type')
 
     # Variables/Files
     define_builtin('INPUT', text_type, 'var')

@@ -40,6 +40,8 @@ class FilesMixin:
         self.builder.store(buf_i8, self.builder.gep(fcb, [zero, ir.Constant(i32, 4)]))
         self.builder.store(ir.Constant(ir.IntType(8).as_pointer(), None), self.builder.gep(fcb, [zero, ir.Constant(i32, 5)]))
         self.builder.store(ir.Constant(ir.IntType(8).as_pointer(), None), self.builder.gep(fcb, [zero, ir.Constant(i32, 6)]))
+        default_mode = 1 if getattr(slot, 'name', '').lower() in {'input', 'output'} else 0
+        self.builder.store(ir.Constant(i32, default_mode), self.builder.gep(fcb, [zero, ir.Constant(i32, 7)]))
         # The handle handed to the rest of codegen is an opaque i8* to the FCB.
         self.builder.store(self.builder.bitcast(fcb, ir.IntType(8).as_pointer()), slot)
 

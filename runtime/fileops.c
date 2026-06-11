@@ -6,7 +6,7 @@
 #include <string.h>
 
 /* Must match codegen/base.py and codegen/files.py:
- * { i32 elem_size, i32 structure, i32 touched, i32 mode, i8* buffer, i8* handle, i8* name }
+ * { i32 elem_size, i32 structure, i32 touched, i32 mode, i8* buffer, i8* handle, i8* name, i32 filemode }
  * mode low bits: 0 = closed/unopened, 1 = inspection/read, 2 = generation/write
  * mode flags: EOF=0x4, STD=0x8, PENDING=0x10, EOLN=0x20, OWNS_HANDLE=0x40, TEMP=0x80.
  * TEXT line-marker host mapping: '\n' in the stream; EOLN presents F^ as blank.
@@ -33,6 +33,7 @@ struct pas_file_fcb {
     void *buffer;
     FILE *handle;
     char *name;
+    int filemode;
 };
 
 static void die(const char *msg) {

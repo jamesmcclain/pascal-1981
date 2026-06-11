@@ -578,9 +578,33 @@ the biggest single chunk; expect it to need its own design pass.
     READSET LSTRING/SETOFCHAR checks, READFN TEXT-source/file-target/read-target
     checks, and READ file-selector validation. Full suite: `python3 -m unittest
     discover -s tests` ran 357 tests OK. `[OBSERVED]`
-- [ ] **8.6 — `FILEMODES`, `SEQUENTIAL`, `TERMINAL`, `FCBFQQ`.** `[INFERRED]` **L**
-  Confirm each one's meaning from the manual body before implementing — several
-  are opaque from the identifier list alone.
+- [x] **8.6 — `FILEMODES`, `SEQUENTIAL`, `TERMINAL`, `FCBFQQ`.** `[READ]` **L**
+  - Done: `FILEMODES` is registered as the predeclared enumerated type with
+    constants `SEQUENTIAL`, `TERMINAL`, and `DIRECT` in manual order. File FCB
+    field access supports `F.MODE` for any file variable; ordinary files default
+    to `SEQUENTIAL`, and predeclared `INPUT`/`OUTPUT` default to `TERMINAL`, as
+    documented. Assigning `F.MODE := DIRECT`/`SEQUENTIAL`/`TERMINAL` changes the
+    stored FCB mode value and reading/comparing `F.MODE` observes that value.
+    `[OBSERVED]`
+  - Done: `FCBFQQ` is registered as the documented file-control-block record
+    type with standard fields `MODE`, `TRAP`, and `ERRS`; direct `FCBFQQ`
+    variables lower as ordinary records, and file designator field typing
+    recognizes those names. Runtime error-trapping behavior for
+    `TRAP`/`ERRS` is not expanded here; existing runtime still aborts on fatal
+    I/O errors unless older helpers already handled otherwise. `[OBSERVED]`
+  - Manual basis: Chapter 6 identifies `FILEMODES` as the predeclared enum with
+    `SEQUENTIAL`, `TERMINAL`, and `DIRECT`, says files default to SEQUENTIAL
+    except `INPUT`/`OUTPUT` which default TERMINAL, and says file control block
+    fields are accessible with record notation. Chapter 12 File Field Values
+    documents `F.MODE`, `F.TRAP`, `F.ERRS`, and that `F.MODE` is used by the
+    file system during `RESET`/`REWRITE`. `[READ]`
+  - Proof: `tests.test_runtime_fixes.TestFileBufferModel.test_file_mode_field_defaults_and_assignment`
+    checks SEQUENTIAL default for a normal TEXT file, TERMINAL default for
+    `INPUT`, and assignment/readback of `DIRECT`; `test_fcbfqq_record_mode_field_codegen`
+    proves direct `FCBFQQ` record field codegen. `tests.test_typecheck.TestReadWriteTypecheck.test_filemodes_and_fcb_mode_typecheck`
+    checks `FILEMODES` variables, `F.MODE` assignment, rejection of integer
+    assignment to `F.MODE`, and rejection of unknown FCB fields. Full suite:
+    `python3 -m unittest discover -s tests` ran 360 tests OK. `[OBSERVED]`
 
 ---
 
