@@ -100,6 +100,43 @@ static void force_fill(struct pas_file_fcb *f) {
     if (is_pending(f)) raw_get(f, 1);
 }
 
+/* ---- Unified character source (buffer-variable model + host stream) ----
+ *
+ * The FCB's current-component buffer and the host stream form one logical
+ * character sequence. Formatted readers (READ/READSET/READFN/READLN-skip)
+ * must consume a live buffered component before touching the stream,
+ * otherwise the component supplied by RESET's implicit GET is lost.
+ */
+
+static int fcb_next_char(struct pas_file_fcb *f, FILE *h) {
+    if (!f || !f->buffer || current_mode(f) != MODE_READ) return fgetc(h);
+    if (is_eof(f)) return EOF;
+    if (!is_pending(f)) {
+        /* The buffer holds the current component: consume it. A TEXT line
+         * marker is stored as a blank with MODE_EOLN set; hand the reader the
+         * real '\n' so delimiter logic sees the marker. */
+        int ch = *((unsigned char *)f->buffer);
+        if (f->structure == STRUCT_TEXT && (f->mode & MODE_EOLN) != 0) ch = '\n';
+        set_mode_flags(f, MODE_READ, 0, 0, 1); /* consumed -> pending */
+        f->touched = 0;
+        return ch;
+    }
+    int ch = fgetc(h);
+    if (ch == EOF) set_mode_flags(f, MODE_READ, 1, 0, 0);
+    return ch;
+}
+
+static void fcb_unget_char(struct pas_file_fcb *f, FILE *h, int ch) {
+    /* Push a character back as the FCB's current component (so F^/EOF/EOLN
+     * observe it), falling back to stdio pushback when there is no FCB. */
+    if (ch == EOF) return;
+    if (!f || !f->buffer || current_mode(f) != MODE_READ) { ungetc(ch, h); return; }
+    int eoln = (f->structure == STRUCT_TEXT && ch == '\n');
+    *((unsigned char *)f->buffer) = eoln ? ' ' : (unsigned char)ch;
+    set_mode_flags(f, MODE_READ, 0, eoln, 0);
+    f->touched = 0;
+}
+
 void pas_file_attach_std(struct pas_file_fcb *in, struct pas_file_fcb *out) {
     if (in && !(in->mode & MODE_STD)) {
         in->handle = stdin;
@@ -122,7 +159,12 @@ void pas_file_touch_buffer(struct pas_file_fcb *f) {
     if (f) f->touched = 1;
 }
 
-void pas_file_get(struct pas_file_fcb *f) { raw_get(f, 0); }
+void pas_file_get(struct pas_file_fcb *f) {
+    /* If RESET's implicit GET is still pending, materialize the current
+     * component first so an explicit GET advances to the *next* one. */
+    force_fill(f);
+    raw_get(f, 0);
+}
 
 void pas_file_reset(struct pas_file_fcb *f) {
     if (!f) die("file runtime: null fcb");
@@ -134,8 +176,11 @@ void pas_file_reset(struct pas_file_fcb *f) {
     FILE *h = ensure_handle(f);
     if (current_mode(f) == MODE_WRITE && fflush(h) != 0) die("file runtime: flush failed");
     rewind(h);
-    set_mode_flags(f, MODE_READ, 0, 0, 0);
-    raw_get(f, 1); /* manual-required implicit first GET */
+    /* The manual-required implicit first GET is deferred: the current
+     * component is marked PENDING and materialized by force_fill at the
+     * first F^ / EOF / EOLN / formatted-read use site, so the buffer-variable
+     * model and the formatted readers share a single fill path. */
+    set_mode_flags(f, MODE_READ, 0, 0, 1);
 }
 
 void pas_file_rewrite(struct pas_file_fcb *f) {
@@ -254,20 +299,18 @@ void pas_freadset(struct pas_file_fcb *src, unsigned char *lstr, int capacity, c
     require_text_read(src);
     FILE *h = ensure_handle(src);
     int ch;
-    while ((ch = fgetc(h)) != EOF && is_leading_skip(ch)) { }
+    while ((ch = fcb_next_char(src, h)) != EOF && is_leading_skip(ch)) { }
     int len = 0;
     while (ch != EOF && ch != '\n' && len < capacity && set_contains(set_words, ch)) {
         lstr[1 + len++] = (unsigned char)ch;
-        ch = fgetc(h);
+        ch = fcb_next_char(src, h);
     }
-    if (ch == '\n') {
-        *((unsigned char *)src->buffer) = ' ';
-        set_mode_flags(src, MODE_READ, 0, 1, 0);
-    } else if (ch != EOF) {
-        ungetc(ch, h);
-        set_mode_flags(src, MODE_READ, 0, 0, 1);
-    } else {
+    if (ch == EOF) {
         set_mode_flags(src, MODE_READ, 1, 0, 0);
+    } else {
+        /* Delimiter (line marker, non-member, or capacity overflow char)
+         * becomes the current component again. */
+        fcb_unget_char(src, h, ch);
     }
     lstr[0] = (unsigned char)len;
 }
@@ -279,21 +322,17 @@ void pas_fread_filename(struct pas_file_fcb *src, struct pas_file_fcb *target) {
     char namebuf[260];
     int len = 0;
     int ch;
-    while ((ch = fgetc(h)) != EOF && is_leading_skip(ch)) {
-        if (ch == '\n') { *((unsigned char *)src->buffer) = ' '; set_mode_flags(src, MODE_READ, 0, 1, 0); }
-    }
+    while ((ch = fcb_next_char(src, h)) != EOF && is_leading_skip(ch)) { }
     while (ch != EOF && ch != '\n' && ch != ' ' && ch != '\t' && ch != '\f' && len < (int)sizeof(namebuf)) {
         namebuf[len++] = (char)ch;
-        ch = fgetc(h);
+        ch = fcb_next_char(src, h);
     }
-    if (ch == '\n') {
-        *((unsigned char *)src->buffer) = ' ';
-        set_mode_flags(src, MODE_READ, 0, 1, 0);
-    } else if (ch != EOF) {
-        ungetc(ch, h);
-        set_mode_flags(src, MODE_READ, 0, 0, 1);
-    } else {
+    if (ch == EOF) {
         set_mode_flags(src, MODE_READ, 1, 0, 0);
+    } else {
+        /* READFN never consumes the line marker; the trailing delimiter
+         * becomes the current component again. */
+        fcb_unget_char(src, h, ch);
     }
     assign_name_closed(target, namebuf, len);
 }
@@ -315,7 +354,7 @@ int pas_file_eoln(struct pas_file_fcb *f) {
 static FILE *stream_for(struct pas_file_fcb *f, int writing) {
     if (!f) return writing ? stdout : stdin;
     if (writing && current_mode(f) != MODE_WRITE) set_mode_flags(f, MODE_WRITE, 1, 0, 0);
-    if (!writing && current_mode(f) == MODE_CLOSED) set_mode_flags(f, MODE_READ, 0, 0, 0);
+    if (!writing && current_mode(f) == MODE_CLOSED) set_mode_flags(f, MODE_READ, 0, 0, 1);
     return ensure_handle(f);
 }
 
@@ -327,21 +366,19 @@ int pas_write_fmt(struct pas_file_fcb *f, const char *fmt, ...) {
     return r;
 }
 
-static int skip_ws_except_nl(FILE *h) {
+static int fcb_skip_ws_except_nl(struct pas_file_fcb *f, FILE *h) {
     int ch;
-    while ((ch = fgetc(h)) != EOF) {
+    while ((ch = fcb_next_char(f, h)) != EOF) {
         if (ch == '\n' || !isspace((unsigned char) ch)) return ch;
     }
     return EOF;
 }
 
-static void unread_to(FILE *h, int ch) { if (ch != EOF) ungetc(ch, h); }
-
 int pas_fread_int(struct pas_file_fcb *f, int32_t *out) {
     FILE *h = stream_for(f, 0);
-    int ch = skip_ws_except_nl(h);
+    int ch = fcb_skip_ws_except_nl(f, h);
     if (ch == EOF) die("runtime error: unexpected EOF while reading integer");
-    unread_to(h, ch);
+    ungetc(ch, h); /* hand the token's first char back to stdio for fscanf */
     long v;
     if (fscanf(h, "%ld", &v) != 1) die("runtime error: malformed integer input");
     *out = (int32_t)v;
@@ -358,16 +395,16 @@ int pas_fread_word(struct pas_file_fcb *f, uint16_t *out) {
 
 int pas_fread_real(struct pas_file_fcb *f, double *out) {
     FILE *h = stream_for(f, 0);
-    int ch = skip_ws_except_nl(h);
+    int ch = fcb_skip_ws_except_nl(f, h);
     if (ch == EOF) die("runtime error: unexpected EOF while reading real");
-    unread_to(h, ch);
+    ungetc(ch, h);
     if (fscanf(h, "%lf", out) != 1) die("runtime error: malformed real input");
     return 0;
 }
 
 int pas_fread_char(struct pas_file_fcb *f, uint8_t *out) {
     FILE *h = stream_for(f, 0);
-    int ch = fgetc(h);
+    int ch = fcb_next_char(f, h);
     if (ch == EOF) die("runtime error: unexpected EOF while reading char");
     *out = (ch == '\n') ? ' ' : (uint8_t)ch;
     return 0;
@@ -376,12 +413,12 @@ int pas_fread_char(struct pas_file_fcb *f, uint8_t *out) {
 int pas_fread_lstring(struct pas_file_fcb *f, uint8_t *buf, int cap) {
     FILE *h = stream_for(f, 0);
     int ch, n = 0;
-    while ((ch = fgetc(h)) != EOF && ch != '\n') {
+    while ((ch = fcb_next_char(f, h)) != EOF && ch != '\n') {
         if (n < cap) buf[1 + n] = (uint8_t)ch;
         n++;
     }
     if (ch == EOF) die("runtime error: unexpected EOF while reading string");
-    if (ch == '\n') unread_to(h, ch);
+    fcb_unget_char(f, h, ch); /* line marker stays the current component */
     if (cap < 0) cap = 0;
     buf[0] = (uint8_t)(n < cap ? n : cap);
     return 0;
@@ -390,5 +427,5 @@ int pas_fread_lstring(struct pas_file_fcb *f, uint8_t *buf, int cap) {
 void pas_freadln_skip(struct pas_file_fcb *f) {
     FILE *h = stream_for(f, 0);
     int ch;
-    while ((ch = fgetc(h)) != EOF && ch != '\n') {}
+    while ((ch = fcb_next_char(f, h)) != EOF && ch != '\n') {}
 }

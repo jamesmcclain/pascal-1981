@@ -286,6 +286,75 @@ class TestFileBufferModel(unittest.TestCase):
             self.assertEqual(out, "eol\nR\n")
             self.assertEqual(path.read_text(), "R\n")
 
+    # ---- Phase 1 regressions: formatted readers must honor the FCB's ----
+    # ---- current-component buffer (RESET's implicit GET was being lost) ----
+
+    def test_fread_after_reset_reads_first_component(self):
+        """READ(f, c) immediately after RESET must yield the FIRST character.
+        Previously pas_fread_char read the raw handle and the component
+        supplied by RESET's implicit GET was silently dropped."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "first.txt"
+            src = ("PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); REWRITE(f); WRITELN(f, 'XY'); CLOSE(f); "
+                   "RESET(f); READ(f, c); WRITELN(c) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "X\n")
+
+    def test_readset_after_reset_includes_first_char(self):
+        """READSET after RESET must include the first character of the token
+        (previously 'HELLO' came back as 'ELLO')."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "rs.txt"
+            src = ("PROGRAM P; VAR f: TEXT; s: LSTRING(10); BEGIN "
+                   f"ASSIGN(f, '{path}'); REWRITE(f); WRITELN(f, 'HELLO 1'); CLOSE(f); "
+                   "RESET(f); READSET(f, s, ['A'..'Z']); WRITELN(s) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "HELLO\n")
+
+    def test_buffer_get_and_fread_interleave(self):
+        """F^ / GET / READ(f, ...) draw from one logical character sequence:
+        f^ sees the first component, GET advances, READ consumes the buffered
+        component before touching the stream."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "mix.txt"
+            src = ("PROGRAM P; VAR f: TEXT; c1, c2, c3: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); REWRITE(f); WRITELN(f, 'ABC'); CLOSE(f); "
+                   "RESET(f); c1 := f^; GET(f); READ(f, c2); READ(f, c3); "
+                   "WRITELN(c1); WRITELN(c2); WRITELN(c3) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "A\nB\nC\n")
+
+    def test_eoln_and_eof_observed_after_formatted_read(self):
+        """After READ(f, i) consumes the only token, EOLN(f) sees the line
+        marker; after READLN(f) consumes it, EOF(f) is true."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "pred.txt"
+            src = ("PROGRAM P; VAR f: TEXT; i: INTEGER; BEGIN "
+                   f"ASSIGN(f, '{path}'); REWRITE(f); WRITELN(f, '7'); CLOSE(f); "
+                   "RESET(f); READ(f, i); WRITELN(i); "
+                   "IF EOLN(f) THEN WRITELN('eol'); "
+                   "READLN(f); IF EOF(f) THEN WRITELN('eof') END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "7\neol\neof\n")
+
+    def test_fread_lstring_after_reset_keeps_line_marker(self):
+        """String READ after RESET returns the whole first line and leaves the
+        line marker as the current component (EOLN true, not consumed)."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "ls.txt"
+            src = ("PROGRAM P; VAR f: TEXT; s: LSTRING(10); BEGIN "
+                   f"ASSIGN(f, '{path}'); REWRITE(f); WRITELN(f, 'HI'); CLOSE(f); "
+                   "RESET(f); READ(f, s); WRITELN(s); "
+                   "IF EOLN(f) THEN WRITELN('eol') END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "HI\neol\n")
+
     def test_file_mode_field_defaults_and_assignment(self):
         src = ("PROGRAM P; VAR f: TEXT; BEGIN "
                "IF f.MODE = SEQUENTIAL THEN WRITELN('seq'); "
