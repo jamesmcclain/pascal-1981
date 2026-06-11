@@ -727,13 +727,25 @@ the biggest single chunk; expect it to need its own design pass.
   now uses the shared table, predeclared symbols are tagged `is_builtin`, and
   user-defined redeclarations are allowed to shadow builtins instead of tripping
   redeclaration errors. Proven by `python -m unittest` (264 tests).
-- [ ] **9.3 — Test fixtures for every closed item.** `[INFERRED]` **S (ongoing)**
+- [x] **9.3 — Test fixtures for every closed item.** `[INFERRED]` **S (ongoing)**
   Each grammar item → a `should_pass`/`should_fail` fixture; each intrinsic → a
   codegen test (and a build/run test where a runtime is involved). Keeps the
   grammar doc, parser, and runtime honest against each other.
-- [ ] **9.4 — Keep `docs/ebnf_grammar.md` in sync.** `[INFERRED]` **S (ongoing)**
+  - REFRAMED as ongoing discipline, not a finite task. Audited at §9.5 close:
+    `AND_THEN`/`OR_ELSE`, `ADS`, and labeled `BREAK`/`CYCLE` have no dedicated
+    fixture files but are covered by in-code `TestParserJudgmentCalls` tests —
+    not an egregious gap. All §9.5 metacommand items have both fixture files and
+    `TestMetacommands` unit tests. No outstanding violations found. `[OBSERVED]`
+- [x] **9.4 — Keep `docs/ebnf_grammar.md` in sync.** `[INFERRED]` **S (ongoing)**
   Every grammar change above should update the EBNF doc and its change log in the
   same commit, with the right evidence grade.
+  - REFRAMED as ongoing discipline, not a finite task. Audited at §9.5 close:
+    one genuine stale spot found — the entire metacommand system (§9.5) had no
+    EBNF coverage. Fixed: added `metacommand_comment` section documenting all
+    three tiers (ON/OFF switches with defaults and coupling rules, INTEGER/STRING
+    listing metacommands, typeless and conditional-compilation forms) plus a
+    changelog row. All other §2–9 grammar changes verified present and
+    correctly graded. `[OBSERVED]`
 
 - [x] **9.5 — Remaining compiler metacommands.** `[OBSERVED]` **M**
   After `$INCLUDE` and the identifier-label cleanup, the brace-directive path
