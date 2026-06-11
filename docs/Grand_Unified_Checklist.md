@@ -530,8 +530,8 @@ the biggest single chunk; expect it to need its own design pass.
     a documented `EOL` constant. Manual grep found `EOL` in the predeclared
     identifier table only, with no body semantics; do not infer it until 8.6 or
     a deeper manual pass verifies meaning. `[READ]`
-- [ ] **8.5 — `ASSIGN`, `CLOSE`, `DISCARD`, `READFN`, `READSET`.** `[READ]` **L** Extended I/O verbs.
-  - PARTIAL / implemented now: `ASSIGN`, `CLOSE`, and `DISCARD` are real
+- [x] **8.5 — `ASSIGN`, `CLOSE`, `DISCARD`, `READFN`, `READSET`.** `[READ]` **L** Extended I/O verbs.
+  - Done: `ASSIGN`, `CLOSE`, and `DISCARD` are real
     runtime operations, not façade calls. The FCB layout now carries a bound
     filename slot; `ASSIGN(VAR F, name)` copies STRING/LSTRING/CHAR data,
     trims trailing blanks, rejects assignment to an open file, and treats
@@ -542,29 +542,42 @@ the biggest single chunk; expect it to need its own design pass.
     marker on written non-empty TEXT files if the stream does not already end
     in `\n`. `DISCARD` closes and removes the named host file; anonymous
     temporaries disappear through `tmpfile`/`fclose`. `[OBSERVED]`
+  - Done: `READSET` implements the documented scanner semantics: optional
+    leading TEXT file selector with default `INPUT`, mutable LSTRING destination,
+    and `SET OF CHAR` source set. Runtime skips leading spaces, tabs, form
+    feeds, and line markers, then copies characters while they are in the set
+    and capacity remains. The first nonmatching character is left available to
+    the same FCB stream; a line marker stops scanning. `[OBSERVED]`
+  - Done: `READFN` implements the documented READLN-like dispatcher without
+    consuming the line marker. An optional leading TEXT parameter is the source
+    stream; file-typed later parameters read one nonblank filename token from
+    that source and bind the target using ASSIGN semantics, while scalar/string
+    parameters reuse the existing formatted READ helper path. `[OBSERVED]`
   - Manual basis: ASSIGN/CLOSE/DISCARD/READSET/READFN are documented on manual
     pp. 12-27..12-31 (`IBM_Pascal_Compiler_Aug81_djvu.txt` around lines
     13939, 13993, 14040, 14075, 14095). The text says ASSIGN trims trailing
     blanks and overrides a prior filename; CLOSE may be called on a closed file;
-    DISCARD closes and deletes; temporary files are deleted when closed.
-    `[READ]`
+    DISCARD closes and deletes; temporary files are deleted when closed;
+    READSET skips leading blanks/tabs/form-feeds/line markers and reads while
+    chars are in the supplied SETOFCHAR and there is room in the LSTRING;
+    READFN is READLN except file-typed parameters read valid filenames assigned
+    like ASSIGN, and READFN does not read a line marker. `[READ]`
   - Proof: `tests.test_runtime_fixes.TestFileBufferModel.test_assign_close_named_text_persists_across_fcb`
     writes through one assigned TEXT FCB, closes it, reopens the same host path
     through a second assigned FCB, reads the characters back, and verifies the
     host file persists as `HI\n` (tmpfile cannot fake this). `test_discard_named_file_deletes_host_path`
     verifies `DISCARD` removes the host path; `test_assign_chr_zero_keeps_anonymous_temp_behavior`
     verifies the manual temporary-file spelling `ASSIGN(f, CHR(0))`. Existing
-    8.2 anonymous-file tests still pass. `tests.test_typecheck.TestReadWriteTypecheck`
-    covers ASSIGN argument validation plus CLOSE/DISCARD file-argument validation.
-    Full suite: `python3 -m unittest discover -s tests` ran 352 tests OK.
-    `[OBSERVED]`
-  - Still open before checking this item complete: `READFN` and `READSET` are
-    registered as builtins but deliberately rejected with an explicit diagnostic
-    instead of silently falling through. `READFN` needs filename-token parsing
-    and assignment-to-file parameters without consuming the line marker;
-    `READSET` depends on complete `SETOFCHAR`/SET OF CHAR runtime lowering and
-    LSTRING filling semantics. Leaving those open is intentional evidence
-    discipline, not a hidden stub. `[OBSERVED]`
+    8.2 anonymous-file tests still pass. `test_readset_reads_allowed_chars_and_leaves_delimiter`
+    proves leading skip, SETOFCHAR membership, LSTRING filling, and delimiter
+    retention; `test_readset_capacity_stops_without_consuming_next_char` proves
+    capacity stop retains the next char; `test_readfn_reads_filename_and_does_not_consume_line_marker`
+    proves filename binding from INPUT, line-marker retention visible through
+    `EOLN(INPUT)`, and subsequent named-file REWRITE/RESET behavior.
+    `tests.test_typecheck.TestReadWriteTypecheck` covers ASSIGN/CLOSE/DISCARD,
+    READSET LSTRING/SETOFCHAR checks, READFN TEXT-source/file-target/read-target
+    checks, and READ file-selector validation. Full suite: `python3 -m unittest
+    discover -s tests` ran 357 tests OK. `[OBSERVED]`
 - [ ] **8.6 — `FILEMODES`, `SEQUENTIAL`, `TERMINAL`, `FCBFQQ`.** `[INFERRED]` **L**
   Confirm each one's meaning from the manual body before implementing — several
   are opaque from the identifier list alone.

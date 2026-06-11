@@ -149,7 +149,7 @@ void pas_file_rewrite(struct pas_file_fcb *f) {
     f->mode &= ~MODE_OWNS_HANDLE;
     if (f->name) {
         f->handle = fopen(f->name, "w+b");
-        if (!f->handle) die("file runtime: create failed");
+        if (!f->handle) { perror(f->name ? f->name : "<unnamed>"); die("file runtime: create failed"); }
         f->mode &= ~MODE_TEMP;
     } else {
         f->handle = tmpfile();
@@ -210,7 +210,7 @@ void pas_file_discard(struct pas_file_fcb *f) {
     }
 }
 
-void pas_file_assign(struct pas_file_fcb *f, const char *name, int len) {
+static void assign_name_closed(struct pas_file_fcb *f, const char *name, int len) {
     if (!f) die("file runtime: null fcb");
     if (current_mode(f) != MODE_CLOSED || f->handle) die("file runtime: ASSIGN on open file");
     if (!name || len < 0) die("file runtime: bad ASSIGN name");
@@ -226,6 +226,75 @@ void pas_file_assign(struct pas_file_fcb *f, const char *name, int len) {
     if (!f->name) die("file runtime: filename allocation failed");
     memcpy(f->name, name, (size_t)len);
     f->name[len] = '\0';
+}
+
+void pas_file_assign(struct pas_file_fcb *f, const char *name, int len) {
+    assign_name_closed(f, name, len);
+}
+
+static void require_text_read(struct pas_file_fcb *f) {
+    if (!f) die("file runtime: null fcb");
+    if (f->structure != STRUCT_TEXT) die("file runtime: TEXT file required");
+    if (current_mode(f) == MODE_CLOSED) pas_file_reset(f);
+    if (current_mode(f) != MODE_READ) die("file runtime: read requires RESET/read mode");
+}
+
+static int is_leading_skip(int ch) {
+    return ch == ' ' || ch == '\t' || ch == '\f' || ch == '\n';
+}
+
+static int set_contains(const uint64_t *set_words, int ch) {
+    if (ch < 0 || ch > 255) return 0;
+    return (set_words[ch / 64] & ((uint64_t)1 << (ch % 64))) != 0;
+}
+
+void pas_freadset(struct pas_file_fcb *src, unsigned char *lstr, int capacity, const uint64_t *set_words) {
+    if (!lstr || capacity < 0 || !set_words) die("file runtime: bad READSET argument");
+    require_text_read(src);
+    FILE *h = ensure_handle(src);
+    int ch;
+    while ((ch = fgetc(h)) != EOF && is_leading_skip(ch)) { }
+    int len = 0;
+    while (ch != EOF && ch != '\n' && len < capacity && set_contains(set_words, ch)) {
+        lstr[1 + len++] = (unsigned char)ch;
+        ch = fgetc(h);
+    }
+    if (ch == '\n') {
+        *((unsigned char *)src->buffer) = ' ';
+        set_mode_flags(src, MODE_READ, 0, 1, 0);
+    } else if (ch != EOF) {
+        ungetc(ch, h);
+        set_mode_flags(src, MODE_READ, 0, 0, 1);
+    } else {
+        set_mode_flags(src, MODE_READ, 1, 0, 0);
+    }
+    lstr[0] = (unsigned char)len;
+}
+
+void pas_fread_filename(struct pas_file_fcb *src, struct pas_file_fcb *target) {
+    if (!target) die("file runtime: null target fcb");
+    require_text_read(src);
+    FILE *h = ensure_handle(src);
+    char namebuf[260];
+    int len = 0;
+    int ch;
+    while ((ch = fgetc(h)) != EOF && is_leading_skip(ch)) {
+        if (ch == '\n') { *((unsigned char *)src->buffer) = ' '; set_mode_flags(src, MODE_READ, 0, 1, 0); }
+    }
+    while (ch != EOF && ch != '\n' && ch != ' ' && ch != '\t' && ch != '\f' && len < (int)sizeof(namebuf)) {
+        namebuf[len++] = (char)ch;
+        ch = fgetc(h);
+    }
+    if (ch == '\n') {
+        *((unsigned char *)src->buffer) = ' ';
+        set_mode_flags(src, MODE_READ, 0, 1, 0);
+    } else if (ch != EOF) {
+        ungetc(ch, h);
+        set_mode_flags(src, MODE_READ, 0, 0, 1);
+    } else {
+        set_mode_flags(src, MODE_READ, 1, 0, 0);
+    }
+    assign_name_closed(target, namebuf, len);
 }
 
 int pas_file_eof(struct pas_file_fcb *f) {

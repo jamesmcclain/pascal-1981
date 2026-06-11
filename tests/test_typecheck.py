@@ -185,6 +185,23 @@ class TestReadWriteTypecheck(unittest.TestCase):
         self.assertIn("file", errors)
         self.assertIn("expects 1", errors)
 
+    def test_readset_typechecks_lstring_and_setofchar(self):
+        ok = typecheck_source("PROGRAM P; VAR s: LSTRING(8); BEGIN READSET(s, ['A'..'Z']) END.")
+        self.assertTrue(ok.success, msg=" ".join(str(e) for e in ok.errors))
+        bad_dest = typecheck_source("PROGRAM P; VAR s: STRING(8); BEGIN READSET(s, ['A'..'Z']) END.")
+        self.assertFalse(bad_dest.success)
+        self.assertIn("LSTRING", " ".join(str(e) for e in bad_dest.errors))
+        bad_set = typecheck_source("PROGRAM P; VAR s: LSTRING(8); BEGIN READSET(s, [1..3]) END.")
+        self.assertFalse(bad_set.success)
+        self.assertIn("SET OF CHAR", " ".join(str(e) for e in bad_set.errors))
+
+    def test_readfn_accepts_text_source_file_targets_and_read_targets(self):
+        ok = typecheck_source("PROGRAM P; VAR f: TEXT; n: INTEGER; BEGIN READFN(INPUT, f, n) END.")
+        self.assertTrue(ok.success, msg=" ".join(str(e) for e in ok.errors))
+        bad_src = typecheck_source("PROGRAM P; VAR f: FILE OF INTEGER; t: TEXT; BEGIN READFN(f, t) END.")
+        self.assertFalse(bad_src.success)
+        self.assertIn("TEXT", " ".join(str(e) for e in bad_src.errors))
+
 
 class TestTypeCompatibility(unittest.TestCase):
     """Type compatibility and assignment rules."""

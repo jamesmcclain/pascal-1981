@@ -944,8 +944,11 @@ class PascalTypeChecker(TypeChecker):
             elif lookup_name == 'ASSIGN':
                 self._check_assign_file_args(stmt)
                 return
-            elif lookup_name in {'READFN', 'READSET'}:
-                self.error(f"{lookup_name} is registered but not implemented yet; Section 8.5 tracks it as deferred pending full filename-token/SETOFCHAR semantics", stmt)
+            elif lookup_name == 'READFN':
+                self._check_readfn_args(stmt)
+                return
+            elif lookup_name == 'READSET':
+                self._check_readset_args(stmt)
                 return
 
         if not sym:
@@ -1080,7 +1083,15 @@ class PascalTypeChecker(TypeChecker):
         """Type check READ/READLN arguments."""
         if not stmt.args:
             return
-        for i, arg in enumerate(stmt.args):
+        start = 0
+        first_type = self.infer_expression_type(stmt.args[0])
+        if isinstance(first_type, FileType):
+            if self._is_text_file_type(first_type):
+                start = 1
+            else:
+                self.error("READ/READLN file selector must be TEXT, not binary FILE", stmt)
+                start = 1
+        for i, arg in enumerate(stmt.args[start:], start=start):
             if not isinstance(arg, (Identifier, Designator)):
                 self.error(f"READ argument {i+1} must be a designator", stmt)
                 continue
@@ -1097,6 +1108,55 @@ class PascalTypeChecker(TypeChecker):
                 continue
             if not self._is_readable_type(target_type):
                 self.error(f"READ argument {i+1} has unreadable type {target_type}", stmt)
+
+    def _check_readset_args(self, stmt: ProcCallStmt) -> None:
+        if len(stmt.args) not in {2, 3}:
+            self.error(f"READSET expects 2 or 3 arguments, got {len(stmt.args)}", stmt)
+            return
+        start = 0
+        if len(stmt.args) == 3:
+            f_type = self.infer_expression_type(stmt.args[0])
+            if not self._is_text_file_type(f_type):
+                self.error(f"READSET file parameter must be TEXT, got {f_type}", stmt)
+            start = 1
+        dest = stmt.args[start]
+        if not isinstance(dest, (Identifier, Designator)):
+            self.error("READSET destination must be a mutable LSTRING designator", stmt)
+        else:
+            sym = self.symbol_table.lookup(dest.name) or self.symbol_table.lookup(dest.name.upper())
+            dest_type = self.infer_expression_type(dest)
+            if not sym or not sym.is_mutable:
+                self.error("READSET destination must be mutable", stmt)
+            if not isinstance(dest_type, LStringType):
+                self.error(f"READSET destination must be LSTRING, got {dest_type}", stmt)
+        set_type = self.infer_expression_type(stmt.args[start + 1])
+        if not isinstance(set_type, SetType) or not set_type.element_type.equivalent_to(CHAR_TYPE):
+            self.error(f"READSET set argument must be SET OF CHAR, got {set_type}", stmt)
+
+    def _check_readfn_args(self, stmt: ProcCallStmt) -> None:
+        if not stmt.args:
+            self.error("READFN expects at least one argument", stmt)
+            return
+        start = 0
+        first_type = self.infer_expression_type(stmt.args[0])
+        if self._is_text_file_type(first_type):
+            start = 1
+        elif isinstance(first_type, FileType):
+            self.error("READFN source file parameter must be TEXT", stmt)
+            start = 1
+        for i, arg in enumerate(stmt.args[start:], start=start + 1):
+            if not isinstance(arg, (Identifier, Designator)):
+                self.error(f"READFN argument {i} must be a designator", stmt)
+                continue
+            sym = self.symbol_table.lookup(arg.name) or self.symbol_table.lookup(arg.name.upper())
+            if not sym or not sym.is_mutable:
+                self.error(f"READFN argument {i} must be assignable", stmt)
+                continue
+            target_type = self.infer_expression_type(arg)
+            if isinstance(target_type, FileType):
+                continue
+            if target_type is None or not self._is_readable_type(target_type):
+                self.error(f"READFN argument {i} has unreadable type {target_type}", stmt)
 
     def _is_writable_type(self, t: Type) -> bool:
         # WRITE supports printable BOOLEAN and enum values; READ input parsing for those is intentionally absent.

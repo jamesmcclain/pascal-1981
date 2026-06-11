@@ -260,6 +260,32 @@ class TestFileBufferModel(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(out, "T\n")
 
+    def test_readset_reads_allowed_chars_and_leaves_delimiter(self):
+        src = ("PROGRAM P; VAR s: LSTRING(10); c: CHAR; BEGIN "
+               "READSET(s, ['A'..'Z']); READ(INPUT, c); WRITELN(s); WRITELN(c) END.")
+        rc, out = build_run_linked(src, ["fileops.c", "readq.c"], stdin="  \tABC1Z\n")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "ABC\n1\n")
+
+    def test_readset_capacity_stops_without_consuming_next_char(self):
+        src = ("PROGRAM P; VAR s: LSTRING(3); c: CHAR; BEGIN "
+               "READSET(s, ['A'..'Z']); READ(INPUT, c); WRITELN(s); WRITELN(c) END.")
+        rc, out = build_run_linked(src, ["fileops.c", "readq.c"], stdin="ABCDE\n")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "ABC\nD\n")
+
+    def test_readfn_reads_filename_and_does_not_consume_line_marker(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "readfn.txt"
+            src = ("PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
+                   "READFN(INPUT, f); IF EOLN(INPUT) THEN WRITELN('eol'); "
+                   "REWRITE(f); f^ := 'R'; PUT(f); CLOSE(f); "
+                   f"ASSIGN(f, '{path}'); RESET(f); c := f^; WRITELN(c); CLOSE(f) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"], stdin=f"{path}\n")
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "eol\nR\n")
+            self.assertEqual(path.read_text(), "R\n")
+
 
 if __name__ == "__main__":
     unittest.main()

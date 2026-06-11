@@ -175,6 +175,10 @@ class StmtsMixin:
                 self.builtin_read(stmt.args)
             elif lookup_name == 'READLN':
                 self.builtin_readln(stmt.args)
+            elif lookup_name == 'READSET':
+                self.builtin_readset(stmt.args)
+            elif lookup_name == 'READFN':
+                self.builtin_readfn(stmt.args)
             elif lookup_name == 'CONCAT':
                 self.builtin_concat(stmt.args, enabled=self.effective_rangeck(stmt))
             elif lookup_name == 'COPYLST':
