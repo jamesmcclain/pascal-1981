@@ -589,9 +589,14 @@ the biggest single chunk; expect it to need its own design pass.
   - Done: `FCBFQQ` is registered as the documented file-control-block record
     type with standard fields `MODE`, `TRAP`, and `ERRS`; direct `FCBFQQ`
     variables lower as ordinary records, and file designator field typing
-    recognizes those names. Runtime error-trapping behavior for
-    `TRAP`/`ERRS` is not expanded here; existing runtime still aborts on fatal
-    I/O errors unless older helpers already handled otherwise. `[OBSERVED]`
+    recognizes those names. `[OBSERVED]`
+  - Does NOT cover: full runtime error-trapping semantics for `F.TRAP` and
+    `F.ERRS`. Those fields are surfaced in `FCBFQQ`/file-field typing so source
+    can name them, but the runtime was not converted into the manual's trapped
+    I/O subsystem where errors set `ERRS` and operations are ignored or resumed
+    depending on `TRAP`. Existing runtime helpers still abort on fatal I/O errors
+    unless a pre-existing path already handled otherwise. Treat this as explicit
+    future work, not an implemented 8.6 behavior. `[OBSERVED]`
   - Manual basis: Chapter 6 identifies `FILEMODES` as the predeclared enum with
     `SEQUENTIAL`, `TERMINAL`, and `DIRECT`, says files default to SEQUENTIAL
     except `INPUT`/`OUTPUT` which default TERMINAL, and says file control block
