@@ -12,12 +12,19 @@ Compile a Pascal program to a native executable:
 # Pascal source -> LLVM IR  (parse + type-check + codegen)
 python3 compile_to_llvm.py myprogram.pas myprogram.ll
 
-# LLVM IR -> native executable (requires clang)
-clang myprogram.ll -o myprogram
+# LLVM IR -> native executable (requires clang).
+# Link the C runtime: file I/O, READ/READLN, string intrinsics,
+# ENCODE/DECODE, and friends resolve against runtime/*.c.
+clang myprogram.ll runtime/*.c -o myprogram
 
 # Run it
 ./myprogram
 ```
+
+Programs whose output lowers to bare `printf` (e.g. `WRITELN` of integers)
+link without the runtime, but anything touching files, READ, or the string
+intrinsics will fail with `undefined reference to pas_...` unless
+`runtime/*.c` is on the link line.
 
 Add `-v` / `--verbose` for detailed output and full Python tracebacks if compilation fails:
 
@@ -28,7 +35,7 @@ python3 compile_to_llvm.py -v myprogram.pas myprogram.ll
 If no output file is specified, LLVM IR is written to stdout:
 
 ```bash
-python3 compile_to_llvm.py myprogram.pas | clang -x ir - -o myprogram
+python3 compile_to_llvm.py myprogram.pas | clang -x ir - runtime/*.c -o myprogram
 ```
 
 ## Architecture
@@ -51,8 +58,10 @@ Each phase is independent and focused:
 - **Lexer (`lexer.py`)** — tokenizes Pascal source: keywords, identifiers, numbers, operators, strings.
 - **Parser (`parser.py`)** — builds an Abstract Syntax Tree (AST) from tokens. Implements the full IBM Pascal 2.0 grammar. Entry point: `parse_file(path)`.
 - **Type Checker (`type_system.py`, `symbol_table.py`, `type_checker.py`)** — semantic analysis: validates types, scopes, control flow, and module semantics before code generation. All type violations stop the pipeline with clear error messages.
-- **Codegen (`codegen_llvm.py`)** — walks the AST and emits LLVM IR using `llvmlite`. Built-in I/O (`WRITELN`, `READLN`) is wired to the C runtime (`printf`, `scanf`).
-- **Linking** — `clang` lowers LLVM IR to native code and links any required runtime objects.
+- **Type Checker support (`builtins_registry.py`)** — centralized registration of predeclared identifiers (types, constants, intrinsics); user declarations may shadow builtins.
+- **Codegen (`codegen/` package)** — walks the AST and emits LLVM IR using `llvmlite`. Split by concern: `base`, `decls`, `exprs`, `stmts`, `types_map`, `constfold`, plus feature modules `files` (file-control blocks), `io_write_read`, `strings`, `sets`, and `runtime_builtins`. `codegen_llvm.py` remains as a compatibility shim re-exporting the package.
+- **C Runtime (`runtime/`)** — the file I/O subsystem (`fileops.c`: FCB model, RESET/REWRITE/GET/PUT, ASSIGN/CLOSE/DISCARD, READSET/READFN, EOF/EOLN, mode enforcement), stdin readers (`readq.c`), ENCODE/DECODE (`encode_decode.c`), and the move/scan/fill/position intrinsics.
+- **Linking** — `clang` lowers LLVM IR to native code and links `runtime/*.c`.
 
 ### Grammar Reference
 
@@ -65,12 +74,16 @@ This compiler implements the full IBM Pascal 2.0 language, including all semanti
 ### Types
 - `INTEGER` (32-bit signed)
 - `BOOLEAN` (one byte; stored as `i8` so address-of / `sizeof` / fills are byte-consistent)
-- `REAL` (64-bit float; limited codegen support)
+- `REAL` (64-bit float; constants, division, unary minus, and mixed arithmetic are codegen-hardened — see checklist 9.1 — and the default `WRITE` format matches the manual's 14-wide exponential, e.g. `WRITE(123.456)` prints ` 1.2345600E+02`)
 - `WORD` (16-bit unsigned)
 - `CHAR` (8-bit)
 - `ARRAY[low..high] OF type` — bounds may be constant expressions, including named `CONST`s
 - `RECORD ... END`
-- `SET OF type`
+- `SET OF type` — 256-bit bitvector representation; constant constructors fold at compile time
+- Enumerated types (`TYPE color = (RED, GREEN, BLUE)`)
+- `STRING(n)` (fixed, blank-padded) and `LSTRING(n)` (length-prefixed) string storage
+- `TEXT` and binary `FILE OF T` file types, with the buffer variable `F^` backed by an inline file-control block
+- Predeclared `FILEMODES` enum (`SEQUENTIAL`, `TERMINAL`, `DIRECT`) and `FCBFQQ` record; `F.MODE` is readable and assignable on file variables
 - Pointers, plus the `adrmem` (generic address) parameter type
 
 ### Declarations
@@ -96,11 +109,17 @@ This compiler implements the full IBM Pascal 2.0 language, including all semanti
 - Comparison: `=`, `<>`, `<`, `<=`, `>`, `>=`
 - Calls: `func(args)`
 - Systems-programming operators: `adr x` (address-of), `sizeof(x)` / `sizeof(type)`
-- Built-ins: `CHR`, `ORD`
+- Built-ins: `CHR`, `ORD`, plus the intrinsic families `ENCODE`/`DECODE`, `SCANEQ`/`SCANNE`, `POSITN`, and the move/fill block operations
 
 ### Built-in I/O
-- `WRITELN(...)` — accepts a mix of integers, characters, booleans, REALs, and string literals (mapped to `printf`)
-- `READ(...)` / `READLN(...)` — reads scalar and string targets (mapped to the runtime reader helpers)
+- `WRITE`/`WRITELN` — mixed integers, characters, booleans, enums, REALs, strings, and string literals, with `:width`/`:width:frac` field formatting; an optional leading `TEXT` file argument selects the output stream (default `OUTPUT`/stdout)
+- `READ`/`READLN` — scalar and string targets, with an optional leading `TEXT` file argument (default `INPUT`/stdin)
+- File primitives — `RESET`, `REWRITE`, `GET`, `PUT`, and the buffer variable `F^`, over an inline file-control block with a single fill path shared by `F^`, the predicates, and the formatted readers
+- Extended I/O verbs — `ASSIGN` (filename binding; `CHR(0)` spells a temporary file), `CLOSE`, `DISCARD`, `READSET` (scan characters in a `SET OF CHAR`), `READFN` (READLN-like dispatcher that binds filenames to file parameters)
+- Stream predicates — `EOF` and `EOLN`, with line markers presented as blanks per the manual
+- Mode enforcement — writing a file in inspection mode, writing a closed file, or reading a file in generation mode aborts with a runtime error rather than corrupting data
+
+Coverage and known gaps for the file subsystem are tracked in checklist Section 8.
 
 ## Systems-Programming Extensions
 
@@ -138,7 +157,14 @@ pascal-1981/
 │  ├── type_system.py            # Type hierarchy and compatibility rules
 │  ├── symbol_table.py           # Scope management and symbol lookup
 │  ├── type_checker.py           # Semantic analysis (types, scopes, control flow)
-│  ├── codegen_llvm.py           # LLVM IR generation from AST
+│  ├── builtins_registry.py      # Centralized predeclared-identifier registration
+│  ├── codegen/                  # LLVM IR generation package
+│  │  ├── base.py, decls.py, exprs.py, stmts.py, types_map.py, constfold.py
+│  │  ├── files.py               # File-control blocks (FCB layout, F^, file ops)
+│  │  ├── io_write_read.py       # WRITE/READ lowering, field widths, file selectors
+│  │  ├── strings.py, sets.py    # STRING/LSTRING and SET lowering
+│  │  └── runtime_builtins.py    # Extern seams to the C runtime
+│  ├── codegen_llvm.py           # Compatibility shim re-exporting codegen/
 │  └── compile_to_llvm.py        # Driver (parse → type-check → codegen)
 │
 ├─ Tests (organized by pipeline layer)
@@ -148,6 +174,9 @@ pascal-1981/
 │  │  ├── test_parser.py         # Parser accept/reject corpus (pure Python)
 │  │  ├── test_typecheck.py      # Type rules and semantics (pure Python)
 │  │  ├── test_codegen.py        # IR generation and build/run (requires llvmlite + clang)
+│  │  ├── test_codegen_strings_bounds.py  # String intrinsics, capacities, READ dispatch
+│  │  ├── test_read_end_to_end.py         # Piped-stdin READ/READLN run tests
+│  │  ├── test_runtime_fixes.py           # Hostile run tests for runtime behaviors (file subsystem, intrinsics)
 │  │  ├── test_integration.py    # Legacy integration corpus (removed)
 │  │  └── fixtures/parser/
 │  │      ├── should_pass/       # Programs that MUST parse
@@ -157,11 +186,19 @@ pascal-1981/
 ├─ Documentation
 │  ├── docs/
 │  │  ├── ebnf_grammar.md        # Formal grammar specification (reference document)
-│  │  └── Grand_Unified_Checklist.md  # Feature completeness tracker (priorities, effort, gaps)
+│  │  ├── Grand_Unified_Checklist.md  # Feature completeness tracker (priorities, effort, gaps)
+│  │  └── plans/                 # Remediation and completion plans (executed plans kept for the record)
 │
 ├─ Runtime & Build
 │  ├── runtime/
-│  │  └── fillc.c                # C runtime for Pascal I/O (printf/scanf bridge)
+│  │  ├── fileops.c              # File subsystem: FCB model, RESET/REWRITE/GET/PUT,
+│  │  │                          #   ASSIGN/CLOSE/DISCARD, READSET/READFN, EOF/EOLN, mode enforcement
+│  │  ├── readq.c                # stdin READ/READLN readers
+│  │  ├── encode_decode.c        # ENCODE/DECODE intrinsics
+│  │  ├── mover.c, movel.c, movesl.c, movesr.c   # Block-move intrinsics
+│  │  ├── scaneq.c, positn.c     # Scan/position intrinsics
+│  │  ├── fillc.c, fillsc.c      # Fill intrinsics
+│  │  └── pabort.c               # Runtime abort reporting
 │  ├── scripts/
 │  │  └── beautify.sh            # Code formatter (isort + yapf)
 │  ├── .gitignore
@@ -202,6 +239,12 @@ python3 -m unittest tests.test_codegen
 - **`tests/test_typecheck.py`** — Type rules, scope, compatibility, control flow, and module semantics. Organized by topic into `TestCase` classes (`TestVariableScope`, `TestTypeCompatibility`, `TestModuleSemantics`, etc.). In-process; no subprocess or `llvmlite` dependency.
 
 - **`tests/test_codegen.py`** — LLVM IR generation and native build/run tests. Decorated with `@requires_llvm` (IR tests) and `@requires_exe` (build/run tests). Automatically skipped if the toolchain is unavailable; the suite still exits 0.
+
+- **`tests/test_codegen_strings_bounds.py`** — string-intrinsic capacity semantics, WRITE field-width ordering, and READ dispatch guards at the IR and run level.
+
+- **`tests/test_read_end_to_end.py`** — piped-stdin READ/READLN run tests across scalar and string types.
+
+- **`tests/test_runtime_fixes.py`** — hostile run tests pinning previously-wrong runtime behaviors: NEW sizing, ENCODE/DECODE, SCANNE, and the file subsystem (buffer-variable model, RESET/GET interleaves, mode-enforcement aborts, ASSIGN/CLOSE/DISCARD/READSET/READFN).
 
 - **`tests/test_integration.py`** — Legacy integration corpus (currently removed from supported test suite).
 

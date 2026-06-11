@@ -710,12 +710,18 @@ the biggest single chunk; expect it to need its own design pass.
     float-aware arithmetic folding, and emitting `ir.Constant(ir.DoubleType(), v)`
     at use sites via a new `_const_ir()` helper. (3) Unary minus on a `double`
     operand emitted integer `sub`; fixed by checking operand type in
-    `codegen_unaryop` and using `fsub(0.0, operand)` for doubles. Output format
-    note: WRITE/WRITELN emits `%f` (six decimals by default); IBM Pascal’s
-    free-format / exponential default differs — tracked as a future cosmetic fix,
-    not a correctness blocker. Proven by `python -m unittest tests.test_parser
-    tests.test_typecheck tests.test_codegen` (157 tests, 8 new REAL-hardening
-    run tests in `TestCodegenBuildRun`).
+    `codegen_unaryop` and using `fsub(0.0, operand)` for doubles. Proven by
+    `python -m unittest tests.test_parser tests.test_typecheck
+    tests.test_codegen` (157 tests, 8 new REAL-hardening run tests in
+    `TestCodegenBuildRun`).
+  - AMENDED (stale note removed): this item previously said WRITE/WRITELN
+    emits `%f` (six decimals) with the manual's exponential default "tracked
+    as a future cosmetic fix." That was fixed by the 8.3 REAL field-width
+    work and the note was never updated: no-width REAL output now uses
+    `%14.7E`, matching the manual's documented default (M = 14) and its
+    example — `WRITE(123.456)` prints ` 1.2345600E+02` (manual p. 12-24).
+    Verified by direct run during the README/EBNF documentation sync.
+    `[OBSERVED]`
 - [x] **9.2 — Predeclared-identifier registration mechanism.** `[INFERRED]` **S**
   Centralized predeclared registration in `builtins_registry.py`; `type_checker`
   now uses the shared table, predeclared symbols are tagged `is_builtin`, and
