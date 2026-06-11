@@ -776,9 +776,20 @@ the biggest single chunk; expect it to need its own design pass.
     `test_named_const_subrange_set_base_resolves` (typecheck). EBNF `set_type`
     note refreshed to match the real implementation.
 
-- [ ] **9.7 — Deferred attribute-argument forms.** `[DEFERRED]` **S**
+- [x] **9.7 — Deferred attribute-argument forms.** `[DEFERRED]` **S**
   `ORIGIN(c)` and any `PORT(addr)`-style attribute syntax remain intentionally
   out of scope until the manual's prose and grammar are reconciled more fully.
+  - CLOSED (no implementation required): manual audit confirms both are 8088/PC-DOS
+    artifacts with no logical mapping to a 64-bit ELF Linux target.
+    `ORIGIN(addr)` binds an `EXTERN` routine to a fixed absolute segment:offset
+    address — a mechanism for calling BIOS/ROM entry points that has no analog
+    under virtual memory with ASLR and a standard ELF linker. `PORT(addr)` is
+    not a real IBM Pascal attribute at all: the manual never describes it, and
+    the original compiler rejects it with "Attribute Invalid" (EBNF note,
+    `ebnf_grammar.md` line 164). The current parser rejects both at the
+    `parse_attribute_item` gate, which matches the original compiler's behavior
+    exactly. No code change needed; the EBNF note already carries the correct
+    evidence grade. `[READ]`
 
 - [x] **9.8 — Full Enum support.** `[INFERRED]` **M**
   Enum-based sets (9.6) now work because they resolve to `i32` ordinals, but
