@@ -735,7 +735,7 @@ the biggest single chunk; expect it to need its own design pass.
   Every grammar change above should update the EBNF doc and its change log in the
   same commit, with the right evidence grade.
 
-- [ ] **9.5 — Remaining compiler metacommands.** `[OBSERVED]` **M**
+- [x] **9.5 — Remaining compiler metacommands.** `[OBSERVED]` **M**
   After `$INCLUDE` and the identifier-label cleanup, the brace-directive path
   still needs an explicit policy for the rest of the IBM Pascal metacommands:
   `$BRAVE`, `$DEBUG`, `$ENTRY`, `$ERRORS`, `$GOTO`, `$INDEXCK`, `$INITCK`,
@@ -744,6 +744,46 @@ the biggest single chunk; expect it to need its own design pass.
   `$SUBTITLE`, `$SYMTAB`, `$TITLE`, `$IF`, `$INCONST`, `$MESSAGE`, `$POP`, and
   `$PUSH`. Decide which are ignored, which affect parser/codegen state, and
   which should error when unsupported.
+  - Done: Rewrote `parse_metacommand_comment` and added supporting helpers
+    (`_read_meta_name`, `_consume_to`, `_eval_meta_const`, `_skip_source_block`).
+    Three tiers implemented per manual Chapter 4:
+    **Tier 1** (listing/output — `$LIST`, `$OCODE`, `$SYMTAB`, `$TITLE`,
+    `$SUBTITLE`, `$PAGE`, `$PAGEIF`, `$PAGESIZE`, `$LINESIZE`, `$ERRORS`,
+    `$SKIP`): accepted and silently absorbed; integer/string arguments consumed
+    so they don't corrupt subsequent parsing.
+    **Tier 2** (runtime-check ON/OFF — `$BRAVE`, `$DEBUG`, `$ENTRY`, `$GOTO`,
+    `$INDEXCK`, `$INITCK`, `$LINE`, `$MATHCK`, `$NILCK`, `$RANGECK`,
+    `$RUNTIME`, `$STACKCK`, `$WARN`): stored in `meta_flags` and stamped onto
+    every emitted token (same mechanism `$RANGECK` already used). `$DEBUG+/-`
+    couples to its seven sub-flags (manual §4-11); `$LINE+` implies `$ENTRY+`
+    (manual §4-20). All defaults are per the manual.
+    **Tier 3** (conditional compilation): `$PUSH`/`$POP` save/restore a full
+    snapshot of `meta_flags`/`_meta_int`/`_meta_str` on a stack; `$MESSAGE:'text'`
+    prints to stderr during compilation; `$INCONST:id` registers a meta-constant
+    at 0 (non-interactive build) and logs a notice to stderr; `$IF constant
+    $THEN ... [$ELSE ...] $END` fully supported including arbitrary nesting —
+    false branches are skipped at the character level before tokenisation, so
+    syntax errors in skipped text are invisible to the parser. `$ELSE` and
+    `$END` encountered during normal (true-branch) processing are handled
+    correctly. `_skip_source_block` tracks `$IF`/`$END` nesting depth so a
+    skipped outer block atomically swallows all inner `$IF...$END` pairs.
+    Multiple comma-separated metacommands in one comment are supported.
+    Module-level tables `_ON_OFF_FLAGS`, `_INT_META_DEFAULTS`,
+    `_STR_META_DEFAULTS`, `_DEBUG_SUB_FLAGS` document all defaults.
+  - Also note: the `$RANGECK` flag gates on string-intrinsic capacity checks
+    (added in 7.7) are currently **unconditional**; they should eventually read
+    the per-statement `rangeck` field from the AST node (which already carries
+    the flag) instead of the hardcoded `True`. Deferred as a codegen follow-on.
+    `[OBSERVED]`
+  - Fixtures: `parser/should_pass/metacmd_tier1.pas`, `metacmd_tier2.pas`,
+    `metacmd_if_true.pas`, `metacmd_if_false.pas`, `metacmd_if_else.pas`,
+    `metacmd_if_false_else.pas`, `metacmd_if_nested.pas`,
+    `metacmd_push_pop.pas`, `metacmd_message.pas`.
+  - Tests: `tests.test_parser.TestMetacommands` (20 tests covering flag
+    state, `$DEBUG` coupling, `$LINE`→`$ENTRY`, comma-separated flags, token
+    stamping, all tier-1 names, `$PUSH`/`$POP` round-trips, all `$IF`
+    combinations, `$MESSAGE`, `$INCONST`). Proven by
+    `python -m unittest discover -s tests` (391 tests OK). `[OBSERVED]`
 
 - [x] **9.6 — Full set type-checking and codegen.** `[OBSERVED]` **L**
   CORRECTION to the original audit note: by the time this item was picked up,
