@@ -166,6 +166,25 @@ class TestReadWriteTypecheck(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("TEXT", " ".join(str(e) for e in result.errors))
 
+    def test_assign_requires_file_and_string_name(self):
+        ok = typecheck_source("PROGRAM P; VAR f: TEXT; BEGIN ASSIGN(f, 'x') END.")
+        self.assertTrue(ok.success, msg=" ".join(str(e) for e in ok.errors))
+        bad_file = typecheck_source("PROGRAM P; VAR i: INTEGER; BEGIN ASSIGN(i, 'x') END.")
+        self.assertFalse(bad_file.success)
+        self.assertIn("file", " ".join(str(e) for e in bad_file.errors))
+        bad_name = typecheck_source("PROGRAM P; VAR f: TEXT; BEGIN ASSIGN(f, 42) END.")
+        self.assertFalse(bad_name.success)
+        self.assertIn("STRING", " ".join(str(e) for e in bad_name.errors))
+
+    def test_close_discard_require_one_file_arg(self):
+        ok = typecheck_source("PROGRAM P; VAR f: FILE OF INTEGER; BEGIN CLOSE(f); DISCARD(f) END.")
+        self.assertTrue(ok.success, msg=" ".join(str(e) for e in ok.errors))
+        bad = typecheck_source("PROGRAM P; VAR i: INTEGER; BEGIN CLOSE(i); DISCARD END.")
+        self.assertFalse(bad.success)
+        errors = " ".join(str(e) for e in bad.errors)
+        self.assertIn("file", errors)
+        self.assertIn("expects 1", errors)
+
 
 class TestTypeCompatibility(unittest.TestCase):
     """Type compatibility and assignment rules."""

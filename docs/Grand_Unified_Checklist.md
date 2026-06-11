@@ -531,6 +531,40 @@ the biggest single chunk; expect it to need its own design pass.
     identifier table only, with no body semantics; do not infer it until 8.6 or
     a deeper manual pass verifies meaning. `[READ]`
 - [ ] **8.5 — `ASSIGN`, `CLOSE`, `DISCARD`, `READFN`, `READSET`.** `[READ]` **L** Extended I/O verbs.
+  - PARTIAL / implemented now: `ASSIGN`, `CLOSE`, and `DISCARD` are real
+    runtime operations, not façade calls. The FCB layout now carries a bound
+    filename slot; `ASSIGN(VAR F, name)` copies STRING/LSTRING/CHAR data,
+    trims trailing blanks, rejects assignment to an open file, and treats
+    `CHR(0)`/NUL as the existing anonymous temporary-file case. `RESET` and
+    `REWRITE` honor the bound name via host `fopen` (`r+b` / `w+b`), preserving
+    anonymous `tmpfile()` behavior for unbound files. `CLOSE` is a no-op for
+    already closed files, closes owned handles, and appends a final TEXT line
+    marker on written non-empty TEXT files if the stream does not already end
+    in `\n`. `DISCARD` closes and removes the named host file; anonymous
+    temporaries disappear through `tmpfile`/`fclose`. `[OBSERVED]`
+  - Manual basis: ASSIGN/CLOSE/DISCARD/READSET/READFN are documented on manual
+    pp. 12-27..12-31 (`IBM_Pascal_Compiler_Aug81_djvu.txt` around lines
+    13939, 13993, 14040, 14075, 14095). The text says ASSIGN trims trailing
+    blanks and overrides a prior filename; CLOSE may be called on a closed file;
+    DISCARD closes and deletes; temporary files are deleted when closed.
+    `[READ]`
+  - Proof: `tests.test_runtime_fixes.TestFileBufferModel.test_assign_close_named_text_persists_across_fcb`
+    writes through one assigned TEXT FCB, closes it, reopens the same host path
+    through a second assigned FCB, reads the characters back, and verifies the
+    host file persists as `HI\n` (tmpfile cannot fake this). `test_discard_named_file_deletes_host_path`
+    verifies `DISCARD` removes the host path; `test_assign_chr_zero_keeps_anonymous_temp_behavior`
+    verifies the manual temporary-file spelling `ASSIGN(f, CHR(0))`. Existing
+    8.2 anonymous-file tests still pass. `tests.test_typecheck.TestReadWriteTypecheck`
+    covers ASSIGN argument validation plus CLOSE/DISCARD file-argument validation.
+    Full suite: `python3 -m unittest discover -s tests` ran 352 tests OK.
+    `[OBSERVED]`
+  - Still open before checking this item complete: `READFN` and `READSET` are
+    registered as builtins but deliberately rejected with an explicit diagnostic
+    instead of silently falling through. `READFN` needs filename-token parsing
+    and assignment-to-file parameters without consuming the line marker;
+    `READSET` depends on complete `SETOFCHAR`/SET OF CHAR runtime lowering and
+    LSTRING filling semantics. Leaving those open is intentional evidence
+    discipline, not a hidden stub. `[OBSERVED]`
 - [ ] **8.6 — `FILEMODES`, `SEQUENTIAL`, `TERMINAL`, `FCBFQQ`.** `[INFERRED]` **L**
   Confirm each one's meaning from the manual body before implementing — several
   are opaque from the identifier list alone.

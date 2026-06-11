@@ -147,6 +147,33 @@ class RuntimeBuiltinsMixin:
     def builtin_put(self, args: List[Expression]) -> None:
         self._builtin_file_op('PUT', 'pas_file_put', args)
 
+    def builtin_close(self, args: List[Expression]) -> None:
+        self._builtin_file_op('CLOSE', 'pas_file_close', args)
+
+    def builtin_discard(self, args: List[Expression]) -> None:
+        self._builtin_file_op('DISCARD', 'pas_file_discard', args)
+
+    def builtin_assign(self, args: List[Expression]) -> None:
+        if len(args) != 2:
+            raise CodegenError(f'ASSIGN expects 2 arguments, got {len(args)}')
+        target = args[0] if isinstance(args[0], Designator) else Designator(args[0].name, [])
+        ptr = self.resolve_designator_ptr(target)
+        handle = self.builder.load(ptr)
+        fcb_ptr = self.builder.bitcast(handle, self.file_fcb_type().as_pointer())
+        name_arg = args[1]
+        try:
+            chars, length = self.get_string_chars_and_len(name_arg)
+        except Exception:
+            # ASSIGN accepts a single CHAR too; in particular ASSIGN(F, CHR(0))
+            # requests an anonymous temporary file per the manual.
+            val = self.codegen_expr(name_arg)
+            if val.type != ir.IntType(8):
+                raise
+            tmp = self.builder.alloca(ir.IntType(8), name='assign_char')
+            self.builder.store(val, tmp)
+            chars, length = tmp, ir.Constant(ir.IntType(32), 1)
+        self.builder.call(self._file_helper('pas_file_assign'), [fcb_ptr, chars, length])
+
     def builtin_abort(self, args: List[Expression]) -> None:
         # ABORT(CONST STRING, WORD, WORD): surface the message, error code, and
         # STATUS word through the runtime rather than dropping them (manual:

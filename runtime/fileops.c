@@ -3,11 +3,12 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 /* Must match codegen/base.py and codegen/files.py:
- * { i32 elem_size, i32 structure, i32 touched, i32 mode, i8* buffer, i8* handle }
+ * { i32 elem_size, i32 structure, i32 touched, i32 mode, i8* buffer, i8* handle, i8* name }
  * mode low bits: 0 = closed/unopened, 1 = inspection/read, 2 = generation/write
- * mode flags: EOF=0x4, STD=0x8, PENDING=0x10, EOLN=0x20, OWNS_HANDLE=0x40.
+ * mode flags: EOF=0x4, STD=0x8, PENDING=0x10, EOLN=0x20, OWNS_HANDLE=0x40, TEMP=0x80.
  * TEXT line-marker host mapping: '\n' in the stream; EOLN presents F^ as blank.
  */
 #define MODE_CLOSED 0
@@ -19,6 +20,7 @@
 #define MODE_PENDING 16
 #define MODE_EOLN   32
 #define MODE_OWNS_HANDLE 64
+#define MODE_TEMP 128
 
 #define STRUCT_BINARY 0
 #define STRUCT_TEXT   1
@@ -30,6 +32,7 @@ struct pas_file_fcb {
     int mode;
     void *buffer;
     FILE *handle;
+    char *name;
 };
 
 static void die(const char *msg) {
@@ -46,15 +49,21 @@ static int is_eof(struct pas_file_fcb *f) { return (f->mode & MODE_EOF) != 0; }
 static int is_pending(struct pas_file_fcb *f) { return (f->mode & MODE_PENDING) != 0; }
 
 static void set_mode_flags(struct pas_file_fcb *f, int mode, int eof, int eoln, int pending) {
-    int keep = f->mode & (MODE_STD | MODE_OWNS_HANDLE);
+    int keep = f->mode & (MODE_STD | MODE_OWNS_HANDLE | MODE_TEMP);
     f->mode = keep | mode | (eof ? MODE_EOF : 0) | (eoln ? MODE_EOLN : 0) | (pending ? MODE_PENDING : 0);
 }
 
 static FILE *ensure_handle(struct pas_file_fcb *f) {
     if (!f) die("file runtime: null fcb");
     if (f->handle) return f->handle;
-    f->handle = tmpfile();
-    if (!f->handle) die("file runtime: tmpfile failed");
+    if (f->name) {
+        f->handle = fopen(f->name, "r+b");
+        if (!f->handle) die("file runtime: open failed");
+    } else {
+        f->handle = tmpfile();
+        if (!f->handle) die("file runtime: tmpfile failed");
+        f->mode |= MODE_TEMP;
+    }
     f->mode |= MODE_OWNS_HANDLE;
     return f->handle;
 }
@@ -115,6 +124,12 @@ void pas_file_touch_buffer(struct pas_file_fcb *f) {
 void pas_file_get(struct pas_file_fcb *f) { raw_get(f, 0); }
 
 void pas_file_reset(struct pas_file_fcb *f) {
+    if (!f) die("file runtime: null fcb");
+    if (!f->handle && f->name) {
+        f->handle = fopen(f->name, "r+b");
+        if (!f->handle) die("file runtime: open failed");
+        f->mode |= MODE_OWNS_HANDLE;
+    }
     FILE *h = ensure_handle(f);
     if (current_mode(f) == MODE_WRITE && fflush(h) != 0) die("file runtime: flush failed");
     rewind(h);
@@ -124,14 +139,23 @@ void pas_file_reset(struct pas_file_fcb *f) {
 
 void pas_file_rewrite(struct pas_file_fcb *f) {
     if (!f) die("file runtime: null fcb");
-    if (f->handle && (f->mode & MODE_OWNS_HANDLE)) fclose(f->handle);
     if (f->mode & MODE_STD) {
         if (f->handle && fflush(f->handle) != 0) die("file runtime: flush failed");
         set_mode_flags(f, MODE_WRITE, 1, 0, 0);
         return;
     }
-    f->handle = tmpfile();
-    if (!f->handle) die("file runtime: tmpfile failed");
+    if (f->handle && (f->mode & MODE_OWNS_HANDLE)) fclose(f->handle);
+    f->handle = NULL;
+    f->mode &= ~MODE_OWNS_HANDLE;
+    if (f->name) {
+        f->handle = fopen(f->name, "w+b");
+        if (!f->handle) die("file runtime: create failed");
+        f->mode &= ~MODE_TEMP;
+    } else {
+        f->handle = tmpfile();
+        if (!f->handle) die("file runtime: tmpfile failed");
+        f->mode |= MODE_TEMP;
+    }
     f->mode |= MODE_OWNS_HANDLE;
     set_mode_flags(f, MODE_WRITE, 1, 0, 0);
     f->touched = 0;
@@ -144,8 +168,64 @@ void pas_file_put(struct pas_file_fcb *f) {
 
     size_t n = f->structure == STRUCT_TEXT ? 1 : elem_size(f);
     if (fwrite(f->buffer, 1, n, h) != n) die("file runtime: write failed");
-    set_mode_flags(f, MODE_WRITE, 1, 0, 0);
+    int eoln = (f->structure == STRUCT_TEXT && *((unsigned char *)f->buffer) == '\n');
+    set_mode_flags(f, MODE_WRITE, 1, eoln, 0);
     f->touched = 0;
+}
+
+static void append_final_text_marker_if_needed(struct pas_file_fcb *f) {
+    if (!f || f->structure != STRUCT_TEXT || current_mode(f) != MODE_WRITE || !f->handle || (f->mode & MODE_STD)) return;
+    FILE *h = f->handle;
+    if (fflush(h) != 0) die("file runtime: flush failed");
+    long pos = ftell(h);
+    if (pos <= 0) return;
+    if (fseek(h, -1, SEEK_END) != 0) die("file runtime: seek failed");
+    int ch = fgetc(h);
+    if (ch != '\n') {
+        if (fseek(h, 0, SEEK_END) != 0) die("file runtime: seek failed");
+        if (fputc('\n', h) == EOF) die("file runtime: final line marker write failed");
+    }
+    fflush(h);
+}
+
+void pas_file_close(struct pas_file_fcb *f) {
+    if (!f) die("file runtime: null fcb");
+    append_final_text_marker_if_needed(f);
+    if (f->handle && (f->mode & MODE_OWNS_HANDLE)) fclose(f->handle);
+    f->handle = NULL;
+    f->mode &= ~(MODE_OWNS_HANDLE | MODE_PENDING | MODE_EOF | MODE_EOLN);
+    set_mode_flags(f, MODE_CLOSED, 0, 0, 0);
+}
+
+void pas_file_discard(struct pas_file_fcb *f) {
+    if (!f) die("file runtime: null fcb");
+    char *name = f->name ? strdup(f->name) : NULL;
+    int was_temp = (f->mode & MODE_TEMP) != 0;
+    pas_file_close(f);
+    if (name) {
+        remove(name);
+        free(name);
+    } else if (was_temp) {
+        /* Anonymous tmpfile storage is deleted by fclose. */
+    }
+}
+
+void pas_file_assign(struct pas_file_fcb *f, const char *name, int len) {
+    if (!f) die("file runtime: null fcb");
+    if (current_mode(f) != MODE_CLOSED || f->handle) die("file runtime: ASSIGN on open file");
+    if (!name || len < 0) die("file runtime: bad ASSIGN name");
+    while (len > 0 && name[len - 1] == ' ') len--;
+    if (f->name) free(f->name);
+    f->name = NULL;
+    f->mode &= ~MODE_TEMP;
+    if (len == 1 && name[0] == '\0') {
+        f->mode |= MODE_TEMP;
+        return;
+    }
+    f->name = (char *)malloc((size_t)len + 1);
+    if (!f->name) die("file runtime: filename allocation failed");
+    memcpy(f->name, name, (size_t)len);
+    f->name[len] = '\0';
 }
 
 int pas_file_eof(struct pas_file_fcb *f) {

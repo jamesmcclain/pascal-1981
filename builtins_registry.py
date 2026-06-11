@@ -15,7 +15,7 @@ BUILTIN_FUNCTIONS = {
 }
 
 BUILTIN_PROCEDURES = {
-    'WRITE', 'WRITELN', 'READ', 'READLN', 'RESET', 'REWRITE', 'GET', 'PUT', 'CONCAT', 'COPYLST', 'COPYSTR', 'INSERT', 'DELETE', 'POSITN', 'PACK', 'UNPACK', 'NEW', 'DISPOSE', 'FILLC', 'FILLSC', 'MOVEL', 'MOVER',
+    'WRITE', 'WRITELN', 'READ', 'READLN', 'RESET', 'REWRITE', 'GET', 'PUT', 'ASSIGN', 'CLOSE', 'DISCARD', 'READFN', 'READSET', 'CONCAT', 'COPYLST', 'COPYSTR', 'INSERT', 'DELETE', 'POSITN', 'PACK', 'UNPACK', 'NEW', 'DISPOSE', 'FILLC', 'FILLSC', 'MOVEL', 'MOVER',
     'MOVESL', 'MOVESR', 'ABORT'
 }
 
@@ -36,6 +36,11 @@ def register_builtins(symbol_table) -> None:
     define_builtin('REWRITE', ProcedureType('REWRITE', text_file_param), 'procedure')
     define_builtin('GET', ProcedureType('GET', text_file_param), 'procedure')
     define_builtin('PUT', ProcedureType('PUT', text_file_param), 'procedure')
+    define_builtin('ASSIGN', ProcedureType('ASSIGN', []), 'procedure')
+    define_builtin('CLOSE', ProcedureType('CLOSE', text_file_param), 'procedure')
+    define_builtin('DISCARD', ProcedureType('DISCARD', text_file_param), 'procedure')
+    define_builtin('READFN', ProcedureType('READFN', []), 'procedure')
+    define_builtin('READSET', ProcedureType('READSET', []), 'procedure')
     define_builtin('CONCAT', ProcedureType('CONCAT', []), 'procedure')
     define_builtin('COPYLST', ProcedureType('COPYLST', []), 'procedure')
     define_builtin('COPYSTR', ProcedureType('COPYSTR', []), 'procedure')

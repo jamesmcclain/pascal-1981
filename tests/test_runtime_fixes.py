@@ -19,6 +19,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 
 from tests.support import (parse_source, requires_exe, requires_llvm, typecheck_source)
 
@@ -228,6 +229,36 @@ class TestFileBufferModel(unittest.TestCase):
         rc, out = build_run_linked(src, ["fileops.c"], stdin="XY")
         self.assertEqual(rc, 0)
         self.assertEqual(out, "2\n")
+
+    def test_assign_close_named_text_persists_across_fcb(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "named.txt"
+            src = ("PROGRAM P; VAR f, g: TEXT; c1, c2: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); REWRITE(f); f^ := 'H'; PUT(f); f^ := 'I'; PUT(f); CLOSE(f); "
+                   f"ASSIGN(g, '{path}'); RESET(g); c1 := g^; GET(g); c2 := g^; CLOSE(g); "
+                   "WRITELN(c1); WRITELN(c2) END.")
+            rc, out = build_run_linked(src, ["fileops.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "H\nI\n")
+            self.assertEqual(path.read_text(), "HI\n")
+
+    def test_discard_named_file_deletes_host_path(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "gone.txt"
+            src = ("PROGRAM P; VAR f: TEXT; BEGIN "
+                   f"ASSIGN(f, '{path}'); REWRITE(f); f^ := 'X'; PUT(f); DISCARD(f); "
+                   "WRITELN('done') END.")
+            rc, out = build_run_linked(src, ["fileops.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "done\n")
+            self.assertFalse(path.exists())
+
+    def test_assign_chr_zero_keeps_anonymous_temp_behavior(self):
+        src = ("PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
+               "ASSIGN(f, CHR(0)); REWRITE(f); f^ := 'T'; PUT(f); RESET(f); c := f^; WRITELN(c); CLOSE(f) END.")
+        rc, out = build_run_linked(src, ["fileops.c"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "T\n")
 
 
 if __name__ == "__main__":

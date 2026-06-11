@@ -208,6 +208,12 @@ class StmtsMixin:
                 self.builtin_get(stmt.args)
             elif lookup_name == 'PUT':
                 self.builtin_put(stmt.args)
+            elif lookup_name == 'ASSIGN':
+                self.builtin_assign(stmt.args)
+            elif lookup_name == 'CLOSE':
+                self.builtin_close(stmt.args)
+            elif lookup_name == 'DISCARD':
+                self.builtin_discard(stmt.args)
             elif lookup_name == 'NEW':
                 self.builtin_new(stmt.args)
             elif lookup_name == 'DISPOSE':

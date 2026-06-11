@@ -938,8 +938,14 @@ class PascalTypeChecker(TypeChecker):
             elif lookup_name in {'READ', 'READLN'}:
                 self._check_read_args(stmt, is_readln=(lookup_name == 'READLN'))
                 return
-            elif lookup_name in {'RESET', 'REWRITE', 'GET', 'PUT'}:
+            elif lookup_name in {'RESET', 'REWRITE', 'GET', 'PUT', 'CLOSE', 'DISCARD'}:
                 self._check_file_primitive_args(stmt, lookup_name)
+                return
+            elif lookup_name == 'ASSIGN':
+                self._check_assign_file_args(stmt)
+                return
+            elif lookup_name in {'READFN', 'READSET'}:
+                self.error(f"{lookup_name} is registered but not implemented yet; Section 8.5 tracks it as deferred pending full filename-token/SETOFCHAR semantics", stmt)
                 return
 
         if not sym:
@@ -1014,6 +1020,20 @@ class PascalTypeChecker(TypeChecker):
         arg_type = self.infer_expression_type(arg)
         if not isinstance(arg_type, FileType):
             self.error(f"Argument 1 type mismatch: {name} expects a file variable, got {arg_type}", stmt)
+
+    def _check_assign_file_args(self, stmt: ProcCallStmt) -> None:
+        if len(stmt.args) != 2:
+            self.error(f"ASSIGN expects 2 arguments, got {len(stmt.args)}", stmt)
+            return
+        f_arg, name_arg = stmt.args
+        f_type = self.infer_expression_type(f_arg)
+        if not isinstance(f_type, FileType):
+            self.error(f"ASSIGN argument 1 expects a file variable, got {f_type}", stmt)
+        if not isinstance(f_arg, (Identifier, Designator)):
+            self.error("ASSIGN argument 1 must be a file variable designator", stmt)
+        name_type = self.infer_expression_type(name_arg)
+        if name_type is None or (not isinstance(name_type, (StringType, LStringType)) and not name_type.equivalent_to(CHAR_TYPE)):
+            self.error(f"ASSIGN argument 2 must be STRING/LSTRING/CHAR, got {name_type}", stmt)
 
     def _is_text_file_type(self, t: Type) -> bool:
         return isinstance(t, FileType) and t.structure == 'ASCII' and t.element_type.equivalent_to(CHAR_TYPE)
