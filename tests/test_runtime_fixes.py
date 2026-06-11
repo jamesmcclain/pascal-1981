@@ -19,6 +19,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 
 from tests.support import (parse_source, requires_exe, requires_llvm, typecheck_source)
 
@@ -172,8 +173,259 @@ class TestFileBufferModel(unittest.TestCase):
         retained, inline/leak-free) against breaking the basic F^ contract."""
         src = ("PROGRAM P; VAR f: FILE OF INTEGER; x: INTEGER; t: TEXT; c: CHAR; "
                "BEGIN f^ := 42; x := f^; WRITELN(x); t^ := 'Q'; c := t^; WRITELN(c) END.")
-        rc, out = build_run_linked(src, [])
+        rc, out = build_run_linked(src, ["fileops.c"])
         self.assertEqual(out, "42\nQ\n")
+
+    def test_text_reset_rewrite_get_put_roundtrip(self):
+        """TEXT file primitives must move distinct components through the stream.
+        RESET supplies the first component via its implicit GET; explicit GET
+        then advances to the second component."""
+        src = ("PROGRAM P; VAR f: TEXT; c1, c2: CHAR; BEGIN "
+               "REWRITE(f); f^ := 'A'; PUT(f); f^ := 'B'; PUT(f); "
+               "RESET(f); c1 := f^; GET(f); c2 := f^; WRITELN(c1); WRITELN(c2) END.")
+        rc, out = build_run_linked(src, ["fileops.c"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "A\nB\n")
+
+    def test_binary_reset_rewrite_get_put_roundtrip(self):
+        """Binary FILE OF INTEGER uses elem_size transfers, not byte-sized TEXT I/O."""
+        src = ("PROGRAM P; VAR f: FILE OF INTEGER; x, y, z: INTEGER; BEGIN "
+               "REWRITE(f); f^ := 1001; PUT(f); f^ := -7; PUT(f); f^ := 42; PUT(f); "
+               "RESET(f); x := f^; GET(f); y := f^; GET(f); z := f^; "
+               "WRITELN(x); WRITELN(y); WRITELN(z) END.")
+        rc, out = build_run_linked(src, ["fileops.c"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "1001\n-7\n42\n")
+
+    def test_rewrite_truncates_and_get_past_eof_aborts(self):
+        """A second REWRITE truncates prior content. Prove truncation by driving
+        GET past the only surviving component."""
+        src = ("PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
+               "REWRITE(f); f^ := 'A'; PUT(f); f^ := 'B'; PUT(f); "
+               "REWRITE(f); f^ := 'C'; PUT(f); RESET(f); c := f^; WRITELN(c); GET(f); GET(f) END.")
+        rc, out = build_run_linked(src, ["fileops.c"])
+        self.assertNotEqual(rc, 0)
+
+    def test_eof_loop_counts_text_components(self):
+        src = ("PROGRAM P; VAR f: TEXT; n: INTEGER; BEGIN "
+               "REWRITE(f); f^ := 'A'; PUT(f); f^ := 'B'; PUT(f); "
+               "RESET(f); n := 0; WHILE NOT EOF(f) DO BEGIN n := n + 1; GET(f) END; "
+               "WRITELN(n) END.")
+        rc, out = build_run_linked(src, ["fileops.c"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "2\n")
+
+    def test_eoln_line_marker_presents_blank(self):
+        src = ("PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
+               "REWRITE(f); WRITELN(f, 'A'); RESET(f); c := f^; WRITELN(c); "
+               "GET(f); IF EOLN(f) THEN WRITELN(1); c := f^; WRITELN(c) END.")
+        rc, out = build_run_linked(src, ["fileops.c"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "A\n1\n \n")
+
+    def test_eof_without_argument_uses_input(self):
+        src = ("PROGRAM P; VAR n: INTEGER; BEGIN n := 0; "
+               "WHILE NOT EOF DO BEGIN n := n + 1; GET(INPUT) END; WRITELN(n) END.")
+        rc, out = build_run_linked(src, ["fileops.c"], stdin="XY")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "2\n")
+
+    def test_assign_close_named_text_persists_across_fcb(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "named.txt"
+            src = ("PROGRAM P; VAR f, g: TEXT; c1, c2: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); REWRITE(f); f^ := 'H'; PUT(f); f^ := 'I'; PUT(f); CLOSE(f); "
+                   f"ASSIGN(g, '{path}'); RESET(g); c1 := g^; GET(g); c2 := g^; CLOSE(g); "
+                   "WRITELN(c1); WRITELN(c2) END.")
+            rc, out = build_run_linked(src, ["fileops.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "H\nI\n")
+            self.assertEqual(path.read_text(), "HI\n")
+
+    def test_discard_named_file_deletes_host_path(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "gone.txt"
+            src = ("PROGRAM P; VAR f: TEXT; BEGIN "
+                   f"ASSIGN(f, '{path}'); REWRITE(f); f^ := 'X'; PUT(f); DISCARD(f); "
+                   "WRITELN('done') END.")
+            rc, out = build_run_linked(src, ["fileops.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "done\n")
+            self.assertFalse(path.exists())
+
+    def test_assign_chr_zero_keeps_anonymous_temp_behavior(self):
+        src = ("PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
+               "ASSIGN(f, CHR(0)); REWRITE(f); f^ := 'T'; PUT(f); RESET(f); c := f^; WRITELN(c); CLOSE(f) END.")
+        rc, out = build_run_linked(src, ["fileops.c"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "T\n")
+
+    def test_readset_reads_allowed_chars_and_leaves_delimiter(self):
+        src = ("PROGRAM P; VAR s: LSTRING(10); c: CHAR; BEGIN "
+               "READSET(s, ['A'..'Z']); READ(INPUT, c); WRITELN(s); WRITELN(c) END.")
+        rc, out = build_run_linked(src, ["fileops.c", "readq.c"], stdin="  \tABC1Z\n")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "ABC\n1\n")
+
+    def test_readset_capacity_stops_without_consuming_next_char(self):
+        src = ("PROGRAM P; VAR s: LSTRING(3); c: CHAR; BEGIN "
+               "READSET(s, ['A'..'Z']); READ(INPUT, c); WRITELN(s); WRITELN(c) END.")
+        rc, out = build_run_linked(src, ["fileops.c", "readq.c"], stdin="ABCDE\n")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "ABC\nD\n")
+
+    def test_readfn_reads_filename_and_does_not_consume_line_marker(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "readfn.txt"
+            src = ("PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
+                   "READFN(INPUT, f); IF EOLN(INPUT) THEN WRITELN('eol'); "
+                   "REWRITE(f); f^ := 'R'; PUT(f); CLOSE(f); "
+                   f"ASSIGN(f, '{path}'); RESET(f); c := f^; WRITELN(c); CLOSE(f) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"], stdin=f"{path}\n")
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "eol\nR\n")
+            self.assertEqual(path.read_text(), "R\n")
+
+    # ---- Phase 1 regressions: formatted readers must honor the FCB's ----
+    # ---- current-component buffer (RESET's implicit GET was being lost) ----
+
+    def test_fread_after_reset_reads_first_component(self):
+        """READ(f, c) immediately after RESET must yield the FIRST character.
+        Previously pas_fread_char read the raw handle and the component
+        supplied by RESET's implicit GET was silently dropped."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "first.txt"
+            src = ("PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); REWRITE(f); WRITELN(f, 'XY'); CLOSE(f); "
+                   "RESET(f); READ(f, c); WRITELN(c) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "X\n")
+
+    def test_readset_after_reset_includes_first_char(self):
+        """READSET after RESET must include the first character of the token
+        (previously 'HELLO' came back as 'ELLO')."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "rs.txt"
+            src = ("PROGRAM P; VAR f: TEXT; s: LSTRING(10); BEGIN "
+                   f"ASSIGN(f, '{path}'); REWRITE(f); WRITELN(f, 'HELLO 1'); CLOSE(f); "
+                   "RESET(f); READSET(f, s, ['A'..'Z']); WRITELN(s) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "HELLO\n")
+
+    def test_buffer_get_and_fread_interleave(self):
+        """F^ / GET / READ(f, ...) draw from one logical character sequence:
+        f^ sees the first component, GET advances, READ consumes the buffered
+        component before touching the stream."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "mix.txt"
+            src = ("PROGRAM P; VAR f: TEXT; c1, c2, c3: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); REWRITE(f); WRITELN(f, 'ABC'); CLOSE(f); "
+                   "RESET(f); c1 := f^; GET(f); READ(f, c2); READ(f, c3); "
+                   "WRITELN(c1); WRITELN(c2); WRITELN(c3) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "A\nB\nC\n")
+
+    def test_eoln_and_eof_observed_after_formatted_read(self):
+        """After READ(f, i) consumes the only token, EOLN(f) sees the line
+        marker; after READLN(f) consumes it, EOF(f) is true."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "pred.txt"
+            src = ("PROGRAM P; VAR f: TEXT; i: INTEGER; BEGIN "
+                   f"ASSIGN(f, '{path}'); REWRITE(f); WRITELN(f, '7'); CLOSE(f); "
+                   "RESET(f); READ(f, i); WRITELN(i); "
+                   "IF EOLN(f) THEN WRITELN('eol'); "
+                   "READLN(f); IF EOF(f) THEN WRITELN('eof') END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "7\neol\neof\n")
+
+    def test_fread_lstring_after_reset_keeps_line_marker(self):
+        """String READ after RESET returns the whole first line and leaves the
+        line marker as the current component (EOLN true, not consumed)."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "ls.txt"
+            src = ("PROGRAM P; VAR f: TEXT; s: LSTRING(10); BEGIN "
+                   f"ASSIGN(f, '{path}'); REWRITE(f); WRITELN(f, 'HI'); CLOSE(f); "
+                   "RESET(f); READ(f, s); WRITELN(s); "
+                   "IF EOLN(f) THEN WRITELN('eol') END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "HI\neol\n")
+
+    # ---- Phase 2 regressions: writes in inspection/closed mode must abort ----
+    # ---- (previously stream_for silently flipped modes and clobbered bytes) ----
+
+    def test_write_in_inspection_mode_aborts_and_preserves_file(self):
+        """WRITE(f, ...) on a file in read mode aborts (nonzero exit) and the
+        host file is NOT modified. Previously the runtime silently flipped to
+        write mode at the current offset and 'ABCD' became 'ABZD'."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "ro.txt"
+            src = ("PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); REWRITE(f); WRITELN(f, 'ABCD'); CLOSE(f); "
+                   "RESET(f); READ(f, c); WRITE(f, 'Z') END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertNotEqual(rc, 0)
+            self.assertEqual(path.read_text(), "ABCD\n")
+
+    def test_write_to_closed_file_aborts(self):
+        """WRITE(f, ...) on an assigned-but-never-opened file aborts instead of
+        implicitly creating/opening the file in write mode."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "closed.txt"
+            src = ("PROGRAM P; VAR f: TEXT; BEGIN "
+                   f"ASSIGN(f, '{path}'); WRITE(f, 'X') END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertNotEqual(rc, 0)
+            self.assertFalse(path.exists())
+
+    def test_read_in_generation_mode_aborts(self):
+        """READ(f, ...) on a file in write mode aborts (symmetric check)."""
+        src = ("PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
+               "REWRITE(f); WRITELN(f, 'A'); READ(f, c) END.")
+        rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+        self.assertNotEqual(rc, 0)
+
+    def test_read_from_closed_file_performs_implicit_reset(self):
+        """Reading a closed named file goes through the implicit RESET path
+        (consistent with require_text_read), yielding the first component."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "imp.txt"
+            src = ("PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); REWRITE(f); WRITELN(f, 'Q'); CLOSE(f); "
+                   "READ(f, c); WRITELN(c) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "Q\n")
+
+    # ---- Phase 4 regression: bad ASSIGN fails at ASSIGN, not a later fopen ----
+
+    def test_assign_empty_name_aborts_immediately(self):
+        """ASSIGN(f, '') (empty after blank-trimming, and not the CHR(0)
+        temporary-file spelling) aborts at the ASSIGN call site."""
+        src = ("PROGRAM P; VAR f: TEXT; BEGIN ASSIGN(f, '  '); WRITELN('late') END.")
+        rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+        self.assertNotEqual(rc, 0)
+        self.assertNotIn("late", out)
+
+    def test_file_mode_field_defaults_and_assignment(self):
+        src = ("PROGRAM P; VAR f: TEXT; BEGIN "
+               "IF f.MODE = SEQUENTIAL THEN WRITELN('seq'); "
+               "IF INPUT.MODE = TERMINAL THEN WRITELN('term'); "
+               "f.MODE := DIRECT; IF f.MODE = DIRECT THEN WRITELN('direct') END.")
+        rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "seq\nterm\ndirect\n")
+
+    def test_fcbfqq_record_mode_field_codegen(self):
+        src = ("PROGRAM P; VAR b: FCBFQQ; BEGIN "
+               "b.MODE := TERMINAL; IF b.MODE = TERMINAL THEN WRITELN('fcb') END.")
+        rc, out = build_run_linked(src, [])
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "fcb\n")
 
 
 if __name__ == "__main__":

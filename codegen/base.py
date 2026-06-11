@@ -90,6 +90,9 @@ class CodegenBase:
         self.constants: Dict[str, object] = {
             'MAXINT': 2147483647,
             'MAXWORD': 65535,
+            'SEQUENTIAL': 0,
+            'TERMINAL': 1,
+            'DIRECT': 2,
         }
         self.type_aliases: Dict[str, Type] = {}  # compile-time type aliases, keyed UPPER
         self.current_interface_decls: Dict[str, Declaration] = {}
@@ -196,29 +199,45 @@ class CodegenBase:
         self.scope.define('free', free_fn, None)
         # File-control block, one fixed layout for every file type:
         #   {i32 element-size, i32 structure (0=binary FILE OF T, 1=ASCII/TEXT),
-        #    i32 touched (buffer-accessed flag), i8* current-component buffer}.
+        #    i32 touched (buffer-accessed flag), i32 mode/eof bookkeeping,
+        #    i8* current-component buffer, i8* runtime handle, i8* bound name}.
         fcb_ty = self.file_fcb_type()
         fcb_ptr = fcb_ty.as_pointer()
         file_buffer_ty = ir.FunctionType(ir.IntType(8).as_pointer(), [fcb_ptr])
         file_touch_ty = ir.FunctionType(ir.VoidType(), [fcb_ptr])
         i32 = ir.IntType(32)
         file_buffer = ir.Function(self.module, file_buffer_ty, name='pas_file_buffer')
-        b = IRBuilder(file_buffer.append_basic_block(name='entry'))
-        buf_field = b.gep(file_buffer.args[0], [ir.Constant(i32, 0), ir.Constant(i32, 3)])
-        b.ret(b.load(buf_field))
+        file_buffer.linkage = 'external'
         self.scope.define('pas_file_buffer', file_buffer, None)
         file_touch = ir.Function(self.module, file_touch_ty, name='pas_file_touch_buffer')
-        b = IRBuilder(file_touch.append_basic_block(name='entry'))
-        touched_field = b.gep(file_touch.args[0], [ir.Constant(i32, 0), ir.Constant(i32, 2)])
-        b.store(ir.Constant(i32, 1), touched_field)
-        b.ret_void()
+        file_touch.linkage = 'external'
         self.scope.define('pas_file_touch_buffer', file_touch, None)
+        set_ptr = self.set_llvm_type().as_pointer()
+        for name, ty in [('pas_file_reset', ir.FunctionType(ir.VoidType(), [fcb_ptr])), ('pas_file_rewrite', ir.FunctionType(ir.VoidType(), [fcb_ptr])), ('pas_file_get', ir.FunctionType(ir.VoidType(), [fcb_ptr])), ('pas_file_put', ir.FunctionType(ir.VoidType(), [fcb_ptr])), ('pas_file_close', ir.FunctionType(ir.VoidType(), [fcb_ptr])), ('pas_file_discard', ir.FunctionType(ir.VoidType(), [fcb_ptr])), ('pas_file_assign', ir.FunctionType(ir.VoidType(), [fcb_ptr, ir.IntType(8).as_pointer(), ir.IntType(32)])), ('pas_fread_filename', ir.FunctionType(ir.VoidType(), [fcb_ptr, fcb_ptr])), ('pas_freadset', ir.FunctionType(ir.VoidType(), [fcb_ptr, ir.IntType(8).as_pointer(), ir.IntType(32), set_ptr])), ('pas_file_attach_std', ir.FunctionType(ir.VoidType(), [fcb_ptr, fcb_ptr])), ('pas_file_eof', ir.FunctionType(ir.IntType(32), [fcb_ptr])), ('pas_file_eoln', ir.FunctionType(ir.IntType(32), [fcb_ptr]))]:
+            fn = ir.Function(self.module, ty, name=name)
+            fn.linkage = 'external'
+            self.scope.define(name, fn, None)
+        write_fmt = ir.Function(self.module, ir.FunctionType(ir.IntType(32), [fcb_ptr, ir.IntType(8).as_pointer()], var_arg=True), name='pas_write_fmt')
+        write_fmt.linkage = 'external'
+        self.scope.define('pas_write_fmt', write_fmt, None)
+        for name, ptr_ty in [('pas_fread_int', ir.IntType(32).as_pointer()), ('pas_fread_word', ir.IntType(16).as_pointer()), ('pas_fread_real', ir.DoubleType().as_pointer()), ('pas_fread_char', ir.IntType(8).as_pointer())]:
+            fn = ir.Function(self.module, ir.FunctionType(ir.IntType(32), [fcb_ptr, ptr_ty]), name=name)
+            fn.linkage = 'external'
+            self.scope.define(name, fn, None)
+        fread_lstr = ir.Function(self.module, ir.FunctionType(ir.IntType(32), [fcb_ptr, ir.IntType(8).as_pointer(), ir.IntType(32)]), name='pas_fread_lstring')
+        fread_lstr.linkage = 'external'
+        self.scope.define('pas_fread_lstring', fread_lstr, None)
+        fread_skip = ir.Function(self.module, ir.FunctionType(ir.VoidType(), [fcb_ptr]), name='pas_freadln_skip')
+        fread_skip.linkage = 'external'
+        self.scope.define('pas_freadln_skip', fread_skip, None)
 
     def file_fcb_type(self) -> ir.Type:
-        """The file-control-block layout: [i32 element-size, i32 structure, i32 touched, i8* buffer]."""
+        """The file-control-block layout: [i32 element-size, i32 structure,
+        i32 touched, i32 mode/eof, i8* buffer, i8* handle, i8* bound name,
+        i32 FILEMODES user mode]."""
         if not hasattr(self, '_fcb_ty'):
             i32 = ir.IntType(32)
-            self._fcb_ty = ir.LiteralStructType([i32, i32, i32, ir.IntType(8).as_pointer()])
+            self._fcb_ty = ir.LiteralStructType([i32, i32, i32, i32, ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer(), i32])
         return self._fcb_ty
 
     def _scalar_size(self, name: str) -> int:

@@ -1,0 +1,445 @@
+#include <ctype.h>
+#include <stdarg.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* Must match codegen/base.py and codegen/files.py:
+ * { i32 elem_size, i32 structure, i32 touched, i32 mode, i8* buffer, i8* handle, i8* name, i32 filemode }
+ * mode low bits: 0 = closed/unopened, 1 = inspection/read, 2 = generation/write
+ * mode flags: EOF=0x4, STD=0x8, PENDING=0x10, EOLN=0x20, OWNS_HANDLE=0x40, TEMP=0x80.
+ * TEXT line-marker host mapping: '\n' in the stream; EOLN presents F^ as blank.
+ */
+#define MODE_CLOSED 0
+#define MODE_READ   1
+#define MODE_WRITE  2
+#define MODE_BITS   3
+#define MODE_EOF    4
+#define MODE_STD    8
+#define MODE_PENDING 16
+#define MODE_EOLN   32
+#define MODE_OWNS_HANDLE 64
+#define MODE_TEMP 128
+
+#define STRUCT_BINARY 0
+#define STRUCT_TEXT   1
+
+struct pas_file_fcb {
+    int elem_size;
+    int structure;
+    int touched;
+    int mode;
+    void *buffer;
+    FILE *handle;
+    char *name;
+    int filemode;
+};
+
+static void die(const char *msg) {
+    fprintf(stderr, "%s\n", msg);
+    abort();
+}
+
+static size_t elem_size(struct pas_file_fcb *f) {
+    return (size_t)(f->elem_size > 0 ? f->elem_size : 1);
+}
+
+static int current_mode(struct pas_file_fcb *f) { return f->mode & MODE_BITS; }
+static int is_eof(struct pas_file_fcb *f) { return (f->mode & MODE_EOF) != 0; }
+static int is_pending(struct pas_file_fcb *f) { return (f->mode & MODE_PENDING) != 0; }
+
+static void set_mode_flags(struct pas_file_fcb *f, int mode, int eof, int eoln, int pending) {
+    int keep = f->mode & (MODE_STD | MODE_OWNS_HANDLE | MODE_TEMP);
+    f->mode = keep | mode | (eof ? MODE_EOF : 0) | (eoln ? MODE_EOLN : 0) | (pending ? MODE_PENDING : 0);
+}
+
+static FILE *ensure_handle(struct pas_file_fcb *f) {
+    if (!f) die("file runtime: null fcb");
+    if (f->handle) return f->handle;
+    if (f->name) {
+        f->handle = fopen(f->name, "r+b");
+        if (!f->handle) die("file runtime: open failed");
+    } else {
+        f->handle = tmpfile();
+        if (!f->handle) die("file runtime: tmpfile failed");
+        f->mode |= MODE_TEMP;
+    }
+    f->mode |= MODE_OWNS_HANDLE;
+    return f->handle;
+}
+
+static void checked_buffer(struct pas_file_fcb *f) {
+    if (!f || !f->buffer) die("file runtime: null buffer");
+}
+
+static void raw_get(struct pas_file_fcb *f, int allow_eof) {
+    FILE *h = ensure_handle(f);
+    checked_buffer(f);
+    if (current_mode(f) != MODE_READ) die("file runtime: GET requires RESET/read mode");
+    if (!allow_eof && is_eof(f)) die("file runtime: GET past eof");
+
+    size_t n = f->structure == STRUCT_TEXT ? 1 : elem_size(f);
+    size_t got = fread(f->buffer, 1, n, h);
+    if (got != n) {
+        if (feof(h)) {
+            set_mode_flags(f, MODE_READ, 1, 0, 0);
+            f->touched = 0;
+            return;
+        }
+        die("file runtime: read failed");
+    }
+    int eoln = (f->structure == STRUCT_TEXT && *((unsigned char *)f->buffer) == '\n');
+    if (eoln) *((unsigned char *)f->buffer) = ' ';
+    set_mode_flags(f, MODE_READ, 0, eoln, 0);
+    f->touched = 0;
+}
+
+static void force_fill(struct pas_file_fcb *f) {
+    if (!f) return;
+    if (is_pending(f)) raw_get(f, 1);
+}
+
+/* ---- Unified character source (buffer-variable model + host stream) ----
+ *
+ * The FCB's current-component buffer and the host stream form one logical
+ * character sequence. Formatted readers (READ/READSET/READFN/READLN-skip)
+ * must consume a live buffered component before touching the stream,
+ * otherwise the component supplied by RESET's implicit GET is lost.
+ */
+
+static int fcb_next_char(struct pas_file_fcb *f, FILE *h) {
+    if (!f || !f->buffer || current_mode(f) != MODE_READ) return fgetc(h);
+    if (is_eof(f)) return EOF;
+    if (!is_pending(f)) {
+        /* The buffer holds the current component: consume it. A TEXT line
+         * marker is stored as a blank with MODE_EOLN set; hand the reader the
+         * real '\n' so delimiter logic sees the marker. */
+        int ch = *((unsigned char *)f->buffer);
+        if (f->structure == STRUCT_TEXT && (f->mode & MODE_EOLN) != 0) ch = '\n';
+        set_mode_flags(f, MODE_READ, 0, 0, 1); /* consumed -> pending */
+        f->touched = 0;
+        return ch;
+    }
+    int ch = fgetc(h);
+    if (ch == EOF) set_mode_flags(f, MODE_READ, 1, 0, 0);
+    return ch;
+}
+
+static void fcb_unget_char(struct pas_file_fcb *f, FILE *h, int ch) {
+    /* Push a character back as the FCB's current component (so F^/EOF/EOLN
+     * observe it), falling back to stdio pushback when there is no FCB. */
+    if (ch == EOF) return;
+    if (!f || !f->buffer || current_mode(f) != MODE_READ) { ungetc(ch, h); return; }
+    int eoln = (f->structure == STRUCT_TEXT && ch == '\n');
+    *((unsigned char *)f->buffer) = eoln ? ' ' : (unsigned char)ch;
+    set_mode_flags(f, MODE_READ, 0, eoln, 0);
+    f->touched = 0;
+}
+
+void pas_file_attach_std(struct pas_file_fcb *in, struct pas_file_fcb *out) {
+    if (in && !(in->mode & MODE_STD)) {
+        in->handle = stdin;
+        set_mode_flags(in, MODE_READ, 0, 0, 1);
+        in->mode |= MODE_STD;
+    }
+    if (out && !(out->mode & MODE_STD)) {
+        out->handle = stdout;
+        set_mode_flags(out, MODE_WRITE, 1, 0, 0);
+        out->mode |= MODE_STD;
+    }
+}
+
+void *pas_file_buffer(struct pas_file_fcb *f) {
+    force_fill(f);
+    return f ? f->buffer : NULL;
+}
+
+void pas_file_touch_buffer(struct pas_file_fcb *f) {
+    if (f) f->touched = 1;
+}
+
+void pas_file_get(struct pas_file_fcb *f) {
+    /* If RESET's implicit GET is still pending, materialize the current
+     * component first so an explicit GET advances to the *next* one. */
+    force_fill(f);
+    raw_get(f, 0);
+}
+
+void pas_file_reset(struct pas_file_fcb *f) {
+    if (!f) die("file runtime: null fcb");
+    if (!f->handle && f->name) {
+        f->handle = fopen(f->name, "r+b");
+        if (!f->handle) die("file runtime: open failed");
+        f->mode |= MODE_OWNS_HANDLE;
+    }
+    FILE *h = ensure_handle(f);
+    if (current_mode(f) == MODE_WRITE && fflush(h) != 0) die("file runtime: flush failed");
+    rewind(h);
+    /* The manual-required implicit first GET is deferred: the current
+     * component is marked PENDING and materialized by force_fill at the
+     * first F^ / EOF / EOLN / formatted-read use site, so the buffer-variable
+     * model and the formatted readers share a single fill path. */
+    set_mode_flags(f, MODE_READ, 0, 0, 1);
+}
+
+void pas_file_rewrite(struct pas_file_fcb *f) {
+    if (!f) die("file runtime: null fcb");
+    if (f->mode & MODE_STD) {
+        if (f->handle && fflush(f->handle) != 0) die("file runtime: flush failed");
+        set_mode_flags(f, MODE_WRITE, 1, 0, 0);
+        return;
+    }
+    if (f->handle && (f->mode & MODE_OWNS_HANDLE)) fclose(f->handle);
+    f->handle = NULL;
+    f->mode &= ~MODE_OWNS_HANDLE;
+    if (f->name) {
+        f->handle = fopen(f->name, "w+b");
+        if (!f->handle) { perror(f->name ? f->name : "<unnamed>"); die("file runtime: create failed"); }
+        f->mode &= ~MODE_TEMP;
+    } else {
+        f->handle = tmpfile();
+        if (!f->handle) die("file runtime: tmpfile failed");
+        f->mode |= MODE_TEMP;
+    }
+    f->mode |= MODE_OWNS_HANDLE;
+    set_mode_flags(f, MODE_WRITE, 1, 0, 0);
+    f->touched = 0;
+}
+
+void pas_file_put(struct pas_file_fcb *f) {
+    FILE *h = ensure_handle(f);
+    checked_buffer(f);
+    if (current_mode(f) != MODE_WRITE) die("file runtime: PUT requires REWRITE/write mode");
+
+    size_t n = f->structure == STRUCT_TEXT ? 1 : elem_size(f);
+    if (fwrite(f->buffer, 1, n, h) != n) die("file runtime: write failed");
+    int eoln = (f->structure == STRUCT_TEXT && *((unsigned char *)f->buffer) == '\n');
+    set_mode_flags(f, MODE_WRITE, 1, eoln, 0);
+    f->touched = 0;
+}
+
+/* NOTE: when DOS CR/LF translation lands (checklist 8.4 deferral), the
+ * final-marker probe below must recognize "\r\n" as an existing marker. */
+static void append_final_text_marker_if_needed(struct pas_file_fcb *f) {
+    if (!f || f->structure != STRUCT_TEXT || current_mode(f) != MODE_WRITE || !f->handle || (f->mode & MODE_STD)) return;
+    FILE *h = f->handle;
+    if (fflush(h) != 0) die("file runtime: flush failed");
+    long pos = ftell(h);
+    if (pos <= 0) return;
+    if (fseek(h, -1, SEEK_END) != 0) die("file runtime: seek failed");
+    int ch = fgetc(h);
+    if (ch != '\n') {
+        if (fseek(h, 0, SEEK_END) != 0) die("file runtime: seek failed");
+        if (fputc('\n', h) == EOF) die("file runtime: final line marker write failed");
+    }
+    fflush(h);
+}
+
+void pas_file_close(struct pas_file_fcb *f) {
+    if (!f) die("file runtime: null fcb");
+    append_final_text_marker_if_needed(f);
+    if (f->handle && (f->mode & MODE_OWNS_HANDLE)) fclose(f->handle);
+    f->handle = NULL;
+    f->mode &= ~(MODE_OWNS_HANDLE | MODE_PENDING | MODE_EOF | MODE_EOLN);
+    set_mode_flags(f, MODE_CLOSED, 0, 0, 0);
+}
+
+void pas_file_discard(struct pas_file_fcb *f) {
+    if (!f) die("file runtime: null fcb");
+    char *name = f->name ? strdup(f->name) : NULL;
+    int was_temp = (f->mode & MODE_TEMP) != 0;
+    pas_file_close(f);
+    if (name) {
+        remove(name);
+        free(name);
+    } else if (was_temp) {
+        /* Anonymous tmpfile storage is deleted by fclose. */
+    }
+}
+
+static void assign_name_closed(struct pas_file_fcb *f, const char *name, int len) {
+    if (!f) die("file runtime: null fcb");
+    if (current_mode(f) != MODE_CLOSED || f->handle) die("file runtime: ASSIGN on open file");
+    if (!name || len < 0) die("file runtime: bad ASSIGN name");
+    while (len > 0 && name[len - 1] == ' ') len--;
+    if (len == 0) die("file runtime: empty filename in ASSIGN");
+    if (f->name) free(f->name);
+    f->name = NULL;
+    f->mode &= ~MODE_TEMP;
+    if (len == 1 && name[0] == '\0') {
+        f->mode |= MODE_TEMP;
+        return;
+    }
+    f->name = (char *)malloc((size_t)len + 1);
+    if (!f->name) die("file runtime: filename allocation failed");
+    memcpy(f->name, name, (size_t)len);
+    f->name[len] = '\0';
+}
+
+void pas_file_assign(struct pas_file_fcb *f, const char *name, int len) {
+    assign_name_closed(f, name, len);
+}
+
+static void require_text_read(struct pas_file_fcb *f) {
+    if (!f) die("file runtime: null fcb");
+    if (f->structure != STRUCT_TEXT) die("file runtime: TEXT file required");
+    if (current_mode(f) == MODE_CLOSED) pas_file_reset(f);
+    if (current_mode(f) != MODE_READ) die("file runtime: read requires RESET/read mode");
+}
+
+static int is_leading_skip(int ch) {
+    return ch == ' ' || ch == '\t' || ch == '\f' || ch == '\n';
+}
+
+static int set_contains(const uint64_t *set_words, int ch) {
+    if (ch < 0 || ch > 255) return 0;
+    return (set_words[ch / 64] & ((uint64_t)1 << (ch % 64))) != 0;
+}
+
+void pas_freadset(struct pas_file_fcb *src, unsigned char *lstr, int capacity, const uint64_t *set_words) {
+    if (!lstr || capacity < 0 || !set_words) die("file runtime: bad READSET argument");
+    require_text_read(src);
+    FILE *h = ensure_handle(src);
+    int ch;
+    while ((ch = fcb_next_char(src, h)) != EOF && is_leading_skip(ch)) { }
+    int len = 0;
+    while (ch != EOF && ch != '\n' && len < capacity && set_contains(set_words, ch)) {
+        lstr[1 + len++] = (unsigned char)ch;
+        ch = fcb_next_char(src, h);
+    }
+    if (ch == EOF) {
+        set_mode_flags(src, MODE_READ, 1, 0, 0);
+    } else {
+        /* Delimiter (line marker, non-member, or capacity overflow char)
+         * becomes the current component again. */
+        fcb_unget_char(src, h, ch);
+    }
+    lstr[0] = (unsigned char)len;
+}
+
+void pas_fread_filename(struct pas_file_fcb *src, struct pas_file_fcb *target) {
+    if (!target) die("file runtime: null target fcb");
+    require_text_read(src);
+    FILE *h = ensure_handle(src);
+    char namebuf[260];
+    int len = 0;
+    int ch;
+    while ((ch = fcb_next_char(src, h)) != EOF && is_leading_skip(ch)) { }
+    while (ch != EOF && ch != '\n' && ch != ' ' && ch != '\t' && ch != '\f' && len < (int)sizeof(namebuf)) {
+        namebuf[len++] = (char)ch;
+        ch = fcb_next_char(src, h);
+    }
+    if (ch == EOF) {
+        set_mode_flags(src, MODE_READ, 1, 0, 0);
+    } else {
+        /* READFN never consumes the line marker; the trailing delimiter
+         * becomes the current component again. */
+        fcb_unget_char(src, h, ch);
+    }
+    assign_name_closed(target, namebuf, len);
+}
+
+int pas_file_eof(struct pas_file_fcb *f) {
+    if (!f) die("file runtime: EOF null file");
+    force_fill(f);
+    return current_mode(f) == MODE_WRITE || is_eof(f);
+}
+
+int pas_file_eoln(struct pas_file_fcb *f) {
+    if (!f) die("file runtime: EOLN null file");
+    force_fill(f);
+    if (pas_file_eof(f)) die("file runtime: EOLN at eof");
+    if (f->structure != STRUCT_TEXT) die("file runtime: EOLN requires TEXT file");
+    return (f->mode & MODE_EOLN) != 0;
+}
+
+static FILE *stream_for(struct pas_file_fcb *f, int writing) {
+    if (!f) return writing ? stdout : stdin;
+    if (writing) {
+        /* Writing requires generation mode. Silently flipping a read-mode
+         * file here used to clobber bytes at the current offset. When the
+         * trapped-I/O subsystem (F.TRAP/F.ERRS) lands, these die sites
+         * become the trap dispatch points. */
+        if (current_mode(f) == MODE_READ) die("file runtime: WRITE requires REWRITE/write mode");
+        if (current_mode(f) == MODE_CLOSED) die("file runtime: WRITE to closed file requires REWRITE");
+    } else {
+        if (current_mode(f) == MODE_WRITE) die("file runtime: READ requires RESET/read mode");
+        /* Reading a closed file performs the implicit RESET (consistent with
+         * require_text_read for READSET/READFN). */
+        if (current_mode(f) == MODE_CLOSED) pas_file_reset(f);
+    }
+    return ensure_handle(f);
+}
+
+int pas_write_fmt(struct pas_file_fcb *f, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int r = vfprintf(stream_for(f, 1), fmt, ap);
+    va_end(ap);
+    return r;
+}
+
+static int fcb_skip_ws_except_nl(struct pas_file_fcb *f, FILE *h) {
+    int ch;
+    while ((ch = fcb_next_char(f, h)) != EOF) {
+        if (ch == '\n' || !isspace((unsigned char) ch)) return ch;
+    }
+    return EOF;
+}
+
+int pas_fread_int(struct pas_file_fcb *f, int32_t *out) {
+    FILE *h = stream_for(f, 0);
+    int ch = fcb_skip_ws_except_nl(f, h);
+    if (ch == EOF) die("runtime error: unexpected EOF while reading integer");
+    ungetc(ch, h); /* hand the token's first char back to stdio for fscanf */
+    long v;
+    if (fscanf(h, "%ld", &v) != 1) die("runtime error: malformed integer input");
+    *out = (int32_t)v;
+    return 0;
+}
+
+int pas_fread_word(struct pas_file_fcb *f, uint16_t *out) {
+    int32_t v = 0;
+    pas_fread_int(f, &v);
+    if (v < 0 || v > 65535) die("runtime error: word out of range");
+    *out = (uint16_t)v;
+    return 0;
+}
+
+int pas_fread_real(struct pas_file_fcb *f, double *out) {
+    FILE *h = stream_for(f, 0);
+    int ch = fcb_skip_ws_except_nl(f, h);
+    if (ch == EOF) die("runtime error: unexpected EOF while reading real");
+    ungetc(ch, h);
+    if (fscanf(h, "%lf", out) != 1) die("runtime error: malformed real input");
+    return 0;
+}
+
+int pas_fread_char(struct pas_file_fcb *f, uint8_t *out) {
+    FILE *h = stream_for(f, 0);
+    int ch = fcb_next_char(f, h);
+    if (ch == EOF) die("runtime error: unexpected EOF while reading char");
+    *out = (ch == '\n') ? ' ' : (uint8_t)ch;
+    return 0;
+}
+
+int pas_fread_lstring(struct pas_file_fcb *f, uint8_t *buf, int cap) {
+    FILE *h = stream_for(f, 0);
+    int ch, n = 0;
+    while ((ch = fcb_next_char(f, h)) != EOF && ch != '\n') {
+        if (n < cap) buf[1 + n] = (uint8_t)ch;
+        n++;
+    }
+    if (ch == EOF) die("runtime error: unexpected EOF while reading string");
+    fcb_unget_char(f, h, ch); /* line marker stays the current component */
+    if (cap < 0) cap = 0;
+    buf[0] = (uint8_t)(n < cap ? n : cap);
+    return 0;
+}
+
+void pas_freadln_skip(struct pas_file_fcb *f) {
+    FILE *h = stream_for(f, 0);
+    int ch;
+    while ((ch = fcb_next_char(f, h)) != EOF && ch != '\n') {}
+}

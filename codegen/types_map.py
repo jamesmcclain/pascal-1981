@@ -15,6 +15,7 @@ from typing import Any, List, Optional, Union
 import llvmlite.ir as ir
 
 from ast_nodes import *
+from codegen.base import CodegenError
 from type_system import LStringType as ResolvedLStringType
 from type_system import StringType as ResolvedStringType
 
@@ -69,6 +70,10 @@ class TypesMapMixin:
                 return ir.IntType(8)
             elif name_up == 'TEXT':
                 return ir.PointerType(ir.IntType(8))
+            elif name_up == 'FILEMODES':
+                return ir.IntType(32)
+            elif name_up == 'FCBFQQ':
+                return self.llvm_type(self.resolve_type_alias(type_expr))
             if name_up in self.type_aliases:
                 return self.llvm_type(self.type_aliases[name_up])
             return ir.IntType(32)
@@ -293,12 +298,23 @@ class TypesMapMixin:
                         ptr = self.builder.gep(ptr, [index])
                     cur_type = elem_type
                 elif selector.kind == 'FIELD':
-                    # Record field access: GEP to the field's struct slot.
-                    fidx, ftype = self.record_field_index(cur_type, selector.index_or_field)
-                    if fidx is None:
-                        raise CodegenError(f"Cannot access field '{selector.index_or_field}' on type {cur_type}")
-                    ptr = self.builder.gep(ptr, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), fidx)])
-                    cur_type = ftype
+                    base = self.resolve_type_alias(cur_type) if cur_type is not None else None
+                    if isinstance(base, FileType):
+                        field = str(selector.index_or_field).upper()
+                        handle = self.builder.load(ptr)
+                        fcb = self.builder.bitcast(handle, self.file_fcb_type().as_pointer())
+                        if field == 'MODE':
+                            ptr = self.builder.gep(fcb, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 7)])
+                            cur_type = NamedType('FILEMODES', None)
+                        else:
+                            raise CodegenError(f"Cannot access FCB field '{selector.index_or_field}' on type {cur_type}")
+                    else:
+                        # Record field access: GEP to the field's struct slot.
+                        fidx, ftype = self.record_field_index(cur_type, selector.index_or_field)
+                        if fidx is None:
+                            raise CodegenError(f"Cannot access field '{selector.index_or_field}' on type {cur_type}")
+                        ptr = self.builder.gep(ptr, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), fidx)])
+                        cur_type = ftype
                 elif selector.kind == 'DEREF':
                     base = self.resolve_type_alias(cur_type) if cur_type is not None else None
                     if isinstance(base, FileType):
@@ -326,6 +342,10 @@ class TypesMapMixin:
             key = type_expr.name.upper()
             if key == 'TEXT':
                 return FileType(NamedType('CHAR', None), structure='ASCII')
+            if key == 'FILEMODES':
+                return EnumType(['SEQUENTIAL', 'TERMINAL', 'DIRECT'])
+            if key == 'FCBFQQ':
+                return RecordType([(['MODE'], NamedType('FILEMODES', None)), (['TRAP'], NamedType('BOOLEAN', None)), (['ERRS'], NamedType('INTEGER', None))], False)
             if key in seen or key not in self.type_aliases:
                 break
             seen.add(key)

@@ -412,7 +412,13 @@ set_type = "SET" "OF" ( index_range | identifier ) ;
 
 (* [DOCUMENTED] FILE OF is fully specified with GET, PUT, READ, WRITE,
    RESET, REWRITE semantics. Compilation to .obj is confirmed.
-   Runtime I/O is unverified due to linker library path issue. *)
+   Vintage-toolchain runtime I/O is unverified due to linker library path
+   issue (the grade above is about the original pas1/pas2 compiler).
+   Reimplementation status: the file runtime is implemented and run-tested
+   — FCB/buffer-variable model, RESET/REWRITE/GET/PUT, ASSIGN/CLOSE/
+   DISCARD, READSET/READFN, EOF/EOLN, FILEMODES/F.MODE, and read/write
+   mode enforcement; see checklist Section 8. TEXT, FILEMODES, and FCBFQQ
+   are predeclared identifiers, not grammar productions. *)
 file_type = "FILE" "OF" type ;
 
 (* [OBSERVED] STRING(n) is fixed-length string storage (PACKED ARRAY [1..n] OF CHAR):
@@ -433,6 +439,33 @@ file_type = "FILE" "OF" type ;
    The bare identifier STRING is also predeclared as a type name. *)
 string_type  = "STRING"  "(" constant ")" ;      (* PACKED ARRAY [1..n] OF CHAR, inline [n x i8] *)
 lstring_type = "LSTRING" "(" constant ")" ;    (* PACKED ARRAY [0..n] OF CHAR, inline [n+1 x i8] *)
+
+
+(* ═══════════════════════════════════════════════════════════════════
+   TEXTFILE I/O DATA PARAMETERS                            [DOCUMENTED]
+
+   Manual 12-17 (source text line ~13473): data parameters to READ,
+   READLN, WRITE, and WRITELN on textfiles take the forms
+
+       P    P:M    P:M:N    P::N
+
+   where M and N are INTEGER value parameters used for formatting;
+   omitting M or N is the same as passing MAXINT (the default width is
+   then used). M and N are documented for READs as well as WRITEs
+   ("for later input format control") and are not accepted for BINARY
+   files. An optional leading file argument selects the stream.
+
+   Reimplementation status (see checklist 8.3/8.3a): P, P:M, and P:M:N
+   are parsed and lowered on WRITE/WRITELN; P::N is rejected by the
+   parser, and READ-side M/N are not parsed. Known parser looseness:
+   the colon forms are currently accepted on EVERY call, not just the
+   I/O procedures (see tests/fixtures/parser/judgment_calls/
+   B_colon_args_any_call.pas); rejection of M/N on binary files is not
+   enforced. *)
+
+io_data_param = expression [ ":" ( expression [ ":" expression ]
+                                 | ":" expression ) ] ;
+                (* P | P:M | P:M:N | P::N *)
 
 
 (* ═══════════════════════════════════════════════════════════════════
@@ -560,6 +593,8 @@ character = (* any printable ASCII character in the range 0x20–0x7E,
 | `factor` — `"NOT" factor` alternative added for unary boolean negation | ADDED (Pillar 1) | `NOT` was entirely absent from grammar |
 | Lexical Rules section added: case-insensitivity, whitespace, comment forms, directive disambiguation | ADDED (Pillar 1) | Unspecified in original grammar |
 | `letter`, `digit`, `character`, `hex_digit`, `exponent` productions defined | ADDED (Pillar 1) | Primitives referenced throughout grammar but never defined |
+| `io_data_param` — new production for READ/WRITE field formatting (`P`, `P:M`, `P:M:N`, `P::N`) | DOCUMENTED | Manual 12-17 (line ~13473); previously recorded only in judgment_calls fixture comments |
+| `file_type` — comment amended to separate vintage-toolchain verification (still blocked) from reimplementation runtime status (implemented, checklist §8) | Structural | Checklist Section 8 evidence |
 
 ---
 
@@ -575,6 +610,6 @@ character = (* any printable ASCII character in the range 0x20–0x7E,
 | `USES` initialization order | DOCUMENTED | Requires two units with `BEGIN` blocks |
 | `USES` selective import (partial list) | UNVERIFIED | `USES u ( a )` when u exports `(a, b)` |
 | `GOTO` into structured statement (runtime) | OBSERVED (compiles); UNVERIFIED (runtime) | Link and run T_GBAD.EXE |
-| `FILE OF` runtime I/O | DOCUMENTED | Requires linker library path fix |
+| `FILE OF` runtime I/O (vintage toolchain) | DOCUMENTED | Requires linker library path fix; reimplementation runtime is implemented and run-tested (checklist §8) |
 | Large set runtime behavior (> 15 elements) | OBSERVED (compiles); UNVERIFIED (runtime) | Link and run T_SET2.EXE |
 | `FORWARD` with function return type propagation | INFERRED | Forward-declared FUNCTION with consumers |

@@ -938,6 +938,18 @@ class PascalTypeChecker(TypeChecker):
             elif lookup_name in {'READ', 'READLN'}:
                 self._check_read_args(stmt, is_readln=(lookup_name == 'READLN'))
                 return
+            elif lookup_name in {'RESET', 'REWRITE', 'GET', 'PUT', 'CLOSE', 'DISCARD'}:
+                self._check_file_primitive_args(stmt, lookup_name)
+                return
+            elif lookup_name == 'ASSIGN':
+                self._check_assign_file_args(stmt)
+                return
+            elif lookup_name == 'READFN':
+                self._check_readfn_args(stmt)
+                return
+            elif lookup_name == 'READSET':
+                self._check_readset_args(stmt)
+                return
 
         if not sym:
             self.error(f"Undefined procedure: {stmt.name}", stmt)
@@ -1003,6 +1015,29 @@ class PascalTypeChecker(TypeChecker):
                             self.error(f"Argument {i+1} type mismatch: expected {param_type}, got {arg_type}", stmt)
             return
 
+    def _check_file_primitive_args(self, stmt: ProcCallStmt, name: str) -> None:
+        if len(stmt.args) != 1:
+            self.error(f"Procedure '{stmt.name}' expects 1 argument, got {len(stmt.args)}", stmt)
+            return
+        arg = stmt.args[0]
+        arg_type = self.infer_expression_type(arg)
+        if not isinstance(arg_type, FileType):
+            self.error(f"Argument 1 type mismatch: {name} expects a file variable, got {arg_type}", stmt)
+
+    def _check_assign_file_args(self, stmt: ProcCallStmt) -> None:
+        if len(stmt.args) != 2:
+            self.error(f"ASSIGN expects 2 arguments, got {len(stmt.args)}", stmt)
+            return
+        f_arg, name_arg = stmt.args
+        f_type = self.infer_expression_type(f_arg)
+        if not isinstance(f_type, FileType):
+            self.error(f"ASSIGN argument 1 expects a file variable, got {f_type}", stmt)
+        if not isinstance(f_arg, (Identifier, Designator)):
+            self.error("ASSIGN argument 1 must be a file variable designator", stmt)
+        name_type = self.infer_expression_type(name_arg)
+        if name_type is None or (not isinstance(name_type, (StringType, LStringType)) and not name_type.equivalent_to(CHAR_TYPE)):
+            self.error(f"ASSIGN argument 2 must be STRING/LSTRING/CHAR, got {name_type}", stmt)
+
     def _is_text_file_type(self, t: Type) -> bool:
         return isinstance(t, FileType) and t.structure == 'ASCII' and t.element_type.equivalent_to(CHAR_TYPE)
 
@@ -1048,7 +1083,15 @@ class PascalTypeChecker(TypeChecker):
         """Type check READ/READLN arguments."""
         if not stmt.args:
             return
-        for i, arg in enumerate(stmt.args):
+        start = 0
+        first_type = self.infer_expression_type(stmt.args[0])
+        if isinstance(first_type, FileType):
+            if self._is_text_file_type(first_type):
+                start = 1
+            else:
+                self.error("READ/READLN file selector must be TEXT, not binary FILE", stmt)
+                start = 1
+        for i, arg in enumerate(stmt.args[start:], start=start):
             if not isinstance(arg, (Identifier, Designator)):
                 self.error(f"READ argument {i+1} must be a designator", stmt)
                 continue
@@ -1065,6 +1108,55 @@ class PascalTypeChecker(TypeChecker):
                 continue
             if not self._is_readable_type(target_type):
                 self.error(f"READ argument {i+1} has unreadable type {target_type}", stmt)
+
+    def _check_readset_args(self, stmt: ProcCallStmt) -> None:
+        if len(stmt.args) not in {2, 3}:
+            self.error(f"READSET expects 2 or 3 arguments, got {len(stmt.args)}", stmt)
+            return
+        start = 0
+        if len(stmt.args) == 3:
+            f_type = self.infer_expression_type(stmt.args[0])
+            if not self._is_text_file_type(f_type):
+                self.error(f"READSET file parameter must be TEXT, got {f_type}", stmt)
+            start = 1
+        dest = stmt.args[start]
+        if not isinstance(dest, (Identifier, Designator)):
+            self.error("READSET destination must be a mutable LSTRING designator", stmt)
+        else:
+            sym = self.symbol_table.lookup(dest.name) or self.symbol_table.lookup(dest.name.upper())
+            dest_type = self.infer_expression_type(dest)
+            if not sym or not sym.is_mutable:
+                self.error("READSET destination must be mutable", stmt)
+            if not isinstance(dest_type, LStringType):
+                self.error(f"READSET destination must be LSTRING, got {dest_type}", stmt)
+        set_type = self.infer_expression_type(stmt.args[start + 1])
+        if not isinstance(set_type, SetType) or not set_type.element_type.equivalent_to(CHAR_TYPE):
+            self.error(f"READSET set argument must be SET OF CHAR, got {set_type}", stmt)
+
+    def _check_readfn_args(self, stmt: ProcCallStmt) -> None:
+        if not stmt.args:
+            self.error("READFN expects at least one argument", stmt)
+            return
+        start = 0
+        first_type = self.infer_expression_type(stmt.args[0])
+        if self._is_text_file_type(first_type):
+            start = 1
+        elif isinstance(first_type, FileType):
+            self.error("READFN source file parameter must be TEXT", stmt)
+            start = 1
+        for i, arg in enumerate(stmt.args[start:], start=start + 1):
+            if not isinstance(arg, (Identifier, Designator)):
+                self.error(f"READFN argument {i} must be a designator", stmt)
+                continue
+            sym = self.symbol_table.lookup(arg.name) or self.symbol_table.lookup(arg.name.upper())
+            if not sym or not sym.is_mutable:
+                self.error(f"READFN argument {i} must be assignable", stmt)
+                continue
+            target_type = self.infer_expression_type(arg)
+            if isinstance(target_type, FileType):
+                continue
+            if target_type is None or not self._is_readable_type(target_type):
+                self.error(f"READFN argument {i} has unreadable type {target_type}", stmt)
 
     def _is_writable_type(self, t: Type) -> bool:
         # WRITE supports printable BOOLEAN and enum values; READ input parsing for those is intentionally absent.
@@ -1519,15 +1611,30 @@ class PascalTypeChecker(TypeChecker):
                                 self.error(f"Array index must be {expected}, got {index_type}", expr)
                         current_type = current_type.element_type
                     elif selector.kind == 'FIELD':
-                        if not isinstance(current_type, RecordType):
-                            self.error(f"Cannot access field on non-record type {current_type}", expr)
-                            return None
-                        field_name = selector.index_or_field
-                        field_type = current_type.get_field_type(field_name)
-                        if field_type is None:
-                            self.error(f"Record has no field '{field_name}'", expr)
-                            return None
-                        current_type = field_type
+                        field_name = str(selector.index_or_field).upper()
+                        if isinstance(current_type, FileType):
+                            if field_name == 'MODE':
+                                current_type = EnumType(['SEQUENTIAL', 'TERMINAL', 'DIRECT'], name='FILEMODES')
+                            elif field_name in ('TRAP', 'ERRS'):
+                                # Documented FCBFQQ fields, but the trapped-I/O
+                                # runtime is not implemented; codegen has no
+                                # lowering for these on file variables. Reject
+                                # loudly here rather than crash in codegen.
+                                self.error(f"File field '{field_name}' is not yet supported on file variables (trapped I/O is unimplemented); use a FCBFQQ record variable", expr)
+                                return None
+                            else:
+                                self.error(f"File control block has no field '{selector.index_or_field}'", expr)
+                                return None
+                        else:
+                            if not isinstance(current_type, RecordType):
+                                self.error(f"Cannot access field on non-record type {current_type}", expr)
+                                return None
+                            field_name_orig = selector.index_or_field
+                            field_type = current_type.get_field_type(field_name_orig)
+                            if field_type is None:
+                                self.error(f"Record has no field '{field_name_orig}'", expr)
+                                return None
+                            current_type = field_type
                     elif selector.kind == 'DEREF':
                         if not isinstance(current_type, PointerType):
                             self.error(f"Cannot dereference non-pointer type {current_type}", expr)
@@ -1583,6 +1690,20 @@ class PascalTypeChecker(TypeChecker):
                     return sym.type.return_type
                 return None
 
+            if lookup_name in {'EOF', 'EOLN'}:
+                argc = len(expr.args) if expr.args else 0
+                if argc > 1:
+                    self.error(f"Function '{lookup_name}' expects 0 or 1 arguments, got {argc}", expr)
+                    return None
+                if argc == 1:
+                    arg_type = self.infer_expression_type(expr.args[0])
+                    if not isinstance(arg_type, FileType):
+                        self.error(f"Argument 1 type mismatch: {lookup_name} expects a file variable, got {arg_type}", expr)
+                        return None
+                    if lookup_name == 'EOLN' and not self._is_text_file_type(arg_type):
+                        self.error("EOLN expects a TEXT file", expr)
+                        return None
+                return BOOLEAN_TYPE
             if lookup_name == 'ABS':
                 if len(expr.args) != 1:
                     self.error(f"Function 'ABS' expects 1 argument, got {len(expr.args)}", expr)
@@ -1822,16 +1943,28 @@ class PascalTypeChecker(TypeChecker):
                     current_type = current_type.element_type
 
                 elif selector.kind == 'FIELD':
-                    # Record field access
-                    if not isinstance(current_type, RecordType):
-                        self.error(f"Cannot access field on non-record type {current_type}", designator)
-                        return None
-                    field_name = selector.index_or_field
-                    field_type = current_type.get_field_type(field_name)
-                    if not field_type:
-                        self.error(f"Record has no field '{field_name}'", designator)
-                        return None
-                    current_type = field_type
+                    field_name = str(selector.index_or_field).upper()
+                    if isinstance(current_type, FileType):
+                        if field_name == 'MODE':
+                            current_type = EnumType(['SEQUENTIAL', 'TERMINAL', 'DIRECT'], name='FILEMODES')
+                        elif field_name in ('TRAP', 'ERRS'):
+                            # See expression-side note: reject pending trapped I/O.
+                            self.error(f"File field '{field_name}' is not yet supported on file variables (trapped I/O is unimplemented); use a FCBFQQ record variable", designator)
+                            return None
+                        else:
+                            self.error(f"File control block has no field '{selector.index_or_field}'", designator)
+                            return None
+                    else:
+                        # Record field access
+                        if not isinstance(current_type, RecordType):
+                            self.error(f"Cannot access field on non-record type {current_type}", designator)
+                            return None
+                        field_name_orig = selector.index_or_field
+                        field_type = current_type.get_field_type(field_name_orig)
+                        if not field_type:
+                            self.error(f"Record has no field '{field_name_orig}'", designator)
+                            return None
+                        current_type = field_type
 
                 elif selector.kind == 'DEREF':
                     # Pointer dereference, or Pascal file buffer variable F^.

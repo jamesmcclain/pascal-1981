@@ -14,6 +14,7 @@ import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
 from ast_nodes import *
+from codegen.base import CodegenError
 
 
 class RuntimeBuiltinsMixin:
@@ -112,6 +113,66 @@ class RuntimeBuiltinsMixin:
         raw = self.builder.bitcast(ptr_val, ir.IntType(8).as_pointer())
         self.builder.call(self.scope.lookup('free').llvm_value, [raw])
         self.builder.store(ir.Constant(self.llvm_type(sym.type_expr), None), ptr_addr)
+
+    def _file_helper(self, name: str) -> ir.Function:
+        fn = self.scope.lookup(name)
+        if not fn:
+            raise CodegenError(f'Undefined runtime helper: {name}')
+        return fn.llvm_value
+
+    def _builtin_file_op(self, pas_name: str, helper_name: str, args: List[Expression]) -> None:
+        if len(args) != 1:
+            raise CodegenError(f'{pas_name} expects 1 argument, got {len(args)}')
+        target = args[0] if isinstance(args[0], Designator) else Designator(args[0].name, [])
+        ptr = self.resolve_designator_ptr(target)
+        handle = self.builder.load(ptr)
+        fcb_ptr = self.builder.bitcast(handle, self.file_fcb_type().as_pointer())
+        if getattr(target, 'name', '').upper() in {'INPUT', 'OUTPUT'}:
+            in_sym = self.scope.lookup('INPUT')
+            out_sym = self.scope.lookup('OUTPUT')
+            in_fcb = self.builder.bitcast(self.builder.load(in_sym.llvm_value), self.file_fcb_type().as_pointer())
+            out_fcb = self.builder.bitcast(self.builder.load(out_sym.llvm_value), self.file_fcb_type().as_pointer())
+            self.builder.call(self._file_helper('pas_file_attach_std'), [in_fcb, out_fcb])
+        self.builder.call(self._file_helper(helper_name), [fcb_ptr])
+
+    def builtin_reset(self, args: List[Expression]) -> None:
+        self._builtin_file_op('RESET', 'pas_file_reset', args)
+
+    def builtin_rewrite(self, args: List[Expression]) -> None:
+        self._builtin_file_op('REWRITE', 'pas_file_rewrite', args)
+
+    def builtin_get(self, args: List[Expression]) -> None:
+        self._builtin_file_op('GET', 'pas_file_get', args)
+
+    def builtin_put(self, args: List[Expression]) -> None:
+        self._builtin_file_op('PUT', 'pas_file_put', args)
+
+    def builtin_close(self, args: List[Expression]) -> None:
+        self._builtin_file_op('CLOSE', 'pas_file_close', args)
+
+    def builtin_discard(self, args: List[Expression]) -> None:
+        self._builtin_file_op('DISCARD', 'pas_file_discard', args)
+
+    def builtin_assign(self, args: List[Expression]) -> None:
+        if len(args) != 2:
+            raise CodegenError(f'ASSIGN expects 2 arguments, got {len(args)}')
+        target = args[0] if isinstance(args[0], Designator) else Designator(args[0].name, [])
+        ptr = self.resolve_designator_ptr(target)
+        handle = self.builder.load(ptr)
+        fcb_ptr = self.builder.bitcast(handle, self.file_fcb_type().as_pointer())
+        name_arg = args[1]
+        try:
+            chars, length = self.get_string_chars_and_len(name_arg)
+        except Exception:
+            # ASSIGN accepts a single CHAR too; in particular ASSIGN(F, CHR(0))
+            # requests an anonymous temporary file per the manual.
+            val = self.codegen_expr(name_arg)
+            if val.type != ir.IntType(8):
+                raise
+            tmp = self.builder.alloca(ir.IntType(8), name='assign_char')
+            self.builder.store(val, tmp)
+            chars, length = tmp, ir.Constant(ir.IntType(32), 1)
+        self.builder.call(self._file_helper('pas_file_assign'), [fcb_ptr, chars, length])
 
     def builtin_abort(self, args: List[Expression]) -> None:
         # ABORT(CONST STRING, WORD, WORD): surface the message, error code, and

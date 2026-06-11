@@ -161,6 +161,71 @@ class TestReadWriteTypecheck(unittest.TestCase):
         self.assertFalse(bad.success)
         self.assertIn("TEXT", " ".join(str(e) for e in bad.errors))
 
+    def test_eoln_rejects_binary_file(self):
+        result = typecheck_source("PROGRAM P; VAR f: FILE OF INTEGER; VAR b: BOOLEAN; BEGIN b := EOLN(f) END.")
+        self.assertFalse(result.success)
+        self.assertIn("TEXT", " ".join(str(e) for e in result.errors))
+
+    def test_assign_requires_file_and_string_name(self):
+        ok = typecheck_source("PROGRAM P; VAR f: TEXT; BEGIN ASSIGN(f, 'x') END.")
+        self.assertTrue(ok.success, msg=" ".join(str(e) for e in ok.errors))
+        bad_file = typecheck_source("PROGRAM P; VAR i: INTEGER; BEGIN ASSIGN(i, 'x') END.")
+        self.assertFalse(bad_file.success)
+        self.assertIn("file", " ".join(str(e) for e in bad_file.errors))
+        bad_name = typecheck_source("PROGRAM P; VAR f: TEXT; BEGIN ASSIGN(f, 42) END.")
+        self.assertFalse(bad_name.success)
+        self.assertIn("STRING", " ".join(str(e) for e in bad_name.errors))
+
+    def test_close_discard_require_one_file_arg(self):
+        ok = typecheck_source("PROGRAM P; VAR f: FILE OF INTEGER; BEGIN CLOSE(f); DISCARD(f) END.")
+        self.assertTrue(ok.success, msg=" ".join(str(e) for e in ok.errors))
+        bad = typecheck_source("PROGRAM P; VAR i: INTEGER; BEGIN CLOSE(i); DISCARD END.")
+        self.assertFalse(bad.success)
+        errors = " ".join(str(e) for e in bad.errors)
+        self.assertIn("file", errors)
+        self.assertIn("expects 1", errors)
+
+    def test_readset_typechecks_lstring_and_setofchar(self):
+        ok = typecheck_source("PROGRAM P; VAR s: LSTRING(8); BEGIN READSET(s, ['A'..'Z']) END.")
+        self.assertTrue(ok.success, msg=" ".join(str(e) for e in ok.errors))
+        bad_dest = typecheck_source("PROGRAM P; VAR s: STRING(8); BEGIN READSET(s, ['A'..'Z']) END.")
+        self.assertFalse(bad_dest.success)
+        self.assertIn("LSTRING", " ".join(str(e) for e in bad_dest.errors))
+        bad_set = typecheck_source("PROGRAM P; VAR s: LSTRING(8); BEGIN READSET(s, [1..3]) END.")
+        self.assertFalse(bad_set.success)
+        self.assertIn("SET OF CHAR", " ".join(str(e) for e in bad_set.errors))
+
+    def test_readfn_accepts_text_source_file_targets_and_read_targets(self):
+        ok = typecheck_source("PROGRAM P; VAR f: TEXT; n: INTEGER; BEGIN READFN(INPUT, f, n) END.")
+        self.assertTrue(ok.success, msg=" ".join(str(e) for e in ok.errors))
+        bad_src = typecheck_source("PROGRAM P; VAR f: FILE OF INTEGER; t: TEXT; BEGIN READFN(f, t) END.")
+        self.assertFalse(bad_src.success)
+        self.assertIn("TEXT", " ".join(str(e) for e in bad_src.errors))
+
+    def test_filemodes_and_fcb_mode_typecheck(self):
+        ok = typecheck_source("PROGRAM P; VAR f: TEXT; m: FILEMODES; BEGIN m := f.MODE; f.MODE := DIRECT END.")
+        self.assertTrue(ok.success, msg=" ".join(str(e) for e in ok.errors))
+        bad = typecheck_source("PROGRAM P; VAR f: TEXT; BEGIN f.MODE := 1 END.")
+        self.assertFalse(bad.success)
+        self.assertIn("FILEMODES", " ".join(str(e) for e in bad.errors))
+        bad_field = typecheck_source("PROGRAM P; VAR f: TEXT; BEGIN f.NOPE := DIRECT END.")
+        self.assertFalse(bad_field.success)
+        self.assertIn("File control block", " ".join(str(e) for e in bad_field.errors))
+
+    def test_fcb_trap_errs_rejected_on_file_variables(self):
+        """F.TRAP / F.ERRS on file variables are rejected at typecheck with a
+        'not yet supported' diagnostic (trapped I/O is unimplemented), instead
+        of typechecking and then crashing in codegen. Direct FCBFQQ record
+        variables keep working."""
+        trap = typecheck_source("PROGRAM P; VAR f: TEXT; b: BOOLEAN; BEGIN b := f.TRAP END.")
+        self.assertFalse(trap.success)
+        self.assertIn("not yet supported", " ".join(str(e) for e in trap.errors))
+        errs = typecheck_source("PROGRAM P; VAR f: TEXT; BEGIN f.ERRS := 0 END.")
+        self.assertFalse(errs.success)
+        self.assertIn("not yet supported", " ".join(str(e) for e in errs.errors))
+        rec = typecheck_source("PROGRAM P; VAR b: FCBFQQ; BEGIN b.TRAP := TRUE; b.ERRS := 0 END.")
+        self.assertTrue(rec.success, msg=" ".join(str(e) for e in rec.errors))
+
 
 class TestTypeCompatibility(unittest.TestCase):
     """Type compatibility and assignment rules."""

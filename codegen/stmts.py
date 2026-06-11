@@ -165,7 +165,7 @@ class StmtsMixin:
         """Codegen for procedure call statement."""
         lookup_name = stmt.name.upper()
         symbol = self.scope.lookup(lookup_name) or self.scope.lookup(stmt.name)
-        if not symbol:
+        if not symbol or symbol.llvm_value is None:
             # Try built-in procedures
             if lookup_name == 'WRITELN':
                 self.builtin_writeln(stmt.args)
@@ -175,6 +175,10 @@ class StmtsMixin:
                 self.builtin_read(stmt.args)
             elif lookup_name == 'READLN':
                 self.builtin_readln(stmt.args)
+            elif lookup_name == 'READSET':
+                self.builtin_readset(stmt.args)
+            elif lookup_name == 'READFN':
+                self.builtin_readfn(stmt.args)
             elif lookup_name == 'CONCAT':
                 self.builtin_concat(stmt.args, enabled=self.effective_rangeck(stmt))
             elif lookup_name == 'COPYLST':
@@ -200,6 +204,20 @@ class StmtsMixin:
                 self.builtin_movesl(stmt.args)
             elif lookup_name == 'MOVESR':
                 self.builtin_movesr(stmt.args)
+            elif lookup_name == 'RESET':
+                self.builtin_reset(stmt.args)
+            elif lookup_name == 'REWRITE':
+                self.builtin_rewrite(stmt.args)
+            elif lookup_name == 'GET':
+                self.builtin_get(stmt.args)
+            elif lookup_name == 'PUT':
+                self.builtin_put(stmt.args)
+            elif lookup_name == 'ASSIGN':
+                self.builtin_assign(stmt.args)
+            elif lookup_name == 'CLOSE':
+                self.builtin_close(stmt.args)
+            elif lookup_name == 'DISCARD':
+                self.builtin_discard(stmt.args)
             elif lookup_name == 'NEW':
                 self.builtin_new(stmt.args)
             elif lookup_name == 'DISPOSE':
@@ -209,7 +227,10 @@ class StmtsMixin:
             else:
                 raise CodegenError(f'Undefined procedure: {stmt.name}')
         else:
-            # User-defined procedure
+            # User-defined procedure, or a predeclared built-in with a
+            # placeholder symbol entry but no llvm_value.
+            if symbol.llvm_value is None:
+                raise CodegenError(f'Undefined procedure: {stmt.name}')
             fn = symbol.llvm_value
             param_types = fn.function_type.args
             param_modes = self.proc_param_modes.get(stmt.name.lower(), [])

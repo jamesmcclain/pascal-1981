@@ -408,10 +408,33 @@ the biggest single chunk; expect it to need its own design pass.
     assignment is rejected. Proven by `python -m unittest tests.test_parser
     tests.test_typecheck tests.test_codegen`.
   - NOTE / does not cover: there is no device I/O yet. `INPUT`/`OUTPUT` are not
-    attached to stdin/stdout, and the FCB has no fd/position/mode — those, plus
-    the lazy fill/flush that the touch hook is a seam for, are 8.2 (`RESET`/
-    `REWRITE`/`GET`/`PUT`). 8.1 is the in-memory buffer-variable model only.
-- [ ] **8.2 — `RESET`, `REWRITE`, `GET`, `PUT`.** `[READ]` **L** Core file ops.
+    attached to stdin/stdout. 8.1 is the in-memory buffer-variable model only;
+    8.2 adds anonymous backing streams and mode/eof bookkeeping for core file
+    primitives.
+- [x] **8.2 — `RESET`, `REWRITE`, `GET`, `PUT`.** `[READ]` **L** Core file ops.
+  - Done: codegen lowers these four calls to runtime helpers; `runtime/fileops.c`
+    now uses a real `tmpfile()` backing stream with `fread`/`fwrite`, `RESET`
+    performs the required implicit first `GET`, `REWRITE` truncates by replacing
+    the anonymous backing stream, and the FCB records mode plus an eof bit for
+    8.4 to consume. The FCB layout is now defined in one live codegen site.
+  - Proof: hostile run tests in `tests.test_runtime_fixes.TestFileBufferModel`
+    cover TEXT two-component round-trip, binary `FILE OF INTEGER` element-sized
+    round-trip, and `REWRITE` truncation via GET-past-eof abort; IR shape tests
+    in `tests.test_codegen.TestCodegenIR` still verify the extern helper seam.
+  - AMENDED: `RESET`'s implicit first GET is now *deferred* (current component
+    marked PENDING, materialized by the shared `force_fill` path at the first
+    use site) and explicit `GET` force-fills before advancing — semantics are
+    unchanged through `F^`/`EOF`/`EOLN`, proven by the pre-existing round-trip
+    tests passing unmodified. See the 8.4 REOPENED note for why. `[OBSERVED]`
+  - Tested combinations: REWRITE/PUT/RESET/GET round-trips (TEXT and binary),
+    truncation, GET-past-eof abort, RESET→GET second-component ordering (via
+    `test_buffer_get_and_fread_interleave`). NOT yet tested: RESET of a file
+    already in read mode mid-stream, PUT after GET on the same open file.
+    `[OBSERVED]`
+  - DEFERRED: `EOF`/`EOLN` predicates and TEXT line-marker semantics remain
+    8.4; filename binding (`ASSIGN`/`READFN`) and `INPUT`/`OUTPUT` attachment
+    remain 8.4/8.5 territory. Until then, unbound files use anonymous tmpfile
+    backing stores.
 - [x] **8.3 — `READ`, and `READLN` beyond integer; `WRITE`/`WRITELN` for `REAL`.** `[OBSERVED]` **M**
   `READLN` currently reads integers only; `WRITE`/`WRITELN` don't handle `REAL`.
   Extend the existing printf/scanf hybrid path.
@@ -491,11 +514,183 @@ the biggest single chunk; expect it to need its own design pass.
   - Does NOT cover: runtime file-directed writes, file open/position/mode state
     (`RESET`/`REWRITE`/`GET`/`PUT`, 8.2), or stream predicates (`EOF`/`EOLN`,
     8.4). `[OBSERVED]`
-- [ ] **8.4 — `EOF`, `EOL`, `EOLN`.** `[READ]` **M** Stream predicates.
-- [ ] **8.5 — `ASSIGN`, `CLOSE`, `DISCARD`, `READFN`, `READSET`.** `[READ]` **L** Extended I/O verbs.
-- [ ] **8.6 — `FILEMODES`, `SEQUENTIAL`, `TERMINAL`, `FCBFQQ`.** `[INFERRED]` **L**
-  Confirm each one's meaning from the manual body before implementing — several
-  are opaque from the identifier list alone.
+- [x] **8.4 — `EOF`, `EOL`, `EOLN`.** `[READ]` **M** Stream predicates.
+  - Done: verified `EOF` and `EOLN` are implemented as real stream predicates
+    over the FCB runtime. `EOF` accepts zero args (`INPUT`) or one file arg and
+    is true in write/generation mode or after the last `GET` reaches end of
+    file; `EOLN` accepts zero args or a TEXT file arg, forces pending lazy
+    buffer fill, errors at EOF/binary files, and uses host `\n` as the TEXT
+    line marker while presenting `F^` as blank at EOLN. Standard `INPUT` and
+    `OUTPUT` are attached to stdin/stdout lazily at the file-variable use sites,
+    avoiding the implicit-GET-eats-first-character trap and avoiding a global
+    runtime dependency for programs that only use ordinary stdout `WRITELN`.
+  - Done: file-directed formatted output/input now routes through an FCB when
+    a leading TEXT selector is present (`pas_write_fmt`, `pas_fread_*`,
+    `pas_freadln_skip`), while the no-selector `READ`/`WRITE` path remains the
+    existing stdin/stdout runtime path.
+  - Proof: `tests.test_runtime_fixes.TestFileBufferModel` covers `WHILE NOT
+    EOF(f)` over a two-component TEXT file, EOLN at a written line marker with
+    blank `F^`, zero-arg `EOF` over piped `INPUT`, and the existing 8.2
+    RESET/REWRITE/GET/PUT round trips; `tests.test_typecheck.TestReadWriteTypecheck`
+    rejects `EOLN` on binary files; `tests.test_read_end_to_end` proves the
+    legacy stdin READ/READLN path still works. Full suite: `python3 -m unittest
+    discover -s tests` ran 347 tests OK. `[OBSERVED]`
+  - Does NOT cover: named-file binding (`ASSIGN`/`READFN`) or closing/deleting
+    files (8.5), DIRECT/TERMINAL mode behavior (8.6), DOS CR/LF translation, or
+    a documented `EOL` constant. Manual grep found `EOL` in the predeclared
+    identifier table only, with no body semantics; do not infer it until 8.6 or
+    a deeper manual pass verifies meaning. `[READ]`
+  - REOPENED: the claim "file-directed formatted output/input now routes
+    through an FCB" was true at the *handle* level only, not the
+    buffer-variable level, and the cited tests never combined `RESET`'s
+    implicit GET with a formatted reader on the same file. Two defects found
+    by external adversarial runs: (1) every `pas_fread_*` reader (and
+    `READSET`/`READFN`, an 8.5 spillover) read the raw `FILE*`, so the
+    component supplied by `RESET`'s implicit GET was silently dropped —
+    `READ(f, c)` after `RESET` on `'XY'` returned `Y`, `READSET` on `'HELLO'`
+    returned `ELLO`; (2) `stream_for(f, writing=1)` silently flipped a
+    read-mode file into write mode at the current offset, so
+    `RESET; READ; WRITE(f, 'Z')` clobbered `'ABCD'` into `'ABZD'` with exit 0.
+    The original `[OBSERVED]` grade described the tested paths, but the prose
+    generalized past the coverage envelope.
+  - CLOSED (1, buffer bypass): `RESET` now defers the implicit GET by marking
+    the current component PENDING, and one fill path (`force_fill`) owns all
+    first-reads. New helpers `fcb_next_char`/`fcb_unget_char` treat the FCB
+    buffer plus host stream as a single logical character source; all
+    formatted readers (`pas_fread_int/word/real/char/lstring`,
+    `pas_freadset`, `pas_fread_filename`, `pas_freadln_skip`) route through
+    them, and delimiter ungets land in the buffer (so `F^`/`EOF`/`EOLN`
+    observe retained delimiters) instead of raw `ungetc`. `pas_file_get`
+    force-fills before advancing so an explicit GET after RESET still lands
+    on the second component; `stream_for`'s CLOSED-to-read flip now performs
+    the implicit RESET. Representation note: READSET's retained non-member
+    delimiter is now the current buffered component rather than
+    `ungetc`+PENDING — observably equivalent through `F^`/`READ`. `[OBSERVED]`
+  - CLOSED (2, mode flip): `stream_for` now aborts on WRITE in read mode, on
+    WRITE to a closed file, and on READ in write mode, consistent with the
+    GET/PUT mode aborts. These `die` sites are the future trap dispatch
+    points for the 8.6 trapped-I/O work. `[OBSERVED]`
+  - Evidence: `tests.test_runtime_fixes.TestFileBufferModel.test_fread_after_reset_reads_first_component`,
+    `test_readset_after_reset_includes_first_char`,
+    `test_buffer_get_and_fread_interleave`,
+    `test_eoln_and_eof_observed_after_formatted_read`,
+    `test_fread_lstring_after_reset_keeps_line_marker`,
+    `test_write_in_inspection_mode_aborts_and_preserves_file`,
+    `test_write_to_closed_file_aborts`, `test_read_in_generation_mode_aborts`,
+    `test_read_from_closed_file_performs_implicit_reset`. All pre-existing
+    tests passed unmodified before the new tests were added. Full suite:
+    `python3 -m unittest discover -s tests` ran 371 tests OK. `[OBSERVED]`
+  - Tested combinations: RESET→READ/READSET/READLN-skip first-component;
+    F^/GET/READ interleave; READ→EOLN→READLN→EOF predicate chain; write-mode
+    and closed-mode rejections. NOT yet tested: binary-file formatted reads
+    (TEXT only by design), GET/READ interleave on `INPUT`, multi-line READSET
+    sequences. `[OBSERVED]`
+- [x] **8.5 — `ASSIGN`, `CLOSE`, `DISCARD`, `READFN`, `READSET`.** `[READ]` **L** Extended I/O verbs.
+  - Done: `ASSIGN`, `CLOSE`, and `DISCARD` are real
+    runtime operations, not façade calls. The FCB layout now carries a bound
+    filename slot; `ASSIGN(VAR F, name)` copies STRING/LSTRING/CHAR data,
+    trims trailing blanks, rejects assignment to an open file, and treats
+    `CHR(0)`/NUL as the existing anonymous temporary-file case. `RESET` and
+    `REWRITE` honor the bound name via host `fopen` (`r+b` / `w+b`), preserving
+    anonymous `tmpfile()` behavior for unbound files. `CLOSE` is a no-op for
+    already closed files, closes owned handles, and appends a final TEXT line
+    marker on written non-empty TEXT files if the stream does not already end
+    in `\n`. `DISCARD` closes and removes the named host file; anonymous
+    temporaries disappear through `tmpfile`/`fclose`. `[OBSERVED]`
+  - Done: `READSET` implements the documented scanner semantics: optional
+    leading TEXT file selector with default `INPUT`, mutable LSTRING destination,
+    and `SET OF CHAR` source set. Runtime skips leading spaces, tabs, form
+    feeds, and line markers, then copies characters while they are in the set
+    and capacity remains. The first nonmatching character is left available to
+    the same FCB stream; a line marker stops scanning. `[OBSERVED]`
+  - Done: `READFN` implements the documented READLN-like dispatcher without
+    consuming the line marker. An optional leading TEXT parameter is the source
+    stream; file-typed later parameters read one nonblank filename token from
+    that source and bind the target using ASSIGN semantics, while scalar/string
+    parameters reuse the existing formatted READ helper path. `[OBSERVED]`
+  - Manual basis: ASSIGN/CLOSE/DISCARD/READSET/READFN are documented on manual
+    pp. 12-27..12-31 (`IBM_Pascal_Compiler_Aug81_djvu.txt` around lines
+    13939, 13993, 14040, 14075, 14095). The text says ASSIGN trims trailing
+    blanks and overrides a prior filename; CLOSE may be called on a closed file;
+    DISCARD closes and deletes; temporary files are deleted when closed;
+    READSET skips leading blanks/tabs/form-feeds/line markers and reads while
+    chars are in the supplied SETOFCHAR and there is room in the LSTRING;
+    READFN is READLN except file-typed parameters read valid filenames assigned
+    like ASSIGN, and READFN does not read a line marker. `[READ]`
+  - Proof: `tests.test_runtime_fixes.TestFileBufferModel.test_assign_close_named_text_persists_across_fcb`
+    writes through one assigned TEXT FCB, closes it, reopens the same host path
+    through a second assigned FCB, reads the characters back, and verifies the
+    host file persists as `HI\n` (tmpfile cannot fake this). `test_discard_named_file_deletes_host_path`
+    verifies `DISCARD` removes the host path; `test_assign_chr_zero_keeps_anonymous_temp_behavior`
+    verifies the manual temporary-file spelling `ASSIGN(f, CHR(0))`. Existing
+    8.2 anonymous-file tests still pass. `test_readset_reads_allowed_chars_and_leaves_delimiter`
+    proves leading skip, SETOFCHAR membership, LSTRING filling, and delimiter
+    retention; `test_readset_capacity_stops_without_consuming_next_char` proves
+    capacity stop retains the next char; `test_readfn_reads_filename_and_does_not_consume_line_marker`
+    proves filename binding from INPUT, line-marker retention visible through
+    `EOLN(INPUT)`, and subsequent named-file REWRITE/RESET behavior.
+    `tests.test_typecheck.TestReadWriteTypecheck` covers ASSIGN/CLOSE/DISCARD,
+    READSET LSTRING/SETOFCHAR checks, READFN TEXT-source/file-target/read-target
+    checks, and READ file-selector validation. Full suite: `python3 -m unittest
+    discover -s tests` ran 357 tests OK. `[OBSERVED]`
+  - AMENDED: `READSET`/`READFN` shared the formatted-reader buffer-bypass
+    defect reopened under 8.4 (first component after `RESET` dropped); fixed
+    there by the unified `fcb_next_char` source, with
+    `test_readset_after_reset_includes_first_char` as the 8.5-side regression.
+    Additionally, `ASSIGN(f, '')` (empty after blank-trimming, distinct from
+    the `CHR(0)` temporary spelling) now aborts at the ASSIGN call site with a
+    clear message instead of deferring to a confusing later `fopen` failure
+    (`test_assign_empty_name_aborts_immediately`). `[OBSERVED]`
+  - Tested combinations: ASSIGN→REWRITE→CLOSE→reopen persistence; DISCARD of
+    named files; `CHR(0)` temp spelling; READSET/READFN delimiter and
+    line-marker retention, now including the RESET-first-component case. NOT
+    yet tested: ASSIGN to unwritable paths, DISCARD of never-opened files,
+    READFN with multiple file parameters on one line. `[OBSERVED]`
+- [x] **8.6 — `FILEMODES`, `SEQUENTIAL`, `TERMINAL`, `FCBFQQ`.** `[READ]` **L**
+  - Done: `FILEMODES` is registered as the predeclared enumerated type with
+    constants `SEQUENTIAL`, `TERMINAL`, and `DIRECT` in manual order. File FCB
+    field access supports `F.MODE` for any file variable; ordinary files default
+    to `SEQUENTIAL`, and predeclared `INPUT`/`OUTPUT` default to `TERMINAL`, as
+    documented. Assigning `F.MODE := DIRECT`/`SEQUENTIAL`/`TERMINAL` changes the
+    stored FCB mode value and reading/comparing `F.MODE` observes that value.
+    `[OBSERVED]`
+  - Done: `FCBFQQ` is registered as the documented file-control-block record
+    type with standard fields `MODE`, `TRAP`, and `ERRS`; direct `FCBFQQ`
+    variables lower as ordinary records, and file designator field typing
+    recognizes those names. `[OBSERVED]`
+  - Does NOT cover: full runtime error-trapping semantics for `F.TRAP` and
+    `F.ERRS`. The runtime was not converted into the manual's trapped I/O
+    subsystem where errors set `ERRS` and operations are ignored or resumed
+    depending on `TRAP`. Existing runtime helpers still abort on fatal I/O errors
+    unless a pre-existing path already handled otherwise. Treat this as explicit
+    future work, not an implemented 8.6 behavior. `[OBSERVED]`
+  - REOPENED/RE-GRADED: the prior note said TRAP/ERRS were "surfaced in
+    FCBFQQ/file-field typing so source can name them." That overstated: on a
+    *file variable*, `F.TRAP`/`F.ERRS` passed typecheck and then crashed in
+    codegen (`Cannot access FCB field 'TRAP'`) — an `[INFERRED]` claim wearing
+    an `[OBSERVED]` badge. Resolution (the loud option): the typechecker now
+    rejects `F.TRAP`/`F.ERRS` on file variables with a "not yet supported
+    (trapped I/O is unimplemented)" diagnostic, so the failure moves to the
+    earlier phase with a better message. Direct `FCBFQQ` record variables are
+    unaffected. Real TRAP/ERRS lowering is deferred to the trapped-I/O item,
+    where the mode-enforcement `die` sites added under 8.4 become the trap
+    dispatch points. `[OBSERVED]`
+  - Evidence: `tests.test_typecheck.TestReadWriteTypecheck.test_fcb_trap_errs_rejected_on_file_variables`
+    (rejection on file variables, acceptance on `FCBFQQ` records). Full suite:
+    `python3 -m unittest discover -s tests` ran 371 tests OK. `[OBSERVED]`
+  - Manual basis: Chapter 6 identifies `FILEMODES` as the predeclared enum with
+    `SEQUENTIAL`, `TERMINAL`, and `DIRECT`, says files default to SEQUENTIAL
+    except `INPUT`/`OUTPUT` which default TERMINAL, and says file control block
+    fields are accessible with record notation. Chapter 12 File Field Values
+    documents `F.MODE`, `F.TRAP`, `F.ERRS`, and that `F.MODE` is used by the
+    file system during `RESET`/`REWRITE`. `[READ]`
+  - Proof: `tests.test_runtime_fixes.TestFileBufferModel.test_file_mode_field_defaults_and_assignment`
+    checks SEQUENTIAL default for a normal TEXT file, TERMINAL default for
+    `INPUT`, and assignment/readback of `DIRECT`; `test_fcbfqq_record_mode_field_codegen`
+    proves direct `FCBFQQ` record field codegen. `tests.test_typecheck.TestReadWriteTypecheck.test_filemodes_and_fcb_mode_typecheck`
+    checks `FILEMODES` variables, `F.MODE` assignment, rejection of integer
+    assignment to `F.MODE`, and rejection of unknown FCB fields. Full suite:
+    `python3 -m unittest discover -s tests` ran 360 tests OK. `[OBSERVED]`
 
 ---
 
@@ -515,12 +710,18 @@ the biggest single chunk; expect it to need its own design pass.
     float-aware arithmetic folding, and emitting `ir.Constant(ir.DoubleType(), v)`
     at use sites via a new `_const_ir()` helper. (3) Unary minus on a `double`
     operand emitted integer `sub`; fixed by checking operand type in
-    `codegen_unaryop` and using `fsub(0.0, operand)` for doubles. Output format
-    note: WRITE/WRITELN emits `%f` (six decimals by default); IBM Pascal’s
-    free-format / exponential default differs — tracked as a future cosmetic fix,
-    not a correctness blocker. Proven by `python -m unittest tests.test_parser
-    tests.test_typecheck tests.test_codegen` (157 tests, 8 new REAL-hardening
-    run tests in `TestCodegenBuildRun`).
+    `codegen_unaryop` and using `fsub(0.0, operand)` for doubles. Proven by
+    `python -m unittest tests.test_parser tests.test_typecheck
+    tests.test_codegen` (157 tests, 8 new REAL-hardening run tests in
+    `TestCodegenBuildRun`).
+  - AMENDED (stale note removed): this item previously said WRITE/WRITELN
+    emits `%f` (six decimals) with the manual's exponential default "tracked
+    as a future cosmetic fix." That was fixed by the 8.3 REAL field-width
+    work and the note was never updated: no-width REAL output now uses
+    `%14.7E`, matching the manual's documented default (M = 14) and its
+    example — `WRITE(123.456)` prints ` 1.2345600E+02` (manual p. 12-24).
+    Verified by direct run during the README/EBNF documentation sync.
+    `[OBSERVED]`
 - [x] **9.2 — Predeclared-identifier registration mechanism.** `[INFERRED]` **S**
   Centralized predeclared registration in `builtins_registry.py`; `type_checker`
   now uses the shared table, predeclared symbols are tagged `is_builtin`, and

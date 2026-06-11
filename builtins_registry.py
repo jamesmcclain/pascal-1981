@@ -6,16 +6,16 @@ This is shared between the type checker and code generator to prevent
 """
 
 from symbol_table import Symbol
-from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, FileType, FunctionType, LStringType, PointerType, ProcedureType, StringType)
+from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, EnumType, FileType, FunctionType, LStringType, PointerType, ProcedureType, RecordType, StringType)
 
 # Lists of all built-in function and procedure names
 BUILTIN_FUNCTIONS = {
     'ABS', 'SQR', 'SQRT', 'SIN', 'COS', 'LN', 'EXP', 'ARCTAN', 'CHR', 'ORD', 'ODD', 'SUCC', 'PRED', 'HIBYTE', 'LOBYTE', 'WRD', 'BYWORD', 'TRUNC', 'ROUND', 'FLOAT', 'SCANEQ',
-    'SCANNE', 'ENCODE', 'DECODE'
+    'SCANNE', 'ENCODE', 'DECODE', 'EOF', 'EOLN'
 }
 
 BUILTIN_PROCEDURES = {
-    'WRITE', 'WRITELN', 'READ', 'READLN', 'CONCAT', 'COPYLST', 'COPYSTR', 'INSERT', 'DELETE', 'POSITN', 'PACK', 'UNPACK', 'NEW', 'DISPOSE', 'FILLC', 'FILLSC', 'MOVEL', 'MOVER',
+    'WRITE', 'WRITELN', 'READ', 'READLN', 'RESET', 'REWRITE', 'GET', 'PUT', 'ASSIGN', 'CLOSE', 'DISCARD', 'READFN', 'READSET', 'CONCAT', 'COPYLST', 'COPYSTR', 'INSERT', 'DELETE', 'POSITN', 'PACK', 'UNPACK', 'NEW', 'DISPOSE', 'FILLC', 'FILLSC', 'MOVEL', 'MOVER',
     'MOVESL', 'MOVESR', 'ABORT'
 }
 
@@ -29,8 +29,18 @@ def register_builtins(symbol_table) -> None:
     # Procedures
     define_builtin('WRITELN', ProcedureType('WRITELN', []), 'procedure')
     define_builtin('WRITE', ProcedureType('WRITE', []), 'procedure')
+    text_file_param = [('f', FileType(CHAR_TYPE, structure='ASCII'))]
     define_builtin('READ', ProcedureType('READ', []), 'procedure')
     define_builtin('READLN', ProcedureType('READLN', []), 'procedure')
+    define_builtin('RESET', ProcedureType('RESET', text_file_param), 'procedure')
+    define_builtin('REWRITE', ProcedureType('REWRITE', text_file_param), 'procedure')
+    define_builtin('GET', ProcedureType('GET', text_file_param), 'procedure')
+    define_builtin('PUT', ProcedureType('PUT', text_file_param), 'procedure')
+    define_builtin('ASSIGN', ProcedureType('ASSIGN', []), 'procedure')
+    define_builtin('CLOSE', ProcedureType('CLOSE', text_file_param), 'procedure')
+    define_builtin('DISCARD', ProcedureType('DISCARD', text_file_param), 'procedure')
+    define_builtin('READFN', ProcedureType('READFN', []), 'procedure')
+    define_builtin('READSET', ProcedureType('READSET', []), 'procedure')
     define_builtin('CONCAT', ProcedureType('CONCAT', []), 'procedure')
     define_builtin('COPYLST', ProcedureType('COPYLST', []), 'procedure')
     define_builtin('COPYSTR', ProcedureType('COPYSTR', []), 'procedure')
@@ -41,6 +51,8 @@ def register_builtins(symbol_table) -> None:
     define_builtin('SCANNE', FunctionType('SCANNE', [], INTEGER_TYPE), 'function')
     define_builtin('ENCODE', FunctionType('ENCODE', [], BOOLEAN_TYPE), 'function')
     define_builtin('DECODE', FunctionType('DECODE', [], BOOLEAN_TYPE), 'function')
+    define_builtin('EOF', FunctionType('EOF', [], BOOLEAN_TYPE), 'function')
+    define_builtin('EOLN', FunctionType('EOLN', [], BOOLEAN_TYPE), 'function')
     define_builtin('PACK', ProcedureType('PACK', []), 'procedure')
     define_builtin('UNPACK', ProcedureType('UNPACK', []), 'procedure')
     define_builtin('NEW', ProcedureType('NEW', []), 'procedure')
@@ -63,11 +75,17 @@ def register_builtins(symbol_table) -> None:
     define_builtin('MAXINT', INTEGER_TYPE, 'const')
     define_builtin('MAXWORD', WORD_TYPE, 'const')
     define_builtin('NULL', LStringType(0), 'const')
+    filemodes_type = EnumType(['SEQUENTIAL', 'TERMINAL', 'DIRECT'], name='FILEMODES')
+    define_builtin('SEQUENTIAL', filemodes_type, 'const')
+    define_builtin('TERMINAL', filemodes_type, 'const')
+    define_builtin('DIRECT', filemodes_type, 'const')
 
     # Types
     text_type = FileType(CHAR_TYPE, structure='ASCII')
     define_builtin('TEXT', text_type, 'type')
     define_builtin('STRING', StringType(256), 'type')
+    define_builtin('FILEMODES', filemodes_type, 'type')
+    define_builtin('FCBFQQ', RecordType('FCBFQQ', {'MODE': filemodes_type, 'TRAP': BOOLEAN_TYPE, 'ERRS': INTEGER_TYPE}), 'type')
 
     # Variables/Files
     define_builtin('INPUT', text_type, 'var')

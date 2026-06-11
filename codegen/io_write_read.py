@@ -48,19 +48,41 @@ class IoWriteReadMixin:
     def _pas_type(self, expr) -> Optional[object]:
         if isinstance(expr, (Identifier, Designator)):
             sym = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
-            return getattr(sym, 'type_expr', None) if sym else None
+            ty = getattr(sym, 'type_expr', None) if sym else None
+            if isinstance(expr, Designator) and expr.selectors and ty is not None:
+                cur = ty
+                for sel in expr.selectors:
+                    if sel.kind == 'FIELD' and isinstance(self.resolve_type_alias(cur), (ResolvedFileType, FileType)):
+                        if str(sel.index_or_field).upper() == 'MODE':
+                            return NamedType('FILEMODES', None)
+                    # Fall back to the base type for complex selectors this helper does not model.
+            return ty
         return self.infer_expression_type(expr) if hasattr(self, 'infer_expression_type') else None
 
-    def build_write_format_and_args(self, args: List[Union[Expression, WriteArg]]) -> tuple[str, List[ir.Value]]:
+    def _file_selector_fcb(self, expr) -> ir.Value:
+        target = expr if isinstance(expr, Designator) else Designator(expr.name, [])
+        slot = self.resolve_designator_ptr(target)
+        handle = self.builder.load(slot)
+        fcb = self.builder.bitcast(handle, self.file_fcb_type().as_pointer())
+        if getattr(expr, 'name', '').upper() in {'INPUT', 'OUTPUT'}:
+            in_sym = self.scope.lookup('INPUT')
+            out_sym = self.scope.lookup('OUTPUT')
+            in_fcb = self.builder.bitcast(self.builder.load(in_sym.llvm_value), self.file_fcb_type().as_pointer())
+            out_fcb = self.builder.bitcast(self.builder.load(out_sym.llvm_value), self.file_fcb_type().as_pointer())
+            self.builder.call(self.scope.lookup('pas_file_attach_std').llvm_value, [in_fcb, out_fcb])
+        return fcb
+
+    def build_write_format_and_args(self, args: List[Union[Expression, WriteArg]]) -> tuple[str, List[ir.Value], Optional[ir.Value]]:
         fmt_parts: List[str] = []
         printf_args: List[ir.Value] = []
         start = 0
+        file_fcb = None
         if args:
             first = args[0]
             first_expr = first.expr if isinstance(first, WriteArg) else first
             first_ty = self.resolve_type_alias(self._pas_type(first_expr)) if self._pas_type(first_expr) is not None else None
             if isinstance(first_ty, (ResolvedFileType, FileType)) and getattr(first_ty, 'structure', None) == 'ASCII':
-                # Leading TEXT file selector is accepted by the checker; current codegen still writes to stdout.
+                file_fcb = self._file_selector_fcb(first_expr)
                 start = 1
         for arg in args[start:]:
             expr = arg.expr if isinstance(arg, WriteArg) else arg
@@ -133,27 +155,33 @@ class IoWriteReadMixin:
             else:
                 fmt_parts.append(f'%{conv}')
             printf_args.append(val)
-        return ''.join(fmt_parts), printf_args
+        return ''.join(fmt_parts), printf_args, file_fcb
 
     def builtin_write(self, args):
-        fmt_str, printf_args = self.build_write_format_and_args(args)
+        fmt_str, printf_args, file_fcb = self.build_write_format_and_args(args)
         fmt_str = fmt_str or ''
         fmt_const = ir.Constant(ir.ArrayType(ir.IntType(8), len(fmt_str) + 1), bytearray(fmt_str.encode() + b'\0'))
         g = ir.GlobalVariable(self.module, fmt_const.type, name=self.unique_name('fmt'))
         g.initializer = fmt_const
         g.global_constant = True
         ptr = self.builder.gep(g, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0)])
-        self.builder.call(self.printf_func(), [ptr] + printf_args)
+        if file_fcb is None:
+            self.builder.call(self.printf_func(), [ptr] + printf_args)
+        else:
+            self.builder.call(self.scope.lookup('pas_write_fmt').llvm_value, [file_fcb, ptr] + printf_args)
 
     def builtin_writeln(self, args):
-        fmt_str, printf_args = self.build_write_format_and_args(args)
+        fmt_str, printf_args, file_fcb = self.build_write_format_and_args(args)
         fmt_str += "\n"
         fmt_const = ir.Constant(ir.ArrayType(ir.IntType(8), len(fmt_str) + 1), bytearray(fmt_str.encode() + b'\0'))
         g = ir.GlobalVariable(self.module, fmt_const.type, name=self.unique_name('fmt'))
         g.initializer = fmt_const
         g.global_constant = True
         ptr = self.builder.gep(g, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0)])
-        self.builder.call(self.printf_func(), [ptr] + printf_args)
+        if file_fcb is None:
+            self.builder.call(self.printf_func(), [ptr] + printf_args)
+        else:
+            self.builder.call(self.scope.lookup('pas_write_fmt').llvm_value, [file_fcb, ptr] + printf_args)
 
     def _read_ptr(self, arg):
         return self.resolve_designator_ptr(arg if isinstance(arg, Designator) else Designator(arg.name, []))
@@ -164,44 +192,92 @@ class IoWriteReadMixin:
     def builtin_read(self, args):
         self._builtin_read(args, False)
 
-    def _builtin_read(self, args, consume_eol):
-        for arg in args:
-            target = arg if isinstance(arg, Designator) else Designator(arg.name, [])
-            ptr = self.resolve_designator_ptr(target)
-            ty = self.resolve_type_alias(self._pas_type(arg)) if self._pas_type(arg) is not None else None
-            # Dispatch on the *resolved* type. After resolve_type_alias a
-            # built-in scalar is still an AST NamedType whose str() is the
-            # dataclass repr ("NamedType(name='INTEGER')"), so we must use
-            # its .name attribute -- never str() of the node.
-            if isinstance(ty, NamedType):
-                ty_name = ty.name.upper()
-            elif ty is not None:
-                ty_name = getattr(ty, 'name', type(ty).__name__).upper()
+    def _emit_read_target(self, arg, file_fcb):
+        target = arg if isinstance(arg, Designator) else Designator(arg.name, [])
+        ptr = self.resolve_designator_ptr(target)
+        ty = self.resolve_type_alias(self._pas_type(arg)) if self._pas_type(arg) is not None else None
+        if isinstance(ty, NamedType):
+            ty_name = ty.name.upper()
+        elif ty is not None:
+            ty_name = getattr(ty, 'name', type(ty).__name__).upper()
+        else:
+            ty_name = ''
+        if ty is INTEGER_TYPE or ty_name == 'INTEGER':
+            fn = self._read_helper('pas_fread_int' if file_fcb is not None else 'pas_read_int', ptr.type)
+            call_args = ([file_fcb, ptr] if file_fcb is not None else [ptr])
+        elif ty is WORD_TYPE or ty_name == 'WORD':
+            fn = self._read_helper('pas_fread_word' if file_fcb is not None else 'pas_read_word', ptr.type)
+            call_args = ([file_fcb, ptr] if file_fcb is not None else [ptr])
+        elif ty is REAL_TYPE or ty_name == 'REAL':
+            fn = self._read_helper('pas_fread_real' if file_fcb is not None else 'pas_read_real', ptr.type)
+            call_args = ([file_fcb, ptr] if file_fcb is not None else [ptr])
+        elif ty is CHAR_TYPE or ty_name == 'CHAR':
+            fn = self._read_helper('pas_fread_char' if file_fcb is not None else 'pas_read_char', ptr.type)
+            call_args = ([file_fcb, ptr] if file_fcb is not None else [ptr])
+        else:
+            is_str, max_len, is_lstring = self.get_string_type_info(ty)
+            if not is_str or not is_lstring:
+                type_label = ty_name or (getattr(ty, 'name', type(ty).__name__) if ty is not None else 'UNKNOWN')
+                raise CodegenError(f"READ/READLN cannot read a value of type {type_label}")
+            if file_fcb is not None:
+                fn = self.scope.lookup('pas_fread_lstring').llvm_value
+                call_args = [file_fcb, self.builder.bitcast(ptr, ir.IntType(8).as_pointer()), ir.Constant(ir.IntType(32), max_len)]
             else:
-                ty_name = ''
-            if ty is INTEGER_TYPE or ty_name == 'INTEGER':
-                fn = self._read_helper('pas_read_int', ptr.type)
-                call_args = [ptr]
-            elif ty is WORD_TYPE or ty_name == 'WORD':
-                fn = self._read_helper('pas_read_word', ptr.type)
-                call_args = [ptr]
-            elif ty is REAL_TYPE or ty_name == 'REAL':
-                fn = self._read_helper('pas_read_real', ptr.type)
-                call_args = [ptr]
-            elif ty is CHAR_TYPE or ty_name == 'CHAR':
-                fn = self._read_helper('pas_read_char', ptr.type)
-                call_args = [ptr]
-            else:
-                is_str, max_len, is_lstring = self.get_string_type_info(ty)
-                # Unknown or unsupported READ targets must fail loudly, never fall through to a memory write.
-                if not is_str or not is_lstring:
-                    type_label = ty_name or (getattr(ty, 'name', type(ty).__name__) if ty is not None else 'UNKNOWN')
-                    raise CodegenError(f"READ/READLN cannot read a value of type {type_label}")
                 fn = self._read_helper('pas_read_lstring', ir.IntType(8).as_pointer(), [ir.IntType(32)])
                 call_args = [self.builder.bitcast(ptr, ir.IntType(8).as_pointer()), ir.Constant(ir.IntType(32), max_len)]
-            self.builder.call(fn, call_args)
+        self.builder.call(fn, call_args)
+
+    def _default_input_fcb(self) -> ir.Value:
+        return self._file_selector_fcb(Identifier('INPUT'))
+
+    def builtin_readset(self, args):
+        file_fcb = self._default_input_fcb()
+        start = 0
+        if len(args) == 3:
+            file_fcb = self._file_selector_fcb(args[0])
+            start = 1
+        dest = args[start]
+        set_expr = args[start + 1]
+        dest_ptr = self.resolve_designator_ptr(dest if isinstance(dest, Designator) else Designator(dest.name, []))
+        _is_str, max_len, is_lstring = self.get_string_type_info(self._pas_type(dest))
+        if not is_lstring:
+            raise CodegenError('READSET destination must be LSTRING')
+        set_val = self.codegen_expr(set_expr)
+        set_slot = self.builder.alloca(self.set_llvm_type(), name='readset_set')
+        self.builder.store(set_val, set_slot)
+        self.builder.call(self.scope.lookup('pas_freadset').llvm_value, [file_fcb, self.builder.bitcast(dest_ptr, ir.IntType(8).as_pointer()), ir.Constant(ir.IntType(32), max_len), set_slot])
+
+    def builtin_readfn(self, args):
+        file_fcb = self._default_input_fcb()
+        start = 0
+        if args:
+            first_ty = self.resolve_type_alias(self._pas_type(args[0])) if self._pas_type(args[0]) is not None else None
+            if isinstance(first_ty, (ResolvedFileType, FileType)) and getattr(first_ty, 'structure', None) == 'ASCII':
+                file_fcb = self._file_selector_fcb(args[0])
+                start = 1
+        for arg in args[start:]:
+            ty = self.resolve_type_alias(self._pas_type(arg)) if self._pas_type(arg) is not None else None
+            if isinstance(ty, (ResolvedFileType, FileType)):
+                target_fcb = self._file_selector_fcb(arg)
+                self.builder.call(self.scope.lookup('pas_fread_filename').llvm_value, [file_fcb, target_fcb])
+            else:
+                self._emit_read_target(arg, file_fcb)
+
+    def _builtin_read(self, args, consume_eol):
+        file_fcb = None
+        start = 0
+        if args:
+            first_ty = self.resolve_type_alias(self._pas_type(args[0])) if self._pas_type(args[0]) is not None else None
+            if isinstance(first_ty, (ResolvedFileType, FileType)) and getattr(first_ty, 'structure', None) == 'ASCII':
+                file_fcb = self._file_selector_fcb(args[0])
+                start = 1
+        for arg in args[start:]:
+            self._emit_read_target(arg, file_fcb)
         if consume_eol:
-            self.builder.call(self._read_helper('pas_readln_skip', ir.VoidType()), [])
+            if file_fcb is not None:
+                self.builder.call(self.scope.lookup('pas_freadln_skip').llvm_value, [file_fcb])
+            else:
+                self.builder.call(self._read_helper('pas_readln_skip', ir.VoidType()), [])
 
     def enum_value_list(self, type_expr) -> Optional[List[str]]:
         t = self.resolve_type_alias(type_expr)
