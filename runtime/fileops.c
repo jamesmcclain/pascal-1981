@@ -219,6 +219,8 @@ void pas_file_put(struct pas_file_fcb *f) {
     f->touched = 0;
 }
 
+/* NOTE: when DOS CR/LF translation lands (checklist 8.4 deferral), the
+ * final-marker probe below must recognize "\r\n" as an existing marker. */
 static void append_final_text_marker_if_needed(struct pas_file_fcb *f) {
     if (!f || f->structure != STRUCT_TEXT || current_mode(f) != MODE_WRITE || !f->handle || (f->mode & MODE_STD)) return;
     FILE *h = f->handle;
@@ -261,6 +263,7 @@ static void assign_name_closed(struct pas_file_fcb *f, const char *name, int len
     if (current_mode(f) != MODE_CLOSED || f->handle) die("file runtime: ASSIGN on open file");
     if (!name || len < 0) die("file runtime: bad ASSIGN name");
     while (len > 0 && name[len - 1] == ' ') len--;
+    if (len == 0) die("file runtime: empty filename in ASSIGN");
     if (f->name) free(f->name);
     f->name = NULL;
     f->mode &= ~MODE_TEMP;
@@ -338,7 +341,7 @@ void pas_fread_filename(struct pas_file_fcb *src, struct pas_file_fcb *target) {
 }
 
 int pas_file_eof(struct pas_file_fcb *f) {
-    if (!f) return 1;
+    if (!f) die("file runtime: EOF null file");
     force_fill(f);
     return current_mode(f) == MODE_WRITE || is_eof(f);
 }
@@ -353,8 +356,19 @@ int pas_file_eoln(struct pas_file_fcb *f) {
 
 static FILE *stream_for(struct pas_file_fcb *f, int writing) {
     if (!f) return writing ? stdout : stdin;
-    if (writing && current_mode(f) != MODE_WRITE) set_mode_flags(f, MODE_WRITE, 1, 0, 0);
-    if (!writing && current_mode(f) == MODE_CLOSED) set_mode_flags(f, MODE_READ, 0, 0, 1);
+    if (writing) {
+        /* Writing requires generation mode. Silently flipping a read-mode
+         * file here used to clobber bytes at the current offset. When the
+         * trapped-I/O subsystem (F.TRAP/F.ERRS) lands, these die sites
+         * become the trap dispatch points. */
+        if (current_mode(f) == MODE_READ) die("file runtime: WRITE requires REWRITE/write mode");
+        if (current_mode(f) == MODE_CLOSED) die("file runtime: WRITE to closed file requires REWRITE");
+    } else {
+        if (current_mode(f) == MODE_WRITE) die("file runtime: READ requires RESET/read mode");
+        /* Reading a closed file performs the implicit RESET (consistent with
+         * require_text_read for READSET/READFN). */
+        if (current_mode(f) == MODE_CLOSED) pas_file_reset(f);
+    }
     return ensure_handle(f);
 }
 

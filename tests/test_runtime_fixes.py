@@ -355,6 +355,62 @@ class TestFileBufferModel(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertEqual(out, "HI\neol\n")
 
+    # ---- Phase 2 regressions: writes in inspection/closed mode must abort ----
+    # ---- (previously stream_for silently flipped modes and clobbered bytes) ----
+
+    def test_write_in_inspection_mode_aborts_and_preserves_file(self):
+        """WRITE(f, ...) on a file in read mode aborts (nonzero exit) and the
+        host file is NOT modified. Previously the runtime silently flipped to
+        write mode at the current offset and 'ABCD' became 'ABZD'."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "ro.txt"
+            src = ("PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); REWRITE(f); WRITELN(f, 'ABCD'); CLOSE(f); "
+                   "RESET(f); READ(f, c); WRITE(f, 'Z') END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertNotEqual(rc, 0)
+            self.assertEqual(path.read_text(), "ABCD\n")
+
+    def test_write_to_closed_file_aborts(self):
+        """WRITE(f, ...) on an assigned-but-never-opened file aborts instead of
+        implicitly creating/opening the file in write mode."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "closed.txt"
+            src = ("PROGRAM P; VAR f: TEXT; BEGIN "
+                   f"ASSIGN(f, '{path}'); WRITE(f, 'X') END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertNotEqual(rc, 0)
+            self.assertFalse(path.exists())
+
+    def test_read_in_generation_mode_aborts(self):
+        """READ(f, ...) on a file in write mode aborts (symmetric check)."""
+        src = ("PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
+               "REWRITE(f); WRITELN(f, 'A'); READ(f, c) END.")
+        rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+        self.assertNotEqual(rc, 0)
+
+    def test_read_from_closed_file_performs_implicit_reset(self):
+        """Reading a closed named file goes through the implicit RESET path
+        (consistent with require_text_read), yielding the first component."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "imp.txt"
+            src = ("PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); REWRITE(f); WRITELN(f, 'Q'); CLOSE(f); "
+                   "READ(f, c); WRITELN(c) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "Q\n")
+
+    # ---- Phase 4 regression: bad ASSIGN fails at ASSIGN, not a later fopen ----
+
+    def test_assign_empty_name_aborts_immediately(self):
+        """ASSIGN(f, '') (empty after blank-trimming, and not the CHR(0)
+        temporary-file spelling) aborts at the ASSIGN call site."""
+        src = ("PROGRAM P; VAR f: TEXT; BEGIN ASSIGN(f, '  '); WRITELN('late') END.")
+        rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+        self.assertNotEqual(rc, 0)
+        self.assertNotIn("late", out)
+
     def test_file_mode_field_defaults_and_assignment(self):
         src = ("PROGRAM P; VAR f: TEXT; BEGIN "
                "IF f.MODE = SEQUENTIAL THEN WRITELN('seq'); "
