@@ -1698,3 +1698,59 @@ class TestWriteDoubleColonCodegen(unittest.TestCase):
         rc, out = build_and_run(src)
         self.assertEqual(rc, 0)
         self.assertEqual(out, "        123.46\n")
+
+
+class TestStringCapacityGatesRespectRangeck(unittest.TestCase):
+    """7.7 follow-on: the string-intrinsic capacity gates must honor the
+    per-statement $RANGECK state and the CLI force override.
+
+    (The §9.5 checklist note claiming these were 'unconditional' was stale:
+    statement-level wiring via effective_rangeck already exists. These tests
+    pin the behavior so it cannot silently regress.)
+
+    Note: each guard contributes exactly one `_overflow` basic block, whose
+    label appears twice in the IR text (block definition + cbranch operand),
+    so we count distinct guards as occurrences // 2.
+    """
+
+    def _guards(self, src: str, **kw) -> int:
+        from tests.support import parse_source
+        from codegen_llvm import compile_to_llvm
+        ir = compile_to_llvm(parse_source(src), **kw)
+        return ir.count('_overflow') // 2
+
+    MIX = ("PROGRAM P; VAR a, b: LSTRING(5); BEGIN "
+           "{$RANGECK-} CONCAT(a, 'XY'); "
+           "{$RANGECK+} CONCAT(b, 'XY') END.")
+
+    def test_rangeck_off_removes_concat_guard(self):
+        src = "PROGRAM P; VAR a: LSTRING(5); BEGIN {$RANGECK-} CONCAT(a, 'XY') END."
+        self.assertEqual(self._guards(src), 0)
+
+    def test_rangeck_default_emits_concat_guard(self):
+        src = "PROGRAM P; VAR a: LSTRING(5); BEGIN CONCAT(a, 'XY') END."
+        self.assertEqual(self._guards(src), 1)
+
+    def test_per_statement_granularity(self):
+        """$RANGECK- then $RANGECK+ in one program: only the second
+        statement gets a guard."""
+        self.assertEqual(self._guards(self.MIX), 1)
+
+    def test_cli_force_off_overrides_source(self):
+        self.assertEqual(self._guards(self.MIX, force_flags={'RANGECK': False}), 0)
+
+    def test_cli_force_on_overrides_source(self):
+        self.assertEqual(self._guards(self.MIX, force_flags={'RANGECK': True}), 2)
+
+    def test_string_assignment_gate_respects_flag(self):
+        on = "PROGRAM P; VAR a: LSTRING(5); b: LSTRING(9); BEGIN a := b END."
+        off = "PROGRAM P; VAR a: LSTRING(5); b: LSTRING(9); BEGIN {$RANGECK-} a := b END."
+        self.assertEqual(self._guards(on), 1)
+        self.assertEqual(self._guards(off), 0)
+
+    def test_copystr_copylst_insert_respect_flag(self):
+        for call in ("COPYSTR('AB', s)", "COPYLST('AB', a)", "INSERT('AB', a, 1)"):
+            src_on = f"PROGRAM P; VAR a: LSTRING(5); s: STRING(5); BEGIN {call} END."
+            src_off = f"PROGRAM P; VAR a: LSTRING(5); s: STRING(5); BEGIN {{$RANGECK-}} {call} END."
+            self.assertGreaterEqual(self._guards(src_on), 1, call)
+            self.assertEqual(self._guards(src_off), 0, call)

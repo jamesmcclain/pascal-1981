@@ -787,6 +787,18 @@ the biggest single chunk; expect it to need its own design pass.
     the per-statement `rangeck` field from the AST node (which already carries
     the flag) instead of the hardcoded `True`. Deferred as a codegen follow-on.
     `[OBSERVED]`
+  - CORRECTION (gate audit): the note above was stale when written — the
+    statement-level wiring already exists. `codegen_stmt` threads
+    `effective_rangeck(stmt)` into CONCAT/COPYLST/COPYSTR/INSERT and the
+    string-assignment guard; `{$RANGECK-}`/`{$RANGECK+}` toggle guards
+    per-statement and `--rangeck on/off` overrides both directions.
+    Verified by IR inspection (guard `_overflow` blocks appear/disappear
+    per statement) and pinned by
+    `tests.test_codegen.TestStringCapacityGatesRespectRangeck` (7 tests).
+    One real bug found and fixed during the audit: `builtin_insert`
+    crashed (`AttributeError` on a `None` end-block) when the guard was
+    disabled via `$RANGECK-` — it was the only string intrinsic that did
+    not handle `_guard_string_capacity` returning `None`. `[OBSERVED]`
   - Fixtures: `parser/should_pass/metacmd_tier1.pas`, `metacmd_tier2.pas`,
     `metacmd_if_true.pas`, `metacmd_if_false.pas`, `metacmd_if_else.pas`,
     `metacmd_if_false_else.pas`, `metacmd_if_nested.pas`,
@@ -920,7 +932,12 @@ Here's the de facto remaining work, pulled from the deferred notes inside closed
     `P::N` lowering is unchanged (vintage behavior for those types is
     `[UNVERIFIED]` — candidate probes t003/t004 for the new
     discrepancies.md). READ-side M/N still unparsed (8.3a scope).
-- [ ] **7.7 string-intrinsic capacity gates** — currently hardcoded `True`; should read the per-statement flag. Now a one-liner via `effective_flag('RANGECK', stmt)` after tonight's patch.
+- [x] **7.7 string-intrinsic capacity gates** — currently hardcoded `True`; should read the per-statement flag. Now a one-liner via `effective_flag('RANGECK', stmt)` after tonight's patch.
+  - CLOSED as already-implemented: the premise (from the stale §9.5 note) was
+    wrong — per-statement gating via `effective_rangeck` already existed and
+    works, including the CLI override. Audit added 7 pinning tests and fixed
+    one real crash: `INSERT` under `$RANGECK-` died on a `None` end-block in
+    `builtin_insert`. See the CORRECTION under §9.5. `[OBSERVED]`
 - [ ] **Codegen for the plumbed-but-inert check flags** — INDEXCK, MATHCK, NILCK, STACKCK, INITCK reach codegen but no checks are emitted; CLI help now says so. Implement (or formally close as out-of-scope) per flag.
 - [ ] **`RESET` implicit first GET** — deferred in the §8 amendment (current component left unfilled).
 - [ ] **`EOF`/`EOLN` predicates and TEXT line-marker semantics** — deferred at §8.4.
