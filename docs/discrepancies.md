@@ -184,3 +184,85 @@
 - **Cross-references:** checklist 9.8 / boolean WRITE; latent defect found during campaign drafting
 - **Severity:** high (user-visible formatting bug)
 - **Follow-up:** fix BOOLEAN output lowering to match vintage text formatting
+
+## Notes — AGREE-REJECT cases from t021-t022
+- t021.pas — `EOL` is a ghost: both compilers reject it as an undefined identifier / unknown expression token. No runtime, just dead air.
+- t022.pas — `READSET` with `['A'..'Z']` dies the same way on both sides: the set constructor there isn't a character-set literal the vintage pas1 wants, and modern agrees in its own bureaucratic way.
+- t023.pas — ASSIGN(f, CHR(0)) temp file round-trip (`42`) — AGREE-ACCEPT
+
+## D-024 — formatted WRITE on file in inspection mode
+- **Probe:** t024.pas (`RESET(f); WRITELN('BEFORE'); WRITELN(f, 'BBB'); WRITELN('AFTER'); ...`)
+- **Behavior targeted:** Formatted WRITE while a file is open in inspection/read mode
+- **Class:** OUTPUT-DIFF
+- **Vintage (1981):** printed `BEFORE` then runtime error `? Error: Operation error in file T024.DAT` / `Error Code 1104` [OBSERVED]
+- **Modern (reimplementation):** aborted with `file runtime: WRITE requires REWRITE/write mode` [OBSERVED]
+- **Adjudication:** both side against write-through, but vintage uses the old file-operation error 1104 while modern throws its own mode-enforcement message [OBSERVED]
+- **Cross-references:** checklist file runtime semantics; mode enforcement
+- **Severity:** medium (diagnostic mismatch on write-mode violation)
+- **Follow-up:** consider aligning error code/message if vintage fidelity is desired
+
+## D-025 — final line marker appended at CLOSE
+- **Probe:** t025.pas (`WRITE(f, 'X'); CLOSE(f); RESET(f); READ(f, c); WRITELN(c); IF EOLN(f)...`)
+- **Behavior targeted:** Whether CLOSE appends a final TEXT line marker after a WRITE-without-WRITELN
+- **Class:** AGREE-ACCEPT
+- **Vintage (1981):** printed `X`, `L`, `E` [OBSERVED]
+- **Modern (reimplementation):** printed `X`, `L`, `E` [OBSERVED]
+- **Adjudication:** the manual's CLOSE-marker claim is confirmed on vintage hardware; both runtimes agree on the observable text semantics [OBSERVED]
+- **Cross-references:** TEXT line-marker checklist; manual close-marker note
+- **Severity:** baseline
+- **Follow-up:** none
+- t026.pas — type-prefixed set constructor `COLORS [RED, BLUE]` — AGREE-REJECT-ish: vintage pas1 only warned and likely accepted, while modern type-check rejected `Cannot index non-array type SET OF COLOR`. Needs a rerun if we want to settle whether this is a true ACCEPT/REJECT split or just a compile-time warning path.
+- t026.pas — settled rerun: type-prefixed set constructor `COLORS [RED, BLUE]` is ACCEPT/REJECT, not AGREE-REJECT. Vintage pas1 accepted (warnings only), linked, and running the program printed `R`; modern type-check still rejects `Cannot index non-array type SET OF COLOR`.
+
+## Notes — vintage warnings seen in earlier probes
+- t021.pas — vintage pas1 rejected `EOL` with `Unknown Identifier In Expression Assumed Zero`, and the listing included a warning-style caret trail rather than a clean hard-stop. Worth remembering: the old compiler complains like a smoker, then still tells you exactly where it choked.
+- t022.pas — vintage pas1 rejected `READSET(f, l, ['A'..'Z'])` with `Character Set Expected` after showing the source positions; again, warning-style diagnostics around the fatal parse error.
+- t024.pas — vintage pas1 compiled successfully but emitted 3 warnings (`Assumed OUTPUT`) on the `WRITELN` calls before the runtime `Error Code 1104` at execution.
+- t025.pas — vintage pas1 compiled successfully but emitted 5 warnings (`Assumed OUTPUT`) around the `WRITELN`/`READLN` lines before running and printing `X / L / E`.
+- t026.pas — vintage pas1 compiled successfully with 2 warnings (`Assumed OUTPUT`) and then linked/run printed `R`; the earlier “AGREE-REJECT-ish” note was wrong, but the warnings were real and are now recorded.
+- t027.pas — RETYPE round-trip and size-mismatch acceptance (`3` / `65`) — AGREE-ACCEPT
+- t028.pas — CASE no-match under default $RANGECK: vintage runtime error `No CASE Value Matches Selector` / `2050` after `BEFORE`, while modern falls through and prints `BEFORE` / `AFTER` — OUTPUT-DIFF
+
+## D-028 — CASE no-match under default $RANGECK
+- **Probe:** t028.pas (`n := 5; CASE n OF 1: WRITELN('ONE'); 2: WRITELN('TWO') END; WRITELN('AFTER')`)
+- **Behavior targeted:** Default CASE no-match behavior with no `OTHERWISE`
+- **Class:** OUTPUT-DIFF
+- **Vintage (1981):** printed `BEFORE` and then runtime error `? Error: No CASE Value Matches Selector` / `Error Code 2050` [OBSERVED]
+- **Modern (reimplementation):** printed `BEFORE` and `AFTER` [OBSERVED]
+- **Adjudication:** vintage traps the unmatched CASE selector under the default range-checking model; modern falls through silently, which is the behavior mismatch the probe was after [OBSERVED]
+- **Cross-references:** checklist/runtime CASE semantics; manual note around `RANGECK` and CASE failure
+- **Severity:** medium (observable control-flow divergence)
+- **Follow-up:** decide whether modern should raise the vintage CASE error or keep fall-through semantics
+
+## D-021 — EOL identifier rejection
+- **Probe:** t021.pas (`WRITELN(ORD(EOL))`)
+- **Behavior targeted:** Predeclared `EOL` identifier availability
+- **Class:** AGREE-REJECT
+- **Vintage (1981):** rejected at pas1 with `Unknown Identifier In Expression Assumed Zero` [OBSERVED]
+- **Modern (reimplementation):** rejected at typecheck with `Undefined variable: EOL` [OBSERVED]
+- **Adjudication:** both compilers agree that `EOL` is not a usable expression-level identifier here; the vintage diagnostic is just the old-school bark [OBSERVED]
+- **Cross-references:** checklist around `EOL` / `EOF` / `EOLN`; identifier-table note
+- **Severity:** low (same verdict, different wording)
+- **Follow-up:** none
+
+## D-022 — READSET character-set literal rejection
+- **Probe:** t022.pas (`READSET(f, l, ['A'..'Z'])`)
+- **Behavior targeted:** READSET set-constructor form
+- **Class:** AGREE-REJECT
+- **Vintage (1981):** rejected at pas1 with `Character Set Expected` [OBSERVED]
+- **Modern (reimplementation):** rejected at typecheck with `Cannot index non-array type SET OF COLOR` [OBSERVED]
+- **Adjudication:** both compilers reject the probe; the source uses a set form neither side accepts in this position [OBSERVED]
+- **Cross-references:** manual 12-31; checklist READSET notes
+- **Severity:** low (same verdict, different diagnostic path)
+- **Follow-up:** none
+
+## D-026 — type-prefixed set constructor `COLORS [RED, BLUE]`
+- **Probe:** t026.pas (`s := COLORS [RED, BLUE]; IF RED IN s THEN WRITELN('R'); IF GREEN IN s THEN WRITELN('G')`)
+- **Behavior targeted:** Type-prefixed set constructor acceptance
+- **Class:** ACCEPT/REJECT
+- **Vintage (1981):** accepted with 2 warnings (`Assumed OUTPUT`), linked, and ran; output `R` [OBSERVED]
+- **Modern (reimplementation):** rejected at typecheck with `Cannot index non-array type SET OF COLOR` [OBSERVED]
+- **Adjudication:** vintage accepts the constructor form and evaluates the set membership; modern does not implement this syntax [OBSERVED]
+- **Cross-references:** checklist 2.9; type-prefixed set constructor notes
+- **Severity:** medium (grammar/semantics gap)
+- **Follow-up:** decide whether to implement the type-prefixed set constructor or document as unsupported
