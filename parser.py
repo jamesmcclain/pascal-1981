@@ -259,7 +259,7 @@ class Parser:
             self.expect('COLON')
             type_expr = self.parse_type()
             self.expect('SEMICOLON')
-            decls.append(VarDecl(names, type_expr, attributes))
+            decls.append(VarDecl(names, type_expr, attributes, meta_flags=dict(self.current_flags())))
         return decls
 
     def parse_value_decl(self) -> List[ValueDecl]:

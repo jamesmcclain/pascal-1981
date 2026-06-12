@@ -108,6 +108,10 @@ class CodegenBase:
         # CLI flag overrides: maps flag name (upper) → forced bool.
         # A key absent from this dict means "use whatever the source says".
         self.force_flags: Dict[str, bool] = force_flags if force_flags is not None else {}
+        # Metacommand flag state of the innermost statement currently being
+        # lowered (set by codegen_stmt).  Expression-level runtime checks
+        # (INDEXCK, MATHCK, NILCK) read it via check_enabled().
+        self._stmt_meta: Optional[Dict[str, bool]] = None
         self._register_predeclared_externs()
         self._register_predeclared_files()
 
@@ -116,6 +120,32 @@ class CodegenBase:
         if self.verbose:
             import sys
             print(f'[codegen] {msg}', file=sys.stderr)
+
+    def check_enabled(self, flag: str) -> bool:
+        """Effective value of a runtime-check flag at the current lowering
+        point.  Priority: CLI force override > metacommand state of the
+        innermost enclosing statement > the manual's documented default.
+        """
+        if flag in self.force_flags:
+            return self.force_flags[flag]
+        if self._stmt_meta is not None and flag in self._stmt_meta:
+            return self._stmt_meta[flag]
+        from lexer import _ON_OFF_FLAGS
+        return _ON_OFF_FLAGS.get(flag, True)
+
+    def _emit_runtime_check(self, ok_cond: 'ir.Value', label: str) -> None:
+        """Emit a guarded runtime check: if ok_cond is false, call the
+        runtime error handler (abort) — same shape as the string capacity
+        guards.  The builder is left positioned in the ok block.
+        """
+        parent = self.builder.block.parent
+        ok_block = parent.append_basic_block(label + '_ok')
+        err_block = parent.append_basic_block(label + '_fail')
+        self.builder.cbranch(ok_cond, ok_block, err_block)
+        self.builder.position_at_end(err_block)
+        self.builder.call(self.runtime_error_func(), [])
+        self.builder.unreachable()
+        self.builder.position_at_end(ok_block)
 
     def _register_predeclared_files(self) -> None:
         """Declare INPUT and OUTPUT as real predeclared TEXT file handles."""

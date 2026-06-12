@@ -1754,3 +1754,147 @@ class TestStringCapacityGatesRespectRangeck(unittest.TestCase):
             src_off = f"PROGRAM P; VAR a: LSTRING(5); s: STRING(5); BEGIN {{$RANGECK-}} {call} END."
             self.assertGreaterEqual(self._guards(src_on), 1, call)
             self.assertEqual(self._guards(src_off), 0, call)
+
+
+class TestRuntimeCheckFlags(unittest.TestCase):
+    """$INDEXCK / $MATHCK / $NILCK / $INITCK codegen (manual metacommand
+    pages: INDEXCK/MATHCK/NILCK/STACKCK default +, INITCK default -).
+    The -32768 INITCK sentinel is widened to its 32-bit analogue
+    -2147483648 (INT32_MIN) for this implementation's INTEGER."""
+
+    def _ir(self, src: str, **kw) -> str:
+        from tests.support import parse_source
+        from codegen_llvm import compile_to_llvm
+        return compile_to_llvm(parse_source(src), **kw)
+
+    # ---------------- INDEXCK ----------------
+
+    IDX = ("PROGRAM P; VAR a: ARRAY[1..3] OF INTEGER; i: INTEGER; "
+           "BEGIN i := 2; a[i] := 1 END.")
+
+    def test_indexck_default_emits_guard(self):
+        self.assertIn('indexck_fail', self._ir(self.IDX))
+
+    def test_indexck_off_removes_guard(self):
+        src = self.IDX.replace('BEGIN', 'BEGIN {$INDEXCK-}')
+        self.assertNotIn('indexck_fail', self._ir(src))
+
+    def test_indexck_constant_in_range_skips_guard(self):
+        src = ("PROGRAM P; VAR a: ARRAY[1..3] OF INTEGER; "
+               "BEGIN a[2] := 1 END.")
+        self.assertNotIn('indexck_fail', self._ir(src))
+
+    @requires_exe
+    def test_indexck_aborts_out_of_bounds(self):
+        src = ("PROGRAM P; VAR a: ARRAY[1..3] OF INTEGER; i: INTEGER; "
+               "BEGIN i := 5; a[i] := 1 END.")
+        rc, _ = build_and_run(src)
+        self.assertNotEqual(rc, 0)
+
+    @requires_exe
+    def test_indexck_in_bounds_runs_clean(self):
+        rc, _ = build_and_run(self.IDX)
+        self.assertEqual(rc, 0)
+
+    # ---------------- MATHCK ----------------
+
+    ADD = "PROGRAM P; VAR x, y: INTEGER; BEGIN x := 1; y := x + 1 END."
+
+    def test_mathck_default_uses_overflow_intrinsic(self):
+        self.assertIn('sadd.with.overflow', self._ir(self.ADD))
+
+    def test_mathck_off_uses_plain_add(self):
+        src = self.ADD.replace('BEGIN', 'BEGIN {$MATHCK-}')
+        ir = self._ir(src)
+        self.assertNotIn('with.overflow', ir)
+
+    def test_mathck_word_uses_unsigned_intrinsic(self):
+        src = "PROGRAM P; VAR x, y: WORD; BEGIN x := 1; y := x + x END."
+        self.assertIn('uadd.with.overflow', self._ir(src))
+
+    def test_mathck_div_emits_zero_guard(self):
+        src = "PROGRAM P; VAR x, y: INTEGER; BEGIN y := 2; x := 4 DIV y END."
+        self.assertIn('mathck_div_fail', self._ir(src))
+
+    @requires_exe
+    def test_mathck_overflow_aborts(self):
+        src = ("PROGRAM P; VAR x: INTEGER; "
+               "BEGIN x := 2147483647; x := x + 1 END.")
+        rc, _ = build_and_run(src)
+        self.assertNotEqual(rc, 0)
+
+    @requires_exe
+    def test_mathck_off_overflow_wraps(self):
+        src = ("PROGRAM P; VAR x: INTEGER; BEGIN {$MATHCK-} "
+               "x := 2147483647; x := x + 1; WRITELN(x) END.")
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), '-2147483648')
+
+    @requires_exe
+    def test_mathck_div_by_zero_aborts(self):
+        src = ("PROGRAM P; VAR x, y: INTEGER; "
+               "BEGIN y := 0; x := 1 DIV y END.")
+        rc, _ = build_and_run(src)
+        self.assertNotEqual(rc, 0)
+
+    # ---------------- NILCK ----------------
+
+    DEREF = ("PROGRAM P; TYPE pi = ^INTEGER; VAR p: pi; x: INTEGER; "
+             "BEGIN p := NIL; x := p^ END.")
+
+    def test_nilck_default_emits_guard(self):
+        self.assertIn('nilck_fail', self._ir(self.DEREF))
+
+    def test_nilck_off_removes_guard(self):
+        src = self.DEREF.replace('BEGIN p', 'BEGIN {$NILCK-} p')
+        self.assertNotIn('nilck_fail', self._ir(src))
+
+    @requires_exe
+    def test_nilck_nil_deref_aborts(self):
+        rc, _ = build_and_run(self.DEREF)
+        self.assertNotEqual(rc, 0)
+
+    @requires_exe
+    def test_nilck_initck_sentinel_deref_aborts(self):
+        """With $INITCK+, an uninitialized pointer holds sentinel 1 and
+        dereferencing it must be caught by NILCK (manual: 'Uninitialized
+        (value of 1; only with $INITCK)')."""
+        src = ("PROGRAM P; {$INITCK+} TYPE pi = ^INTEGER; "
+               "VAR p: pi; x: INTEGER; BEGIN x := p^ END.")
+        rc, _ = build_and_run(src)
+        self.assertNotEqual(rc, 0)
+
+    # ---------------- INITCK ----------------
+
+    @requires_exe
+    def test_initck_integer_sentinel_is_int32_min(self):
+        src = "PROGRAM P; {$INITCK+} VAR x: INTEGER; BEGIN WRITELN(x) END."
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), '-2147483648')
+
+    @requires_exe
+    def test_initck_default_off_zero_init(self):
+        src = "PROGRAM P; VAR x: INTEGER; BEGIN WRITELN(x) END."
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), '0')
+
+    def test_initck_pointer_sentinel_requires_nilck(self):
+        """Pointer sentinel 1 is emitted only when $NILCK is also on."""
+        on = ("PROGRAM P; {$INITCK+} TYPE pi = ^INTEGER; VAR p: pi; "
+              "BEGIN END.")
+        off = ("PROGRAM P; {$INITCK+, $NILCK-} TYPE pi = ^INTEGER; VAR p: pi; "
+               "BEGIN END.")
+        self.assertIn('inttoptr', self._ir(on))
+        self.assertNotIn('inttoptr (i64 1', self._ir(off))
+
+    # ---------------- CLI overrides ----------------
+
+    def test_force_flags_override_for_new_checks(self):
+        ir_off = self._ir(self.IDX, force_flags={'INDEXCK': False})
+        self.assertNotIn('indexck_fail', ir_off)
+        ir_on = self._ir(self.ADD.replace('BEGIN', 'BEGIN {$MATHCK-}'),
+                         force_flags={'MATHCK': True})
+        self.assertIn('with.overflow', ir_on)

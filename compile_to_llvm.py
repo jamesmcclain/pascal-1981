@@ -42,28 +42,28 @@ def main() -> int:
     _flag_help = (
         'Force {name} check on/off, or use source metacommands (default).'
     )
-    # NOTE: codegen currently emits checks only for RANGECK (subrange and
-    # string-intrinsic capacity gates).  The other flags are fully plumbed
-    # (lexer -> token -> AST -> codegen.effective_flag) but no code reads
-    # them yet; the help text says so to avoid implying inert flags work.
-    _flag_help_inert = (
-        'Force {name} on/off (plumbed end-to-end, but codegen does not yet '
-        'emit this check; currently has no effect on generated code).'
+    # NOTE: STACKCK is accepted as a documented no-op: on this target the
+    # OS guard page already faults on stack overflow, and clang owns frame
+    # layout, so explicit entry probes would add cost without adding
+    # detection.  All other check flags are implemented in codegen.
+    _flag_help_noop = (
+        'Force {name} on/off (accepted for source compatibility; no-op on '
+        'this target — the OS guard page already detects stack overflow).'
     )
     parser.add_argument('--debug',   choices=['on', 'off', 'source'], default='source',
                         help=_flag_help.format(name='DEBUG (master: sets all sub-flags)'))
     parser.add_argument('--rangeck', choices=['on', 'off', 'source'], default='source',
                         help=_flag_help.format(name='RANGECK (subrange validity)'))
     parser.add_argument('--indexck', choices=['on', 'off', 'source'], default='source',
-                        help=_flag_help_inert.format(name='INDEXCK (array index bounds)'))
+                        help=_flag_help.format(name='INDEXCK (array index bounds)'))
     parser.add_argument('--mathck',  choices=['on', 'off', 'source'], default='source',
-                        help=_flag_help_inert.format(name='MATHCK (integer overflow / div-by-zero)'))
+                        help=_flag_help.format(name='MATHCK (integer overflow / div-by-zero)'))
     parser.add_argument('--nilck',   choices=['on', 'off', 'source'], default='source',
-                        help=_flag_help_inert.format(name='NILCK (nil pointer dereference)'))
+                        help=_flag_help.format(name='NILCK (nil pointer dereference)'))
     parser.add_argument('--stackck', choices=['on', 'off', 'source'], default='source',
-                        help=_flag_help_inert.format(name='STACKCK (stack overflow)'))
+                        help=_flag_help_noop.format(name='STACKCK (stack overflow)'))
     parser.add_argument('--initck',  choices=['on', 'off', 'source'], default='source',
-                        help=_flag_help_inert.format(name='INITCK (uninitialised variable detection)'))
+                        help=_flag_help.format(name='INITCK (uninitialised variable detection)'))
     args = parser.parse_args()
 
     source_file = args.source_file

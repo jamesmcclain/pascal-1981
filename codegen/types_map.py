@@ -268,6 +268,30 @@ class TypesMapMixin:
 
         return False, 256, False
 
+    def _array_bounds_or_none(self, type_expr) -> tuple:
+        """(low, high) for a genuine array type with constant-resolvable
+        bounds, else (None, None).  Unlike get_array_bounds, never guesses
+        — INDEXCK checks are emitted only against known declared bounds.
+        STRING/LSTRING are excluded (length-prefix convention, not array
+        bounds; their capacity is guarded by the RANGECK string gates)."""
+        t = self.resolve_type_alias(type_expr)
+        if hasattr(t, 'max_len'):
+            return None, None
+        if hasattr(t, 'index_range') and getattr(t, 'index_range', None) is not None:
+            try:
+                low = self.eval_const_expr(t.index_range.low)
+                high = self.eval_const_expr(t.index_range.high) if t.index_range.high is not None else low
+                if isinstance(low, int) and isinstance(high, int):
+                    return low, high
+            except Exception:
+                pass
+            return None, None
+        if hasattr(t, 'lower_bound') and hasattr(t, 'upper_bound'):
+            lo, hi = t.lower_bound, t.upper_bound
+            if isinstance(lo, int) and isinstance(hi, int):
+                return lo, hi
+        return None, None
+
     def resolve_designator_ptr(self, designator: Designator) -> ir.Value:
         """Resolve a designator to its LLVM pointer (handles arrays/selectors)."""
         symbol = self.scope.lookup(designator.name)
@@ -283,6 +307,24 @@ class TypesMapMixin:
             for selector in designator.selectors:
                 if selector.kind == 'INDEX':
                     index = self.codegen_expr(selector.index_or_field)
+                    # $INDEXCK (manual: default +, "bounds checking is
+                    # separate from other subrange checking"): emit
+                    # low <= idx <= high against the declared bounds.
+                    # Constant indices provably in range skip the check;
+                    # checks are emitted only when both bounds are known.
+                    low_b, high_b = self._array_bounds_or_none(cur_type)
+                    if (low_b is not None and high_b is not None
+                            and isinstance(index.type, ir.IntType)
+                            and self.check_enabled('INDEXCK')):
+                        const_idx = None
+                        try:
+                            const_idx = self.eval_const_expr(selector.index_or_field)
+                        except Exception:
+                            const_idx = None
+                        if not (isinstance(const_idx, int) and low_b <= const_idx <= high_b):
+                            ge = self.builder.icmp_signed('>=', index, ir.Constant(index.type, low_b))
+                            le = self.builder.icmp_signed('<=', index, ir.Constant(index.type, high_b))
+                            self._emit_runtime_check(self.builder.and_(ge, le), 'indexck')
                     # Pascal array indices are relative to the declared lower
                     # bound, but storage is allocated as [high-low+1 x elem]
                     # (0-based). Translate the index to a 0-based slot so that
@@ -326,6 +368,19 @@ class TypesMapMixin:
                     else:
                         # Pointer dereference
                         ptr = self.builder.load(ptr)
+                        # $NILCK (manual: default +): error on dereferencing
+                        # NIL (0) or — only with $INITCK — the uninitialized
+                        # sentinel (1).  The manual's odd-pointer and
+                        # free-block checks are 8086 heap-model artifacts
+                        # with no analog here (byte-aligned data makes odd
+                        # pointers legal); documented adaptation.
+                        if self.check_enabled('NILCK'):
+                            ptr_int = self.builder.ptrtoint(ptr, ir.IntType(64))
+                            ok = self.builder.icmp_unsigned('!=', ptr_int, ir.Constant(ir.IntType(64), 0))
+                            if self.check_enabled('INITCK'):
+                                not_sentinel = self.builder.icmp_unsigned('!=', ptr_int, ir.Constant(ir.IntType(64), 1))
+                                ok = self.builder.and_(ok, not_sentinel)
+                            self._emit_runtime_check(ok, 'nilck')
                         cur_type = getattr(base, 'base', None) or getattr(base, 'target_type', None)
         return ptr
 

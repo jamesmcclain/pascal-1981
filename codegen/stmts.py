@@ -55,6 +55,13 @@ class StmtsMixin:
 
     def codegen_stmt(self, stmt: Statement) -> None:
         """Codegen a statement."""
+        # Track the metacommand flag state for expression-level checks
+        # (INDEXCK, MATHCK, NILCK).  Statements that don't carry meta_flags
+        # (compound/control-flow wrappers) inherit the last state seen, which
+        # matches lexical flag scoping for straight-line code.
+        meta = getattr(stmt, 'meta_flags', None)
+        if meta is not None:
+            self._stmt_meta = meta
         self._log(f'stmt  {type(stmt).__name__}')
         if isinstance(stmt, CompoundStmt):
             self.codegen_stmt_list(stmt.stmts)

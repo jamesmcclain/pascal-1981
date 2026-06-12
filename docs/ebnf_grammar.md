@@ -545,7 +545,14 @@ io_data_param = expression [ ":" ( expression [ ":" expression ]
    (* $DEBUG+/- is a master switch: it sets ENTRY INDEXCK INITCK
       MATHCK NILCK RANGECK STACKCK to the same value.  Individual
       flags may still be overridden afterward in the same session.
-      $LINE+ automatically sets $ENTRY+ (manual §4-20). *)
+      $LINE+ automatically sets $ENTRY+ (manual §4-20).
+
+      Codegen status [OBSERVED]: RANGECK, INDEXCK, MATHCK, NILCK, and
+      INITCK emit real checks (see checklist; INITCK's -32768 sentinel
+      is widened to -2147483648 for 32-bit INTEGER).  STACKCK is a
+      documented no-op on this target (OS guard page).  The remaining
+      switches (BRAVE, ENTRY, GOTO, LINE, RUNTIME, WARN and the listing
+      flags) are state-tracked but have no codegen effect. *)
 
    INTEGER metacommands  (affect listing/output only, no codegen effect):
 
@@ -690,6 +697,7 @@ character = (* any printable ASCII character in the range 0x20–0x7E,
 | `file_type` — comment amended to separate vintage-toolchain verification (still blocked) from reimplementation runtime status (implemented, checklist §8) | Structural | Checklist Section 8 evidence |
 | `metacommand_comment` — new section documenting all 30 metacommands (Chapter 4): ON/OFF switches with defaults, INTEGER/STRING listing metacommands, typeless `$PUSH`/`$POP`/`$MESSAGE`/`$INCONST`, and `$IF`/`$THEN`/`$ELSE`/`$END` conditional compilation with nesting semantics | DOCUMENTED | Checklist §9.5; IBM Pascal manual Chapter 4 |
 | `io_data_param` — `P::N` now parsed and lowered on WRITE/WRITELN; comment updated (was: rejected by parser) | OBSERVED | Discrepancy D-002 differential probe (vintage accepts, output `        123.46`); manual 12-17 |
+| Metacommand codegen — $INDEXCK/$MATHCK/$NILCK/$INITCK now emit runtime checks; $STACKCK ruled a documented no-op; INITCK sentinel widened to INT32_MIN | OBSERVED | Manual metacommand pages (images, Chapter 4); checklist runtime-check item; TestRuntimeCheckFlags |
 
 ---
 

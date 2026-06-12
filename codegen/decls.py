@@ -175,6 +175,37 @@ class DeclsMixin:
                 # the symbolic name of a bare member literal (checklist 9.8).
                 self.enum_member_names[member.upper()] = list(decl.type_expr.values)
 
+    def _initck_sentinel(self, decl: VarDecl, llvm_type) -> Optional[ir.Constant]:
+        """$INITCK sentinel constant for a scalar variable, or None.
+
+        Manual: "set the value of all uninitialized integers to -32768 and
+        uninitialized pointers to 1 (if $NILCK is on)" (default -).  -32768
+        is the 16-bit INTEGER minimum; the width analogue for this 32-bit
+        INTEGER is -2147483648 (INT32_MIN).  Per the manual, VALUE-section
+        variables, record variant fields, and super-array components are
+        not covered; this implementation initializes scalar INTEGERs and
+        pointers (the two classes the manual names) and leaves aggregates
+        to their existing zero/blank initialization.
+        """
+        def flag(name: str) -> bool:
+            if name in self.force_flags:
+                return self.force_flags[name]
+            meta = getattr(decl, 'meta_flags', None)
+            if meta is not None and name in meta:
+                return meta[name]
+            from lexer import _ON_OFF_FLAGS
+            return _ON_OFF_FLAGS.get(name, True)
+
+        if not flag('INITCK'):
+            return None
+        resolved = self.resolve_type_alias(decl.type_expr)
+        if isinstance(llvm_type, ir.IntType) and llvm_type.width == 32 \
+                and not isinstance(resolved, EnumType):
+            return ir.Constant(llvm_type, -2147483648)
+        if isinstance(llvm_type, ir.PointerType) and flag('NILCK'):
+            return ir.Constant(ir.IntType(64), 1).inttoptr(llvm_type)
+        return None
+
     def codegen_var_decl(self, decl: VarDecl) -> None:
         """Codegen for VAR declaration."""
         llvm_type = self.llvm_type(decl.type_expr)
@@ -183,12 +214,15 @@ class DeclsMixin:
 
         # Check if the type is a string type
         is_str, max_len, is_lstring = self.get_string_type_info(decl.type_expr)
+        initck_const = self._initck_sentinel(decl, llvm_type)
 
         if self.builder and not is_static:
             # Local variable (inside a function) — allocate the aggregate inline
             for name in decl.names:
                 alloca = self.builder.alloca(llvm_type, name=name)
                 self.scope.define(name, alloca, decl.type_expr)
+                if initck_const is not None:
+                    self.builder.store(initck_const, alloca)
                 if isinstance(decl.type_expr, FileType) or (isinstance(decl.type_expr, NamedType) and decl.type_expr.name.upper() == 'TEXT'):
                     self._init_file_storage(alloca, decl.type_expr)
 
@@ -217,7 +251,7 @@ class DeclsMixin:
                         init_bytes = bytearray([0x20] * llvm_type.count)
                         global_var.initializer = ir.Constant(llvm_type, init_bytes)
                 else:
-                    global_var.initializer = self.zero_initializer(llvm_type)
+                    global_var.initializer = initck_const if initck_const is not None else self.zero_initializer(llvm_type)
 
                 self.scope.define(name, global_var, decl.type_expr)
 

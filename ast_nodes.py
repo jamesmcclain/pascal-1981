@@ -87,6 +87,8 @@ class VarDecl(ASTNode):
     names: List[str]
     type_expr: Type
     attributes: List[str]  # e.g., ['READONLY', 'STATIC']
+    # Metacommand flag state at the declaration ($INITCK/$NILCK read it).
+    meta_flags: Optional[Dict[str, bool]] = None
 
 
 @dataclass

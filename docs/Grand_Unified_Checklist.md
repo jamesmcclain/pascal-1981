@@ -938,7 +938,47 @@ Here's the de facto remaining work, pulled from the deferred notes inside closed
     works, including the CLI override. Audit added 7 pinning tests and fixed
     one real crash: `INSERT` under `$RANGECK-` died on a `None` end-block in
     `builtin_insert`. See the CORRECTION under §9.5. `[OBSERVED]`
-- [ ] **Codegen for the plumbed-but-inert check flags** — INDEXCK, MATHCK, NILCK, STACKCK, INITCK reach codegen but no checks are emitted; CLI help now says so. Implement (or formally close as out-of-scope) per flag.
+- [x] **Codegen for the plumbed-but-inert check flags** — INDEXCK, MATHCK, NILCK, STACKCK, INITCK reach codegen but no checks are emitted; CLI help now says so. Implement (or formally close as out-of-scope) per flag.
+  - DONE (manual metacommand pages provided as evidence, `[DOCUMENTED]`):
+    **$INDEXCK** (default +): array subscripts checked against declared
+    bounds (`low <= i <= high`) in `resolve_designator_ptr`; constant
+    indices provably in range emit no check; STRING/LSTRING excluded
+    (length-prefix convention; covered by RANGECK string gates). "Super
+    array indices" (manual remark) are out of scope until super arrays
+    are.
+    **$MATHCK** (default +): INTEGER (i32, signed) and WORD (i16,
+    unsigned) `+`/`-`/`*` lower to `llvm.{s,u}{add,sub,mul}.with.overflow`;
+    `DIV`/`MOD` get a divisor != 0 guard. ADAPTATION: the manual excludes
+    the exact -MAXINT-1 (#8000) result from detection — a 16-bit artifact
+    not reproduced; here all signed overflow including INT_MIN is caught.
+    The manual's note that Chapter-11 library routines always permit
+    overflow is honored trivially (intrinsics are runtime calls, not
+    compiler-expanded arithmetic).
+    **$NILCK** (default +): pointer dereference checked for NIL (0) and,
+    only when $INITCK is in effect, the uninitialized sentinel (1).
+    ADAPTATION: the manual's odd-pointer and free-block/out-of-range
+    checks are 8086 heap-model artifacts (valid x86-64 pointers may be
+    odd; no compiler-owned heap map) and are not reproduced.
+    **$INITCK** (default -): scalar INTEGER variables initialize to
+    -2147483648 — the INT32_MIN width analogue of the manual's -32768 —
+    and pointers to sentinel 1 when $NILCK is on, for locals and
+    globals/statics. Per the manual, VALUE-section variables, variant
+    fields, and super-array components are excluded; aggregates keep
+    their existing zero/blank initialization.
+    **$STACKCK** (default +): accepted as a documented no-op. RULING: on
+    this ELF/Linux target the OS guard page already faults on overflow
+    and clang owns frame layout, so explicit entry probes add cost
+    without adding detection.
+    Infrastructure: `codegen_stmt` tracks the innermost statement's
+    metacommand state (`_stmt_meta`); `check_enabled` resolves
+    CLI-force > statement state > manual default; `_emit_runtime_check`
+    is the shared guard emitter. CLI `--indexck/--mathck/--nilck/--initck`
+    now do real work; help text updated.
+    Proven by `tests.test_codegen.TestRuntimeCheckFlags` (20 tests:
+    IR-shape on/off/override for each flag plus native runs — OOB index
+    aborts, overflow aborts, off-mode wraps to -2147483648, div-by-zero
+    aborts, NIL and sentinel-1 deref abort, INITCK sentinel observed).
+    Full suite 429 tests OK. `[OBSERVED]`
 - [ ] **`RESET` implicit first GET** — deferred in the §8 amendment (current component left unfilled).
 - [ ] **`EOF`/`EOLN` predicates and TEXT line-marker semantics** — deferred at §8.4.
 - [ ] **Enum input parsing and `STRING(n)` input for READ** — the §9.8/§8.4 follow-ons.
