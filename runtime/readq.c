@@ -111,6 +111,24 @@ int pas_read_lstring(uint8_t * buf, int cap)
     return 0;
 }
 
+int pas_read_string(uint8_t * buf, int cap)
+{
+    /* stdin variant of pas_fread_string: fill up to cap chars, stop early
+     * at the line marker (pushed back), blank-pad the remainder. */
+    int ch = 0;
+    int n = 0;
+    while (n < cap && (ch = getchar()) != EOF && ch != '\n')
+        buf[n++] = (uint8_t) ch;
+    if (n < cap) {
+        if (ch == EOF)
+            die("unexpected EOF while reading string");
+        unread(ch);
+    }
+    while (n < cap)
+        buf[n++] = ' ';
+    return 0;
+}
+
 void pas_readln_skip(void)
 {
     int ch;

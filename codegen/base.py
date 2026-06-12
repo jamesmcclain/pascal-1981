@@ -259,6 +259,9 @@ class CodegenBase:
         fread_lstr = ir.Function(self.module, ir.FunctionType(ir.IntType(32), [fcb_ptr, ir.IntType(8).as_pointer(), ir.IntType(32)]), name='pas_fread_lstring')
         fread_lstr.linkage = 'external'
         self.scope.define('pas_fread_lstring', fread_lstr, None)
+        fread_str = ir.Function(self.module, ir.FunctionType(ir.IntType(32), [fcb_ptr, ir.IntType(8).as_pointer(), ir.IntType(32)]), name='pas_fread_string')
+        fread_str.linkage = 'external'
+        self.scope.define('pas_fread_string', fread_str, None)
         fread_skip = ir.Function(self.module, ir.FunctionType(ir.VoidType(), [fcb_ptr]), name='pas_freadln_skip')
         fread_skip.linkage = 'external'
         self.scope.define('pas_freadln_skip', fread_skip, None)

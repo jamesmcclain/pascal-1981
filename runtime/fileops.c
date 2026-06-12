@@ -470,6 +470,26 @@ int pas_fread_lstring(struct pas_file_fcb *f, uint8_t *buf, int cap) {
     return 0;
 }
 
+int pas_fread_string(struct pas_file_fcb *f, uint8_t *buf, int cap) {
+    /* READ into STRING(n): copy up to cap characters, stopping early at the
+     * line marker (which stays the current component, like the LSTRING
+     * reader); the remainder of the destination is blank-padded.  Unlike
+     * LSTRING, reading stops once the destination is full — the rest of the
+     * line is left unconsumed for subsequent READs.  [INFERRED] semantics;
+     * see checklist note. */
+    FILE *h = stream_for(f, 0);
+    int ch, n = 0;
+    while (n < cap && (ch = fcb_next_char(f, h)) != EOF && ch != '\n') {
+        buf[n++] = (uint8_t)ch;
+    }
+    if (n < cap) {
+        if (ch == EOF) die("runtime error: unexpected EOF while reading string");
+        fcb_unget_char(f, h, ch); /* line marker stays the current component */
+    }
+    while (n < cap) buf[n++] = ' ';
+    return 0;
+}
+
 void pas_freadln_skip(struct pas_file_fcb *f) {
     FILE *h = stream_for(f, 0);
     int ch;

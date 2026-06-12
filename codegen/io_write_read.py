@@ -218,15 +218,28 @@ class IoWriteReadMixin:
             call_args = ([file_fcb, ptr] if file_fcb is not None else [ptr])
         else:
             is_str, max_len, is_lstring = self.get_string_type_info(ty)
-            if not is_str or not is_lstring:
+            if not is_str:
                 type_label = ty_name or (getattr(ty, 'name', type(ty).__name__) if ty is not None else 'UNKNOWN')
                 raise CodegenError(f"READ/READLN cannot read a value of type {type_label}")
-            if file_fcb is not None:
-                fn = self.scope.lookup('pas_fread_lstring').llvm_value
-                call_args = [file_fcb, self.builder.bitcast(ptr, ir.IntType(8).as_pointer()), ir.Constant(ir.IntType(32), max_len)]
+            if is_lstring:
+                if file_fcb is not None:
+                    fn = self.scope.lookup('pas_fread_lstring').llvm_value
+                    call_args = [file_fcb, self.builder.bitcast(ptr, ir.IntType(8).as_pointer()), ir.Constant(ir.IntType(32), max_len)]
+                else:
+                    fn = self._read_helper('pas_read_lstring', ir.IntType(8).as_pointer(), [ir.IntType(32)])
+                    call_args = [self.builder.bitcast(ptr, ir.IntType(8).as_pointer()), ir.Constant(ir.IntType(32), max_len)]
             else:
-                fn = self._read_helper('pas_read_lstring', ir.IntType(8).as_pointer(), [ir.IntType(32)])
-                call_args = [self.builder.bitcast(ptr, ir.IntType(8).as_pointer()), ir.Constant(ir.IntType(32), max_len)]
+                # STRING(n): read up to n characters, stopping at the line
+                # marker (left unconsumed); the remainder is blank-padded.
+                # [INFERRED] from the dialect's STRING blank-pad convention
+                # and the LSTRING reader; vintage stop/consume behavior is a
+                # differential-probe candidate.
+                if file_fcb is not None:
+                    fn = self.scope.lookup('pas_fread_string').llvm_value
+                    call_args = [file_fcb, self.builder.bitcast(ptr, ir.IntType(8).as_pointer()), ir.Constant(ir.IntType(32), max_len)]
+                else:
+                    fn = self._read_helper('pas_read_string', ir.IntType(8).as_pointer(), [ir.IntType(32)])
+                    call_args = [self.builder.bitcast(ptr, ir.IntType(8).as_pointer()), ir.Constant(ir.IntType(32), max_len)]
         self.builder.call(fn, call_args)
 
     def _default_input_fcb(self) -> ir.Value:

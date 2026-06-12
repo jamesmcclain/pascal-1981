@@ -485,6 +485,10 @@ the biggest single chunk; expect it to need its own design pass.
     blank-pad semantics (currently rejected loudly), the WRITE-side `None` gate,
     or any broader REAL formatting beyond the documented default width/example.
     `[OBSERVED]`
+  - UPDATE: STRING(n) READ is now implemented (`pas_fread_string`/
+    `pas_read_string`, `TestStringNRead`; see the mini-checklist closure
+    note). Enum input remains open/`[UNVERIFIED]` pending a differential
+    probe. `[OBSERVED]`
 - [x] **8.3a — `WRITE`/`WRITELN` accept a whole file variable as a data argument.** `[OBSERVED]` **S**
   Still open. This item is the file-selector / whole-file-argument split, and
   should stay separate from 8.3's ordinary data-argument type checking.
@@ -1028,7 +1032,31 @@ Here's the de facto remaining work, pulled from the deferred notes inside closed
     treating it as one was over-indexing. No implementation, no probe
     required. If real-world vintage source is ever found *using* `EOL`,
     reopen with that program as the evidence. `[READ]`
-- [ ] **Enum input parsing and `STRING(n)` input for READ** — the §9.8/§8.4 follow-ons.
+- [x] **Enum input parsing and `STRING(n)` input for READ** — the §9.8/§8.4 follow-ons.
+  - SPLIT on evidence. **`STRING(n)` READ: DONE.** New runtime readers
+    `pas_fread_string` (file-directed, FCB-aware via `fcb_next_char` so the
+    RESET-pending component and CRLF translation are honored) and
+    `pas_read_string` (stdin), dispatched from `_emit_read_target`; the type
+    checker already permitted StringType, so the loud rejection was at the
+    codegen gate only. Semantics `[INFERRED]` from the dialect's STRING
+    blank-pad convention and the LSTRING reader: copy up to n chars, stop
+    early at the line marker (left as the current component, EOLN-visible),
+    blank-pad the remainder, and when the destination fills leave the rest
+    of the line unconsumed for subsequent READs. Whether the vintage runtime
+    instead consumes to end-of-line (as our LSTRING reader does) is a
+    differential-probe candidate. Behavior pinned by
+    `tests.test_runtime_fixes.TestStringNRead` (5 tests: exact fill, short
+    line + pad + EOLN, capacity-stop leaving DE readable, stdin path, CRLF
+    interaction). Full suite 441 tests OK. `[OBSERVED]` for the
+    implementation, `[INFERRED]` for fidelity.
+- [ ] **Enum input for READ** — split out and left open: no evidence in the
+  repo's manual notes that the dialect supports reading enumerated values
+  (standard Pascal does not), and implementing identifier-matching input
+  on a guess would be over-indexing. Current behavior — loud rejection at
+  type-check (`test_read_enum_rejected`) and codegen
+  (`test_read_non_string_fallthrough_raises_codegen_error`) — is the safe
+  default. Settles with one differential probe: feed the vintage compiler
+  `READ(c)` with enum `c` and observe accept/reject. `[UNVERIFIED]`
 - [ ] **Real TRAP/ERRS lowering** — deferred to the trapped-I/O item.
 - [ ] **Vintage differential probes for tonight's lexer decisions** — double-`$ELSE` handling and quote-awareness inside skipped `$IF` blocks are [UNVERIFIED] against the 1981 compiler; cheap t00x probes.
 - [ ] **`ORIGIN`/`PORT` attributes** — closed as intentionally out-of-scope (§9.7); listed only so the deferral stays visible.

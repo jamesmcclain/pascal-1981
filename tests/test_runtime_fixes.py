@@ -557,3 +557,77 @@ class TestDosCrLfTranslation(unittest.TestCase):
             rc, out = build_run_linked(src, ["fileops.c"])
             self.assertEqual(rc, 0)
             self.assertEqual(out, "cr\nlf\n")
+
+
+class TestStringNRead(unittest.TestCase):
+    """READ into STRING(n) (8.3 deferral closed; semantics [INFERRED]).
+
+    Modeled on the dialect's STRING blank-pad convention and the LSTRING
+    reader: copy up to n characters; stop early at the line marker (left as
+    the current component, so EOLN observes it); blank-pad the remainder;
+    when the destination fills, leave the rest of the line unconsumed.
+    Vintage stop/consume behavior is a differential-probe candidate.
+    """
+
+    def test_exact_fill_from_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "s.txt"
+            with open(path, 'w') as fh:
+                fh.write("ABCDE\n")
+            src = ("PROGRAM P; VAR f: TEXT; s: STRING(5); BEGIN "
+                   f"ASSIGN(f, '{path}'); RESET(f); "
+                   "READ(f, s); WRITELN(s) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "ABCDE\n")
+
+    def test_short_line_blank_pads(self):
+        """'AB' into STRING(5) yields 'AB   ' and EOLN is observable."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "s2.txt"
+            with open(path, 'w') as fh:
+                fh.write("AB\n")
+            src = ("PROGRAM P; VAR f: TEXT; s: STRING(5); BEGIN "
+                   f"ASSIGN(f, '{path}'); RESET(f); "
+                   "READ(f, s); "
+                   "IF EOLN(f) THEN WRITELN('eol'); "
+                   "WRITELN(s, '|') END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "eol\nAB   |\n")
+
+    def test_full_destination_leaves_rest_of_line(self):
+        """STRING(3) from 'ABCDE': first READ takes ABC, next chars are DE."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "s3.txt"
+            with open(path, 'w') as fh:
+                fh.write("ABCDE\n")
+            src = ("PROGRAM P; VAR f: TEXT; s: STRING(3); c1, c2: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); RESET(f); "
+                   "READ(f, s); READ(f, c1); READ(f, c2); "
+                   "WRITELN(s); WRITELN(c1); WRITELN(c2) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "ABC\nD\nE\n")
+
+    def test_stdin_path(self):
+        """The no-selector READ path (stdin) handles STRING(n) too."""
+        src = ("PROGRAM P; VAR s: STRING(4); BEGIN "
+               "READ(s); WRITELN(s, '|') END.")
+        rc, out = build_run_linked(src, ["fileops.c", "readq.c"], stdin="HI\n")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "HI  |\n")
+
+    def test_crlf_line_marker_stops_string_read(self):
+        """Interaction with CRLF translation: a DOS marker stops the fill."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "s4.txt"
+            with open(path, 'wb') as fh:
+                fh.write(b"AB\r\nC\r\n")
+            src = ("PROGRAM P; VAR f: TEXT; s: STRING(4); c: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); RESET(f); "
+                   "READ(f, s); READLN(f); READ(f, c); "
+                   "WRITELN(s, '|'); WRITELN(c) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "AB  |\nC\n")
