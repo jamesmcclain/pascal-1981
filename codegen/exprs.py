@@ -259,6 +259,42 @@ class ExprsMixin:
         else:
             raise CodegenError(f'Expression type {type(expr).__name__} not yet supported')
 
+    def _mathck_arith(self, op: str, left: 'ir.Value', right: 'ir.Value') -> 'ir.Value':
+        """Integer add/sub/mul with $MATHCK overflow detection.
+
+        Manual: "Detects INTEGER and WORD overflow" (default +).  INTEGER
+        (i32) uses the signed llvm.s*.with.overflow intrinsics; WORD (i16,
+        unsigned) uses the unsigned variants.  The manual's exclusion of
+        the exact -MAXINT-1 result (#8000) is a 16-bit two-pass-compiler
+        artifact and is not reproduced: here every signed overflow,
+        including INT_MIN, is detected.  When $MATHCK is off (or operand
+        shapes don't match a plain same-width integer op) this lowers to
+        the unchecked instruction, exactly as before.
+        """
+        plain = getattr(self.builder, op)
+        if not self.check_enabled('MATHCK'):
+            return plain(left, right)
+        if not (isinstance(left.type, ir.IntType) and left.type == right.type
+                and left.type.width in (16, 32)):
+            return plain(left, right)
+        signed = left.type.width == 32   # INTEGER; i16 WORD is unsigned
+        meth = getattr(self.builder, ('s' if signed else 'u') + op + '_with_overflow')
+        res = meth(left, right)
+        val = self.builder.extract_value(res, 0)
+        ovf = self.builder.extract_value(res, 1)
+        ok = self.builder.icmp_unsigned('==', ovf, ir.Constant(ir.IntType(1), 0))
+        self._emit_runtime_check(ok, 'mathck')
+        return val
+
+    def _mathck_div_guard(self, divisor: 'ir.Value') -> None:
+        """$MATHCK division-by-zero guard for DIV/MOD."""
+        if not self.check_enabled('MATHCK'):
+            return
+        if not isinstance(divisor.type, ir.IntType):
+            return
+        ok = self.builder.icmp_signed('!=', divisor, ir.Constant(divisor.type, 0))
+        self._emit_runtime_check(ok, 'mathck_div')
+
     def codegen_binop(self, expr: BinOp) -> ir.Value:
         """Codegen binary operation."""
         if expr.op in {'AND_THEN', 'OR_ELSE'}:
@@ -280,15 +316,21 @@ class ExprsMixin:
                 right = self.builder.sitofp(right, ir.DoubleType())
 
         if expr.op == 'PLUS':
-            return self.builder.fadd(left, right) if is_real else self.builder.add(left, right)
+            return self.builder.fadd(left, right) if is_real else self._mathck_arith('add', left, right)
         elif expr.op == 'MINUS':
-            return self.builder.fsub(left, right) if is_real else self.builder.sub(left, right)
+            return self.builder.fsub(left, right) if is_real else self._mathck_arith('sub', left, right)
         elif expr.op == 'MUL':
-            return self.builder.fmul(left, right) if is_real else self.builder.mul(left, right)
+            return self.builder.fmul(left, right) if is_real else self._mathck_arith('mul', left, right)
         elif expr.op == 'SLASH' or expr.op == 'DIV':
-            return self.builder.fdiv(left, right) if is_real else self.builder.sdiv(left, right)
+            if is_real:
+                return self.builder.fdiv(left, right)
+            self._mathck_div_guard(right)
+            return self.builder.sdiv(left, right)
         elif expr.op == 'MOD':
-            return self.builder.frem(left, right) if is_real else self.builder.srem(left, right)
+            if is_real:
+                return self.builder.frem(left, right)
+            self._mathck_div_guard(right)
+            return self.builder.srem(left, right)
         elif expr.op == 'AND':
             return self.builder.and_(left, right)
         elif expr.op == 'OR':

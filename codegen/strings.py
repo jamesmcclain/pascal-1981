@@ -249,8 +249,11 @@ class StringsMixin:
         if isinstance(args[1], (Identifier, Designator)) and self.get_string_type_info(getattr(self.scope.lookup(args[1].name), 'type_expr', None))[2]:
             len_ptr = self.builder.gep(dst_ptr, [zero, zero])
             self.builder.store(self.builder.trunc(new_len, ir.IntType(8)), len_ptr)
-        self.builder.branch(end_block)
-        self.builder.position_at_end(end_block)
+        # end_block is None when the capacity check is disabled ($RANGECK-);
+        # same pattern as the other string intrinsics.
+        if end_block is not None:
+            self.builder.branch(end_block)
+            self.builder.position_at_end(end_block)
 
     def builtin_delete(self, args: List[Expression]) -> None:
         dst_arg = args[0]

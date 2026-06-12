@@ -27,13 +27,41 @@ class StmtsMixin:
                 break
             self.codegen_stmt(stmt)
 
+    def effective_flag(self, flag: str, stmt: Statement) -> bool:
+        """Return the effective boolean value of a runtime-check flag.
+
+        Priority order:
+          1. CLI force_flags (explicit --flag on/off override),
+          2. the full metacommand state stamped onto the AST node by the
+             parser (stmt.meta_flags),
+          3. the legacy per-flag attribute (e.g. stmt.rangeck),
+          4. the manual's documented default for the flag (NOT a blanket
+             True — e.g. ENTRY and INITCK default off).
+        """
+        if flag in self.force_flags:
+            return self.force_flags[flag]
+        meta = getattr(stmt, 'meta_flags', None)
+        if meta is not None and flag in meta:
+            return meta[flag]
+        attr = getattr(stmt, flag.lower(), None)
+        if attr is not None:
+            return attr
+        from lexer import _ON_OFF_FLAGS
+        return _ON_OFF_FLAGS.get(flag, True)
+
     def effective_rangeck(self, stmt: Statement) -> bool:
-        if self.force_rangeck is not None:
-            return self.force_rangeck
-        return getattr(stmt, 'rangeck', True)
+        """Convenience wrapper for the RANGECK flag."""
+        return self.effective_flag('RANGECK', stmt)
 
     def codegen_stmt(self, stmt: Statement) -> None:
         """Codegen a statement."""
+        # Track the metacommand flag state for expression-level checks
+        # (INDEXCK, MATHCK, NILCK).  Statements that don't carry meta_flags
+        # (compound/control-flow wrappers) inherit the last state seen, which
+        # matches lexical flag scoping for straight-line code.
+        meta = getattr(stmt, 'meta_flags', None)
+        if meta is not None:
+            self._stmt_meta = meta
         self._log(f'stmt  {type(stmt).__name__}')
         if isinstance(stmt, CompoundStmt):
             self.codegen_stmt_list(stmt.stmts)

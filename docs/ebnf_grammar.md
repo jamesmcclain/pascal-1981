@@ -455,9 +455,12 @@ lstring_type = "LSTRING" "(" constant ")" ;    (* PACKED ARRAY [0..n] OF CHAR, i
    ("for later input format control") and are not accepted for BINARY
    files. An optional leading file argument selects the stream.
 
-   Reimplementation status (see checklist 8.3/8.3a): P, P:M, and P:M:N
-   are parsed and lowered on WRITE/WRITELN; P::N is rejected by the
-   parser, and READ-side M/N are not parsed. Known parser looseness:
+   Reimplementation status (see checklist 8.3/8.3a): P, P:M, P:M:N,
+   and P::N are parsed and lowered on WRITE/WRITELN (P::N closed via
+   discrepancy D-002: width omitted means the default field width — for
+   REAL a 14-character field, matching the vintage output
+   '        123.46' for 123.456::2 [OBSERVED]). READ-side M/N are not
+   parsed. Known parser looseness:
    the colon forms are currently accepted on EVERY call, not just the
    I/O procedures (see tests/fixtures/parser/judgment_calls/
    B_colon_args_any_call.pas); rejection of M/N on binary files is not
@@ -500,6 +503,103 @@ io_data_param = expression [ ":" ( expression [ ":" expression ]
 (* ═══════════════════════════════════════════════════════════════════
    LEXICAL DIRECTIVES AND HELPERS
    ═══════════════════════════════════════════════════════════════════ *)
+
+(* ───────────────────────────────────────────────────────────────────
+   METACOMMANDS  [DOCUMENTED]  (IBM Pascal manual Chapter 4)
+
+   Metacommands appear at the START of a brace or paren comment
+   (the first character after the comment opener must be "$").
+   A comment that begins with "$" is consumed entirely as a metacommand
+   comment; it is never passed to the Pascal parser as whitespace.
+
+   One or more metacommands may appear in a single comment, separated
+   by commas.  Blanks, tabs, and line ends between elements are ignored.
+
+   Syntax of a metacommand comment:
+
+     metacommand_comment =
+         ( "(*$" | "{$" )
+         metacommand { "," "$" metacommand }
+         ( "*)" | "}" ) ;
+
+     metacommand =
+         on_off_cmd
+       | int_cmd
+       | str_cmd
+       | push_cmd
+       | pop_cmd
+       | message_cmd
+       | inconst_cmd
+       | if_directive ;
+
+   ON/OFF switches  ("$NAME+", "$NAME-", "$NAME:n", or bare "$NAME"):
+
+     on_off_cmd = on_off_name [ "+" | "-" | ":" integer_constant ] ;
+
+     on_off_name =
+         "BRAVE"   | "DEBUG"   | "ENTRY"  | "GOTO"    | "INDEXCK"
+       | "INITCK"  | "LINE"    | "LIST"   | "MATHCK"  | "NILCK"
+       | "OCODE"   | "RANGECK" | "RUNTIME"| "STACKCK" | "SYMTAB"
+       | "WARN" ;
+
+   (* $DEBUG+/- is a master switch: it sets ENTRY INDEXCK INITCK
+      MATHCK NILCK RANGECK STACKCK to the same value.  Individual
+      flags may still be overridden afterward in the same session.
+      $LINE+ automatically sets $ENTRY+ (manual §4-20).
+
+      Codegen status [OBSERVED]: RANGECK, INDEXCK, MATHCK, NILCK, and
+      INITCK emit real checks (see checklist; INITCK's -32768 sentinel
+      is widened to -2147483648 for 32-bit INTEGER).  STACKCK is a
+      documented no-op on this target (OS guard page).  The remaining
+      switches (BRAVE, ENTRY, GOTO, LINE, RUNTIME, WARN and the listing
+      flags) are state-tracked but have no codegen effect. *)
+
+   INTEGER metacommands  (affect listing/output only, no codegen effect):
+
+     int_cmd = int_name [ ":" integer_constant ] ;
+
+     int_name =
+         "ERRORS" | "LINESIZE" | "PAGE" | "PAGEIF" | "PAGESIZE" | "SKIP" ;
+
+   STRING metacommands  (listing page headers, no codegen effect):
+
+     str_cmd = str_name ":" ( "'" { any_char } "'" | identifier ) ;
+
+     str_name = "SUBTITLE" | "TITLE" ;
+
+   Typeless metacommands:
+
+     push_cmd    = "PUSH" ;   (* save snapshot of all current flag values *)
+     pop_cmd     = "POP" ;    (* restore most-recently saved snapshot      *)
+     message_cmd = "MESSAGE" ":" "'" { any_char } "'" ;
+                              (* print text to stderr during compilation   *)
+     inconst_cmd = "INCONST" ":" identifier ;
+                              (* prompt user for a WORD constant value;
+                                 non-interactive builds use 0             *)
+
+   Conditional compilation  ($IF/$THEN/$ELSE/$END span multiple comments):
+
+     if_directive =
+         "IF" constant "THEN" ;   (* closes current comment; source text
+                                     follows until $ELSE or $END comment *)
+
+     else_directive = "ELSE" ;    (* in a comment by itself: {$ELSE}      *)
+     end_directive  = "END" ;     (* in a comment by itself: {$END}       *)
+
+   (* If constant > 0 the then-branch is compiled; otherwise it is
+      skipped at the character level before tokenisation (syntax errors
+      in skipped text are invisible to the parser).  Nesting is
+      supported: an inner $IF/$END pair inside a skipped block is
+      tracked by depth so the outer $END is never confused with an
+      inner one.  $ELSE and $END are the only metacommands recognised
+      inside a skipped block; all others are ignored.
+
+      constant: a literal integer, a $INCONST-defined identifier, or
+      an ON/OFF flag name (treated as 1 if on, 0 if off). *)
+
+   $INCLUDE is handled separately as include_directive (see below)
+   because its argument syntax differs.
+   ─────────────────────────────────────────────────────────────────── *)
 
 include_directive =
     ( "(*$INCLUDE:" | "{$INCLUDE:" )
@@ -595,6 +695,9 @@ character = (* any printable ASCII character in the range 0x20–0x7E,
 | `letter`, `digit`, `character`, `hex_digit`, `exponent` productions defined | ADDED (Pillar 1) | Primitives referenced throughout grammar but never defined |
 | `io_data_param` — new production for READ/WRITE field formatting (`P`, `P:M`, `P:M:N`, `P::N`) | DOCUMENTED | Manual 12-17 (line ~13473); previously recorded only in judgment_calls fixture comments |
 | `file_type` — comment amended to separate vintage-toolchain verification (still blocked) from reimplementation runtime status (implemented, checklist §8) | Structural | Checklist Section 8 evidence |
+| `metacommand_comment` — new section documenting all 30 metacommands (Chapter 4): ON/OFF switches with defaults, INTEGER/STRING listing metacommands, typeless `$PUSH`/`$POP`/`$MESSAGE`/`$INCONST`, and `$IF`/`$THEN`/`$ELSE`/`$END` conditional compilation with nesting semantics | DOCUMENTED | Checklist §9.5; IBM Pascal manual Chapter 4 |
+| `io_data_param` — `P::N` now parsed and lowered on WRITE/WRITELN; comment updated (was: rejected by parser) | OBSERVED | Discrepancy D-002 differential probe (vintage accepts, output `        123.46`); manual 12-17 |
+| Metacommand codegen — $INDEXCK/$MATHCK/$NILCK/$INITCK now emit runtime checks; $STACKCK ruled a documented no-op; INITCK sentinel widened to INT32_MIN | OBSERVED | Manual metacommand pages (images, Chapter 4); checklist runtime-check item; TestRuntimeCheckFlags |
 
 ---
 

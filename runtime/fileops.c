@@ -34,11 +34,37 @@ struct pas_file_fcb {
     FILE *handle;
     char *name;
     int filemode;
+    unsigned char trap;   /* F.TRAP — trapped-I/O switch (manual ch.12)  */
+    int errs;             /* F.ERRS — last trapped error code            */
 };
 
 static void die(const char *msg) {
     fprintf(stderr, "%s\n", msg);
     abort();
+}
+
+/* Trapped I/O (manual ch.12 File Field Values): when F.TRAP is set, an
+ * operational I/O error records a code in F.ERRS and the operation is
+ * abandoned instead of aborting; the program inspects and clears F.ERRS.
+ * Returns 1 when trapped (caller must bail out), aborts otherwise.
+ *
+ * Error codes are internal [INFERRED] — the vintage runtime's numeric
+ * codes are unknown (differential-probe candidate):
+ *   1 open/create failed   2 mode violation   3 GET past EOF
+ *   4 read failed          5 write failed
+ * Converted sites: RESET/REWRITE open failures, GET/PUT mode violations,
+ * GET-past-eof, and component read/write failures.  Structural errors
+ * (null FCB/buffer, bad ASSIGN arguments, stream_for mode aborts, the
+ * formatted-reader EOF/parse errors) still abort unconditionally; those
+ * remain future trap dispatch points if probes show the vintage runtime
+ * traps them too. */
+static int io_error(struct pas_file_fcb *f, int code, const char *msg) {
+    if (f && f->trap) {
+        f->errs = code;
+        return 1;
+    }
+    die(msg);
+    return 0; /* unreachable */
 }
 
 static size_t elem_size(struct pas_file_fcb *f) {
@@ -73,13 +99,53 @@ static void checked_buffer(struct pas_file_fcb *f) {
     if (!f || !f->buffer) die("file runtime: null buffer");
 }
 
+/* DOS CR/LF translation (checklist 8.4 deferral, now closed): vintage
+ * PC-DOS TEXT files mark line ends with "\r\n".  On input, a "\r\n" pair
+ * is folded into a single '\n' line marker so EOLN/READLN/F^ semantics
+ * match the manual on DOS-produced files; a bare '\r' (not followed by
+ * '\n') is passed through as ordinary data.  Output keeps the host's
+ * '\n' marker — this is a Linux-target adaptation, not DOS emulation.
+ * Binary FILE OF T never translates (component bytes are sacred). */
+static int text_getc(FILE *h) {
+    int ch = fgetc(h);
+    if (ch != '\r') return ch;
+    int next = fgetc(h);
+    if (next == '\n') return '\n';   /* fold CRLF into one marker */
+    if (next != EOF) ungetc(next, h);
+    return '\r';                      /* bare CR is data */
+}
+
 static void raw_get(struct pas_file_fcb *f, int allow_eof) {
     FILE *h = ensure_handle(f);
     checked_buffer(f);
-    if (current_mode(f) != MODE_READ) die("file runtime: GET requires RESET/read mode");
-    if (!allow_eof && is_eof(f)) die("file runtime: GET past eof");
+    if (current_mode(f) != MODE_READ) {
+        if (io_error(f, 2, "file runtime: GET requires RESET/read mode")) return;
+    }
+    if (!allow_eof && is_eof(f)) {
+        if (io_error(f, 3, "file runtime: GET past eof")) return;
+    }
 
-    size_t n = f->structure == STRUCT_TEXT ? 1 : elem_size(f);
+    if (f->structure == STRUCT_TEXT) {
+        int ch = text_getc(h);
+        if (ch == EOF) {
+            if (feof(h)) {
+                set_mode_flags(f, MODE_READ, 1, 0, 0);
+                f->touched = 0;
+                return;
+            }
+            if (io_error(f, 4, "file runtime: read failed")) {
+                set_mode_flags(f, MODE_READ, 1, 0, 0);
+                return;
+            }
+        }
+        int eoln = (ch == '\n');
+        *((unsigned char *)f->buffer) = eoln ? ' ' : (unsigned char)ch;
+        set_mode_flags(f, MODE_READ, 0, eoln, 0);
+        f->touched = 0;
+        return;
+    }
+
+    size_t n = elem_size(f);
     size_t got = fread(f->buffer, 1, n, h);
     if (got != n) {
         if (feof(h)) {
@@ -87,11 +153,12 @@ static void raw_get(struct pas_file_fcb *f, int allow_eof) {
             f->touched = 0;
             return;
         }
-        die("file runtime: read failed");
+        if (io_error(f, 4, "file runtime: read failed")) {
+            set_mode_flags(f, MODE_READ, 1, 0, 0);
+            return;
+        }
     }
-    int eoln = (f->structure == STRUCT_TEXT && *((unsigned char *)f->buffer) == '\n');
-    if (eoln) *((unsigned char *)f->buffer) = ' ';
-    set_mode_flags(f, MODE_READ, 0, eoln, 0);
+    set_mode_flags(f, MODE_READ, 0, 0, 0);
     f->touched = 0;
 }
 
@@ -121,7 +188,7 @@ static int fcb_next_char(struct pas_file_fcb *f, FILE *h) {
         f->touched = 0;
         return ch;
     }
-    int ch = fgetc(h);
+    int ch = (f->structure == STRUCT_TEXT) ? text_getc(h) : fgetc(h);
     if (ch == EOF) set_mode_flags(f, MODE_READ, 1, 0, 0);
     return ch;
 }
@@ -170,7 +237,9 @@ void pas_file_reset(struct pas_file_fcb *f) {
     if (!f) die("file runtime: null fcb");
     if (!f->handle && f->name) {
         f->handle = fopen(f->name, "r+b");
-        if (!f->handle) die("file runtime: open failed");
+        if (!f->handle) {
+            if (io_error(f, 1, "file runtime: open failed")) return;
+        }
         f->mode |= MODE_OWNS_HANDLE;
     }
     FILE *h = ensure_handle(f);
@@ -195,7 +264,10 @@ void pas_file_rewrite(struct pas_file_fcb *f) {
     f->mode &= ~MODE_OWNS_HANDLE;
     if (f->name) {
         f->handle = fopen(f->name, "w+b");
-        if (!f->handle) { perror(f->name ? f->name : "<unnamed>"); die("file runtime: create failed"); }
+        if (!f->handle) {
+            perror(f->name ? f->name : "<unnamed>");
+            if (io_error(f, 1, "file runtime: create failed")) return;
+        }
         f->mode &= ~MODE_TEMP;
     } else {
         f->handle = tmpfile();
@@ -210,17 +282,22 @@ void pas_file_rewrite(struct pas_file_fcb *f) {
 void pas_file_put(struct pas_file_fcb *f) {
     FILE *h = ensure_handle(f);
     checked_buffer(f);
-    if (current_mode(f) != MODE_WRITE) die("file runtime: PUT requires REWRITE/write mode");
+    if (current_mode(f) != MODE_WRITE) {
+        if (io_error(f, 2, "file runtime: PUT requires REWRITE/write mode")) return;
+    }
 
     size_t n = f->structure == STRUCT_TEXT ? 1 : elem_size(f);
-    if (fwrite(f->buffer, 1, n, h) != n) die("file runtime: write failed");
+    if (fwrite(f->buffer, 1, n, h) != n) {
+        if (io_error(f, 5, "file runtime: write failed")) return;
+    }
     int eoln = (f->structure == STRUCT_TEXT && *((unsigned char *)f->buffer) == '\n');
     set_mode_flags(f, MODE_WRITE, 1, eoln, 0);
     f->touched = 0;
 }
 
-/* NOTE: when DOS CR/LF translation lands (checklist 8.4 deferral), the
- * final-marker probe below must recognize "\r\n" as an existing marker. */
+/* CR/LF note: with text_getc translation in place, the final-marker probe
+ * below needs no change — a DOS file ending in "\r\n" has '\n' as its last
+ * byte, so the existing last-byte check already recognizes the marker. */
 static void append_final_text_marker_if_needed(struct pas_file_fcb *f) {
     if (!f || f->structure != STRUCT_TEXT || current_mode(f) != MODE_WRITE || !f->handle || (f->mode & MODE_STD)) return;
     FILE *h = f->handle;
@@ -435,6 +512,26 @@ int pas_fread_lstring(struct pas_file_fcb *f, uint8_t *buf, int cap) {
     fcb_unget_char(f, h, ch); /* line marker stays the current component */
     if (cap < 0) cap = 0;
     buf[0] = (uint8_t)(n < cap ? n : cap);
+    return 0;
+}
+
+int pas_fread_string(struct pas_file_fcb *f, uint8_t *buf, int cap) {
+    /* READ into STRING(n): copy up to cap characters, stopping early at the
+     * line marker (which stays the current component, like the LSTRING
+     * reader); the remainder of the destination is blank-padded.  Unlike
+     * LSTRING, reading stops once the destination is full — the rest of the
+     * line is left unconsumed for subsequent READs.  [INFERRED] semantics;
+     * see checklist note. */
+    FILE *h = stream_for(f, 0);
+    int ch, n = 0;
+    while (n < cap && (ch = fcb_next_char(f, h)) != EOF && ch != '\n') {
+        buf[n++] = (uint8_t)ch;
+    }
+    if (n < cap) {
+        if (ch == EOF) die("runtime error: unexpected EOF while reading string");
+        fcb_unget_char(f, h, ch); /* line marker stays the current component */
+    }
+    while (n < cap) buf[n++] = ' ';
     return 0;
 }
 

@@ -212,17 +212,20 @@ class TestReadWriteTypecheck(unittest.TestCase):
         self.assertFalse(bad_field.success)
         self.assertIn("File control block", " ".join(str(e) for e in bad_field.errors))
 
-    def test_fcb_trap_errs_rejected_on_file_variables(self):
-        """F.TRAP / F.ERRS on file variables are rejected at typecheck with a
-        'not yet supported' diagnostic (trapped I/O is unimplemented), instead
-        of typechecking and then crashing in codegen. Direct FCBFQQ record
-        variables keep working."""
+    def test_fcb_trap_errs_accepted_on_file_variables(self):
+        """F.TRAP / F.ERRS on file variables now typecheck (trapped I/O is
+        implemented): TRAP is BOOLEAN, ERRS is INTEGER. Direct FCBFQQ record
+        variables keep working.
+
+        HISTORY: this test originally asserted *rejection* with a 'not yet
+        supported' diagnostic, from the era when these fields had no codegen
+        lowering. Flipped (not deleted) when trapped I/O landed."""
         trap = typecheck_source("PROGRAM P; VAR f: TEXT; b: BOOLEAN; BEGIN b := f.TRAP END.")
-        self.assertFalse(trap.success)
-        self.assertIn("not yet supported", " ".join(str(e) for e in trap.errors))
+        self.assertTrue(trap.success, msg=" ".join(str(e) for e in trap.errors))
         errs = typecheck_source("PROGRAM P; VAR f: TEXT; BEGIN f.ERRS := 0 END.")
-        self.assertFalse(errs.success)
-        self.assertIn("not yet supported", " ".join(str(e) for e in errs.errors))
+        self.assertTrue(errs.success, msg=" ".join(str(e) for e in errs.errors))
+        wrong = typecheck_source("PROGRAM P; VAR f: TEXT; BEGIN f.TRAP := 3 END.")
+        self.assertFalse(wrong.success)  # TRAP is BOOLEAN, not INTEGER
         rec = typecheck_source("PROGRAM P; VAR b: FCBFQQ; BEGIN b.TRAP := TRUE; b.ERRS := 0 END.")
         self.assertTrue(rec.success, msg=" ".join(str(e) for e in rec.errors))
 

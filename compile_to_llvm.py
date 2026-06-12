@@ -28,7 +28,42 @@ def main() -> int:
         default=None,
         help='Output LLVM IR file to write to.')
     parser.add_argument('-v', '--verbose', action='store_true', help='Log each declaration/statement and print a full traceback on failure.')
-    parser.add_argument('--rangeck', choices=['on', 'off', 'source'], default='source', help='Force RANGECK checks on/off, or use source metacommands (default).')
+    # ----------------------------------------------------------------
+    # Runtime-check flag overrides
+    # Each flag follows the same tri-state convention:
+    #   on     — force the check on  (overrides source metacommands)
+    #   off    — force the check off (overrides source metacommands)
+    #   source — respect what the source says via $METACOMMAND (default)
+    #
+    # $DEBUG is a master switch: --debug on/off sets all sub-flags
+    # (ENTRY INDEXCK INITCK MATHCK NILCK RANGECK STACKCK) to the same
+    # value, but individual flags still override the master.
+    # ----------------------------------------------------------------
+    _flag_help = (
+        'Force {name} check on/off, or use source metacommands (default).'
+    )
+    # NOTE: STACKCK is accepted as a documented no-op: on this target the
+    # OS guard page already faults on stack overflow, and clang owns frame
+    # layout, so explicit entry probes would add cost without adding
+    # detection.  All other check flags are implemented in codegen.
+    _flag_help_noop = (
+        'Force {name} on/off (accepted for source compatibility; no-op on '
+        'this target — the OS guard page already detects stack overflow).'
+    )
+    parser.add_argument('--debug',   choices=['on', 'off', 'source'], default='source',
+                        help=_flag_help.format(name='DEBUG (master: sets all sub-flags)'))
+    parser.add_argument('--rangeck', choices=['on', 'off', 'source'], default='source',
+                        help=_flag_help.format(name='RANGECK (subrange validity)'))
+    parser.add_argument('--indexck', choices=['on', 'off', 'source'], default='source',
+                        help=_flag_help.format(name='INDEXCK (array index bounds)'))
+    parser.add_argument('--mathck',  choices=['on', 'off', 'source'], default='source',
+                        help=_flag_help.format(name='MATHCK (integer overflow / div-by-zero)'))
+    parser.add_argument('--nilck',   choices=['on', 'off', 'source'], default='source',
+                        help=_flag_help.format(name='NILCK (nil pointer dereference)'))
+    parser.add_argument('--stackck', choices=['on', 'off', 'source'], default='source',
+                        help=_flag_help_noop.format(name='STACKCK (stack overflow)'))
+    parser.add_argument('--initck',  choices=['on', 'off', 'source'], default='source',
+                        help=_flag_help.format(name='INITCK (uninitialised variable detection)'))
     args = parser.parse_args()
 
     source_file = args.source_file
@@ -64,8 +99,33 @@ def main() -> int:
 
         # Codegen
         print(f'Generating LLVM IR...', file=sys.stderr)
-        force_rangeck = None if args.rangeck == 'source' else (args.rangeck == 'on')
-        ir = compile_to_llvm(ast, verbose=verbose, source_file=source_file, force_rangeck=force_rangeck)
+        # Build force_flags dict from CLI args.  Only flags explicitly set
+        # to 'on' or 'off' (not 'source') enter the dict.
+        _DEBUG_SUBS = ('ENTRY', 'INDEXCK', 'INITCK', 'MATHCK', 'NILCK', 'RANGECK', 'STACKCK')
+        force_flags: dict[str, bool] = {}
+
+        # $DEBUG master: pre-populate sub-flags, then let individual args override.
+        if args.debug != 'source':
+            debug_val = (args.debug == 'on')
+            force_flags['DEBUG'] = debug_val
+            for sub in _DEBUG_SUBS:
+                force_flags[sub] = debug_val
+
+        # Individual flags (each overrides whatever $DEBUG may have set).
+        for flag_name, attr in (
+            ('RANGECK', 'rangeck'),
+            ('INDEXCK', 'indexck'),
+            ('MATHCK',  'mathck'),
+            ('NILCK',   'nilck'),
+            ('STACKCK', 'stackck'),
+            ('INITCK',  'initck'),
+        ):
+            val = getattr(args, attr)
+            if val != 'source':
+                force_flags[flag_name] = (val == 'on')
+
+        ir = compile_to_llvm(ast, verbose=verbose, source_file=source_file,
+                             force_flags=force_flags or None)
 
         # Output
         if output_file:

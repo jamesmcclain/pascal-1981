@@ -1615,13 +1615,14 @@ class PascalTypeChecker(TypeChecker):
                         if isinstance(current_type, FileType):
                             if field_name == 'MODE':
                                 current_type = EnumType(['SEQUENTIAL', 'TERMINAL', 'DIRECT'], name='FILEMODES')
-                            elif field_name in ('TRAP', 'ERRS'):
-                                # Documented FCBFQQ fields, but the trapped-I/O
-                                # runtime is not implemented; codegen has no
-                                # lowering for these on file variables. Reject
-                                # loudly here rather than crash in codegen.
-                                self.error(f"File field '{field_name}' is not yet supported on file variables (trapped I/O is unimplemented); use a FCBFQQ record variable", expr)
-                                return None
+                            elif field_name == 'TRAP':
+                                # Trapped I/O (manual ch.12 File Field Values):
+                                # F.TRAP is a BOOLEAN the program sets to make
+                                # I/O errors record into F.ERRS instead of
+                                # aborting.
+                                current_type = BOOLEAN_TYPE
+                            elif field_name == 'ERRS':
+                                current_type = INTEGER_TYPE
                             else:
                                 self.error(f"File control block has no field '{selector.index_or_field}'", expr)
                                 return None
@@ -1947,10 +1948,11 @@ class PascalTypeChecker(TypeChecker):
                     if isinstance(current_type, FileType):
                         if field_name == 'MODE':
                             current_type = EnumType(['SEQUENTIAL', 'TERMINAL', 'DIRECT'], name='FILEMODES')
-                        elif field_name in ('TRAP', 'ERRS'):
-                            # See expression-side note: reject pending trapped I/O.
-                            self.error(f"File field '{field_name}' is not yet supported on file variables (trapped I/O is unimplemented); use a FCBFQQ record variable", designator)
-                            return None
+                        elif field_name == 'TRAP':
+                            # Trapped I/O: assignable BOOLEAN (see expression side).
+                            current_type = BOOLEAN_TYPE
+                        elif field_name == 'ERRS':
+                            current_type = INTEGER_TYPE
                         else:
                             self.error(f"File control block has no field '{selector.index_or_field}'", designator)
                             return None

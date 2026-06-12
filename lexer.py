@@ -130,6 +130,55 @@ class LexerError(Exception):
     pass
 
 
+# ---------------------------------------------------------------------------
+# Metacommand tables  (IBM Pascal manual, Chapter 4)
+# ---------------------------------------------------------------------------
+
+# ON/OFF switches that are stamped onto every emitted token so the parser and
+# codegen can read the in-effect state at any source location.  Defaults are
+# per the manual (§4-10 … §4-35).
+_ON_OFF_FLAGS: dict[str, bool] = {
+    'BRAVE':   True,   # errors/warnings to display         (default +)
+    'DEBUG':   True,   # master runtime debug switch        (default +)
+    'ENTRY':   False,  # proc entry/exit for debugger       (default -)
+    'GOTO':    False,  # flag GOTO statements               (default -)
+    'INDEXCK': True,   # array index range check            (default +)
+    'INITCK':  False,  # initialise uninitialised variables (default -)
+    'LINE':    False,  # line-number calls for debugger     (default -)
+    'LIST':    True,   # source listing                     (default +)
+    'MATHCK':  True,   # integer overflow / div-by-zero     (default +)
+    'NILCK':   True,   # pointer dereference check          (default +)
+    'OCODE':   True,   # object-code listing                (default +)
+    'RANGECK': True,   # subrange validity                  (default +)
+    'RUNTIME': False,  # runtime error location mode        (default -)
+    'STACKCK': True,   # stack overflow check               (default +)
+    'SYMTAB':  True,   # symbol-table listing               (default +)
+    'WARN':    True,   # warnings                           (default +)
+}
+
+# $DEBUG master switch controls these sub-flags (manual §4-11).
+_DEBUG_SUB_FLAGS: frozenset[str] = frozenset(
+    {'ENTRY', 'INDEXCK', 'INITCK', 'MATHCK', 'NILCK', 'RANGECK', 'STACKCK'}
+)
+
+# INTEGER metacommands (listing/output — no semantic effect on codegen).
+# Defaults from the manual where stated.
+_INT_META_DEFAULTS: dict[str, int] = {
+    'ERRORS':   25,
+    'LINESIZE': 79,
+    'PAGE':      1,
+    'PAGEIF':    0,
+    'PAGESIZE': 53,
+    'SKIP':      0,
+}
+
+# STRING metacommands (listing/output — no semantic effect on codegen).
+_STR_META_DEFAULTS: dict[str, str] = {
+    'SUBTITLE': '',
+    'TITLE':    '',
+}
+
+
 class Lexer:
 
     def __init__(self, source: str):
@@ -138,7 +187,15 @@ class Lexer:
         self.line = 1
         self.column = 1
         self.length = len(source)
-        self.meta_flags: dict[str, bool] = {'RANGECK': True}
+        # ON/OFF flags stamped onto every token (parser/codegen read these).
+        self.meta_flags: dict[str, bool] = dict(_ON_OFF_FLAGS)
+        # Integer and string metacommand values (used only at compile time).
+        self._meta_int: dict[str, int] = dict(_INT_META_DEFAULTS)
+        self._meta_str: dict[str, str] = dict(_STR_META_DEFAULTS)
+        # PUSH/POP stack: each entry is a snapshot of (meta_flags, _meta_int, _meta_str).
+        self._flag_stack: list[tuple[dict, dict, dict]] = []
+        # $INCONST identifiers (integer meta-constants usable in $IF conditions).
+        self._meta_consts: dict[str, int] = {}
 
     def current(self) -> str:
         return self.source[self.pos] if self.pos < self.length else ''
@@ -213,33 +270,340 @@ class Lexer:
             return self.emit('INCLUDE_DIRECTIVE', filename, filename, line, column)
         return None
 
-    def parse_metacommand_comment(self, closer: str) -> None:
-        self.advance()  # consume '$'
-        while True:
-            self.skip_whitespace()
-            name_start = self.pos
-            while self.current().isalpha():
-                self.advance()
-            name = self.source[name_start:self.pos].upper()
-            if not name:
-                break
-            if name == 'RANGECK':
-                self.skip_whitespace()
-                if self.current() in '+-':
-                    self.meta_flags['RANGECK'] = (self.current() == '+')
-                    self.advance()
-                else:
-                    self.meta_flags['RANGECK'] = True
-            self.skip_whitespace()
-            if self.current() == ',':
-                self.advance()
-                continue
-            break
+    # ------------------------------------------------------------------
+    # Metacommand helpers
+    # ------------------------------------------------------------------
+
+    def _read_meta_name(self) -> str:
+        """Read an identifier from current position (upper-cased)."""
+        start = self.pos
+        while self.current() and (self.current().isalpha() or self.current().isdigit() or self.current() == '_'):
+            self.advance()
+        return self.source[start:self.pos].upper()
+
+    def _consume_to(self, closer: str) -> None:
+        """Advance past the next occurrence of `closer`."""
         while self.current() and not self.startswith(closer):
             self.advance()
         if not self.current():
             raise LexerError(f"Unterminated comment at line {self.line}, column {self.column}")
         self.advance(len(closer))
+
+    def _eval_meta_const(self, token: str) -> int:
+        """Evaluate a metacommand constant: integer literal or $INCONST name.
+        Identifiers that match an ON/OFF flag return 1 if the flag is on.
+        Returns 0 for unknown identifiers (treats as false).
+        """
+        if not token:
+            return 0
+        try:
+            return int(token)
+        except ValueError:
+            upper = token.upper()
+            if upper in self._meta_consts:
+                return self._meta_consts[upper]
+            if upper in self.meta_flags:
+                return 1 if self.meta_flags[upper] else 0
+            return 0
+
+    def _skip_source_block(self, current_closer: str, stop_at_else: bool) -> str:
+        """Skip a conditional source block, tracking $IF nesting.
+
+        Closes the current metacommand comment (advances past `current_closer`),
+        then scans forward until a matching $ELSE (if stop_at_else) or $END at
+        depth 1 is found.
+
+        Returns 'ELSE' or 'END'.
+        Nested $IF/$END pairs increment/decrement depth so inner blocks are
+        skipped atomically.
+
+        When stop_at_else is False (skipping a completed true-branch forward
+        to $END), a depth-1 $ELSE is ignored rather than terminating the skip,
+        so stray or duplicate $ELSE markers cannot leak text into the parser.
+
+        String literals ('...') in the skipped text are honored: a comment
+        opener inside a quoted string does not start a comment, so e.g.
+        x := '{' inside a skipped block cannot derail $IF/$END tracking.
+        """
+        self._consume_to(current_closer)   # close the comment we're in
+        depth = 1
+        while self.current():
+            if self.current() == "'":
+                # Skip a string literal verbatim; doubled '' quotes inside a
+                # string are naturally handled as two adjacent literals.
+                self.advance()
+                while self.current() and self.current() != "'":
+                    self.advance()
+                if self.current() == "'":
+                    self.advance()
+            elif self.startswith('(*') or self.current() == '{':
+                is_paren = self.startswith('(*')
+                inner_closer = '*)' if is_paren else '}'
+                self.advance(2 if is_paren else 1)
+                if self.current() == '$':
+                    self.advance()         # consume '$'
+                    self.skip_whitespace()
+                    tag = self._read_meta_name()
+                    if tag == 'IF':
+                        # Nested $IF: scan forward in this comment for $THEN,
+                        # then increment depth.
+                        while self.current() and not self.startswith(inner_closer):
+                            if self.current().isalpha():
+                                word_start = self.pos
+                                while self.current().isalpha():
+                                    self.advance()
+                                if self.source[word_start:self.pos].upper() == 'THEN':
+                                    break
+                            else:
+                                self.advance()
+                        depth += 1
+                        self._consume_to(inner_closer)
+                    elif tag == 'END' and depth == 1:
+                        self._consume_to(inner_closer)
+                        return 'END'
+                    elif tag == 'ELSE' and depth == 1 and stop_at_else:
+                        self._consume_to(inner_closer)
+                        return 'ELSE'
+                    elif tag == 'END':
+                        depth -= 1
+                        self._consume_to(inner_closer)
+                    else:
+                        self._consume_to(inner_closer)
+                else:
+                    self._consume_to(inner_closer)
+            else:
+                self.advance()
+        raise LexerError("Unterminated $IF: missing $END")
+
+    # ------------------------------------------------------------------
+    # Main metacommand dispatcher
+    # ------------------------------------------------------------------
+
+    def parse_metacommand_comment(self, closer: str) -> None:
+        """Parse and act on one or more comma-separated metacommands.
+
+        Called after the comment-opener has been consumed and '$' is the
+        current character.  Advances past `closer` before returning.
+
+        Tiers (IBM Pascal manual, Chapter 4):
+          Tier 1 – listing/output: accepted and silently ignored.
+          Tier 2 – ON/OFF runtime checks: stored in self.meta_flags.
+          Tier 3 – conditional compilation ($IF/$PUSH/$POP/$MESSAGE/$INCONST).
+        """
+        self.advance()  # consume '$'
+
+        while True:
+            self.skip_whitespace()
+            if not self.current() or self.startswith(closer):
+                break
+            if not (self.current().isalpha() or self.current() == '_'):
+                break
+
+            name = self._read_meta_name()
+            self.skip_whitespace()
+
+            # ── Tier 3: conditional compilation ────────────────────────
+
+            if name == 'IF':
+                # Syntax: $IF constant $THEN
+                # Read the constant token (integer literal or identifier).
+                const_token = ''
+                if self.current().isdigit():
+                    start = self.pos
+                    while self.current().isdigit():
+                        self.advance()
+                    const_token = self.source[start:self.pos]
+                elif self.current() == '-' and self.peek().isdigit():
+                    start = self.pos
+                    self.advance()  # consume '-'
+                    while self.current().isdigit():
+                        self.advance()
+                    const_token = self.source[start:self.pos]
+                elif self.current().isalpha() or self.current() == '_':
+                    const_token = self._read_meta_name()
+                self.skip_whitespace()
+                # Expect $THEN within the same comment.
+                if self.current() == '$':
+                    self.advance()
+                    self.skip_whitespace()
+                    kw = self._read_meta_name()
+                    if kw != 'THEN':
+                        # Malformed; absorb the rest of the comment silently.
+                        self._consume_to(closer)
+                        return
+                # Evaluate condition.
+                cond = self._eval_meta_const(const_token)
+                if cond <= 0:
+                    # False branch: skip source to $ELSE or $END.
+                    result = self._skip_source_block(closer, stop_at_else=True)
+                    if result == 'END':
+                        return   # no else-branch; done
+                    # result == 'ELSE': tokenize continues normally into else-branch;
+                    # the eventual {$END} comment will be a no-op.
+                else:
+                    # True branch: close comment and keep tokenizing.
+                    # When we hit {$ELSE}, we skip to $END.
+                    # When we hit {$END}, it's a no-op.
+                    self._consume_to(closer)
+                return
+
+            if name == 'ELSE':
+                # Reached during the true branch of an $IF.
+                # Skip source forward to the matching $END.
+                self._skip_source_block(closer, stop_at_else=False)
+                return
+
+            if name == 'END':
+                # End-marker for a completed $IF block.  No-op.
+                self._consume_to(closer)
+                return
+
+            if name == 'PUSH':
+                self._flag_stack.append((
+                    dict(self.meta_flags),
+                    dict(self._meta_int),
+                    dict(self._meta_str),
+                ))
+                # PUSH is typeless; no argument to consume.
+
+            elif name == 'POP':
+                if self._flag_stack:
+                    saved_flags, saved_int, saved_str = self._flag_stack.pop()
+                    self.meta_flags.update(saved_flags)
+                    self._meta_int.update(saved_int)
+                    self._meta_str.update(saved_str)
+                # Silently ignore POP on an empty stack (matches lenient original).
+
+            elif name == 'MESSAGE':
+                # $MESSAGE: 'text'  — print to stderr during compilation.
+                if self.current() == ':':
+                    self.advance()
+                    self.skip_whitespace()
+                if self.current() == "'":
+                    self.advance()
+                    msg_start = self.pos
+                    while self.current() and self.current() != "'":
+                        self.advance()
+                    msg = self.source[msg_start:self.pos]
+                    if self.current() == "'":
+                        self.advance()
+                    print(f"[Pascal] {msg}", file=sys.stderr)
+
+            elif name == 'INCONST':
+                # $INCONST: identifier  — prompt for a WORD constant.
+                # Non-interactive build: print a notice and use 0.
+                if self.current() == ':':
+                    self.advance()
+                    self.skip_whitespace()
+                ident = ''
+                if self.current().isalpha() or self.current() == '_':
+                    ident = self._read_meta_name()
+                if ident:
+                    print(f"[Pascal] $INCONST: '{ident}' — non-interactive build, using 0",
+                          file=sys.stderr)
+                    self._meta_consts[ident] = 0
+
+            # ── Tier 1 / Tier 2: flag and listing metacommands ──────────
+
+            elif name in _ON_OFF_FLAGS:
+                # ON/OFF switch: +, -, :n, or bare (treat bare as +).
+                value: bool
+                if self.current() == '+':
+                    self.advance()
+                    value = True
+                elif self.current() == '-':
+                    self.advance()
+                    value = False
+                elif self.current() == ':':
+                    self.advance()
+                    self.skip_whitespace()
+                    num_start = self.pos
+                    if self.current() in '+-':
+                        self.advance()
+                    while self.current().isdigit():
+                        self.advance()
+                    try:
+                        value = int(self.source[num_start:self.pos]) > 0
+                    except ValueError:
+                        value = True
+                else:
+                    value = True  # bare name = enable
+
+                self.meta_flags[name] = value
+
+                # $DEBUG couples to its sub-flags (manual §4-11).
+                if name == 'DEBUG':
+                    for sub in _DEBUG_SUB_FLAGS:
+                        self.meta_flags[sub] = value
+
+                # $LINE+ implies $ENTRY+ (manual §4-20).
+                if name == 'LINE' and value:
+                    self.meta_flags['ENTRY'] = True
+
+            elif name in _INT_META_DEFAULTS:
+                # Integer metacommand: consume optional :n.
+                if self.current() == ':':
+                    self.advance()
+                    self.skip_whitespace()
+                    num_start = self.pos
+                    if self.current() in '+-':
+                        self.advance()
+                    while self.current().isdigit():
+                        self.advance()
+                    try:
+                        self._meta_int[name] = int(self.source[num_start:self.pos])
+                    except ValueError:
+                        pass
+                # Bare $PAGE (no colon) is typeless (skip to next page).
+
+            elif name in _STR_META_DEFAULTS:
+                # String metacommand: consume :'text' or :identifier.
+                if self.current() == ':':
+                    self.advance()
+                    self.skip_whitespace()
+                    if self.current() == "'":
+                        self.advance()
+                        s_start = self.pos
+                        while self.current() and self.current() != "'":
+                            self.advance()
+                        self._meta_str[name] = self.source[s_start:self.pos]
+                        if self.current() == "'":
+                            self.advance()
+                    elif self.current().isalpha() or self.current() == '_':
+                        self._meta_str[name] = self._read_meta_name()
+
+            # Any other name (INCLUDE handled separately, unknown names) is
+            # silently absorbed.  Consume an optional +/- or :arg so we don't
+            # misparse the rest of the comment.
+            else:
+                if self.current() in '+-':
+                    self.advance()
+                elif self.current() == ':':
+                    self.advance()
+                    self.skip_whitespace()
+                    if self.current() == "'":
+                        self.advance()
+                        while self.current() and self.current() != "'":
+                            self.advance()
+                        if self.current() == "'":
+                            self.advance()
+                    else:
+                        while self.current() and self.current() not in ' \t,}' and not self.startswith('*)'):
+                            self.advance()
+
+            # Allow comma-separated metacommands in one comment.
+            self.skip_whitespace()
+            if self.current() == ',':
+                self.advance()
+                # Expect next metacommand to start with '$'.
+                self.skip_whitespace()
+                if self.current() == '$':
+                    self.advance()
+                continue
+            break
+
+        # Close the comment.
+        self._consume_to(closer)
 
     def read_quoted_filename(self) -> str:
         if self.current() != "'":

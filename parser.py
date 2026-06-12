@@ -259,7 +259,7 @@ class Parser:
             self.expect('COLON')
             type_expr = self.parse_type()
             self.expect('SEMICOLON')
-            decls.append(VarDecl(names, type_expr, attributes))
+            decls.append(VarDecl(names, type_expr, attributes, meta_flags=dict(self.current_flags())))
         return decls
 
     def parse_value_decl(self) -> List[ValueDecl]:
@@ -437,7 +437,7 @@ class Parser:
             self.pos += 1
             expr = self.parse_expression()
             target = Designator(name, selectors)
-            return AssignStmt(target, expr, rangeck=flags.get('RANGECK', True))
+            return AssignStmt(target, expr, rangeck=flags.get('RANGECK', True), meta_flags=dict(flags))
 
         if selectors:
             self.error('designator statement must be an assignment')
@@ -452,7 +452,7 @@ class Parser:
                     args = self.parse_actual_parameter_list()
             self.expect('RPAREN')
         # Bare procedure call is allowed.
-        return ProcCallStmt(name, args, rangeck=flags.get('RANGECK', True))
+        return ProcCallStmt(name, args, rangeck=flags.get('RANGECK', True), meta_flags=dict(flags))
 
     def parse_actual_parameter_list(self) -> List[Expression]:
         exprs: List[Expression] = []
@@ -476,9 +476,16 @@ class Parser:
         width: Optional[Expression] = None
         precision: Optional[Expression] = None
         if self.match('COLON'):
-            width = self.parse_expression()
-            if self.match('COLON'):
+            if self.current().kind == 'COLON':
+                # P::N (manual 12-17): width M omitted — "same as passing
+                # MAXINT", i.e. the type's default width is used.  Vintage
+                # compiler accepts this; see discrepancy D-002.
+                self.match('COLON')
                 precision = self.parse_expression()
+            else:
+                width = self.parse_expression()
+                if self.match('COLON'):
+                    precision = self.parse_expression()
         return WriteArg(expr, width, precision)
 
     def parse_if_statement(self) -> IfStmt:
@@ -542,7 +549,7 @@ class Parser:
         if self.match('OTHERWISE'):
             otherwise = self.parse_statement()
         self.expect('END')
-        return CaseStmt(expr, elements, otherwise, rangeck=self.current_flags().get('RANGECK', True))
+        return CaseStmt(expr, elements, otherwise, rangeck=self.current_flags().get('RANGECK', True), meta_flags=dict(self.current_flags()))
 
     def parse_case_element(self) -> CaseElement:
         constants = self.parse_case_constant_list()

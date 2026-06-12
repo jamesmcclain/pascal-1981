@@ -430,3 +430,276 @@ class TestFileBufferModel(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestResetModeTransitions(unittest.TestCase):
+    """The two mode-transition combinations the §8 amendment flagged as
+    NOT yet tested.  Both stress the lazy-fill state machine (the PENDING
+    current component + mode bits) across a transition.
+    """
+
+    def test_reset_mid_stream_in_read_mode_rewinds_to_first(self):
+        """RESET on a file already in read mode, mid-stream: must rewind
+        and present the FIRST component again — including re-arming the
+        pending implicit GET, not reusing the stale buffered component."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "midstream.txt"
+            src = ("PROGRAM P; VAR f: TEXT; c1, c2, c3: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); REWRITE(f); WRITELN(f, 'XYZ'); CLOSE(f); "
+                   "RESET(f); c1 := f^; GET(f); c2 := f^; "   # X then Y; mid-stream
+                   "RESET(f); c3 := f^; "                     # rewind: X again
+                   "WRITELN(c1); WRITELN(c2); WRITELN(c3) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "X\nY\nX\n")
+
+    def test_put_after_get_in_read_mode_aborts(self):
+        """PUT on a file in read mode (after RESET/GET) must abort with the
+        runtime's mode-enforcement error, not silently corrupt the stream.
+
+        Pins the reimplementation runtime's enforced behavior
+        ('PUT requires REWRITE/write mode') [OBSERVED].  The vintage
+        compiler's behavior for this sequence is [UNVERIFIED] — a
+        differential probe candidate; if the 1981 runtime tolerates it,
+        this test documents the deliberate divergence to revisit."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "putget.txt"
+            src = ("PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); REWRITE(f); WRITELN(f, 'AB'); CLOSE(f); "
+                   "RESET(f); c := f^; GET(f); "
+                   "f^ := 'Z'; PUT(f) "
+                   "END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertNotEqual(rc, 0)
+
+
+class TestDosCrLfTranslation(unittest.TestCase):
+    """DOS CR/LF line markers on TEXT input (8.4 deferral, closed).
+
+    Vintage PC-DOS TEXT files end lines with "\\r\\n"; the runtime folds the
+    pair into a single '\\n' marker on input so EOLN/READLN/F^ behave per
+    the manual on DOS-produced files.  Bare CR is data; binary FILE OF T
+    never translates.  Output keeps host '\\n' (Linux-target adaptation).
+    """
+
+    def _write_bytes(self, path, data: bytes):
+        with open(path, 'wb') as fh:
+            fh.write(data)
+
+    def test_crlf_reads_as_single_line_marker(self):
+        """READ two chars from 'AB\\r\\nCD\\r\\n': EOLN fires after B (not at
+        a CR component); READLN crosses to the next line; first char is C."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "dos.txt"
+            self._write_bytes(path, b"AB\r\nCD\r\n")
+            src = ("PROGRAM P; VAR f: TEXT; a, b, c: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); RESET(f); "
+                   "READ(f, a); READ(f, b); "
+                   "IF EOLN(f) THEN WRITELN('eol'); "
+                   "READLN(f); READ(f, c); "
+                   "WRITELN(a); WRITELN(b); WRITELN(c) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "eol\nA\nB\nC\n")
+
+    def test_buffer_variable_blank_at_crlf_marker(self):
+        """F^ presents a blank at a CRLF line marker, same as at LF."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "dos2.txt"
+            self._write_bytes(path, b"X\r\nY\r\n")
+            src = ("PROGRAM P; VAR f: TEXT; c1, c2: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); RESET(f); "
+                   "c1 := f^; GET(f); c2 := f^; "
+                   "IF EOLN(f) THEN WRITELN('eol'); "
+                   "WRITELN(c1); IF c2 = ' ' THEN WRITELN('blank') END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "eol\nX\nblank\n")
+
+    def test_eof_true_after_final_crlf(self):
+        """A DOS file ending in CRLF: after the last READLN, EOF is true
+        (no phantom CR component at the tail)."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "dos3.txt"
+            self._write_bytes(path, b"7\r\n")
+            src = ("PROGRAM P; VAR f: TEXT; i: INTEGER; BEGIN "
+                   f"ASSIGN(f, '{path}'); RESET(f); "
+                   "READ(f, i); WRITELN(i); READLN(f); "
+                   "IF EOF(f) THEN WRITELN('eof') END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "7\neof\n")
+
+    def test_bare_cr_is_data_not_marker(self):
+        """A CR not followed by LF is an ordinary component, not a marker."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "barecr.txt"
+            self._write_bytes(path, b"A\rB\n")
+            src = ("PROGRAM P; VAR f: TEXT; a, b, c: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); RESET(f); "
+                   "READ(f, a); READ(f, b); READ(f, c); "
+                   "IF ORD(b) = 13 THEN WRITELN('cr'); "
+                   "WRITELN(a); WRITELN(c) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "cr\nA\nB\n")
+
+    def test_binary_file_never_translates(self):
+        """FILE OF CHAR components preserve raw CR and LF bytes."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "bin.dat"
+            self._write_bytes(path, b"\r\n")
+            src = ("PROGRAM P; VAR f: FILE OF CHAR; a, b: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); RESET(f); "
+                   "a := f^; GET(f); b := f^; "
+                   "IF ORD(a) = 13 THEN WRITELN('cr'); "
+                   "IF ORD(b) = 10 THEN WRITELN('lf') END.")
+            rc, out = build_run_linked(src, ["fileops.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "cr\nlf\n")
+
+
+class TestStringNRead(unittest.TestCase):
+    """READ into STRING(n) (8.3 deferral closed; semantics [INFERRED]).
+
+    Modeled on the dialect's STRING blank-pad convention and the LSTRING
+    reader: copy up to n characters; stop early at the line marker (left as
+    the current component, so EOLN observes it); blank-pad the remainder;
+    when the destination fills, leave the rest of the line unconsumed.
+    Vintage stop/consume behavior is a differential-probe candidate.
+    """
+
+    def test_exact_fill_from_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "s.txt"
+            with open(path, 'w') as fh:
+                fh.write("ABCDE\n")
+            src = ("PROGRAM P; VAR f: TEXT; s: STRING(5); BEGIN "
+                   f"ASSIGN(f, '{path}'); RESET(f); "
+                   "READ(f, s); WRITELN(s) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "ABCDE\n")
+
+    def test_short_line_blank_pads(self):
+        """'AB' into STRING(5) yields 'AB   ' and EOLN is observable."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "s2.txt"
+            with open(path, 'w') as fh:
+                fh.write("AB\n")
+            src = ("PROGRAM P; VAR f: TEXT; s: STRING(5); BEGIN "
+                   f"ASSIGN(f, '{path}'); RESET(f); "
+                   "READ(f, s); "
+                   "IF EOLN(f) THEN WRITELN('eol'); "
+                   "WRITELN(s, '|') END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "eol\nAB   |\n")
+
+    def test_full_destination_leaves_rest_of_line(self):
+        """STRING(3) from 'ABCDE': first READ takes ABC, next chars are DE."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "s3.txt"
+            with open(path, 'w') as fh:
+                fh.write("ABCDE\n")
+            src = ("PROGRAM P; VAR f: TEXT; s: STRING(3); c1, c2: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); RESET(f); "
+                   "READ(f, s); READ(f, c1); READ(f, c2); "
+                   "WRITELN(s); WRITELN(c1); WRITELN(c2) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "ABC\nD\nE\n")
+
+    def test_stdin_path(self):
+        """The no-selector READ path (stdin) handles STRING(n) too."""
+        src = ("PROGRAM P; VAR s: STRING(4); BEGIN "
+               "READ(s); WRITELN(s, '|') END.")
+        rc, out = build_run_linked(src, ["fileops.c", "readq.c"], stdin="HI\n")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "HI  |\n")
+
+    def test_crlf_line_marker_stops_string_read(self):
+        """Interaction with CRLF translation: a DOS marker stops the fill."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "s4.txt"
+            with open(path, 'wb') as fh:
+                fh.write(b"AB\r\nC\r\n")
+            src = ("PROGRAM P; VAR f: TEXT; s: STRING(4); c: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); RESET(f); "
+                   "READ(f, s); READLN(f); READ(f, c); "
+                   "WRITELN(s, '|'); WRITELN(c) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "AB  |\nC\n")
+
+
+class TestTrappedIO(unittest.TestCase):
+    """F.TRAP / F.ERRS trapped I/O (manual ch.12 File Field Values).
+
+    With F.TRAP := TRUE, an operational I/O error records an internal code
+    in F.ERRS and the operation is abandoned instead of aborting; the
+    program inspects and clears F.ERRS.  Internal code values are
+    [INFERRED] (vintage codes unknown — probe candidate); the trap/abort
+    *behavior* is what these tests pin.
+    """
+
+    def test_trapped_reset_on_missing_file_sets_errs(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "no_such_file.txt"
+            src = ("PROGRAM P; VAR f: TEXT; BEGIN "
+                   f"ASSIGN(f, '{path}'); "
+                   "f.TRAP := TRUE; RESET(f); "
+                   "IF f.ERRS <> 0 THEN WRITELN('trapped'); "
+                   "f.ERRS := 0; "
+                   "IF f.ERRS = 0 THEN WRITELN('cleared') END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "trapped\ncleared\n")
+
+    def test_untrapped_reset_on_missing_file_aborts(self):
+        """Default (TRAP off): same error still aborts loudly."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "no_such_file.txt"
+            src = ("PROGRAM P; VAR f: TEXT; BEGIN "
+                   f"ASSIGN(f, '{path}'); RESET(f) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertNotEqual(rc, 0)
+
+    def test_trapped_get_past_eof_sets_errs(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "one.txt"
+            with open(path, 'w') as fh:
+                fh.write("A\n")
+            src = ("PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); RESET(f); f.TRAP := TRUE; "
+                   "c := f^; GET(f); GET(f); "      # A, marker, now at eof
+                   "GET(f); "                        # past eof: trapped
+                   "IF f.ERRS <> 0 THEN WRITELN('trapped'); "
+                   "WRITELN(c) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "trapped\nA\n")
+
+    def test_trapped_put_in_read_mode_sets_errs(self):
+        """The PUT-after-GET mode violation becomes trappable with TRAP on
+        (companion to TestResetModeTransitions' untrapped abort)."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "rw.txt"
+            with open(path, 'w') as fh:
+                fh.write("AB\n")
+            src = ("PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); RESET(f); f.TRAP := TRUE; "
+                   "c := f^; GET(f); "
+                   "f^ := 'Z'; PUT(f); "
+                   "IF f.ERRS <> 0 THEN WRITELN('trapped') END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "trapped\n")
+
+    def test_trap_defaults_off_and_errs_zero(self):
+        src = ("PROGRAM P; VAR f: TEXT; BEGIN "
+               "IF NOT f.TRAP THEN WRITELN('off'); "
+               "IF f.ERRS = 0 THEN WRITELN('zero') END.")
+        rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "off\nzero\n")

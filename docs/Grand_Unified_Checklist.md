@@ -431,6 +431,10 @@ the biggest single chunk; expect it to need its own design pass.
     `test_buffer_get_and_fread_interleave`). NOT yet tested: RESET of a file
     already in read mode mid-stream, PUT after GET on the same open file.
     `[OBSERVED]`
+  - UPDATE: the two previously-untested combinations above are now covered
+    by `tests.test_runtime_fixes.TestResetModeTransitions` (RESET mid-stream
+    rewinds to the first component; PUT after GET aborts via mode
+    enforcement). `[OBSERVED]`
   - DEFERRED: `EOF`/`EOLN` predicates and TEXT line-marker semantics remain
     8.4; filename binding (`ASSIGN`/`READFN`) and `INPUT`/`OUTPUT` attachment
     remain 8.4/8.5 territory. Until then, unbound files use anonymous tmpfile
@@ -481,6 +485,10 @@ the biggest single chunk; expect it to need its own design pass.
     blank-pad semantics (currently rejected loudly), the WRITE-side `None` gate,
     or any broader REAL formatting beyond the documented default width/example.
     `[OBSERVED]`
+  - UPDATE: STRING(n) READ is now implemented (`pas_fread_string`/
+    `pas_read_string`, `TestStringNRead`; see the mini-checklist closure
+    note). Enum input remains open/`[UNVERIFIED]` pending a differential
+    probe. `[OBSERVED]`
 - [x] **8.3a — `WRITE`/`WRITELN` accept a whole file variable as a data argument.** `[OBSERVED]` **S**
   Still open. This item is the file-selector / whole-file-argument split, and
   should stay separate from 8.3's ordinary data-argument type checking.
@@ -540,6 +548,10 @@ the biggest single chunk; expect it to need its own design pass.
     a documented `EOL` constant. Manual grep found `EOL` in the predeclared
     identifier table only, with no body semantics; do not infer it until 8.6 or
     a deeper manual pass verifies meaning. `[READ]`
+  - UPDATE: DOS CR/LF translation is now implemented (`text_getc`,
+    `TestDosCrLfTranslation`; see the mini-checklist closure note). The
+    `EOL` constant remains open/`[UNVERIFIED]` pending a differential
+    probe. ASSIGN/READFN landed under 8.5. `[OBSERVED]`
   - REOPENED: the claim "file-directed formatted output/input now routes
     through an FCB" was true at the *handle* level only, not the
     buffer-variable level, and the cited tests never combined `RESET`'s
@@ -664,6 +676,9 @@ the biggest single chunk; expect it to need its own design pass.
     depending on `TRAP`. Existing runtime helpers still abort on fatal I/O errors
     unless a pre-existing path already handled otherwise. Treat this as explicit
     future work, not an implemented 8.6 behavior. `[OBSERVED]`
+  - UPDATE: trapped I/O is now implemented for the operational error sites
+    (see the mini-checklist TRAP/ERRS closure note for scope, adaptations,
+    and the abort-only remainder). `[OBSERVED]`
   - REOPENED/RE-GRADED: the prior note said TRAP/ERRS were "surfaced in
     FCBFQQ/file-field typing so source can name them." That overstated: on a
     *file variable*, `F.TRAP`/`F.ERRS` passed typecheck and then crashed in
@@ -727,15 +742,27 @@ the biggest single chunk; expect it to need its own design pass.
   now uses the shared table, predeclared symbols are tagged `is_builtin`, and
   user-defined redeclarations are allowed to shadow builtins instead of tripping
   redeclaration errors. Proven by `python -m unittest` (264 tests).
-- [ ] **9.3 — Test fixtures for every closed item.** `[INFERRED]` **S (ongoing)**
+- [x] **9.3 — Test fixtures for every closed item.** `[INFERRED]` **S (ongoing)**
   Each grammar item → a `should_pass`/`should_fail` fixture; each intrinsic → a
   codegen test (and a build/run test where a runtime is involved). Keeps the
   grammar doc, parser, and runtime honest against each other.
-- [ ] **9.4 — Keep `docs/ebnf_grammar.md` in sync.** `[INFERRED]` **S (ongoing)**
+  - REFRAMED as ongoing discipline, not a finite task. Audited at §9.5 close:
+    `AND_THEN`/`OR_ELSE`, `ADS`, and labeled `BREAK`/`CYCLE` have no dedicated
+    fixture files but are covered by in-code `TestParserJudgmentCalls` tests —
+    not an egregious gap. All §9.5 metacommand items have both fixture files and
+    `TestMetacommands` unit tests. No outstanding violations found. `[OBSERVED]`
+- [x] **9.4 — Keep `docs/ebnf_grammar.md` in sync.** `[INFERRED]` **S (ongoing)**
   Every grammar change above should update the EBNF doc and its change log in the
   same commit, with the right evidence grade.
+  - REFRAMED as ongoing discipline, not a finite task. Audited at §9.5 close:
+    one genuine stale spot found — the entire metacommand system (§9.5) had no
+    EBNF coverage. Fixed: added `metacommand_comment` section documenting all
+    three tiers (ON/OFF switches with defaults and coupling rules, INTEGER/STRING
+    listing metacommands, typeless and conditional-compilation forms) plus a
+    changelog row. All other §2–9 grammar changes verified present and
+    correctly graded. `[OBSERVED]`
 
-- [ ] **9.5 — Remaining compiler metacommands.** `[OBSERVED]` **M**
+- [x] **9.5 — Remaining compiler metacommands.** `[OBSERVED]` **M**
   After `$INCLUDE` and the identifier-label cleanup, the brace-directive path
   still needs an explicit policy for the rest of the IBM Pascal metacommands:
   `$BRAVE`, `$DEBUG`, `$ENTRY`, `$ERRORS`, `$GOTO`, `$INDEXCK`, `$INITCK`,
@@ -744,6 +771,58 @@ the biggest single chunk; expect it to need its own design pass.
   `$SUBTITLE`, `$SYMTAB`, `$TITLE`, `$IF`, `$INCONST`, `$MESSAGE`, `$POP`, and
   `$PUSH`. Decide which are ignored, which affect parser/codegen state, and
   which should error when unsupported.
+  - Done: Rewrote `parse_metacommand_comment` and added supporting helpers
+    (`_read_meta_name`, `_consume_to`, `_eval_meta_const`, `_skip_source_block`).
+    Three tiers implemented per manual Chapter 4:
+    **Tier 1** (listing/output — `$LIST`, `$OCODE`, `$SYMTAB`, `$TITLE`,
+    `$SUBTITLE`, `$PAGE`, `$PAGEIF`, `$PAGESIZE`, `$LINESIZE`, `$ERRORS`,
+    `$SKIP`): accepted and silently absorbed; integer/string arguments consumed
+    so they don't corrupt subsequent parsing.
+    **Tier 2** (runtime-check ON/OFF — `$BRAVE`, `$DEBUG`, `$ENTRY`, `$GOTO`,
+    `$INDEXCK`, `$INITCK`, `$LINE`, `$MATHCK`, `$NILCK`, `$RANGECK`,
+    `$RUNTIME`, `$STACKCK`, `$WARN`): stored in `meta_flags` and stamped onto
+    every emitted token (same mechanism `$RANGECK` already used). `$DEBUG+/-`
+    couples to its seven sub-flags (manual §4-11); `$LINE+` implies `$ENTRY+`
+    (manual §4-20). All defaults are per the manual.
+    **Tier 3** (conditional compilation): `$PUSH`/`$POP` save/restore a full
+    snapshot of `meta_flags`/`_meta_int`/`_meta_str` on a stack; `$MESSAGE:'text'`
+    prints to stderr during compilation; `$INCONST:id` registers a meta-constant
+    at 0 (non-interactive build) and logs a notice to stderr; `$IF constant
+    $THEN ... [$ELSE ...] $END` fully supported including arbitrary nesting —
+    false branches are skipped at the character level before tokenisation, so
+    syntax errors in skipped text are invisible to the parser. `$ELSE` and
+    `$END` encountered during normal (true-branch) processing are handled
+    correctly. `_skip_source_block` tracks `$IF`/`$END` nesting depth so a
+    skipped outer block atomically swallows all inner `$IF...$END` pairs.
+    Multiple comma-separated metacommands in one comment are supported.
+    Module-level tables `_ON_OFF_FLAGS`, `_INT_META_DEFAULTS`,
+    `_STR_META_DEFAULTS`, `_DEBUG_SUB_FLAGS` document all defaults.
+  - Also note: the `$RANGECK` flag gates on string-intrinsic capacity checks
+    (added in 7.7) are currently **unconditional**; they should eventually read
+    the per-statement `rangeck` field from the AST node (which already carries
+    the flag) instead of the hardcoded `True`. Deferred as a codegen follow-on.
+    `[OBSERVED]`
+  - CORRECTION (gate audit): the note above was stale when written — the
+    statement-level wiring already exists. `codegen_stmt` threads
+    `effective_rangeck(stmt)` into CONCAT/COPYLST/COPYSTR/INSERT and the
+    string-assignment guard; `{$RANGECK-}`/`{$RANGECK+}` toggle guards
+    per-statement and `--rangeck on/off` overrides both directions.
+    Verified by IR inspection (guard `_overflow` blocks appear/disappear
+    per statement) and pinned by
+    `tests.test_codegen.TestStringCapacityGatesRespectRangeck` (7 tests).
+    One real bug found and fixed during the audit: `builtin_insert`
+    crashed (`AttributeError` on a `None` end-block) when the guard was
+    disabled via `$RANGECK-` — it was the only string intrinsic that did
+    not handle `_guard_string_capacity` returning `None`. `[OBSERVED]`
+  - Fixtures: `parser/should_pass/metacmd_tier1.pas`, `metacmd_tier2.pas`,
+    `metacmd_if_true.pas`, `metacmd_if_false.pas`, `metacmd_if_else.pas`,
+    `metacmd_if_false_else.pas`, `metacmd_if_nested.pas`,
+    `metacmd_push_pop.pas`, `metacmd_message.pas`.
+  - Tests: `tests.test_parser.TestMetacommands` (20 tests covering flag
+    state, `$DEBUG` coupling, `$LINE`→`$ENTRY`, comma-separated flags, token
+    stamping, all tier-1 names, `$PUSH`/`$POP` round-trips, all `$IF`
+    combinations, `$MESSAGE`, `$INCONST`). Proven by
+    `python -m unittest discover -s tests` (391 tests OK). `[OBSERVED]`
 
 - [x] **9.6 — Full set type-checking and codegen.** `[OBSERVED]` **L**
   CORRECTION to the original audit note: by the time this item was picked up,
@@ -776,9 +855,20 @@ the biggest single chunk; expect it to need its own design pass.
     `test_named_const_subrange_set_base_resolves` (typecheck). EBNF `set_type`
     note refreshed to match the real implementation.
 
-- [ ] **9.7 — Deferred attribute-argument forms.** `[DEFERRED]` **S**
+- [x] **9.7 — Deferred attribute-argument forms.** `[DEFERRED]` **S**
   `ORIGIN(c)` and any `PORT(addr)`-style attribute syntax remain intentionally
   out of scope until the manual's prose and grammar are reconciled more fully.
+  - CLOSED (no implementation required): manual audit confirms both are 8088/PC-DOS
+    artifacts with no logical mapping to a 64-bit ELF Linux target.
+    `ORIGIN(addr)` binds an `EXTERN` routine to a fixed absolute segment:offset
+    address — a mechanism for calling BIOS/ROM entry points that has no analog
+    under virtual memory with ASLR and a standard ELF linker. `PORT(addr)` is
+    not a real IBM Pascal attribute at all: the manual never describes it, and
+    the original compiler rejects it with "Attribute Invalid" (EBNF note,
+    `ebnf_grammar.md` line 164). The current parser rejects both at the
+    `parse_attribute_item` gate, which matches the original compiler's behavior
+    exactly. No code change needed; the EBNF note already carries the correct
+    evidence grade. `[READ]`
 
 - [x] **9.8 — Full Enum support.** `[INFERRED]` **M**
   Enum-based sets (9.6) now work because they resolve to `i32` ordinals, but
@@ -841,6 +931,169 @@ the biggest single chunk; expect it to need its own design pass.
 
 - [x] **9.10** `wrd_real_arg.pas` is misfiled and self-contradictory. It sits in `parser/should_pass/`, its body comment says "must be rejected — ERROR: REAL is not an ordinal type," and the 4.7 checklist note cites it as `should_fail/wrd_real_arg.pas`. All three disagree. As a parser fixture it correctly passes (REAL rejection is a type error, not a parse error), and the parser-reject test only catches `LexerError`/`ParserError` anyway — so even in `should_fail/` it wouldn't assert what the comment claims. The good news: the REAL rejection is actually covered, by `TestWrdByword.test_wrd_real_is_error` in `test_typecheck`. So there's no real coverage gap — just an artifact that documents a guarantee it doesn't itself enforce. Move/rename it or fix the comment so it stops lying.
   - Done: Moved the test fixture to `tests/fixtures/typecheck/should_fail/wrd_real_arg.pas` and corrected its comment to clarify it's a type error, not a parse error.
+
+---
+
+Here's the de facto remaining work, pulled from the deferred notes inside closed checklist items:
+
+- [x] **`P::N` WRITE formatting (D-002, high severity)** — vintage accepts `WRITELN(x::2)`, reimplementation rejects at parse. Context-sensitive colon handling in `io_data_param`; cross-ref checklist 8.3. The headline item for the rebuilt `discrepancies.md`.
+  - DONE: `parse_write_actual_parameter` now recognizes the empty-width
+    `P::N` form (width=None, precision set); REAL codegen lowers a missing
+    width to the default 14-character field, so `WRITELN(123.456::2)`
+    prints `        123.46` — byte-identical to the vintage D-002 output.
+    `[OBSERVED]` Fixture `parser/should_pass/write_double_colon.pas`;
+    tests `TestWriteDoubleColon` (parser, 3) and
+    `TestWriteDoubleColonCodegen` (codegen + native run, 2). Integer/string
+    `P::N` lowering is unchanged (vintage behavior for those types is
+    `[UNVERIFIED]` — candidate probes t003/t004 for the new
+    discrepancies.md). READ-side M/N still unparsed (8.3a scope).
+- [x] **7.7 string-intrinsic capacity gates** — currently hardcoded `True`; should read the per-statement flag. Now a one-liner via `effective_flag('RANGECK', stmt)` after tonight's patch.
+  - CLOSED as already-implemented: the premise (from the stale §9.5 note) was
+    wrong — per-statement gating via `effective_rangeck` already existed and
+    works, including the CLI override. Audit added 7 pinning tests and fixed
+    one real crash: `INSERT` under `$RANGECK-` died on a `None` end-block in
+    `builtin_insert`. See the CORRECTION under §9.5. `[OBSERVED]`
+- [x] **Codegen for the plumbed-but-inert check flags** — INDEXCK, MATHCK, NILCK, STACKCK, INITCK reach codegen but no checks are emitted; CLI help now says so. Implement (or formally close as out-of-scope) per flag.
+  - DONE (manual metacommand pages provided as evidence, `[DOCUMENTED]`):
+    **$INDEXCK** (default +): array subscripts checked against declared
+    bounds (`low <= i <= high`) in `resolve_designator_ptr`; constant
+    indices provably in range emit no check; STRING/LSTRING excluded
+    (length-prefix convention; covered by RANGECK string gates). "Super
+    array indices" (manual remark) are out of scope until super arrays
+    are.
+    **$MATHCK** (default +): INTEGER (i32, signed) and WORD (i16,
+    unsigned) `+`/`-`/`*` lower to `llvm.{s,u}{add,sub,mul}.with.overflow`;
+    `DIV`/`MOD` get a divisor != 0 guard. ADAPTATION: the manual excludes
+    the exact -MAXINT-1 (#8000) result from detection — a 16-bit artifact
+    not reproduced; here all signed overflow including INT_MIN is caught.
+    The manual's note that Chapter-11 library routines always permit
+    overflow is honored trivially (intrinsics are runtime calls, not
+    compiler-expanded arithmetic).
+    **$NILCK** (default +): pointer dereference checked for NIL (0) and,
+    only when $INITCK is in effect, the uninitialized sentinel (1).
+    ADAPTATION: the manual's odd-pointer and free-block/out-of-range
+    checks are 8086 heap-model artifacts (valid x86-64 pointers may be
+    odd; no compiler-owned heap map) and are not reproduced.
+    **$INITCK** (default -): scalar INTEGER variables initialize to
+    -2147483648 — the INT32_MIN width analogue of the manual's -32768 —
+    and pointers to sentinel 1 when $NILCK is on, for locals and
+    globals/statics. Per the manual, VALUE-section variables, variant
+    fields, and super-array components are excluded; aggregates keep
+    their existing zero/blank initialization.
+    **$STACKCK** (default +): accepted as a documented no-op. RULING: on
+    this ELF/Linux target the OS guard page already faults on overflow
+    and clang owns frame layout, so explicit entry probes add cost
+    without adding detection.
+    Infrastructure: `codegen_stmt` tracks the innermost statement's
+    metacommand state (`_stmt_meta`); `check_enabled` resolves
+    CLI-force > statement state > manual default; `_emit_runtime_check`
+    is the shared guard emitter. CLI `--indexck/--mathck/--nilck/--initck`
+    now do real work; help text updated.
+    Proven by `tests.test_codegen.TestRuntimeCheckFlags` (20 tests:
+    IR-shape on/off/override for each flag plus native runs — OOB index
+    aborts, overflow aborts, off-mode wraps to -2147483648, div-by-zero
+    aborts, NIL and sentinel-1 deref abort, INITCK sentinel observed).
+    Full suite 429 tests OK. `[OBSERVED]`
+- [x] **`RESET` implicit first GET** — deferred in the §8 amendment (current component left unfilled).
+  - CLOSED as a mischaracterization: "deferred" in the §8 amendment names an
+    implementation *strategy* (lazy fill), not pending work. RESET marks the
+    current component PENDING and the shared `force_fill` path materializes
+    it at the first use site (`F^`/`EOF`/`EOLN`/formatted read); explicit
+    `GET` force-fills then advances. This is the classic lazy-buffer-variable
+    technique (avoids blocking on TERMINAL-mode files at RESET) and is
+    observably equivalent to the eager spec through the documented interface.
+    The two mode-transition combinations the amendment flagged as untested
+    are now pinned by `tests.test_runtime_fixes.TestResetModeTransitions`:
+    RESET mid-stream in read mode rewinds to the FIRST component (re-arming
+    the pending fill, not reusing the stale buffer), and PUT after GET in
+    read mode aborts via mode enforcement. The PUT-after-GET vintage
+    behavior is `[UNVERIFIED]` — differential probe candidate. Genuinely
+    open work in this area lives in the 8.4 items below. `[OBSERVED]`
+- [x] **`EOF`/`EOLN` predicates and TEXT line-marker semantics** — deferred at §8.4.
+  - CLOSED, with one piece left open below. This line was partly stale:
+    `EOF`/`EOLN` were already implemented and hostile-tested under 8.4
+    (see its CLOSED notes). The genuine residue was DOS CR/LF translation,
+    now implemented: `text_getc` in `runtime/fileops.c` folds an input
+    "\r\n" pair into a single '\n' line marker for TEXT files (both the
+    buffer-fill path `raw_get` and the formatted-reader path
+    `fcb_next_char`), so EOLN/READLN/`F^`-blank semantics match the manual
+    on DOS-produced files. A bare CR not followed by LF is ordinary data;
+    binary `FILE OF T` never translates. ADAPTATION: output keeps the host
+    '\n' marker (Linux target), and the CLOSE final-marker probe needs no
+    change since a CRLF-terminated file already ends in '\n'. Proven by
+    `tests.test_runtime_fixes.TestDosCrLfTranslation` (5 tests: CRLF as
+    one marker, `F^` blank at marker, EOF after final CRLF, bare CR as
+    data, binary non-translation). Full suite 436 tests OK. `[OBSERVED]`
+- [x] **`EOL` predeclared constant** — split out from the item above and
+  left open on purpose: the manual grep found `EOL` in the predeclared
+  identifier table only, with no body semantics (8.4's `[READ]` note says
+  "do not infer"). Guessing a value (CR? LF? CHR(13)?) would be
+  confabulation. Prime differential-probe candidate: compile
+  `WRITELN(ORD(EOL))` on the vintage toolchain and observe. `[UNVERIFIED]`
+  - CLOSED by maintainer ruling: a bare name in the identifier table with
+    no prose semantics anywhere in the manual is not a feature obligation;
+    treating it as one was over-indexing. No implementation, no probe
+    required. If real-world vintage source is ever found *using* `EOL`,
+    reopen with that program as the evidence. `[READ]`
+- [x] **Enum input parsing and `STRING(n)` input for READ** — the §9.8/§8.4 follow-ons.
+  - SPLIT on evidence. **`STRING(n)` READ: DONE.** New runtime readers
+    `pas_fread_string` (file-directed, FCB-aware via `fcb_next_char` so the
+    RESET-pending component and CRLF translation are honored) and
+    `pas_read_string` (stdin), dispatched from `_emit_read_target`; the type
+    checker already permitted StringType, so the loud rejection was at the
+    codegen gate only. Semantics `[INFERRED]` from the dialect's STRING
+    blank-pad convention and the LSTRING reader: copy up to n chars, stop
+    early at the line marker (left as the current component, EOLN-visible),
+    blank-pad the remainder, and when the destination fills leave the rest
+    of the line unconsumed for subsequent READs. Whether the vintage runtime
+    instead consumes to end-of-line (as our LSTRING reader does) is a
+    differential-probe candidate. Behavior pinned by
+    `tests.test_runtime_fixes.TestStringNRead` (5 tests: exact fill, short
+    line + pad + EOLN, capacity-stop leaving DE readable, stdin path, CRLF
+    interaction). Full suite 441 tests OK. `[OBSERVED]` for the
+    implementation, `[INFERRED]` for fidelity.
+- [ ] **Enum input for READ** — split out and left open: no evidence in the
+  repo's manual notes that the dialect supports reading enumerated values
+  (standard Pascal does not), and implementing identifier-matching input
+  on a guess would be over-indexing. Current behavior — loud rejection at
+  type-check (`test_read_enum_rejected`) and codegen
+  (`test_read_non_string_fallthrough_raises_codegen_error`) — is the safe
+  default. Settles with one differential probe: feed the vintage compiler
+  `READ(c)` with enum `c` and observe accept/reject. `[UNVERIFIED]`
+- [x] **Real TRAP/ERRS lowering** — deferred to the trapped-I/O item.
+  - DONE (manual basis: ch.12 File Field Values documents `F.TRAP`/`F.ERRS`,
+    `[READ]`). FCB layout gains `i8 TRAP` (slot 8, matching the one-byte
+    BOOLEAN and C `unsigned char`) and `i32 ERRS` (slot 9), initialized
+    off/zero; both the C struct and `file_fcb_type` extended in lockstep
+    (append-only, so all existing slot geps are unchanged). The typechecker's
+    "not yet supported" rejection is replaced with real typing (TRAP:
+    BOOLEAN, ERRS: INTEGER) and the old rejection test is flipped — not
+    deleted — to assert acceptance plus a TRAP:=3 type error. Codegen lowers
+    `F.TRAP`/`F.ERRS` next to the existing `F.MODE` path. Runtime: new
+    `io_error(f, code, msg)` dispatcher — when `f->trap` is set it records
+    the code in `f->errs` and the operation is abandoned; otherwise it
+    aborts exactly as before. Converted sites: RESET/REWRITE open/create
+    failures, GET/PUT mode violations, GET-past-eof, and component
+    read/write failures (these are the 8.4 note's promised "trap dispatch
+    points"). Honestly NOT converted (still abort-only, documented in the
+    dispatcher comment): structural errors (null FCB/buffer, bad ASSIGN
+    arguments), `stream_for` formatted-I/O mode aborts, and the formatted
+    readers' EOF/parse errors — converting those needs bail-out plumbing
+    through value-returning helpers and should wait for probe evidence that
+    the vintage runtime traps them at all. ADAPTATION/`[INFERRED]`: the
+    internal error-code values (1 open, 2 mode, 3 past-eof, 4 read, 5
+    write) are invented; the vintage runtime's numeric `ERRS` codes are
+    unknown — differential-probe candidate (`F.TRAP := TRUE; RESET` on a
+    missing file; print `F.ERRS`). Proven by
+    `tests.test_runtime_fixes.TestTrappedIO` (5 tests: trapped RESET on a
+    missing file + ERRS clear, untrapped abort preserved, trapped
+    GET-past-eof, trapped PUT-in-read-mode, defaults off/zero) and the
+    flipped typecheck test. Full suite 446 tests OK. `[OBSERVED]` for
+    behavior, `[INFERRED]` for code values.
+- [ ] **Vintage differential probes for tonight's lexer decisions** — double-`$ELSE` handling and quote-awareness inside skipped `$IF` blocks are [UNVERIFIED] against the 1981 compiler; cheap t00x probes.
+- [ ] **`ORIGIN`/`PORT` attributes** — closed as intentionally out-of-scope (§9.7); listed only so the deferral stays visible.
+
+First two are the highest value: D-002 breaks real programs, and the 7.7 gate fix is nearly free now.
 
 ---
 

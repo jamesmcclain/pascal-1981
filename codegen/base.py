@@ -76,7 +76,7 @@ class CodegenBase:
     Initializes module state, builder, scope, and shared constants/tables.
     """
 
-    def __init__(self, verbose: bool = False, source_file: Optional[str] = None, force_rangeck: Optional[bool] = None):
+    def __init__(self, verbose: bool = False, source_file: Optional[str] = None, force_flags: Optional[Dict[str, bool]] = None):
         self.module = ir.Module(name="pascal_program")
         self.source_file = source_file
         self.module.triple = "x86_64-pc-linux-gnu"  # Standard Linux target
@@ -105,7 +105,13 @@ class CodegenBase:
         self.enum_member_names: Dict[str, List[str]] = {}
         self._enum_name_tables: Dict[str, ir.GlobalVariable] = {}
         self.verbose = verbose
-        self.force_rangeck = force_rangeck
+        # CLI flag overrides: maps flag name (upper) → forced bool.
+        # A key absent from this dict means "use whatever the source says".
+        self.force_flags: Dict[str, bool] = force_flags if force_flags is not None else {}
+        # Metacommand flag state of the innermost statement currently being
+        # lowered (set by codegen_stmt).  Expression-level runtime checks
+        # (INDEXCK, MATHCK, NILCK) read it via check_enabled().
+        self._stmt_meta: Optional[Dict[str, bool]] = None
         self._register_predeclared_externs()
         self._register_predeclared_files()
 
@@ -114,6 +120,32 @@ class CodegenBase:
         if self.verbose:
             import sys
             print(f'[codegen] {msg}', file=sys.stderr)
+
+    def check_enabled(self, flag: str) -> bool:
+        """Effective value of a runtime-check flag at the current lowering
+        point.  Priority: CLI force override > metacommand state of the
+        innermost enclosing statement > the manual's documented default.
+        """
+        if flag in self.force_flags:
+            return self.force_flags[flag]
+        if self._stmt_meta is not None and flag in self._stmt_meta:
+            return self._stmt_meta[flag]
+        from lexer import _ON_OFF_FLAGS
+        return _ON_OFF_FLAGS.get(flag, True)
+
+    def _emit_runtime_check(self, ok_cond: 'ir.Value', label: str) -> None:
+        """Emit a guarded runtime check: if ok_cond is false, call the
+        runtime error handler (abort) — same shape as the string capacity
+        guards.  The builder is left positioned in the ok block.
+        """
+        parent = self.builder.block.parent
+        ok_block = parent.append_basic_block(label + '_ok')
+        err_block = parent.append_basic_block(label + '_fail')
+        self.builder.cbranch(ok_cond, ok_block, err_block)
+        self.builder.position_at_end(err_block)
+        self.builder.call(self.runtime_error_func(), [])
+        self.builder.unreachable()
+        self.builder.position_at_end(ok_block)
 
     def _register_predeclared_files(self) -> None:
         """Declare INPUT and OUTPUT as real predeclared TEXT file handles."""
@@ -227,6 +259,9 @@ class CodegenBase:
         fread_lstr = ir.Function(self.module, ir.FunctionType(ir.IntType(32), [fcb_ptr, ir.IntType(8).as_pointer(), ir.IntType(32)]), name='pas_fread_lstring')
         fread_lstr.linkage = 'external'
         self.scope.define('pas_fread_lstring', fread_lstr, None)
+        fread_str = ir.Function(self.module, ir.FunctionType(ir.IntType(32), [fcb_ptr, ir.IntType(8).as_pointer(), ir.IntType(32)]), name='pas_fread_string')
+        fread_str.linkage = 'external'
+        self.scope.define('pas_fread_string', fread_str, None)
         fread_skip = ir.Function(self.module, ir.FunctionType(ir.VoidType(), [fcb_ptr]), name='pas_freadln_skip')
         fread_skip.linkage = 'external'
         self.scope.define('pas_freadln_skip', fread_skip, None)
@@ -234,10 +269,13 @@ class CodegenBase:
     def file_fcb_type(self) -> ir.Type:
         """The file-control-block layout: [i32 element-size, i32 structure,
         i32 touched, i32 mode/eof, i8* buffer, i8* handle, i8* bound name,
-        i32 FILEMODES user mode]."""
+        i32 FILEMODES user mode, i8 TRAP, i32 ERRS].  TRAP/ERRS are the
+        manual ch.12 trapped-I/O fields; the i8 TRAP slot matches this
+        compiler's one-byte BOOLEAN and C's `unsigned char trap` (natural
+        alignment pads identically on both sides)."""
         if not hasattr(self, '_fcb_ty'):
             i32 = ir.IntType(32)
-            self._fcb_ty = ir.LiteralStructType([i32, i32, i32, i32, ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer(), i32])
+            self._fcb_ty = ir.LiteralStructType([i32, i32, i32, i32, ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer(), i32, ir.IntType(8), i32])
         return self._fcb_ty
 
     def _scalar_size(self, name: str) -> int:

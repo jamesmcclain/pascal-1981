@@ -236,3 +236,317 @@ class TestParserJudgmentCalls(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestMetacommands(unittest.TestCase):
+    """Unit tests for §9.5 metacommand infrastructure."""
+
+    # ------------------------------------------------------------------
+    # helpers
+    # ------------------------------------------------------------------
+
+    def _lex(self, src: str):
+        from lexer import Lexer
+        return Lexer(src)
+
+    def _flags_after(self, src: str) -> dict:
+        """Return the meta_flags dict on the lexer after tokenizing `src`."""
+        from lexer import Lexer
+        lex = Lexer(src)
+        lex.tokenize()
+        return dict(lex.meta_flags)
+
+    def _tokens(self, src: str):
+        from lexer import Lexer
+        return Lexer(src).tokenize()
+
+    # ------------------------------------------------------------------
+    # Tier-2 ON/OFF flags
+    # ------------------------------------------------------------------
+
+    def test_tier2_flag_on(self):
+        flags = self._flags_after('{$RANGECK+}')
+        self.assertTrue(flags['RANGECK'])
+
+    def test_tier2_flag_off(self):
+        flags = self._flags_after('{$RANGECK-}')
+        self.assertFalse(flags['RANGECK'])
+
+    def test_debug_master_off_sets_subflags(self):
+        """$DEBUG- must disable all documented sub-flags."""
+        flags = self._flags_after('{$DEBUG-}')
+        self.assertFalse(flags['DEBUG'])
+        for sub in ('ENTRY', 'INDEXCK', 'INITCK', 'MATHCK', 'NILCK', 'RANGECK', 'STACKCK'):
+            self.assertFalse(flags[sub], f'{sub} should be off after $DEBUG-')
+
+    def test_debug_master_on_sets_subflags(self):
+        flags = self._flags_after('{$DEBUG-} {$DEBUG+}')
+        self.assertTrue(flags['DEBUG'])
+        for sub in ('ENTRY', 'INDEXCK', 'INITCK', 'MATHCK', 'NILCK', 'RANGECK', 'STACKCK'):
+            self.assertTrue(flags[sub], f'{sub} should be on after $DEBUG+')
+
+    def test_line_plus_implies_entry_plus(self):
+        """$LINE+ must automatically set $ENTRY+ (manual §4-20)."""
+        flags = self._flags_after('{$ENTRY-} {$LINE+}')
+        self.assertTrue(flags['LINE'])
+        self.assertTrue(flags['ENTRY'])
+
+    def test_comma_separated_flags(self):
+        flags = self._flags_after('{$RANGECK-, $INDEXCK-}')
+        self.assertFalse(flags['RANGECK'])
+        self.assertFalse(flags['INDEXCK'])
+
+    def test_flag_stamped_on_tokens(self):
+        """RANGECK flag in effect at a token must appear on that token's flags."""
+        toks = self._tokens('{$RANGECK-} PROGRAM P; BEGIN END.')
+        # First real token after the metacommand is PROGRAM
+        prog_tok = next(t for t in toks if t.kind == 'PROGRAM')
+        self.assertFalse(prog_tok.flags.get('RANGECK', True))
+
+    # ------------------------------------------------------------------
+    # Tier-1 listing metacommands (must not raise)
+    # ------------------------------------------------------------------
+
+    def test_tier1_all_absorbed_silently(self):
+        tier1 = (
+            "{$LIST-} {$LIST+} {$OCODE-} {$SYMTAB-} "
+            "{$TITLE:'Test'} {$SUBTITLE:'Sub'} "
+            "{$PAGE:1} {$PAGE} {$PAGEIF:5} {$PAGESIZE:60} "
+            "{$LINESIZE:132} {$ERRORS:10} {$SKIP:3}"
+        )
+        try:
+            self._flags_after(tier1)
+        except Exception as e:
+            self.fail(f"Tier-1 metacommands raised unexpectedly: {e}")
+
+    # ------------------------------------------------------------------
+    # $PUSH / $POP
+    # ------------------------------------------------------------------
+
+    def test_push_pop_round_trip(self):
+        """{$PUSH} {$RANGECK-} {$POP} must restore RANGECK to True."""
+        flags = self._flags_after('{$PUSH} {$RANGECK-} {$POP}')
+        self.assertTrue(flags['RANGECK'])
+
+    def test_push_pop_multiple_flags(self):
+        flags = self._flags_after('{$PUSH} {$RANGECK-} {$INDEXCK-} {$POP}')
+        self.assertTrue(flags['RANGECK'])
+        self.assertTrue(flags['INDEXCK'])
+
+    def test_pop_on_empty_stack_is_silent(self):
+        try:
+            self._flags_after('{$POP}')
+        except Exception as e:
+            self.fail(f"$POP on empty stack raised: {e}")
+
+    # ------------------------------------------------------------------
+    # $IF / $THEN / $ELSE / $END
+    # ------------------------------------------------------------------
+
+    def _token_kinds(self, src: str) -> list:
+        return [t.kind for t in self._tokens(src) if t.kind != 'EOF']
+
+    def test_if_true_includes_then_branch(self):
+        """$IF 1 $THEN: body inside should be tokenized."""
+        kinds = self._token_kinds(
+            'PROGRAM P; BEGIN {$IF 1 $THEN} WRITELN {$END} END.'
+        )
+        self.assertIn('IDENTIFIER', kinds)  # WRITELN is an identifier here
+
+    def test_if_false_skips_then_branch(self):
+        """$IF 0 $THEN: identifiers inside skipped block must not appear."""
+        identifiers = [t for t in self._tokens(
+            'PROGRAM P; BEGIN {$IF 0 $THEN} GARBAGE {$END} END.'
+        ) if t.kind == 'IDENTIFIER']
+        names = [t.value for t in identifiers]
+        self.assertNotIn('GARBAGE', names)
+
+    def test_if_true_skips_else_branch(self):
+        """True condition: else-branch garbage must be skipped."""
+        kinds = self._token_kinds(
+            'PROGRAM P; BEGIN {$IF 1 $THEN} WRITELN {$ELSE} @@@ BAD @@@ {$END} END.'
+        )
+        # WRITELN identifier present, no other stray tokens
+        identifiers = [t for t in self._tokens(
+            'PROGRAM P; BEGIN {$IF 1 $THEN} WRITELN {$ELSE} @@@ BAD @@@ {$END} END.'
+        ) if t.kind == 'IDENTIFIER']
+        names = [t.value for t in identifiers]
+        self.assertIn('WRITELN', names)
+        self.assertNotIn('BAD', names)
+
+    def test_if_false_uses_else_branch(self):
+        """False condition: else-branch must be tokenized."""
+        identifiers = [t for t in self._tokens(
+            'PROGRAM P; BEGIN {$IF 0 $THEN} BAD {$ELSE} WRITELN {$END} END.'
+        ) if t.kind == 'IDENTIFIER']
+        names = [t.value for t in identifiers]
+        self.assertNotIn('BAD', names)
+        self.assertIn('WRITELN', names)
+
+    def test_nested_if_outer_true_inner_false(self):
+        """Nested $IF: inner false block must not leak tokens."""
+        identifiers = [t for t in self._tokens(
+            'PROGRAM P; BEGIN '
+            '{$IF 1 $THEN} '
+            '  {$IF 0 $THEN} BAD {$ELSE} GOOD {$END} '
+            '{$END} '
+            'END.'
+        ) if t.kind == 'IDENTIFIER']
+        names = [t.value for t in identifiers]
+        self.assertNotIn('BAD', names)
+        self.assertIn('GOOD', names)
+
+    def test_nested_if_outer_false_skips_entire_block(self):
+        """When outer $IF is false, inner $IF/$END must not confuse depth tracking."""
+        identifiers = [t for t in self._tokens(
+            'PROGRAM P; BEGIN '
+            '{$IF 0 $THEN} '
+            '  {$IF 1 $THEN} BAD {$END} '
+            '  ALSO_BAD '
+            '{$END} '
+            'END.'
+        ) if t.kind == 'IDENTIFIER']
+        names = [t.value for t in identifiers]
+        self.assertNotIn('BAD', names)
+        self.assertNotIn('ALSO_BAD', names)
+
+    # ------------------------------------------------------------------
+    # $MESSAGE
+    # ------------------------------------------------------------------
+
+    def test_message_does_not_raise(self):
+        import io
+        import sys as _sys
+        buf = io.StringIO()
+        old_err = _sys.stderr
+        _sys.stderr = buf
+        try:
+            self._flags_after("{$MESSAGE: 'hello from test'}")
+        finally:
+            _sys.stderr = old_err
+        self.assertIn('hello from test', buf.getvalue())
+
+    # ------------------------------------------------------------------
+    # $INCONST
+    # ------------------------------------------------------------------
+
+    def test_inconst_sets_meta_const_to_zero(self):
+        """$INCONST defines an identifier with value 0 (non-interactive build)."""
+        from lexer import Lexer
+        lex = Lexer('{$INCONST: MYCONST}')
+        lex.tokenize()
+        self.assertIn('MYCONST', lex._meta_consts)
+        self.assertEqual(lex._meta_consts['MYCONST'], 0)
+
+    def test_if_with_inconst_identifier(self):
+        """$IF referencing a $INCONST-defined name: 0 means false."""
+        from lexer import Lexer
+        lex = Lexer('{$INCONST: FLAG} {$IF FLAG $THEN} BAD {$END}')
+        toks = lex.tokenize()
+        names = [t.value for t in toks if t.kind == 'IDENTIFIER']
+        self.assertNotIn('BAD', names)
+
+
+if __name__ == '__main__':
+    unittest.main()
+
+
+class TestMetacommandSkipRegressions(unittest.TestCase):
+    """Regressions for $IF skip-mode bugs found in review."""
+
+    def _identifiers(self, src: str) -> list:
+        from lexer import Lexer
+        return [t.value for t in Lexer(src).tokenize() if t.kind == 'IDENTIFIER']
+
+    def test_duplicate_else_does_not_leak_tokens(self):
+        """A stray second $ELSE while skipping the else-branch of a true $IF
+        must not terminate the skip and leak text into the parser."""
+        names = self._identifiers(
+            'PROGRAM P; BEGIN {$IF 1 $THEN} GOOD '
+            '{$ELSE} BAD1 {$ELSE} BAD2 {$END} END.'
+        )
+        self.assertIn('GOOD', names)
+        self.assertNotIn('BAD1', names)
+        self.assertNotIn('BAD2', names)
+
+    def test_string_literal_with_brace_in_skipped_block(self):
+        """A '{' inside a quoted string in a skipped block must not be
+        treated as a comment opener (previously: Unterminated $IF)."""
+        names = self._identifiers(
+            "PROGRAM P; VAR s: INTEGER; BEGIN "
+            "{$IF 0 $THEN} x := '{' ; BAD {$END} s := 1 END."
+        )
+        self.assertNotIn('BAD', names)
+        self.assertIn('s', [n.lower() for n in names if n])
+
+    def test_string_literal_with_paren_star_in_skipped_block(self):
+        """'(*' inside a quoted string in a skipped block is also inert."""
+        names = self._identifiers(
+            "PROGRAM P; BEGIN {$IF 0 $THEN} x := '(*' ; BAD {$END} END."
+        )
+        self.assertNotIn('BAD', names)
+
+
+class TestForceFlagDefaults(unittest.TestCase):
+    """effective_flag must use manual defaults, not blanket True."""
+
+    def test_default_for_off_flag_is_false(self):
+        from codegen import Codegen
+        from ast_nodes import EmptyStmt
+        cg = Codegen()
+        stmt = EmptyStmt()
+        # ENTRY and INITCK default off per the manual.
+        self.assertFalse(cg.effective_flag('ENTRY', stmt))
+        self.assertFalse(cg.effective_flag('INITCK', stmt))
+        # RANGECK defaults on.
+        self.assertTrue(cg.effective_flag('RANGECK', stmt))
+
+    def test_meta_flags_on_stmt_take_effect(self):
+        from codegen import Codegen
+        from ast_nodes import EmptyStmt
+        cg = Codegen()
+        stmt = EmptyStmt()
+        stmt.meta_flags = {'MATHCK': False}
+        self.assertFalse(cg.effective_flag('MATHCK', stmt))
+
+    def test_force_flags_override_stmt(self):
+        from codegen import Codegen
+        from ast_nodes import EmptyStmt
+        cg = Codegen(force_flags={'MATHCK': True})
+        stmt = EmptyStmt()
+        stmt.meta_flags = {'MATHCK': False}
+        self.assertTrue(cg.effective_flag('MATHCK', stmt))
+
+
+class TestWriteDoubleColon(unittest.TestCase):
+    """P::N WRITE formatting (manual 12-17; discrepancy D-002)."""
+
+    def test_double_colon_parses(self):
+        from tests.support import parse_source
+        ast = parse_source(
+            'PROGRAM P; VAR x: REAL; BEGIN WRITELN(x::2) END.'
+        )
+        self.assertIsNotNone(ast)
+
+    def test_double_colon_width_none_precision_set(self):
+        from tests.support import parse_source
+        from ast_nodes import WriteArg
+        ast = parse_source(
+            'PROGRAM P; VAR x: REAL; BEGIN WRITELN(x::2) END.'
+        )
+        stmt = ast.block.body[0]
+        arg = stmt.args[0]
+        self.assertIsInstance(arg, WriteArg)
+        self.assertIsNone(arg.width)
+        self.assertIsNotNone(arg.precision)
+
+    def test_full_form_still_parses(self):
+        """P:M:N must be unaffected."""
+        from tests.support import parse_source
+        from ast_nodes import WriteArg
+        ast = parse_source(
+            'PROGRAM P; VAR x: REAL; BEGIN WRITELN(x:8:3) END.'
+        )
+        arg = ast.block.body[0].args[0]
+        self.assertIsNotNone(arg.width)
+        self.assertIsNotNone(arg.precision)
