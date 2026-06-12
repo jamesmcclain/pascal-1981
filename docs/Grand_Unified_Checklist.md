@@ -431,6 +431,10 @@ the biggest single chunk; expect it to need its own design pass.
     `test_buffer_get_and_fread_interleave`). NOT yet tested: RESET of a file
     already in read mode mid-stream, PUT after GET on the same open file.
     `[OBSERVED]`
+  - UPDATE: the two previously-untested combinations above are now covered
+    by `tests.test_runtime_fixes.TestResetModeTransitions` (RESET mid-stream
+    rewinds to the first component; PUT after GET aborts via mode
+    enforcement). `[OBSERVED]`
   - DEFERRED: `EOF`/`EOLN` predicates and TEXT line-marker semantics remain
     8.4; filename binding (`ASSIGN`/`READFN`) and `INPUT`/`OUTPUT` attachment
     remain 8.4/8.5 territory. Until then, unbound files use anonymous tmpfile
@@ -979,7 +983,21 @@ Here's the de facto remaining work, pulled from the deferred notes inside closed
     aborts, overflow aborts, off-mode wraps to -2147483648, div-by-zero
     aborts, NIL and sentinel-1 deref abort, INITCK sentinel observed).
     Full suite 429 tests OK. `[OBSERVED]`
-- [ ] **`RESET` implicit first GET** — deferred in the §8 amendment (current component left unfilled).
+- [x] **`RESET` implicit first GET** — deferred in the §8 amendment (current component left unfilled).
+  - CLOSED as a mischaracterization: "deferred" in the §8 amendment names an
+    implementation *strategy* (lazy fill), not pending work. RESET marks the
+    current component PENDING and the shared `force_fill` path materializes
+    it at the first use site (`F^`/`EOF`/`EOLN`/formatted read); explicit
+    `GET` force-fills then advances. This is the classic lazy-buffer-variable
+    technique (avoids blocking on TERMINAL-mode files at RESET) and is
+    observably equivalent to the eager spec through the documented interface.
+    The two mode-transition combinations the amendment flagged as untested
+    are now pinned by `tests.test_runtime_fixes.TestResetModeTransitions`:
+    RESET mid-stream in read mode rewinds to the FIRST component (re-arming
+    the pending fill, not reusing the stale buffer), and PUT after GET in
+    read mode aborts via mode enforcement. The PUT-after-GET vintage
+    behavior is `[UNVERIFIED]` — differential probe candidate. Genuinely
+    open work in this area lives in the 8.4 items below. `[OBSERVED]`
 - [ ] **`EOF`/`EOLN` predicates and TEXT line-marker semantics** — deferred at §8.4.
 - [ ] **Enum input parsing and `STRING(n)` input for READ** — the §9.8/§8.4 follow-ons.
 - [ ] **Real TRAP/ERRS lowering** — deferred to the trapped-I/O item.

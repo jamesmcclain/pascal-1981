@@ -430,3 +430,44 @@ class TestFileBufferModel(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestResetModeTransitions(unittest.TestCase):
+    """The two mode-transition combinations the §8 amendment flagged as
+    NOT yet tested.  Both stress the lazy-fill state machine (the PENDING
+    current component + mode bits) across a transition.
+    """
+
+    def test_reset_mid_stream_in_read_mode_rewinds_to_first(self):
+        """RESET on a file already in read mode, mid-stream: must rewind
+        and present the FIRST component again — including re-arming the
+        pending implicit GET, not reusing the stale buffered component."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "midstream.txt"
+            src = ("PROGRAM P; VAR f: TEXT; c1, c2, c3: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); REWRITE(f); WRITELN(f, 'XYZ'); CLOSE(f); "
+                   "RESET(f); c1 := f^; GET(f); c2 := f^; "   # X then Y; mid-stream
+                   "RESET(f); c3 := f^; "                     # rewind: X again
+                   "WRITELN(c1); WRITELN(c2); WRITELN(c3) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "X\nY\nX\n")
+
+    def test_put_after_get_in_read_mode_aborts(self):
+        """PUT on a file in read mode (after RESET/GET) must abort with the
+        runtime's mode-enforcement error, not silently corrupt the stream.
+
+        Pins the reimplementation runtime's enforced behavior
+        ('PUT requires REWRITE/write mode') [OBSERVED].  The vintage
+        compiler's behavior for this sequence is [UNVERIFIED] — a
+        differential probe candidate; if the 1981 runtime tolerates it,
+        this test documents the deliberate divergence to revisit."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "putget.txt"
+            src = ("PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); REWRITE(f); WRITELN(f, 'AB'); CLOSE(f); "
+                   "RESET(f); c := f^; GET(f); "
+                   "f^ := 'Z'; PUT(f) "
+                   "END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertNotEqual(rc, 0)
