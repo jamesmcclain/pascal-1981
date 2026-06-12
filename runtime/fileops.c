@@ -73,13 +73,46 @@ static void checked_buffer(struct pas_file_fcb *f) {
     if (!f || !f->buffer) die("file runtime: null buffer");
 }
 
+/* DOS CR/LF translation (checklist 8.4 deferral, now closed): vintage
+ * PC-DOS TEXT files mark line ends with "\r\n".  On input, a "\r\n" pair
+ * is folded into a single '\n' line marker so EOLN/READLN/F^ semantics
+ * match the manual on DOS-produced files; a bare '\r' (not followed by
+ * '\n') is passed through as ordinary data.  Output keeps the host's
+ * '\n' marker — this is a Linux-target adaptation, not DOS emulation.
+ * Binary FILE OF T never translates (component bytes are sacred). */
+static int text_getc(FILE *h) {
+    int ch = fgetc(h);
+    if (ch != '\r') return ch;
+    int next = fgetc(h);
+    if (next == '\n') return '\n';   /* fold CRLF into one marker */
+    if (next != EOF) ungetc(next, h);
+    return '\r';                      /* bare CR is data */
+}
+
 static void raw_get(struct pas_file_fcb *f, int allow_eof) {
     FILE *h = ensure_handle(f);
     checked_buffer(f);
     if (current_mode(f) != MODE_READ) die("file runtime: GET requires RESET/read mode");
     if (!allow_eof && is_eof(f)) die("file runtime: GET past eof");
 
-    size_t n = f->structure == STRUCT_TEXT ? 1 : elem_size(f);
+    if (f->structure == STRUCT_TEXT) {
+        int ch = text_getc(h);
+        if (ch == EOF) {
+            if (feof(h)) {
+                set_mode_flags(f, MODE_READ, 1, 0, 0);
+                f->touched = 0;
+                return;
+            }
+            die("file runtime: read failed");
+        }
+        int eoln = (ch == '\n');
+        *((unsigned char *)f->buffer) = eoln ? ' ' : (unsigned char)ch;
+        set_mode_flags(f, MODE_READ, 0, eoln, 0);
+        f->touched = 0;
+        return;
+    }
+
+    size_t n = elem_size(f);
     size_t got = fread(f->buffer, 1, n, h);
     if (got != n) {
         if (feof(h)) {
@@ -89,9 +122,7 @@ static void raw_get(struct pas_file_fcb *f, int allow_eof) {
         }
         die("file runtime: read failed");
     }
-    int eoln = (f->structure == STRUCT_TEXT && *((unsigned char *)f->buffer) == '\n');
-    if (eoln) *((unsigned char *)f->buffer) = ' ';
-    set_mode_flags(f, MODE_READ, 0, eoln, 0);
+    set_mode_flags(f, MODE_READ, 0, 0, 0);
     f->touched = 0;
 }
 
@@ -121,7 +152,7 @@ static int fcb_next_char(struct pas_file_fcb *f, FILE *h) {
         f->touched = 0;
         return ch;
     }
-    int ch = fgetc(h);
+    int ch = (f->structure == STRUCT_TEXT) ? text_getc(h) : fgetc(h);
     if (ch == EOF) set_mode_flags(f, MODE_READ, 1, 0, 0);
     return ch;
 }
@@ -219,8 +250,9 @@ void pas_file_put(struct pas_file_fcb *f) {
     f->touched = 0;
 }
 
-/* NOTE: when DOS CR/LF translation lands (checklist 8.4 deferral), the
- * final-marker probe below must recognize "\r\n" as an existing marker. */
+/* CR/LF note: with text_getc translation in place, the final-marker probe
+ * below needs no change — a DOS file ending in "\r\n" has '\n' as its last
+ * byte, so the existing last-byte check already recognizes the marker. */
 static void append_final_text_marker_if_needed(struct pas_file_fcb *f) {
     if (!f || f->structure != STRUCT_TEXT || current_mode(f) != MODE_WRITE || !f->handle || (f->mode & MODE_STD)) return;
     FILE *h = f->handle;

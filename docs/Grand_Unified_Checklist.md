@@ -544,6 +544,10 @@ the biggest single chunk; expect it to need its own design pass.
     a documented `EOL` constant. Manual grep found `EOL` in the predeclared
     identifier table only, with no body semantics; do not infer it until 8.6 or
     a deeper manual pass verifies meaning. `[READ]`
+  - UPDATE: DOS CR/LF translation is now implemented (`text_getc`,
+    `TestDosCrLfTranslation`; see the mini-checklist closure note). The
+    `EOL` constant remains open/`[UNVERIFIED]` pending a differential
+    probe. ASSIGN/READFN landed under 8.5. `[OBSERVED]`
   - REOPENED: the claim "file-directed formatted output/input now routes
     through an FCB" was true at the *handle* level only, not the
     buffer-variable level, and the cited tests never combined `RESET`'s
@@ -998,7 +1002,27 @@ Here's the de facto remaining work, pulled from the deferred notes inside closed
     read mode aborts via mode enforcement. The PUT-after-GET vintage
     behavior is `[UNVERIFIED]` — differential probe candidate. Genuinely
     open work in this area lives in the 8.4 items below. `[OBSERVED]`
-- [ ] **`EOF`/`EOLN` predicates and TEXT line-marker semantics** — deferred at §8.4.
+- [x] **`EOF`/`EOLN` predicates and TEXT line-marker semantics** — deferred at §8.4.
+  - CLOSED, with one piece left open below. This line was partly stale:
+    `EOF`/`EOLN` were already implemented and hostile-tested under 8.4
+    (see its CLOSED notes). The genuine residue was DOS CR/LF translation,
+    now implemented: `text_getc` in `runtime/fileops.c` folds an input
+    "\r\n" pair into a single '\n' line marker for TEXT files (both the
+    buffer-fill path `raw_get` and the formatted-reader path
+    `fcb_next_char`), so EOLN/READLN/`F^`-blank semantics match the manual
+    on DOS-produced files. A bare CR not followed by LF is ordinary data;
+    binary `FILE OF T` never translates. ADAPTATION: output keeps the host
+    '\n' marker (Linux target), and the CLOSE final-marker probe needs no
+    change since a CRLF-terminated file already ends in '\n'. Proven by
+    `tests.test_runtime_fixes.TestDosCrLfTranslation` (5 tests: CRLF as
+    one marker, `F^` blank at marker, EOF after final CRLF, bare CR as
+    data, binary non-translation). Full suite 436 tests OK. `[OBSERVED]`
+- [ ] **`EOL` predeclared constant** — split out from the item above and
+  left open on purpose: the manual grep found `EOL` in the predeclared
+  identifier table only, with no body semantics (8.4's `[READ]` note says
+  "do not infer"). Guessing a value (CR? LF? CHR(13)?) would be
+  confabulation. Prime differential-probe candidate: compile
+  `WRITELN(ORD(EOL))` on the vintage toolchain and observe. `[UNVERIFIED]`
 - [ ] **Enum input parsing and `STRING(n)` input for READ** — the §9.8/§8.4 follow-ons.
 - [ ] **Real TRAP/ERRS lowering** — deferred to the trapped-I/O item.
 - [ ] **Vintage differential probes for tonight's lexer decisions** — double-`$ELSE` handling and quote-awareness inside skipped `$IF` blocks are [UNVERIFIED] against the 1981 compiler; cheap t00x probes.

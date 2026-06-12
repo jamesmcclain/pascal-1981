@@ -471,3 +471,89 @@ class TestResetModeTransitions(unittest.TestCase):
                    "END.")
             rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
             self.assertNotEqual(rc, 0)
+
+
+class TestDosCrLfTranslation(unittest.TestCase):
+    """DOS CR/LF line markers on TEXT input (8.4 deferral, closed).
+
+    Vintage PC-DOS TEXT files end lines with "\\r\\n"; the runtime folds the
+    pair into a single '\\n' marker on input so EOLN/READLN/F^ behave per
+    the manual on DOS-produced files.  Bare CR is data; binary FILE OF T
+    never translates.  Output keeps host '\\n' (Linux-target adaptation).
+    """
+
+    def _write_bytes(self, path, data: bytes):
+        with open(path, 'wb') as fh:
+            fh.write(data)
+
+    def test_crlf_reads_as_single_line_marker(self):
+        """READ two chars from 'AB\\r\\nCD\\r\\n': EOLN fires after B (not at
+        a CR component); READLN crosses to the next line; first char is C."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "dos.txt"
+            self._write_bytes(path, b"AB\r\nCD\r\n")
+            src = ("PROGRAM P; VAR f: TEXT; a, b, c: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); RESET(f); "
+                   "READ(f, a); READ(f, b); "
+                   "IF EOLN(f) THEN WRITELN('eol'); "
+                   "READLN(f); READ(f, c); "
+                   "WRITELN(a); WRITELN(b); WRITELN(c) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "eol\nA\nB\nC\n")
+
+    def test_buffer_variable_blank_at_crlf_marker(self):
+        """F^ presents a blank at a CRLF line marker, same as at LF."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "dos2.txt"
+            self._write_bytes(path, b"X\r\nY\r\n")
+            src = ("PROGRAM P; VAR f: TEXT; c1, c2: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); RESET(f); "
+                   "c1 := f^; GET(f); c2 := f^; "
+                   "IF EOLN(f) THEN WRITELN('eol'); "
+                   "WRITELN(c1); IF c2 = ' ' THEN WRITELN('blank') END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "eol\nX\nblank\n")
+
+    def test_eof_true_after_final_crlf(self):
+        """A DOS file ending in CRLF: after the last READLN, EOF is true
+        (no phantom CR component at the tail)."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "dos3.txt"
+            self._write_bytes(path, b"7\r\n")
+            src = ("PROGRAM P; VAR f: TEXT; i: INTEGER; BEGIN "
+                   f"ASSIGN(f, '{path}'); RESET(f); "
+                   "READ(f, i); WRITELN(i); READLN(f); "
+                   "IF EOF(f) THEN WRITELN('eof') END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "7\neof\n")
+
+    def test_bare_cr_is_data_not_marker(self):
+        """A CR not followed by LF is an ordinary component, not a marker."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "barecr.txt"
+            self._write_bytes(path, b"A\rB\n")
+            src = ("PROGRAM P; VAR f: TEXT; a, b, c: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); RESET(f); "
+                   "READ(f, a); READ(f, b); READ(f, c); "
+                   "IF ORD(b) = 13 THEN WRITELN('cr'); "
+                   "WRITELN(a); WRITELN(c) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "cr\nA\nB\n")
+
+    def test_binary_file_never_translates(self):
+        """FILE OF CHAR components preserve raw CR and LF bytes."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "bin.dat"
+            self._write_bytes(path, b"\r\n")
+            src = ("PROGRAM P; VAR f: FILE OF CHAR; a, b: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); RESET(f); "
+                   "a := f^; GET(f); b := f^; "
+                   "IF ORD(a) = 13 THEN WRITELN('cr'); "
+                   "IF ORD(b) = 10 THEN WRITELN('lf') END.")
+            rc, out = build_run_linked(src, ["fileops.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "cr\nlf\n")
