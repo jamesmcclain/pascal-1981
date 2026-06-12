@@ -676,6 +676,9 @@ the biggest single chunk; expect it to need its own design pass.
     depending on `TRAP`. Existing runtime helpers still abort on fatal I/O errors
     unless a pre-existing path already handled otherwise. Treat this as explicit
     future work, not an implemented 8.6 behavior. `[OBSERVED]`
+  - UPDATE: trapped I/O is now implemented for the operational error sites
+    (see the mini-checklist TRAP/ERRS closure note for scope, adaptations,
+    and the abort-only remainder). `[OBSERVED]`
   - REOPENED/RE-GRADED: the prior note said TRAP/ERRS were "surfaced in
     FCBFQQ/file-field typing so source can name them." That overstated: on a
     *file variable*, `F.TRAP`/`F.ERRS` passed typecheck and then crashed in
@@ -1057,7 +1060,36 @@ Here's the de facto remaining work, pulled from the deferred notes inside closed
   (`test_read_non_string_fallthrough_raises_codegen_error`) — is the safe
   default. Settles with one differential probe: feed the vintage compiler
   `READ(c)` with enum `c` and observe accept/reject. `[UNVERIFIED]`
-- [ ] **Real TRAP/ERRS lowering** — deferred to the trapped-I/O item.
+- [x] **Real TRAP/ERRS lowering** — deferred to the trapped-I/O item.
+  - DONE (manual basis: ch.12 File Field Values documents `F.TRAP`/`F.ERRS`,
+    `[READ]`). FCB layout gains `i8 TRAP` (slot 8, matching the one-byte
+    BOOLEAN and C `unsigned char`) and `i32 ERRS` (slot 9), initialized
+    off/zero; both the C struct and `file_fcb_type` extended in lockstep
+    (append-only, so all existing slot geps are unchanged). The typechecker's
+    "not yet supported" rejection is replaced with real typing (TRAP:
+    BOOLEAN, ERRS: INTEGER) and the old rejection test is flipped — not
+    deleted — to assert acceptance plus a TRAP:=3 type error. Codegen lowers
+    `F.TRAP`/`F.ERRS` next to the existing `F.MODE` path. Runtime: new
+    `io_error(f, code, msg)` dispatcher — when `f->trap` is set it records
+    the code in `f->errs` and the operation is abandoned; otherwise it
+    aborts exactly as before. Converted sites: RESET/REWRITE open/create
+    failures, GET/PUT mode violations, GET-past-eof, and component
+    read/write failures (these are the 8.4 note's promised "trap dispatch
+    points"). Honestly NOT converted (still abort-only, documented in the
+    dispatcher comment): structural errors (null FCB/buffer, bad ASSIGN
+    arguments), `stream_for` formatted-I/O mode aborts, and the formatted
+    readers' EOF/parse errors — converting those needs bail-out plumbing
+    through value-returning helpers and should wait for probe evidence that
+    the vintage runtime traps them at all. ADAPTATION/`[INFERRED]`: the
+    internal error-code values (1 open, 2 mode, 3 past-eof, 4 read, 5
+    write) are invented; the vintage runtime's numeric `ERRS` codes are
+    unknown — differential-probe candidate (`F.TRAP := TRUE; RESET` on a
+    missing file; print `F.ERRS`). Proven by
+    `tests.test_runtime_fixes.TestTrappedIO` (5 tests: trapped RESET on a
+    missing file + ERRS clear, untrapped abort preserved, trapped
+    GET-past-eof, trapped PUT-in-read-mode, defaults off/zero) and the
+    flipped typecheck test. Full suite 446 tests OK. `[OBSERVED]` for
+    behavior, `[INFERRED]` for code values.
 - [ ] **Vintage differential probes for tonight's lexer decisions** — double-`$ELSE` handling and quote-awareness inside skipped `$IF` blocks are [UNVERIFIED] against the 1981 compiler; cheap t00x probes.
 - [ ] **`ORIGIN`/`PORT` attributes** — closed as intentionally out-of-scope (§9.7); listed only so the deferral stays visible.
 

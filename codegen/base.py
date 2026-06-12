@@ -269,10 +269,13 @@ class CodegenBase:
     def file_fcb_type(self) -> ir.Type:
         """The file-control-block layout: [i32 element-size, i32 structure,
         i32 touched, i32 mode/eof, i8* buffer, i8* handle, i8* bound name,
-        i32 FILEMODES user mode]."""
+        i32 FILEMODES user mode, i8 TRAP, i32 ERRS].  TRAP/ERRS are the
+        manual ch.12 trapped-I/O fields; the i8 TRAP slot matches this
+        compiler's one-byte BOOLEAN and C's `unsigned char trap` (natural
+        alignment pads identically on both sides)."""
         if not hasattr(self, '_fcb_ty'):
             i32 = ir.IntType(32)
-            self._fcb_ty = ir.LiteralStructType([i32, i32, i32, i32, ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer(), i32])
+            self._fcb_ty = ir.LiteralStructType([i32, i32, i32, i32, ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer(), i32, ir.IntType(8), i32])
         return self._fcb_ty
 
     def _scalar_size(self, name: str) -> int:

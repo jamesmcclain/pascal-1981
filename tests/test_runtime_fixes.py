@@ -631,3 +631,75 @@ class TestStringNRead(unittest.TestCase):
             rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
             self.assertEqual(rc, 0)
             self.assertEqual(out, "AB  |\nC\n")
+
+
+class TestTrappedIO(unittest.TestCase):
+    """F.TRAP / F.ERRS trapped I/O (manual ch.12 File Field Values).
+
+    With F.TRAP := TRUE, an operational I/O error records an internal code
+    in F.ERRS and the operation is abandoned instead of aborting; the
+    program inspects and clears F.ERRS.  Internal code values are
+    [INFERRED] (vintage codes unknown — probe candidate); the trap/abort
+    *behavior* is what these tests pin.
+    """
+
+    def test_trapped_reset_on_missing_file_sets_errs(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "no_such_file.txt"
+            src = ("PROGRAM P; VAR f: TEXT; BEGIN "
+                   f"ASSIGN(f, '{path}'); "
+                   "f.TRAP := TRUE; RESET(f); "
+                   "IF f.ERRS <> 0 THEN WRITELN('trapped'); "
+                   "f.ERRS := 0; "
+                   "IF f.ERRS = 0 THEN WRITELN('cleared') END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "trapped\ncleared\n")
+
+    def test_untrapped_reset_on_missing_file_aborts(self):
+        """Default (TRAP off): same error still aborts loudly."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "no_such_file.txt"
+            src = ("PROGRAM P; VAR f: TEXT; BEGIN "
+                   f"ASSIGN(f, '{path}'); RESET(f) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertNotEqual(rc, 0)
+
+    def test_trapped_get_past_eof_sets_errs(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "one.txt"
+            with open(path, 'w') as fh:
+                fh.write("A\n")
+            src = ("PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); RESET(f); f.TRAP := TRUE; "
+                   "c := f^; GET(f); GET(f); "      # A, marker, now at eof
+                   "GET(f); "                        # past eof: trapped
+                   "IF f.ERRS <> 0 THEN WRITELN('trapped'); "
+                   "WRITELN(c) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "trapped\nA\n")
+
+    def test_trapped_put_in_read_mode_sets_errs(self):
+        """The PUT-after-GET mode violation becomes trappable with TRAP on
+        (companion to TestResetModeTransitions' untrapped abort)."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "rw.txt"
+            with open(path, 'w') as fh:
+                fh.write("AB\n")
+            src = ("PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); RESET(f); f.TRAP := TRUE; "
+                   "c := f^; GET(f); "
+                   "f^ := 'Z'; PUT(f); "
+                   "IF f.ERRS <> 0 THEN WRITELN('trapped') END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "trapped\n")
+
+    def test_trap_defaults_off_and_errs_zero(self):
+        src = ("PROGRAM P; VAR f: TEXT; BEGIN "
+               "IF NOT f.TRAP THEN WRITELN('off'); "
+               "IF f.ERRS = 0 THEN WRITELN('zero') END.")
+        rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "off\nzero\n")

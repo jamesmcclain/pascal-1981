@@ -348,6 +348,13 @@ class TypesMapMixin:
                         if field == 'MODE':
                             ptr = self.builder.gep(fcb, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 7)])
                             cur_type = NamedType('FILEMODES', None)
+                        elif field == 'TRAP':
+                            # Trapped I/O (manual ch.12): BOOLEAN slot 8.
+                            ptr = self.builder.gep(fcb, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 8)])
+                            cur_type = NamedType('BOOLEAN', None)
+                        elif field == 'ERRS':
+                            ptr = self.builder.gep(fcb, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 9)])
+                            cur_type = NamedType('INTEGER', None)
                         else:
                             raise CodegenError(f"Cannot access FCB field '{selector.index_or_field}' on type {cur_type}")
                     else:
