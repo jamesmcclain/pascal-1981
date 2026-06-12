@@ -53,8 +53,13 @@ class IoWriteReadMixin:
                 cur = ty
                 for sel in expr.selectors:
                     if sel.kind == 'FIELD' and isinstance(self.resolve_type_alias(cur), (ResolvedFileType, FileType)):
-                        if str(sel.index_or_field).upper() == 'MODE':
+                        field = str(sel.index_or_field).upper()
+                        if field == 'MODE':
                             return NamedType('FILEMODES', None)
+                        if field == 'TRAP':
+                            return NamedType('BOOLEAN', None)
+                        if field == 'ERRS':
+                            return NamedType('INTEGER', None)
                     # Fall back to the base type for complex selectors this helper does not model.
             return ty
         return self.infer_expression_type(expr) if hasattr(self, 'infer_expression_type') else None

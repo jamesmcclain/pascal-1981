@@ -703,3 +703,32 @@ class TestTrappedIO(unittest.TestCase):
         rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
         self.assertEqual(rc, 0)
         self.assertEqual(out, "off\nzero\n")
+
+
+class TestTrapErrsAsWriteArguments(unittest.TestCase):
+    """Regression found by probe drafting: WRITELN(f.ERRS) misrouted —
+    the WRITE leading-file-selector check saw the designator's base type
+    (a file) and treated f.ERRS as a file selector, producing invalid IR
+    (bitcast i32 to FCB*).  _pas_type now models TRAP/ERRS selectors."""
+
+    def test_writeln_errs_directly(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "nofile.xyz"
+            src = ("PROGRAM P; VAR f: TEXT; BEGIN "
+                   f"ASSIGN(f, '{path}'); f.TRAP := TRUE; RESET(f); "
+                   "WRITELN(f.ERRS) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "1\n")
+
+    def test_trap_field_readable_as_boolean(self):
+        """f.TRAP reads back as a BOOLEAN.  Observed via IF rather than
+        WRITELN: WRITELN of any BOOLEAN currently prints the raw i8 byte
+        (pre-existing defect, found while writing this test — probe t020
+        captures the vintage format before we pick one)."""
+        src = ("PROGRAM P; VAR f: TEXT; BEGIN "
+               "f.TRAP := TRUE; "
+               "IF f.TRAP THEN WRITELN('on') END.")
+        rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "on\n")
