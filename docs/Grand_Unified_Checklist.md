@@ -909,7 +909,17 @@ the biggest single chunk; expect it to need its own design pass.
 
 Here's the de facto remaining work, pulled from the deferred notes inside closed checklist items:
 
-- [ ] **`P::N` WRITE formatting (D-002, high severity)** — vintage accepts `WRITELN(x::2)`, reimplementation rejects at parse. Context-sensitive colon handling in `io_data_param`; cross-ref checklist 8.3. The headline item for the rebuilt `discrepancies.md`.
+- [x] **`P::N` WRITE formatting (D-002, high severity)** — vintage accepts `WRITELN(x::2)`, reimplementation rejects at parse. Context-sensitive colon handling in `io_data_param`; cross-ref checklist 8.3. The headline item for the rebuilt `discrepancies.md`.
+  - DONE: `parse_write_actual_parameter` now recognizes the empty-width
+    `P::N` form (width=None, precision set); REAL codegen lowers a missing
+    width to the default 14-character field, so `WRITELN(123.456::2)`
+    prints `        123.46` — byte-identical to the vintage D-002 output.
+    `[OBSERVED]` Fixture `parser/should_pass/write_double_colon.pas`;
+    tests `TestWriteDoubleColon` (parser, 3) and
+    `TestWriteDoubleColonCodegen` (codegen + native run, 2). Integer/string
+    `P::N` lowering is unchanged (vintage behavior for those types is
+    `[UNVERIFIED]` — candidate probes t003/t004 for the new
+    discrepancies.md). READ-side M/N still unparsed (8.3a scope).
 - [ ] **7.7 string-intrinsic capacity gates** — currently hardcoded `True`; should read the per-statement flag. Now a one-liner via `effective_flag('RANGECK', stmt)` after tonight's patch.
 - [ ] **Codegen for the plumbed-but-inert check flags** — INDEXCK, MATHCK, NILCK, STACKCK, INITCK reach codegen but no checks are emitted; CLI help now says so. Implement (or formally close as out-of-scope) per flag.
 - [ ] **`RESET` implicit first GET** — deferred in the §8 amendment (current component left unfilled).

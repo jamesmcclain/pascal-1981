@@ -1680,3 +1680,21 @@ class TestAbortRuntime(unittest.TestCase):
         self.assertIn("boom", err)
         self.assertIn("5", err)
         self.assertIn("7", err)
+
+
+class TestWriteDoubleColonCodegen(unittest.TestCase):
+    """P::N lowering (discrepancy D-002): default 14-char field, fixed point."""
+
+    def test_double_colon_real_uses_fixed_point_with_default_width(self):
+        src = "PROGRAM P; VAR x: REAL; BEGIN x := 123.456; WRITELN(x::2) END."
+        ir = compile_to_ir(src)
+        self.assertIn("%*.*f", ir)
+
+    @requires_exe
+    def test_double_colon_real_matches_vintage_output(self):
+        """Vintage 1981 output for WRITELN(123.456::2): '        123.46'
+        (14-char field, 2 decimals) — observed in differential probe t002."""
+        src = "PROGRAM P; VAR x: REAL; BEGIN x := 123.456; WRITELN(x::2) END."
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "        123.46\n")

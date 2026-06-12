@@ -516,3 +516,37 @@ class TestForceFlagDefaults(unittest.TestCase):
         stmt = EmptyStmt()
         stmt.meta_flags = {'MATHCK': False}
         self.assertTrue(cg.effective_flag('MATHCK', stmt))
+
+
+class TestWriteDoubleColon(unittest.TestCase):
+    """P::N WRITE formatting (manual 12-17; discrepancy D-002)."""
+
+    def test_double_colon_parses(self):
+        from tests.support import parse_source
+        ast = parse_source(
+            'PROGRAM P; VAR x: REAL; BEGIN WRITELN(x::2) END.'
+        )
+        self.assertIsNotNone(ast)
+
+    def test_double_colon_width_none_precision_set(self):
+        from tests.support import parse_source
+        from ast_nodes import WriteArg
+        ast = parse_source(
+            'PROGRAM P; VAR x: REAL; BEGIN WRITELN(x::2) END.'
+        )
+        stmt = ast.block.body[0]
+        arg = stmt.args[0]
+        self.assertIsInstance(arg, WriteArg)
+        self.assertIsNone(arg.width)
+        self.assertIsNotNone(arg.precision)
+
+    def test_full_form_still_parses(self):
+        """P:M:N must be unaffected."""
+        from tests.support import parse_source
+        from ast_nodes import WriteArg
+        ast = parse_source(
+            'PROGRAM P; VAR x: REAL; BEGIN WRITELN(x:8:3) END.'
+        )
+        arg = ast.block.body[0].args[0]
+        self.assertIsNotNone(arg.width)
+        self.assertIsNotNone(arg.precision)

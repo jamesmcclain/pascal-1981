@@ -455,9 +455,12 @@ lstring_type = "LSTRING" "(" constant ")" ;    (* PACKED ARRAY [0..n] OF CHAR, i
    ("for later input format control") and are not accepted for BINARY
    files. An optional leading file argument selects the stream.
 
-   Reimplementation status (see checklist 8.3/8.3a): P, P:M, and P:M:N
-   are parsed and lowered on WRITE/WRITELN; P::N is rejected by the
-   parser, and READ-side M/N are not parsed. Known parser looseness:
+   Reimplementation status (see checklist 8.3/8.3a): P, P:M, P:M:N,
+   and P::N are parsed and lowered on WRITE/WRITELN (P::N closed via
+   discrepancy D-002: width omitted means the default field width — for
+   REAL a 14-character field, matching the vintage output
+   '        123.46' for 123.456::2 [OBSERVED]). READ-side M/N are not
+   parsed. Known parser looseness:
    the colon forms are currently accepted on EVERY call, not just the
    I/O procedures (see tests/fixtures/parser/judgment_calls/
    B_colon_args_any_call.pas); rejection of M/N on binary files is not
@@ -686,6 +689,7 @@ character = (* any printable ASCII character in the range 0x20–0x7E,
 | `io_data_param` — new production for READ/WRITE field formatting (`P`, `P:M`, `P:M:N`, `P::N`) | DOCUMENTED | Manual 12-17 (line ~13473); previously recorded only in judgment_calls fixture comments |
 | `file_type` — comment amended to separate vintage-toolchain verification (still blocked) from reimplementation runtime status (implemented, checklist §8) | Structural | Checklist Section 8 evidence |
 | `metacommand_comment` — new section documenting all 30 metacommands (Chapter 4): ON/OFF switches with defaults, INTEGER/STRING listing metacommands, typeless `$PUSH`/`$POP`/`$MESSAGE`/`$INCONST`, and `$IF`/`$THEN`/`$ELSE`/`$END` conditional compilation with nesting semantics | DOCUMENTED | Checklist §9.5; IBM Pascal manual Chapter 4 |
+| `io_data_param` — `P::N` now parsed and lowered on WRITE/WRITELN; comment updated (was: rejected by parser) | OBSERVED | Discrepancy D-002 differential probe (vintage accepts, output `        123.46`); manual 12-17 |
 
 ---
 

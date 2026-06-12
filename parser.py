@@ -476,9 +476,16 @@ class Parser:
         width: Optional[Expression] = None
         precision: Optional[Expression] = None
         if self.match('COLON'):
-            width = self.parse_expression()
-            if self.match('COLON'):
+            if self.current().kind == 'COLON':
+                # P::N (manual 12-17): width M omitted — "same as passing
+                # MAXINT", i.e. the type's default width is used.  Vintage
+                # compiler accepts this; see discrepancy D-002.
+                self.match('COLON')
                 precision = self.parse_expression()
+            else:
+                width = self.parse_expression()
+                if self.match('COLON'):
+                    precision = self.parse_expression()
         return WriteArg(expr, width, precision)
 
     def parse_if_statement(self) -> IfStmt:
