@@ -907,6 +907,22 @@ the biggest single chunk; expect it to need its own design pass.
 
 ---
 
+Here's the de facto remaining work, pulled from the deferred notes inside closed checklist items:
+
+- [ ] **`P::N` WRITE formatting (D-002, high severity)** — vintage accepts `WRITELN(x::2)`, reimplementation rejects at parse. Context-sensitive colon handling in `io_data_param`; cross-ref checklist 8.3. The headline item for the rebuilt `discrepancies.md`.
+- [ ] **7.7 string-intrinsic capacity gates** — currently hardcoded `True`; should read the per-statement flag. Now a one-liner via `effective_flag('RANGECK', stmt)` after tonight's patch.
+- [ ] **Codegen for the plumbed-but-inert check flags** — INDEXCK, MATHCK, NILCK, STACKCK, INITCK reach codegen but no checks are emitted; CLI help now says so. Implement (or formally close as out-of-scope) per flag.
+- [ ] **`RESET` implicit first GET** — deferred in the §8 amendment (current component left unfilled).
+- [ ] **`EOF`/`EOLN` predicates and TEXT line-marker semantics** — deferred at §8.4.
+- [ ] **Enum input parsing and `STRING(n)` input for READ** — the §9.8/§8.4 follow-ons.
+- [ ] **Real TRAP/ERRS lowering** — deferred to the trapped-I/O item.
+- [ ] **Vintage differential probes for tonight's lexer decisions** — double-`$ELSE` handling and quote-awareness inside skipped `$IF` blocks are [UNVERIFIED] against the 1981 compiler; cheap t00x probes.
+- [ ] **`ORIGIN`/`PORT` attributes** — closed as intentionally out-of-scope (§9.7); listed only so the deferral stays visible.
+
+First two are the highest value: D-002 breaks real programs, and the 7.7 gate fix is nearly free now.
+
+---
+
 ## Notes on ordering judgement
 
 - Section 0 is the one item that is *actively wrong* (accepts illegal programs),
