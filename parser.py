@@ -437,7 +437,7 @@ class Parser:
             self.pos += 1
             expr = self.parse_expression()
             target = Designator(name, selectors)
-            return AssignStmt(target, expr, rangeck=flags.get('RANGECK', True))
+            return AssignStmt(target, expr, rangeck=flags.get('RANGECK', True), meta_flags=dict(flags))
 
         if selectors:
             self.error('designator statement must be an assignment')
@@ -452,7 +452,7 @@ class Parser:
                     args = self.parse_actual_parameter_list()
             self.expect('RPAREN')
         # Bare procedure call is allowed.
-        return ProcCallStmt(name, args, rangeck=flags.get('RANGECK', True))
+        return ProcCallStmt(name, args, rangeck=flags.get('RANGECK', True), meta_flags=dict(flags))
 
     def parse_actual_parameter_list(self) -> List[Expression]:
         exprs: List[Expression] = []
@@ -542,7 +542,7 @@ class Parser:
         if self.match('OTHERWISE'):
             otherwise = self.parse_statement()
         self.expect('END')
-        return CaseStmt(expr, elements, otherwise, rangeck=self.current_flags().get('RANGECK', True))
+        return CaseStmt(expr, elements, otherwise, rangeck=self.current_flags().get('RANGECK', True), meta_flags=dict(self.current_flags()))
 
     def parse_case_element(self) -> CaseElement:
         constants = self.parse_case_constant_list()

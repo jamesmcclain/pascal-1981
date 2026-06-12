@@ -1667,6 +1667,7 @@ class TestAbortRuntime(unittest.TestCase):
     """ABORT's runtime must surface the message, error code, and status, then
     abort (manual: stops like an internal runtime error)."""
 
+    @requires_exe
     def test_pabort_reports_message_and_aborts(self):
         driver = ("extern void pabort(const char *msg, int msglen, "
                   "unsigned short code, unsigned short status);\n"

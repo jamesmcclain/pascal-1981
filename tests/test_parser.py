@@ -449,3 +449,70 @@ class TestMetacommands(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestMetacommandSkipRegressions(unittest.TestCase):
+    """Regressions for $IF skip-mode bugs found in review."""
+
+    def _identifiers(self, src: str) -> list:
+        from lexer import Lexer
+        return [t.value for t in Lexer(src).tokenize() if t.kind == 'IDENTIFIER']
+
+    def test_duplicate_else_does_not_leak_tokens(self):
+        """A stray second $ELSE while skipping the else-branch of a true $IF
+        must not terminate the skip and leak text into the parser."""
+        names = self._identifiers(
+            'PROGRAM P; BEGIN {$IF 1 $THEN} GOOD '
+            '{$ELSE} BAD1 {$ELSE} BAD2 {$END} END.'
+        )
+        self.assertIn('GOOD', names)
+        self.assertNotIn('BAD1', names)
+        self.assertNotIn('BAD2', names)
+
+    def test_string_literal_with_brace_in_skipped_block(self):
+        """A '{' inside a quoted string in a skipped block must not be
+        treated as a comment opener (previously: Unterminated $IF)."""
+        names = self._identifiers(
+            "PROGRAM P; VAR s: INTEGER; BEGIN "
+            "{$IF 0 $THEN} x := '{' ; BAD {$END} s := 1 END."
+        )
+        self.assertNotIn('BAD', names)
+        self.assertIn('s', [n.lower() for n in names if n])
+
+    def test_string_literal_with_paren_star_in_skipped_block(self):
+        """'(*' inside a quoted string in a skipped block is also inert."""
+        names = self._identifiers(
+            "PROGRAM P; BEGIN {$IF 0 $THEN} x := '(*' ; BAD {$END} END."
+        )
+        self.assertNotIn('BAD', names)
+
+
+class TestForceFlagDefaults(unittest.TestCase):
+    """effective_flag must use manual defaults, not blanket True."""
+
+    def test_default_for_off_flag_is_false(self):
+        from codegen import Codegen
+        from ast_nodes import EmptyStmt
+        cg = Codegen()
+        stmt = EmptyStmt()
+        # ENTRY and INITCK default off per the manual.
+        self.assertFalse(cg.effective_flag('ENTRY', stmt))
+        self.assertFalse(cg.effective_flag('INITCK', stmt))
+        # RANGECK defaults on.
+        self.assertTrue(cg.effective_flag('RANGECK', stmt))
+
+    def test_meta_flags_on_stmt_take_effect(self):
+        from codegen import Codegen
+        from ast_nodes import EmptyStmt
+        cg = Codegen()
+        stmt = EmptyStmt()
+        stmt.meta_flags = {'MATHCK': False}
+        self.assertFalse(cg.effective_flag('MATHCK', stmt))
+
+    def test_force_flags_override_stmt(self):
+        from codegen import Codegen
+        from ast_nodes import EmptyStmt
+        cg = Codegen(force_flags={'MATHCK': True})
+        stmt = EmptyStmt()
+        stmt.meta_flags = {'MATHCK': False}
+        self.assertTrue(cg.effective_flag('MATHCK', stmt))

@@ -6,7 +6,7 @@ Each dataclass represents a construct in the Pascal grammar.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 
 # Base class for all AST nodes
@@ -142,6 +142,10 @@ class AssignStmt(ASTNode):
     target: Designator
     expr: Expression
     rangeck: bool = True
+    # Full metacommand flag state in effect at this statement (stamped by the
+    # parser from the token's lexer flags).  None = unknown; codegen falls
+    # back to the manual defaults.
+    meta_flags: Optional[Dict[str, bool]] = None
 
 
 @dataclass
@@ -156,6 +160,7 @@ class ProcCallStmt(ASTNode):
     name: str
     args: List[Union[Expression, WriteArg]]
     rangeck: bool = True
+    meta_flags: Optional[Dict[str, bool]] = None
 
 
 @dataclass
@@ -193,6 +198,7 @@ class CaseStmt(ASTNode):
     elements: List[CaseElement]
     otherwise: Optional[Statement]
     rangeck: bool = True
+    meta_flags: Optional[Dict[str, bool]] = None
 
 
 @dataclass

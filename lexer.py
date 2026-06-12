@@ -316,11 +316,27 @@ class Lexer:
         Returns 'ELSE' or 'END'.
         Nested $IF/$END pairs increment/decrement depth so inner blocks are
         skipped atomically.
+
+        When stop_at_else is False (skipping a completed true-branch forward
+        to $END), a depth-1 $ELSE is ignored rather than terminating the skip,
+        so stray or duplicate $ELSE markers cannot leak text into the parser.
+
+        String literals ('...') in the skipped text are honored: a comment
+        opener inside a quoted string does not start a comment, so e.g.
+        x := '{' inside a skipped block cannot derail $IF/$END tracking.
         """
         self._consume_to(current_closer)   # close the comment we're in
         depth = 1
         while self.current():
-            if self.startswith('(*') or self.current() == '{':
+            if self.current() == "'":
+                # Skip a string literal verbatim; doubled '' quotes inside a
+                # string are naturally handled as two adjacent literals.
+                self.advance()
+                while self.current() and self.current() != "'":
+                    self.advance()
+                if self.current() == "'":
+                    self.advance()
+            elif self.startswith('(*') or self.current() == '{':
                 is_paren = self.startswith('(*')
                 inner_closer = '*)' if is_paren else '}'
                 self.advance(2 if is_paren else 1)
@@ -342,9 +358,12 @@ class Lexer:
                                 self.advance()
                         depth += 1
                         self._consume_to(inner_closer)
-                    elif tag in ('ELSE', 'END') and depth == 1:
+                    elif tag == 'END' and depth == 1:
                         self._consume_to(inner_closer)
-                        return tag
+                        return 'END'
+                    elif tag == 'ELSE' and depth == 1 and stop_at_else:
+                        self._consume_to(inner_closer)
+                        return 'ELSE'
                     elif tag == 'END':
                         depth -= 1
                         self._consume_to(inner_closer)
