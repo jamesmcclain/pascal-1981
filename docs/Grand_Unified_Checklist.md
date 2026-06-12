@@ -1017,12 +1017,17 @@ Here's the de facto remaining work, pulled from the deferred notes inside closed
     `tests.test_runtime_fixes.TestDosCrLfTranslation` (5 tests: CRLF as
     one marker, `F^` blank at marker, EOF after final CRLF, bare CR as
     data, binary non-translation). Full suite 436 tests OK. `[OBSERVED]`
-- [ ] **`EOL` predeclared constant** — split out from the item above and
+- [x] **`EOL` predeclared constant** — split out from the item above and
   left open on purpose: the manual grep found `EOL` in the predeclared
   identifier table only, with no body semantics (8.4's `[READ]` note says
   "do not infer"). Guessing a value (CR? LF? CHR(13)?) would be
   confabulation. Prime differential-probe candidate: compile
   `WRITELN(ORD(EOL))` on the vintage toolchain and observe. `[UNVERIFIED]`
+  - CLOSED by maintainer ruling: a bare name in the identifier table with
+    no prose semantics anywhere in the manual is not a feature obligation;
+    treating it as one was over-indexing. No implementation, no probe
+    required. If real-world vintage source is ever found *using* `EOL`,
+    reopen with that program as the evidence. `[READ]`
 - [ ] **Enum input parsing and `STRING(n)` input for READ** — the §9.8/§8.4 follow-ons.
 - [ ] **Real TRAP/ERRS lowering** — deferred to the trapped-I/O item.
 - [ ] **Vintage differential probes for tonight's lexer decisions** — double-`$ELSE` handling and quote-awareness inside skipped `$IF` blocks are [UNVERIFIED] against the 1981 compiler; cheap t00x probes.
