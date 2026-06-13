@@ -53,7 +53,7 @@ def parse_source(src: str):
         os.unlink(path)
 
 
-def typecheck_source(src: str):
+def typecheck_source(src: str, features=None):
     """
     Parse and type-check a source string in-process.
     Returns a TypeCheckResult with .success (bool) and .errors (list).
@@ -62,7 +62,7 @@ def typecheck_source(src: str):
     path = _write_temp(src)
     try:
         ast = parse_file(path)
-        checker = PascalTypeChecker(source_file=path)
+        checker = PascalTypeChecker(source_file=path, features=features)
         return checker.check(ast)
     finally:
         os.unlink(path)

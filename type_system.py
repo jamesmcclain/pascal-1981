@@ -25,13 +25,33 @@ class Type(ABC):
 
 
 class IntegerType(Type):
-    """The INTEGER type (32-bit signed)."""
+    """The INTEGER type (16-bit signed)."""
 
     def __str__(self) -> str:
         return "INTEGER"
 
     def equivalent_to(self, other: Type) -> bool:
         return isinstance(other, IntegerType)
+
+
+class Integer32Type(Type):
+    """The INTEGER32 extension type (32-bit signed)."""
+
+    def __str__(self) -> str:
+        return "INTEGER32"
+
+    def equivalent_to(self, other: Type) -> bool:
+        return isinstance(other, Integer32Type)
+
+
+class Integer64Type(Type):
+    """The INTEGER64 extension type (64-bit signed)."""
+
+    def __str__(self) -> str:
+        return "INTEGER64"
+
+    def equivalent_to(self, other: Type) -> bool:
+        return isinstance(other, Integer64Type)
 
 
 class BooleanType(Type):
@@ -293,6 +313,8 @@ class FunctionType(Type):
 
 # Built-in type instances (singletons)
 INTEGER_TYPE = IntegerType()
+INTEGER32_TYPE = Integer32Type()
+INTEGER64_TYPE = Integer64Type()
 BOOLEAN_TYPE = BooleanType()
 REAL_TYPE = RealType()
 WORD_TYPE = WordType()
@@ -315,6 +337,12 @@ def can_assign(from_type: Type, to_type: Type) -> bool:
     if isinstance(from_type, IntegerType) and isinstance(to_type, RealType):
         return True
     if isinstance(from_type, IntegerType) and isinstance(to_type, WordType):
+        return True
+    if isinstance(from_type, IntegerType) and isinstance(to_type, (Integer32Type, Integer64Type)):
+        return True
+    if isinstance(from_type, Integer32Type) and isinstance(to_type, Integer64Type):
+        return True
+    if isinstance(from_type, WordType) and isinstance(to_type, (Integer32Type, Integer64Type)):
         return True
     if isinstance(from_type, SetType) and isinstance(to_type, SetType):
         return from_type.element_type.equivalent_to(to_type.element_type)
@@ -344,6 +372,23 @@ def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optiona
         if op == 'SLASH':
             return REAL_TYPE  # real division
         if op in ARITH or op in BITWISE:
+            return INTEGER_TYPE
+        if op in COMPARE:
+            return BOOLEAN_TYPE
+
+    # Wide signed integer extension family.
+    int_rank = {IntegerType: 0, WordType: 0, Integer32Type: 1, Integer64Type: 2}
+    if type(left_type) in int_rank and type(right_type) in int_rank:
+        if op == 'SLASH':
+            return REAL_TYPE
+        if op in ARITH or op in BITWISE:
+            rank = max(int_rank[type(left_type)], int_rank[type(right_type)])
+            if rank == 2:
+                return INTEGER64_TYPE
+            if rank == 1:
+                return INTEGER32_TYPE
+            if isinstance(left_type, WordType) and isinstance(right_type, WordType):
+                return WORD_TYPE
             return INTEGER_TYPE
         if op in COMPARE:
             return BOOLEAN_TYPE
@@ -421,12 +466,12 @@ def unary_op_result_type(operand_type: Type, op: str) -> Optional[Type]:
     if op == 'NOT':
         if isinstance(operand_type, BooleanType):
             return BOOLEAN_TYPE
-        if isinstance(operand_type, (IntegerType, WordType)):
+        if isinstance(operand_type, (IntegerType, Integer32Type, Integer64Type, WordType)):
             return operand_type  # bitwise complement
 
     if op in ('PLUS', 'MINUS'):
-        if isinstance(operand_type, IntegerType):
-            return INTEGER_TYPE
+        if isinstance(operand_type, (IntegerType, Integer32Type, Integer64Type)):
+            return operand_type
         if isinstance(operand_type, RealType):
             return REAL_TYPE
         if isinstance(operand_type, WordType):

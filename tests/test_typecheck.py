@@ -71,6 +71,40 @@ class TestVariableScope(unittest.TestCase):
         result = typecheck_source("PROGRAM P; CONST hi = MAXINT; BEGIN WRITELN(hi); WRITELN(MAXWORD) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
+    def test_wide_integer_types_are_feature_gated(self):
+        """INTEGER32/INTEGER64 are extension type names, not vintage names."""
+        src = "PROGRAM P; VAR x: INTEGER32; BEGIN x := 1 END."
+        result = typecheck_source(src)
+        self.assertFalse(result.success)
+        self.assertIn("Unknown", " ".join(str(e) for e in result.errors))
+
+        result = typecheck_source(src, features={'wide-integers': True})
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_wide_integer_widening_rules(self):
+        """Wide integer assignments widen implicitly but do not narrow."""
+        ok = typecheck_source("""
+PROGRAM P;
+VAR i: INTEGER; w: WORD; x: INTEGER32; y: INTEGER64;
+BEGIN
+  x := i; x := w; y := x; y := i
+END.
+""", features={'wide-integers': True})
+        self.assertTrue(ok.success, msg=" ".join(str(e) for e in ok.errors))
+
+        bad = typecheck_source("PROGRAM P; VAR x: INTEGER32; i: INTEGER; BEGIN i := x END.", features={'wide-integers': True})
+        self.assertFalse(bad.success)
+        self.assertIn("Cannot assign", " ".join(str(e) for e in bad.errors))
+
+    def test_context_typed_wide_integer_literal_ranges(self):
+        """Integer literals are checked against wide assignment contexts."""
+        wide = typecheck_source("PROGRAM P; VAR x: INTEGER32; BEGIN x := 100000 END.", features={'wide-integers': True})
+        self.assertTrue(wide.success, msg=" ".join(str(e) for e in wide.errors))
+
+        too_wide = typecheck_source("PROGRAM P; VAR x: INTEGER32; BEGIN x := 9223372036854775807 END.", features={'wide-integers': True})
+        self.assertFalse(too_wide.success)
+        self.assertIn("out of range", " ".join(str(e) for e in too_wide.errors))
+
     def test_predeclared_text_input_output_string_names(self):
         """TEXT, INPUT, OUTPUT, and STRING are predeclared names."""
         result = typecheck_source("PROGRAM P; VAR f: TEXT; BEGIN WRITELN(OUTPUT, 'ok'); WRITELN(f, 'ok') END.")

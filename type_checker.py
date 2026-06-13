@@ -33,7 +33,7 @@ from ast_nodes import SubrangeType as ASTSubrangeType
 from ast_nodes import (TypeDecl, UnaryOp, UpperExpr, UseClause, VarDecl, WhileStmt, WriteArg)
 from builtins_registry import register_builtins
 from symbol_table import SourceLocation, Symbol, SymbolTable
-from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, EnumType, FileType, FunctionType, LStringType, PointerType, ProcedureType,
+from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, EnumType, FileType, FunctionType, LStringType, PointerType, ProcedureType,
                          RecordType, SetType, StringType, Type, binary_op_result_type, can_assign, unary_op_result_type)
 
 
@@ -863,7 +863,7 @@ class PascalTypeChecker(TypeChecker):
             target_name = stmt.target.name
             # Special case: assigning to function name inside function body (sets return value)
             if self.current_function and target_name == self.current_function.name:
-                value_type = self.infer_expression_type(stmt.expr)
+                value_type = self.infer_expression_type(stmt.expr, self.current_function_return_type)
                 if value_type and self.current_function_return_type:
                     if not can_assign(value_type, self.current_function_return_type):
                         self.error(f"Cannot assign {value_type} to function return type {self.current_function_return_type}", stmt)
@@ -883,7 +883,7 @@ class PascalTypeChecker(TypeChecker):
                     self.error("Cannot assign whole file variables; use the file buffer variable (F^) or file I/O procedures", stmt)
                     return
                 # Type check successful - target_type is now the element/field type
-                value_type = self.infer_expression_type(stmt.expr)
+                value_type = self.infer_expression_type(stmt.expr, target_type)
                 if value_type and not can_assign(value_type, target_type):
                     self.error(f"Cannot assign {value_type} to {target_type}", stmt)
                 return
@@ -915,7 +915,7 @@ class PascalTypeChecker(TypeChecker):
             return
 
         # Check type compatibility
-        value_type = self.infer_expression_type(stmt.expr)
+        value_type = self.infer_expression_type(stmt.expr, target_type)
         if value_type:
             if not can_assign(value_type, target_type):
                 self.error(f"Cannot assign {value_type} to {target_type}", stmt)
@@ -1165,11 +1165,13 @@ class PascalTypeChecker(TypeChecker):
 
     def _is_writable_type(self, t: Type) -> bool:
         # WRITE supports printable BOOLEAN and enum values; READ input parsing for those is intentionally absent.
-        return isinstance(t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), EnumType, StringType, LStringType))
+        wide = (type(INTEGER32_TYPE), type(INTEGER64_TYPE)) if self.feature_enabled('wide-integers') else ()
+        return isinstance(t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), EnumType, StringType, LStringType) + wide)
 
     def _is_readable_type(self, t: Type) -> bool:
         # READ is narrower than WRITE: enum input is deferred to 9.8 follow-on work, and BOOLEAN input is unsupported.
-        return isinstance(t, (type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), StringType, LStringType))
+        wide = (type(INTEGER32_TYPE), type(INTEGER64_TYPE)) if self.feature_enabled('wide-integers') else ()
+        return isinstance(t, (type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), StringType, LStringType) + wide)
 
     def _check_concat_args(self, stmt: ProcCallStmt) -> None:
         """Type check CONCAT(VAR D: LSTRING; CONST S: STRING).
@@ -1504,10 +1506,50 @@ class PascalTypeChecker(TypeChecker):
             value = value[1:-1]
         return value.replace("''", "'")
 
-    def infer_expression_type(self, expr: Expression) -> Optional[Type]:
+    def _integer_range_for_type(self, t: Type) -> Optional[tuple[int, int]]:
+        if t == INTEGER_TYPE:
+            return (-32768, 32767)
+        if t == WORD_TYPE:
+            return (0, 65535)
+        if t == INTEGER32_TYPE:
+            return (-2147483648, 2147483647)
+        if t == INTEGER64_TYPE:
+            return (-9223372036854775808, 9223372036854775807)
+        return None
+
+    def _fold_int_literal_value(self, expr: Expression) -> Optional[int]:
+        if isinstance(expr, IntLiteral):
+            return expr.value
+        if isinstance(expr, UnaryOp) and expr.op in ('PLUS', 'MINUS'):
+            inner = self._fold_int_literal_value(expr.operand)
+            if inner is not None:
+                return -inner if expr.op == 'MINUS' else inner
+        return None
+
+    def _check_integer_literal_range(self, expr: Expression, context_type: Optional[Type]) -> None:
+        value = self._fold_int_literal_value(expr)
+        if value is None:
+            return
+        if context_type is None:
+            return
+        # Phase 1 installs the machinery without changing legacy INTEGER-width
+        # tests yet; INTEGER's stricter 16-bit context is activated with the
+        # Phase 2 width flip. Extension contexts are checked now.
+        if context_type == INTEGER_TYPE:
+            return
+        target = context_type
+        rng = self._integer_range_for_type(target)
+        if rng is None:
+            return
+        lo, hi = rng
+        if value < lo or value > hi:
+            self.error(f"Integer literal {value} out of range for {target} ({lo}..{hi})", expr)
+
+    def infer_expression_type(self, expr: Expression, context_type: Optional[Type] = None) -> Optional[Type]:
         """Infer the type of an expression."""
         if isinstance(expr, IntLiteral):
-            return INTEGER_TYPE
+            self._check_integer_literal_range(expr, context_type)
+            return context_type if context_type in (INTEGER_TYPE, WORD_TYPE, INTEGER32_TYPE, INTEGER64_TYPE) else INTEGER_TYPE
         elif isinstance(expr, RealLiteral):
             return REAL_TYPE
         elif isinstance(expr, BoolLiteral):
@@ -1665,7 +1707,11 @@ class PascalTypeChecker(TypeChecker):
                 return result
             return None
         elif isinstance(expr, UnaryOp):
-            operand_type = self.infer_expression_type(expr.operand)
+            self._check_integer_literal_range(expr, context_type)
+            if expr.op in ('PLUS', 'MINUS') and isinstance(expr.operand, IntLiteral):
+                operand_type = context_type if context_type in (INTEGER_TYPE, WORD_TYPE, INTEGER32_TYPE, INTEGER64_TYPE) else INTEGER_TYPE
+            else:
+                operand_type = self.infer_expression_type(expr.operand, context_type)
             if operand_type:
                 result = unary_op_result_type(operand_type, expr.op)
                 if result is None:
@@ -2029,6 +2075,10 @@ class PascalTypeChecker(TypeChecker):
             name = type_expr.name.upper()
             if name == 'INTEGER':
                 return INTEGER_TYPE
+            elif name == 'INTEGER32' and self.feature_enabled('wide-integers'):
+                return INTEGER32_TYPE
+            elif name == 'INTEGER64' and self.feature_enabled('wide-integers'):
+                return INTEGER64_TYPE
             elif name == 'BOOLEAN':
                 return BOOLEAN_TYPE
             elif name == 'REAL':
