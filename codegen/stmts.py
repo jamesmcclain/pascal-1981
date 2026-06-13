@@ -123,7 +123,7 @@ class StmtsMixin:
                 if target_type.width < value.type.width:
                     value = self.builder.trunc(value, target_type)
                 elif target_type.width > value.type.width:
-                    value = self.builder.sext(value, target_type)
+                    value = self._extend_int_for_pascal_expr(value, target_type, stmt.expr)
             elif isinstance(target_type, ir.DoubleType) and isinstance(value.type, ir.IntType):
                 value = self.builder.sitofp(value, target_type)
             elif isinstance(target_type, ir.IntType) and isinstance(value.type, ir.DoubleType):
@@ -328,7 +328,7 @@ class StmtsMixin:
         # Initialize loop variable
         start_val = self.codegen_expr(stmt.start)
         if isinstance(start_val.type, ir.IntType) and start_val.type != loop_var.type.pointee:
-            start_val = self.builder.trunc(start_val, loop_var.type.pointee) if start_val.type.width > loop_var.type.pointee.width else self.builder.sext(start_val, loop_var.type.pointee)
+            start_val = self.builder.trunc(start_val, loop_var.type.pointee) if start_val.type.width > loop_var.type.pointee.width else self._extend_int_for_pascal_expr(start_val, loop_var.type.pointee, stmt.start)
         self.builder.store(start_val, loop_var)
 
         # Create loop blocks
@@ -343,7 +343,7 @@ class StmtsMixin:
         current_val = self.builder.load(loop_var)
         end_val = self.codegen_expr(stmt.end)
         if isinstance(end_val.type, ir.IntType) and end_val.type != current_val.type:
-            end_val = self.builder.trunc(end_val, current_val.type) if end_val.type.width > current_val.type.width else self.builder.sext(end_val, current_val.type)
+            end_val = self.builder.trunc(end_val, current_val.type) if end_val.type.width > current_val.type.width else self._extend_int_for_pascal_expr(end_val, current_val.type, stmt.end)
         cond = self.builder.icmp_signed('<=', current_val, end_val) if stmt.direction == 'TO' else self.builder.icmp_signed('>=', current_val, end_val)
         self.builder.cbranch(cond, body_block, end_block)
 

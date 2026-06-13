@@ -472,6 +472,19 @@ END."""
             ],
         )
 
+    def test_word_zero_extends_into_wide_integer_arithmetic(self):
+        """WORD operands remain unsigned when mixed into wider integer arithmetic."""
+        src = """PROGRAM P;
+VAR w: WORD; r: INTEGER32;
+BEGIN
+  w := 40000;
+  r := w + 0;
+  WRITELN(r)
+END."""
+        returncode, stdout = build_and_run(src, features={'wide-integers': True})
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "40000")
+
     def test_real_assignment_and_output(self):
         """REAL assignment and output runs and produces correct output."""
         src = "PROGRAM P; VAR x: REAL; BEGIN x := 1.5; WRITELN(x) END."

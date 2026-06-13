@@ -294,6 +294,12 @@ class ExprsMixin:
             return expr.name.upper() == 'WRD'
         return False
 
+    def _extend_int_for_pascal_expr(self, value: 'ir.Value', target: ir.IntType, expr: Expression) -> 'ir.Value':
+        """Extend an integer value using the Pascal source type's signedness."""
+        if self._expr_is_unsigned_word(expr):
+            return self.builder.zext(value, target)
+        return self.builder.sext(value, target)
+
     def _mathck_arith(self, op: str, left: 'ir.Value', right: 'ir.Value', signed: bool) -> 'ir.Value':
         """Integer add/sub/mul with $MATHCK overflow detection.
 
@@ -343,9 +349,9 @@ class ExprsMixin:
         if isinstance(left.type, ir.IntType) and isinstance(right.type, ir.IntType) and left.type.width != right.type.width:
             target = ir.IntType(max(left.type.width, right.type.width))
             if left.type.width < target.width:
-                left = self.builder.sext(left, target)
+                left = self._extend_int_for_pascal_expr(left, target, expr.left)
             if right.type.width < target.width:
-                right = self.builder.sext(right, target)
+                right = self._extend_int_for_pascal_expr(right, target, expr.right)
 
         # SLASH is always real division in Pascal (7/2 = 3.5), so force double
         # even when both operands are integer-typed.

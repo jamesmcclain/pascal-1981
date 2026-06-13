@@ -1530,9 +1530,7 @@ class PascalTypeChecker(TypeChecker):
         value = self._fold_int_literal_value(expr)
         if value is None:
             return
-        if context_type is None:
-            return
-        target = context_type
+        target = context_type if context_type is not None else INTEGER_TYPE
         rng = self._integer_range_for_type(target)
         if rng is None:
             return

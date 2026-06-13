@@ -96,6 +96,19 @@ END.
         self.assertFalse(bad.success)
         self.assertIn("Cannot assign", " ".join(str(e) for e in bad.errors))
 
+    def test_bare_integer_literal_defaults_to_integer_range(self):
+        """Untyped integer literals default to 16-bit INTEGER and are range-checked."""
+        result = typecheck_source("PROGRAM P; BEGIN WRITELN(100000) END.")
+        self.assertFalse(result.success)
+        self.assertIn("out of range", " ".join(str(e) for e in result.errors))
+
+        ok = typecheck_source("PROGRAM P; BEGIN WRITELN(-32768) END.")
+        self.assertTrue(ok.success, msg=" ".join(str(e) for e in ok.errors))
+
+        bad = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := 32768 END.")
+        self.assertFalse(bad.success)
+        self.assertIn("out of range", " ".join(str(e) for e in bad.errors))
+
     def test_context_typed_wide_integer_literal_ranges(self):
         """Integer literals are checked against wide assignment contexts."""
         wide = typecheck_source("PROGRAM P; VAR x: INTEGER32; BEGIN x := 100000 END.", features={'wide-integers': True})
