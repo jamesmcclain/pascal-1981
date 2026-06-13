@@ -234,7 +234,7 @@ class StringsMixin:
             dst_arg = Designator(dst_arg.name, [])
         dst_ptr = self.resolve_designator_ptr(dst_arg)
         dst_chars, dst_len = self.get_string_chars_and_len(args[1])
-        pos = self.codegen_expr(args[2])
+        pos = self.coerce_printf_int(self.codegen_expr(args[2]))
         one = ir.Constant(ir.IntType(32), 1)
         zero = ir.Constant(ir.IntType(32), 0)
         new_len = self.builder.add(dst_len, src_len)
@@ -261,8 +261,8 @@ class StringsMixin:
             dst_arg = Designator(dst_arg.name, [])
         dst_ptr = self.resolve_designator_ptr(dst_arg)
         dst_chars, dst_len = self.get_string_chars_and_len(args[0])
-        pos = self.codegen_expr(args[1])
-        count = self.codegen_expr(args[2])
+        pos = self.coerce_printf_int(self.codegen_expr(args[1]))
+        count = self.coerce_printf_int(self.codegen_expr(args[2]))
         one = ir.Constant(ir.IntType(32), 1)
         zero = ir.Constant(ir.IntType(32), 0)
         start = self.builder.sub(pos, one)
@@ -283,10 +283,10 @@ class StringsMixin:
         return self.builder.call(fn.llvm_value, [hay_chars, hay_len, needle_chars, needle_len])
 
     def builtin_scaneq_scanne(self, lookup_name: str, args: List[Expression]) -> ir.Value:
-        L = self.codegen_expr(args[0])
+        L = self.coerce_printf_int(self.codegen_expr(args[0]))
         P = self.codegen_expr(args[1])
         S_chars, S_len = self.get_string_chars_and_len(args[2])
-        I = self.codegen_expr(args[3])
+        I = self.coerce_printf_int(self.codegen_expr(args[3]))
         fn = self.scope.lookup(lookup_name.lower())
         if not fn:
             raise CodegenError(f'Undefined helper: {lookup_name.lower()}')
@@ -315,12 +315,16 @@ class StringsMixin:
         precision = ir.Constant(ir.IntType(32), 0)
         if isinstance(value_arg, WriteArg):
             val = self.codegen_expr(value_arg.expr)
+            if isinstance(val.type, ir.IntType) and val.type.width < 32:
+                val = self.builder.sext(val, ir.IntType(32))
             if value_arg.width is not None:
                 width = self.coerce_arg(self.codegen_expr(value_arg.width), ir.IntType(32))
             if value_arg.precision is not None:
                 precision = self.coerce_arg(self.codegen_expr(value_arg.precision), ir.IntType(32))
         else:
             val = self.codegen_expr(value_arg)
+            if isinstance(val.type, ir.IntType) and val.type.width < 32:
+                val = self.builder.sext(val, ir.IntType(32))
         fn = self.scope.lookup('encode_value')
         if not fn:
             raise CodegenError('Undefined helper: encode_value')

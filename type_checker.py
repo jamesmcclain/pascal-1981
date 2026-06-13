@@ -91,7 +91,7 @@ class PascalTypeChecker(TypeChecker):
 
     def _setup_builtins(self) -> None:
         """Define built-in procedures and functions in the global scope."""
-        register_builtins(self.symbol_table)
+        register_builtins(self.symbol_table, self.features)
 
     def check(self, ast: ASTNode) -> TypeCheckResult:
         """Main entry point for type checking."""
@@ -1532,11 +1532,6 @@ class PascalTypeChecker(TypeChecker):
             return
         if context_type is None:
             return
-        # Phase 1 installs the machinery without changing legacy INTEGER-width
-        # tests yet; INTEGER's stricter 16-bit context is activated with the
-        # Phase 2 width flip. Extension contexts are checked now.
-        if context_type == INTEGER_TYPE:
-            return
         target = context_type
         rng = self._integer_range_for_type(target)
         if rng is None:
@@ -1549,7 +1544,9 @@ class PascalTypeChecker(TypeChecker):
         """Infer the type of an expression."""
         if isinstance(expr, IntLiteral):
             self._check_integer_literal_range(expr, context_type)
-            return context_type if context_type in (INTEGER_TYPE, WORD_TYPE, INTEGER32_TYPE, INTEGER64_TYPE) else INTEGER_TYPE
+            resolved = context_type if context_type in (INTEGER_TYPE, WORD_TYPE, INTEGER32_TYPE, INTEGER64_TYPE) else INTEGER_TYPE
+            setattr(expr, 'resolved_type', resolved)
+            return resolved
         elif isinstance(expr, RealLiteral):
             return REAL_TYPE
         elif isinstance(expr, BoolLiteral):
@@ -1698,8 +1695,9 @@ class PascalTypeChecker(TypeChecker):
                 return sym.type.return_type
             return sym.type
         elif isinstance(expr, BinOp):
-            left_type = self.infer_expression_type(expr.left)
-            right_type = self.infer_expression_type(expr.right)
+            literal_context = context_type if context_type in (INTEGER_TYPE, WORD_TYPE, INTEGER32_TYPE, INTEGER64_TYPE) else None
+            left_type = self.infer_expression_type(expr.left, literal_context if isinstance(expr.left, (IntLiteral, UnaryOp)) else None)
+            right_type = self.infer_expression_type(expr.right, literal_context if isinstance(expr.right, (IntLiteral, UnaryOp)) else None)
             if left_type and right_type:
                 result = binary_op_result_type(left_type, expr.op, right_type)
                 if result is None:
@@ -1710,6 +1708,8 @@ class PascalTypeChecker(TypeChecker):
             self._check_integer_literal_range(expr, context_type)
             if expr.op in ('PLUS', 'MINUS') and isinstance(expr.operand, IntLiteral):
                 operand_type = context_type if context_type in (INTEGER_TYPE, WORD_TYPE, INTEGER32_TYPE, INTEGER64_TYPE) else INTEGER_TYPE
+                setattr(expr, 'resolved_type', operand_type)
+                setattr(expr.operand, 'resolved_type', operand_type)
             else:
                 operand_type = self.infer_expression_type(expr.operand, context_type)
             if operand_type:

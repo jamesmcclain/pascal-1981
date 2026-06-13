@@ -14,6 +14,7 @@ import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
 from ast_nodes import *
+from type_system import INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, WORD_TYPE
 from type_system import LStringType as ResolvedLStringType
 from type_system import StringType as ResolvedStringType
 
@@ -24,7 +25,12 @@ class ExprsMixin:
     def codegen_expr(self, expr: Expression) -> ir.Value:
         """Codegen an expression."""
         if isinstance(expr, IntLiteral):
-            return ir.Constant(ir.IntType(32), expr.value)
+            resolved = getattr(expr, 'resolved_type', INTEGER_TYPE)
+            if resolved == INTEGER64_TYPE:
+                return ir.Constant(ir.IntType(64), expr.value)
+            if resolved == INTEGER32_TYPE:
+                return ir.Constant(ir.IntType(32), expr.value)
+            return ir.Constant(ir.IntType(16), expr.value)
         elif isinstance(expr, RealLiteral):
             return ir.Constant(ir.DoubleType(), expr.value)
         elif isinstance(expr, CharLiteral):
@@ -304,7 +310,7 @@ class ExprsMixin:
         if not self.check_enabled('MATHCK'):
             return plain(left, right)
         if not (isinstance(left.type, ir.IntType) and left.type == right.type
-                and left.type.width in (16, 32)):
+                and left.type.width in (16, 32, 64)):
             return plain(left, right)
         meth = getattr(self.builder, ('s' if signed else 'u') + op + '_with_overflow')
         res = meth(left, right)
@@ -333,6 +339,13 @@ class ExprsMixin:
 
         if self.is_set_value(left) or self.is_set_value(right):
             return self.codegen_set_binop(expr.op, left, right)
+
+        if isinstance(left.type, ir.IntType) and isinstance(right.type, ir.IntType) and left.type.width != right.type.width:
+            target = ir.IntType(max(left.type.width, right.type.width))
+            if left.type.width < target.width:
+                left = self.builder.sext(left, target)
+            if right.type.width < target.width:
+                right = self.builder.sext(right, target)
 
         # SLASH is always real division in Pascal (7/2 = 3.5), so force double
         # even when both operands are integer-typed.
@@ -488,17 +501,17 @@ class ExprsMixin:
             return self.builder.zext(val, ir.IntType(32))
         elif lookup_name == 'ODD':
             val = self.codegen_expr(expr.args[0])
-            one = ir.Constant(ir.IntType(32), 1)
+            one = ir.Constant(val.type, 1)
             result = self.builder.and_(val, one)
-            zero = ir.Constant(ir.IntType(32), 0)
+            zero = ir.Constant(val.type, 0)
             return self.builder.icmp_signed('!=', result, zero)
         elif lookup_name == 'SUCC':
             val = self.codegen_expr(expr.args[0])
-            one = ir.Constant(ir.IntType(32), 1)
+            one = ir.Constant(val.type, 1)
             return self.builder.add(val, one)
         elif lookup_name == 'PRED':
             val = self.codegen_expr(expr.args[0])
-            one = ir.Constant(ir.IntType(32), 1)
+            one = ir.Constant(val.type, 1)
             return self.builder.sub(val, one)
         elif lookup_name == 'ABS':
             val = self.codegen_expr(expr.args[0])

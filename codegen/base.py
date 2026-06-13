@@ -61,7 +61,9 @@ class Scope:
 
 
 _SCALAR_SIZES = {
-    'INTEGER': 4,
+    'INTEGER': 2,
+    'INTEGER32': 4,
+    'INTEGER64': 8,
     'REAL': 8,
     'WORD': 2,
     'CHAR': 1,
@@ -84,16 +86,20 @@ class CodegenBase:
         self.scope = Scope()  # global scope
         self.current_function: Optional[ir.Function] = None
         self.current_return_block: Optional[ir.BasicBlock] = None
+        self.features: Dict[str, bool] = features if features is not None else {}
         # Compile-time constants keyed UPPER.  Values are int for INTEGER/BOOL/CHAR
         # constants, or float for REAL constants.  Use _const_ir() to emit the
         # appropriate LLVM constant at reference sites.
         self.constants: Dict[str, object] = {
-            'MAXINT': 2147483647,
+            'MAXINT': 32767,
             'MAXWORD': 65535,
             'SEQUENTIAL': 0,
             'TERMINAL': 1,
             'DIRECT': 2,
         }
+        if self.feature_enabled('wide-integers'):
+            self.constants['MAXINT32'] = 2147483647
+            self.constants['MAXINT64'] = 9223372036854775807
         self.type_aliases: Dict[str, Type] = {}  # compile-time type aliases, keyed UPPER
         self.current_interface_decls: Dict[str, Declaration] = {}
         self.proc_param_modes: Dict[str, List[Optional[str]]] = {}
@@ -108,7 +114,6 @@ class CodegenBase:
         # CLI flag overrides: maps flag name (upper) → forced bool.
         # A key absent from this dict means "use whatever the source says".
         self.force_flags: Dict[str, bool] = force_flags if force_flags is not None else {}
-        self.features: Dict[str, bool] = features if features is not None else {}
         # Metacommand flag state of the innermost statement currently being
         # lowered (set by codegen_stmt).  Expression-level runtime checks
         # (INDEXCK, MATHCK, NILCK) read it via check_enabled().

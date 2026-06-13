@@ -27,6 +27,10 @@ class ConstFoldMixin:
         v = self.constants[name_upper]
         if isinstance(v, float):
             return ir.Constant(ir.DoubleType(), v)
+        if name_upper == 'MAXINT':
+            return ir.Constant(ir.IntType(16), int(v))
+        if name_upper == 'MAXINT64':
+            return ir.Constant(ir.IntType(64), int(v))
         return ir.Constant(ir.IntType(32), int(v))
 
     def _try_const(self, expr: Expression) -> Optional[int]:

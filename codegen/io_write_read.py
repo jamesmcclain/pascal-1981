@@ -14,7 +14,7 @@ from ast_nodes import EnumType as ASTEnumType
 from ast_nodes import LStringType as ASTLStringType
 from ast_nodes import *
 from codegen.base import CodegenError
-from type_system import CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE
+from type_system import CHAR_TYPE, INTEGER_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, REAL_TYPE, WORD_TYPE
 from type_system import EnumType as ResolvedEnumType
 from type_system import FileType as ResolvedFileType
 from type_system import LStringType, StringType
@@ -149,10 +149,17 @@ class IoWriteReadMixin:
                 conv = 'd'
                 val = self.builder.zext(val, ir.IntType(32))
             elif str(val.type) == 'i16':
-                conv = 'u'
-                val = self.builder.zext(val, ir.IntType(32))
+                ty_name = pas_ty.name.upper() if isinstance(pas_ty, (NamedType, BuiltinType)) else ''
+                if pas_ty is WORD_TYPE or ty_name == 'WORD':
+                    conv = 'u'
+                    val = self.builder.zext(val, ir.IntType(32))
+                else:
+                    conv = 'd'
+                    val = self.builder.sext(val, ir.IntType(32))
             elif str(val.type) == 'i32':
                 conv = 'd'
+            elif str(val.type) == 'i64':
+                conv = 'lld'
             else:
                 conv = 's'
 
@@ -210,8 +217,13 @@ class IoWriteReadMixin:
         else:
             ty_name = ''
         if ty is INTEGER_TYPE or ty_name == 'INTEGER':
-            fn = self._read_helper('pas_fread_int' if file_fcb is not None else 'pas_read_int', ptr.type)
-            call_args = ([file_fcb, ptr] if file_fcb is not None else [ptr])
+            tmp = self.builder.alloca(ir.IntType(32), name='read_int_tmp')
+            fn = self._read_helper('pas_fread_int' if file_fcb is not None else 'pas_read_int', tmp.type)
+            call_args = ([file_fcb, tmp] if file_fcb is not None else [tmp])
+            self.builder.call(fn, call_args)
+            val = self.builder.trunc(self.builder.load(tmp), ptr.type.pointee)
+            self.builder.store(val, ptr)
+            return
         elif ty is WORD_TYPE or ty_name == 'WORD':
             fn = self._read_helper('pas_fread_word' if file_fcb is not None else 'pas_read_word', ptr.type)
             call_args = ([file_fcb, ptr] if file_fcb is not None else [ptr])

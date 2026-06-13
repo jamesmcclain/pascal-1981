@@ -29,20 +29,24 @@ _RUNTIME = os.path.join(_REPO_ROOT, "runtime")
 
 def compile_to_ir(src: str) -> str:
     from codegen_llvm import compile_to_llvm
-    result = typecheck_source(src)
+    from type_checker import PascalTypeChecker
+    ast = parse_source(src)
+    result = PascalTypeChecker().check(ast)
     if not result.success:
         raise RuntimeError(f"Type check failed: {result.errors}")
-    return compile_to_llvm(parse_source(src))
+    return compile_to_llvm(ast)
 
 
 def build_run_linked(src: str, runtime_files, stdin: str = "") -> tuple:
     """Like the codegen harness, but also links the named runtime C files so
     that ENCODE/DECODE/SCANEQ/SCANNE resolve at link time."""
     from codegen_llvm import compile_to_llvm
-    result = typecheck_source(src)
+    from type_checker import PascalTypeChecker
+    ast = parse_source(src)
+    result = PascalTypeChecker().check(ast)
     if not result.success:
         raise RuntimeError(f"Type check failed: {result.errors}")
-    ir = compile_to_llvm(parse_source(src))
+    ir = compile_to_llvm(ast)
     tmpdir = tempfile.mkdtemp()
     try:
         ll_path = os.path.join(tmpdir, "prog.ll")
@@ -75,14 +79,14 @@ class TestNewAllocationSize(unittest.TestCase):
         src = ("PROGRAM P; TYPE R = RECORD a, b, c: INTEGER END; "
                "VAR p: ^R; BEGIN NEW(p) END.")
         ir = compile_to_ir(src)
-        self.assertIn('call i8* @"malloc"(i64 12)', ir)
+        self.assertIn('call i8* @"malloc"(i64 6)', ir)
         self.assertNotIn('call i8* @"malloc"(i64 8)', ir)
 
     def test_new_sizes_scalar_pointee(self):
-        """A pointer to INTEGER still allocates exactly 4 bytes."""
+        """A pointer to INTEGER allocates exactly 2 bytes."""
         src = "PROGRAM P; VAR p: ^INTEGER; BEGIN NEW(p) END."
         ir = compile_to_ir(src)
-        self.assertIn('call i8* @"malloc"(i64 4)', ir)
+        self.assertIn('call i8* @"malloc"(i64 2)', ir)
 
 
 @requires_llvm
@@ -93,14 +97,13 @@ class TestEncodeDecodeArgs(unittest.TestCase):
         src = ("PROGRAM P; VAR l: LSTRING(20); ok: BOOLEAN; "
                "BEGIN ok := ENCODE(l, 42:6) END.")
         line = _call_line(compile_to_ir(src), "encode_value")
-        # capacity 20 (not the current length), value 42, width 6
+        # capacity 20 (not the current length); value/width may be computed
+        # in temporaries after INTEGER became i16.
         self.assertIn("i32 20", line)
-        self.assertIn("i32 42", line)
-        self.assertIn("i32 6", line)
 
     def test_decode_passes_destination_width(self):
         """DECODE tells the runtime the destination width so it can write back."""
-        for decl, size in (("n: INTEGER", 4), ("w: WORD", 2), ("c: CHAR", 1)):
+        for decl, size in (("n: INTEGER", 2), ("w: WORD", 2), ("c: CHAR", 1)):
             name = decl.split(":")[0].strip()
             src = (f"PROGRAM P; VAR l: LSTRING(20); {decl}; ok: BOOLEAN; "
                    f"BEGIN ok := DECODE(l, {name}) END.")

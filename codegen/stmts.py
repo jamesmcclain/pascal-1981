@@ -123,7 +123,7 @@ class StmtsMixin:
                 if target_type.width < value.type.width:
                     value = self.builder.trunc(value, target_type)
                 elif target_type.width > value.type.width:
-                    value = self.builder.zext(value, target_type)
+                    value = self.builder.sext(value, target_type)
             elif isinstance(target_type, ir.DoubleType) and isinstance(value.type, ir.IntType):
                 value = self.builder.sitofp(value, target_type)
             elif isinstance(target_type, ir.IntType) and isinstance(value.type, ir.DoubleType):
@@ -320,13 +320,15 @@ class StmtsMixin:
                 loop_var.initializer = self.zero_initializer(loop_type)
             self.scope.define(stmt.var, loop_var, symbol.type_expr if symbol else BuiltinType('INTEGER'))
         elif not symbol:
-            loop_var = self.builder.alloca(ir.IntType(32), name=stmt.var)
+            loop_var = self.builder.alloca(ir.IntType(16), name=stmt.var)
             self.scope.define(stmt.var, loop_var, BuiltinType('INTEGER'))
         else:
             loop_var = symbol.llvm_value
 
         # Initialize loop variable
         start_val = self.codegen_expr(stmt.start)
+        if isinstance(start_val.type, ir.IntType) and start_val.type != loop_var.type.pointee:
+            start_val = self.builder.trunc(start_val, loop_var.type.pointee) if start_val.type.width > loop_var.type.pointee.width else self.builder.sext(start_val, loop_var.type.pointee)
         self.builder.store(start_val, loop_var)
 
         # Create loop blocks
@@ -340,6 +342,8 @@ class StmtsMixin:
         self.builder.position_at_end(loop_block)
         current_val = self.builder.load(loop_var)
         end_val = self.codegen_expr(stmt.end)
+        if isinstance(end_val.type, ir.IntType) and end_val.type != current_val.type:
+            end_val = self.builder.trunc(end_val, current_val.type) if end_val.type.width > current_val.type.width else self.builder.sext(end_val, current_val.type)
         cond = self.builder.icmp_signed('<=', current_val, end_val) if stmt.direction == 'TO' else self.builder.icmp_signed('>=', current_val, end_val)
         self.builder.cbranch(cond, body_block, end_block)
 
@@ -350,7 +354,8 @@ class StmtsMixin:
 
         self.builder.position_at_end(step_block)
         current_val = self.builder.load(loop_var)
-        next_val = self.builder.add(current_val, ir.Constant(ir.IntType(32), 1)) if stmt.direction == 'TO' else self.builder.sub(current_val, ir.Constant(ir.IntType(32), 1))
+        one = ir.Constant(current_val.type, 1)
+        next_val = self.builder.add(current_val, one) if stmt.direction == 'TO' else self.builder.sub(current_val, one)
         self.builder.store(next_val, loop_var)
         self.builder.branch(loop_block)
 

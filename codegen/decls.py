@@ -179,13 +179,12 @@ class DeclsMixin:
         """$INITCK sentinel constant for a scalar variable, or None.
 
         Manual: "set the value of all uninitialized integers to -32768 and
-        uninitialized pointers to 1 (if $NILCK is on)" (default -).  -32768
-        is the 16-bit INTEGER minimum; the width analogue for this 32-bit
-        INTEGER is -2147483648 (INT32_MIN).  Per the manual, VALUE-section
-        variables, record variant fields, and super-array components are
-        not covered; this implementation initializes scalar INTEGERs and
-        pointers (the two classes the manual names) and leaves aggregates
-        to their existing zero/blank initialization.
+        uninitialized pointers to 1 (if $NILCK is on)" (default -).  Use the
+        signed minimum for each INTEGER-family width.  Per the manual,
+        VALUE-section variables, record variant fields, and super-array
+        components are not covered; this implementation initializes scalar
+        INTEGERs and pointers (the two classes the manual names) and leaves
+        aggregates to their existing zero/blank initialization.
         """
         def flag(name: str) -> bool:
             if name in self.force_flags:
@@ -199,9 +198,9 @@ class DeclsMixin:
         if not flag('INITCK'):
             return None
         resolved = self.resolve_type_alias(decl.type_expr)
-        if isinstance(llvm_type, ir.IntType) and llvm_type.width == 32 \
+        if isinstance(llvm_type, ir.IntType) and llvm_type.width in (16, 32, 64) \
                 and not isinstance(resolved, EnumType):
-            return ir.Constant(llvm_type, -2147483648)
+            return ir.Constant(llvm_type, -(1 << (llvm_type.width - 1)))
         if isinstance(llvm_type, ir.PointerType) and flag('NILCK'):
             return ir.Constant(ir.IntType(64), 1).inttoptr(llvm_type)
         return None

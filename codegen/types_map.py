@@ -27,7 +27,11 @@ class TypesMapMixin:
         """Convert a Pascal type to LLVM type."""
         if isinstance(type_expr, BuiltinType):
             if type_expr.name == 'INTEGER':
+                return ir.IntType(16)
+            elif type_expr.name == 'INTEGER32':
                 return ir.IntType(32)
+            elif type_expr.name == 'INTEGER64':
+                return ir.IntType(64)
             elif type_expr.name == 'BOOLEAN':
                 return ir.IntType(8)  # one byte, so adr/sizeof/fillc agree on layout
             elif type_expr.name == 'WORD':
@@ -59,7 +63,11 @@ class TypesMapMixin:
                 # ADS pointers (ADS OF CHAR) lower.
                 return ir.LiteralStructType([ir.PointerType(ir.IntType(8)), ir.IntType(16)])
             elif name_up == 'INTEGER':
+                return ir.IntType(16)
+            elif name_up == 'INTEGER32':
                 return ir.IntType(32)
+            elif name_up == 'INTEGER64':
+                return ir.IntType(64)
             elif name_up == 'BOOLEAN':
                 return ir.IntType(8)
             elif name_up == 'WORD':
@@ -76,7 +84,7 @@ class TypesMapMixin:
                 return self.llvm_type(self.resolve_type_alias(type_expr))
             if name_up in self.type_aliases:
                 return self.llvm_type(self.type_aliases[name_up])
-            return ir.IntType(32)
+            raise CodegenError(f'Unknown named type: {type_expr.name}')
         elif isinstance(type_expr, EnumType):
             return ir.IntType(32)
         elif isinstance(type_expr, SetType):
