@@ -448,6 +448,30 @@ class TestCodegenBuildRun(unittest.TestCase):
         self.assertEqual(returncode, 0)
         self.assertIn("42", stdout)
 
+    def test_wide_integer_codegen_runtime(self):
+        """INTEGER32/INTEGER64 codegen and WRITE work when wide-integers is enabled."""
+        src = """PROGRAM P;
+VAR x: INTEGER32; y: INTEGER64;
+BEGIN
+  x := 100000;
+  y := x + 9000000000;
+  WRITELN(x);
+  WRITELN(y);
+  WRITELN(MAXINT32);
+  WRITELN(MAXINT64)
+END."""
+        returncode, stdout = build_and_run(src, features={'wide-integers': True})
+        self.assertEqual(returncode, 0)
+        self.assertEqual(
+            [line.strip() for line in stdout.splitlines() if line.strip()],
+            [
+                "100000",
+                "9000100000",
+                "2147483647",
+                "9223372036854775807",
+            ],
+        )
+
     def test_real_assignment_and_output(self):
         """REAL assignment and output runs and produces correct output."""
         src = "PROGRAM P; VAR x: REAL; BEGIN x := 1.5; WRITELN(x) END."

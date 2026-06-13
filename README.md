@@ -32,6 +32,16 @@ Add `-v` / `--verbose` for detailed output and full Python tracebacks if compila
 python3 compile_to_llvm.py -v myprogram.pas myprogram.ll
 ```
 
+Optional dialect extensions are controlled with feature flags. The default dialect is vintage IBM Pascal behavior; wider integer types are off unless explicitly enabled:
+
+```bash
+# Show available feature flags
+python3 compile_to_llvm.py --list-features
+
+# Enable INTEGER32 / INTEGER64 and MAXINT32 / MAXINT64
+python3 compile_to_llvm.py -f wide-integers myprogram.pas myprogram.ll
+```
+
 If no output file is specified, LLVM IR is written to stdout:
 
 ```bash
@@ -58,6 +68,7 @@ Each phase is independent and focused:
 - **Lexer (`lexer.py`)** — tokenizes Pascal source: keywords, identifiers, numbers, operators, strings.
 - **Parser (`parser.py`)** — builds an Abstract Syntax Tree (AST) from tokens. Implements the full IBM Pascal 2.0 grammar. Entry point: `parse_file(path)`.
 - **Type Checker (`type_system.py`, `symbol_table.py`, `type_checker.py`)** — semantic analysis: validates types, scopes, control flow, and module semantics before code generation. All type violations stop the pipeline with clear error messages.
+- **Feature flags (`features.py`)** — generic feature-gating machinery for opt-in dialect extensions such as `wide-integers`.
 - **Type Checker support (`builtins_registry.py`)** — centralized registration of predeclared identifiers (types, constants, intrinsics); user declarations may shadow builtins.
 - **Codegen (`codegen/` package)** — walks the AST and emits LLVM IR using `llvmlite`. Split by concern: `base`, `decls`, `exprs`, `stmts`, `types_map`, `constfold`, plus feature modules `files` (file-control blocks), `io_write_read`, `strings`, `sets`, and `runtime_builtins`. `codegen_llvm.py` remains as a compatibility shim re-exporting the package.
 - **C Runtime (`runtime/`)** — the file I/O subsystem (`fileops.c`: FCB model, RESET/REWRITE/GET/PUT, ASSIGN/CLOSE/DISCARD, READSET/READFN, EOF/EOLN, mode enforcement), stdin readers (`readq.c`), ENCODE/DECODE (`encode_decode.c`), and the move/scan/fill/position intrinsics.
@@ -72,7 +83,8 @@ The grammar this dialect implements is formally specified in [`docs/ebnf_grammar
 This compiler implements the full IBM Pascal 2.0 language, including all semantic rules and dialectal extensions. The checklist of features and gaps is tracked in [`docs/Grand_Unified_Checklist.md`](docs/Grand_Unified_Checklist.md).
 
 ### Types
-- `INTEGER` (32-bit signed)
+- `INTEGER` (16-bit signed, matching IBM Pascal 2.0; range `-32768..32767`; `MAXINT = 32767`)
+- `INTEGER32` / `INTEGER64` (opt-in extension types enabled with `-f wide-integers`; also enables `MAXINT32` and `MAXINT64`)
 - `BOOLEAN` (one byte; stored as `i8` so address-of / `sizeof` / fills are byte-consistent)
 - `REAL` (64-bit float; constants, division, unary minus, and mixed arithmetic are codegen-hardened — see checklist 9.1 — and the default `WRITE` format matches the manual's 14-wide exponential, e.g. `WRITE(123.456)` prints ` 1.2345600E+02`)
 - `WORD` (16-bit unsigned)
@@ -130,6 +142,7 @@ These are the features that made Pascal suitable for writing operating systems, 
 - **`adrmem`** — a generic address/pointer parameter type (`i8*` in LLVM). Pointer arguments are automatically bitcast to the parameter's type at the call site, enabling polymorphic low-level functions. Example: `adr flags` (an array pointer) can be passed where an `adrmem` is expected.
 - **`extern` procedures** — declared without a body and resolved at link time. Enables linking Pascal code against C runtimes and external libraries.
 - **`word` type** — 16-bit unsigned integer for register and hardware register operations.
+- **Feature-gated wide integers** — `INTEGER32` and `INTEGER64` are available only with `-f wide-integers`; unflagged builds preserve the vintage 16-bit `INTEGER` surface.
 
 
 ## Project Scope
@@ -158,6 +171,7 @@ pascal-1981/
 │  ├── symbol_table.py           # Scope management and symbol lookup
 │  ├── type_checker.py           # Semantic analysis (types, scopes, control flow)
 │  ├── builtins_registry.py      # Centralized predeclared-identifier registration
+│  ├── features.py               # Generic opt-in dialect feature flags
 │  ├── codegen/                  # LLVM IR generation package
 │  │  ├── base.py, decls.py, exprs.py, stmts.py, types_map.py, constfold.py
 │  │  ├── files.py               # File-control blocks (FCB layout, F^, file ops)
@@ -260,7 +274,7 @@ The front end (lexer, parser, type checker) is pure Python with **no `llvmlite` 
 ### Data Structures
 
 - **AST** — typed dataclasses defined in `ast_nodes.py`, one per language construct. The parser builds the tree bottom-up using recursive descent. Array, record, and pointer access use selector nodes for uniform representation.
-- **Type System** — modular type hierarchy: base scalar types (INTEGER, REAL, BOOLEAN, CHAR, WORD) plus composite types (ARRAY, RECORD, SET, POINTER) and callable types (PROCEDURE, FUNCTION). Implements Pascal's strict assignment rules with explicit type compatibility checks.
+- **Type System** — modular type hierarchy: base scalar types (`INTEGER`, `REAL`, `BOOLEAN`, `CHAR`, `WORD`, plus feature-gated `INTEGER32`/`INTEGER64`) plus composite types (ARRAY, RECORD, SET, POINTER) and callable types (PROCEDURE, FUNCTION). Implements Pascal's strict assignment rules with explicit type compatibility checks.
 - **Symbol Table** — scope stack with parent chain for lexical scoping. Symbols are tagged by kind (var, const, function, procedure, parameter, type) to support scope-aware lookups and proper shadowing rules.
 - **Codegen** — direct LLVM IR emission using `llvmlite`. No intermediate IR; the AST walks directly to LLVM instructions. Globals receive proper zero initializers; named constants are folded at compile time; function arguments are coerced (pointer bitcasts, integer width adjustments) to match callee signatures.
 
@@ -269,6 +283,7 @@ The front end (lexer, parser, type checker) is pure Python with **no `llvmlite` 
 - **Type checking before codegen** — all type errors are caught and reported before any IR is generated, guaranteeing that successful type checking implies compilable output.
 - **Minimal operator overloading** — each operator works on specific types with explicit type rules, avoiding the ambiguity that makes compiled languages harder to reason about.
 - **Array bounds at compile time** — constant expressions in array declarations enable `sizeof` and layout calculations to be resolved during parsing, essential for systems programming.
+- **Vintage integer width by default** — `INTEGER` lowers to signed 16-bit LLVM IR. Wider signed integers are extension-only (`INTEGER32`, `INTEGER64`) and must be enabled deliberately with `-f wide-integers`; there is no compatibility flag that makes default `INTEGER` 32-bit.
 
 ## Requirements
 
