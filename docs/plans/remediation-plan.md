@@ -87,8 +87,8 @@ OPEN = re-probe.
 | RM-XCUT-IOERR | — | X | TODO-FIX | renumber `io_error` table to vintage codes (gates D-005/12/13/24) | M |
 | RM-XCUT-FLUSH | — | X | TODO-FIX | flush stdout before modern abort (test fidelity, D-005/15/16) | S |
 | RM-XCUT-ENUMBOOL | — | X | DECISION-NEEDED | BOOLEAN-names vs enum-ordinal: do NOT unify (D-019 vs D-020) | S |
-| RM-DEC-INTWIDTH | D-014/16/17 | DEC | DECISION-NEEDED | keep 32-bit INTEGER, or move to 16-bit + add INTEGER32/64; reopens the width NO-ACTION items | — |
-| RM-NOACTION | D-014/16/17 + baselines | — | NO-ACTION | width adaptations (conditional on RM-DEC-INTWIDTH) + AGREE-ACCEPT baselines; don't fix piecemeal | — |
+| RM-DEC-INTWIDTH | D-014/16/17 | DEC | DECIDED (16-bit fork, implemented) | INTEGER now 16-bit; INTEGER32/64 added behind `-f wide-integers`; D-014/16/17 resolved | done |
+| RM-NOACTION | baselines | — | NO-ACTION | AGREE-ACCEPT baselines only (the D-014/16/17 width trio is now RESOLVED, see RM-DEC-INTWIDTH); don't fix piecemeal | — |
 | RM-OPEN-T021 | t021 | OPEN | INVESTIGATE | `ORD(EOL)` verdict `[UNVERIFIED]`; rerun | S |
 | RM-OPEN-T022 | t022 | OPEN | INVESTIGATE | `READSET` delimiter retention; redesign (needs RM-P2-SETCTOR) | M |
 
@@ -103,12 +103,14 @@ or with D-012/D-013 since all three touch the same table.
 Two standing design decisions (section D) gate other work. `RM-DEC-ENUMIO` must
 be settled *before* `RM-P1-ENUMWRITE` and `RM-P2-ENUMREAD` are implemented —
 those two are halves of one enum-I/O contract and must not be resolved
-independently; whichever fork is chosen sets both. `RM-DEC-INTWIDTH` is a
-deliberately scheduled, larger call rather than an urgent one: the 32-bit status
-quo is documented-acceptable, so this is a "decide on purpose" item, and taking
-the 16-bit fork reclassifies the D-014/16/17 entries in `RM-NOACTION` from
-NO-ACTION to resolved-by-width-change and pulls in a non-trivial
-`INTEGER32`/`INTEGER64` type-system addition plus a suite migration.
+independently; whichever fork is chosen sets both. `RM-DEC-INTWIDTH` has been
+**decided and implemented**: the 16-bit fork was taken — `INTEGER` is now signed
+16-bit, `INTEGER32`/`INTEGER64` are opt-in extension types behind the
+`wide-integers` feature flag, and D-014/16/17 are resolved (no longer
+NO-ACTION). The feature-flag mechanism introduced for that work (`features.py`,
+exposed via `-f`/`--feature`, `--dialect`, and `--list-features`) is the
+established pattern for gating any future "extends beyond vintage" behavior; new
+extension items should reuse it rather than inventing a parallel mechanism.
 
 ---
 
@@ -489,23 +491,23 @@ implementing the items they govern.
 - XREF: D-019; D-006; D-030; RM-P1-ENUMWRITE; RM-P2-ENUMREAD; RM-XCUT-ENUMBOOL; RM-P0-BOOL.
 
 ## ANCHOR: RM-DEC-INTWIDTH
-**INTEGER width — keep 32-bit (status quo), or move to 16-bit + add INTEGER32 / INTEGER64.**
-- PRIORITY: DEC (deferred / deliberately scheduled — the 32-bit status quo is documented-acceptable, and the 16-bit fork is a larger, non-urgent change; decide on purpose, not reactively)
-- STATUS: DECISION-NEEDED
-- D-ENTRY: D-014, D-016, D-017 (one root cause: INTEGER width)
-- BASIS: OBSERVED — vintage 16-bit behavior at each check site: `$INITCK+` sentinel `-32768` (t014); `$MATHCK+` traps `32767+1` as overflow, code 2054 (t016); `$MATHCK-` wraps to `-32768` (t017). Modern maps `INTEGER → i32` (read from `codegen/types_map.py`). `WORD` is already `i16` with `MAXWORD = 65535` (D-032), so 16-bit machinery already exists in the runtime.
-- DECISION: keep `INTEGER` 32-bit, or make `INTEGER` 16-bit (matching 1981) and introduce `INTEGER32` / `INTEGER64` as explicit extension types for wider arithmetic.
-- OPTIONS:
-  - **Keep 32-bit (status quo).** D-014/16/17 remain documented width adaptations (NO-ACTION). Zero churn. Cost: a silent, pervasive deviation — `$MATHCK+` overflow checks do not fire at the vintage boundary (so they can *hide* overflow bugs in ported code), and struct/array layouts, `SIZEOF`/`ADR`, and on-disk record sizes do not match 1981.
-  - **16-bit + INTEGER32/64 (the proposal).** `INTEGER` range / overflow / sentinel / layout match 1981 bit-for-bit; D-014/16/17 become agreements; `$MATHCK+` regains meaning at the right boundary; `MAXINT` becomes `32767`. Width deviations move behind explicit, obviously-non-vintage type names. Costs: (a) any 32-bit-dependent code — including some of the 448 baseline modern tests — now overflows/traps and must be audited and migrated to `INTEGER32`; (b) reverses a documented decision (rationale rewrite + re-grade); (c) forces a literal-overflow policy (`100000` does not fit `i16` — reject, which is faithful, or auto-widen, which is divergent); (d) `INTEGER32`/`INTEGER64` is real type-system surface — assignment compatibility, mixed-arithmetic result types, per-width overflow and WRITE/READ formatting, conversions; (e) a minor per-op runtime cost emulating 16-bit wrap on a 64-bit host.
-- RECOMMENDATION: for a differential-fidelity project, the 16-bit fork is the consistent choice — faithful default, deviations behind explicit opt-in types — but it is a real cost, and the `INTEGER32`/`INTEGER64` design plus the suite migration must be costed before committing.
-- GOVERNS: the NO-ACTION classification of D-014 / D-016 / D-017 in RM-NOACTION (the 16-bit fork reclassifies them to resolved-by-width-change); and any future `INTEGER32` / `INTEGER64` work.
-- RISK-IF-SKIPPED (never deciding): the width deviation stays silent and unexamined, and `$MATHCK+` keeps not catching overflows the original would — which can mask defects in ported programs. Low urgency, not zero.
-- EFFORT: the decision is free; the 16-bit fork's implementation is L (type-system addition + suite migration); keep-32-bit is zero implementation.
-- VERIFY (only if 16-bit fork is taken): t014 → `-32768`; t016 → overflow trap at `32767+1`; t017 → `-32768`; full modern suite re-audited (some fixtures migrate to `INTEGER32`).
-- UPGRADES: D-014/16/17 from "expected width adaptation (NO-ACTION)" to agreements (16-bit fork), or left documented (keep-32-bit).
-- SEE: `June 12th width discussion.md`.
-- XREF: D-014; D-016; D-017; D-032 (WORD already 16-bit); RM-NOACTION.
+**INTEGER width — RESOLVED: moved to 16-bit + added INTEGER32 / INTEGER64 behind `-f wide-integers`.**
+- PRIORITY: DEC (resolved)
+- STATUS: DECIDED — 16-bit fork taken and implemented; D-014/16/17 resolved.
+- RESOLUTION: `INTEGER` is now signed 16-bit (`i16`), matching 1981 bit-for-bit (range, overflow boundary, `$MATHCK-` wrap, `$INITCK` sentinel, and layout/`SIZEOF`). `MAXINT = 32767`. Wider arithmetic moved behind two opt-in extension types, `INTEGER32` (`i32`) and `INTEGER64` (`i64`), recognized only when the `wide-integers` feature is enabled; without it those identifiers are rejected as unknown types, exactly as vintage would. Implemented decisions: (a) literal-overflow policy is **faithful rejection** — an integer literal is range-checked against its context type and defaults to `INTEGER` (i16) with no context, so out-of-range bare literals are a compile error (no silent widening; unary minus folded before the check, so `-32768` is accepted and bare `32768` is rejected); (b) `$MATHCK` signedness is derived from the Pascal type, not from LLVM width (required once `INTEGER` and unsigned `WORD` share `i16`); (c) `$INITCK` sentinel is each integer type's per-width minimum; (d) a pre-abort `stdout` flush (`RM-XCUT-FLUSH`) lands so output preceding a trap is captured. The feature mechanism (`features.py` + `-f`/`--feature`, `--dialect`, `--list-features`) is generic and is the standing pattern for future extensions.
+- D-ENTRY: D-014, D-016, D-017 (one root cause: INTEGER width) — all RESOLVED
+- BASIS: OBSERVED — vintage 16-bit behavior at each check site: `$INITCK+` sentinel `-32768` (t014); `$MATHCK+` traps `32767+1` as overflow, code 2054 (t016); `$MATHCK-` wraps to `-32768` (t017). Modern *previously* mapped `INTEGER → i32` (`codegen/types_map.py`) — now `i16`. `WORD` was already `i16` with `MAXWORD = 65535` (D-032), so 16-bit machinery already existed in the runtime, which lowered the implementation cost.
+- DECISION (taken): make `INTEGER` 16-bit (matching 1981) and introduce `INTEGER32` / `INTEGER64` as explicit, feature-gated extension types for wider arithmetic. The alternative — keeping `INTEGER` 32-bit — was rejected as a silent, pervasive deviation.
+- OPTIONS (historical — the second was chosen):
+  - **Keep 32-bit (status quo).** *(not taken)* D-014/16/17 remain documented width adaptations (NO-ACTION). Zero churn. Cost: a silent, pervasive deviation — `$MATHCK+` overflow checks do not fire at the vintage boundary (so they can *hide* overflow bugs in ported code), and struct/array layouts, `SIZEOF`/`ADR`, and on-disk record sizes do not match 1981.
+  - **16-bit + INTEGER32/64 (the proposal).** *(taken and implemented)* `INTEGER` range / overflow / sentinel / layout match 1981 bit-for-bit; D-014/16/17 became agreements; `$MATHCK+` regained meaning at the right boundary; `MAXINT` became `32767`. Width deviations moved behind explicit, obviously-non-vintage type names. Costs that materialized: a type-system addition (`INTEGER32`/`INTEGER64` with assignment-compatibility, mixed-arithmetic result types, per-width overflow and WRITE/READ formatting), the faithful literal-overflow rejection policy, signedness threading once `INTEGER` joined `WORD` at `i16`, and a small suite migration (the only baseline fixtures affected were ones asserting the old 32-bit width behavior, which were re-asserted to 16-bit, plus a single fixture moved to `INTEGER32`).
+- RECOMMENDATION: *(carried out)* for a differential-fidelity project the 16-bit fork was the consistent choice — faithful default, deviations behind explicit opt-in types.
+- GOVERNS: the former NO-ACTION classification of D-014 / D-016 / D-017 (now reclassified to resolved-by-width-change); and any future `INTEGER32` / `INTEGER64` work.
+- EFFORT: implemented (was L — type-system addition + suite migration).
+- VERIFY: PASSED — t014 → `-32768`; t016 → prints `BEFORE` then traps signed overflow at `32767+1`; t017 → `-32768`; full modern suite green (one fixture migrated to `INTEGER32`; width-assertion tests re-asserted to 16-bit; wide-type and literal-policy regression tests added).
+- UPGRADES: D-014/16/17 reclassified from "expected width adaptation (NO-ACTION)" to agreements resolved by the width change.
+- SEE: `June 12th width discussion.md` (original proposal note).
+- XREF: D-014; D-016; D-017; D-032 (WORD already 16-bit); RM-NOACTION; RM-XCUT-FLUSH.
 
 ---
 
@@ -513,12 +515,9 @@ implementing the items they govern.
 
 ## ANCHOR: RM-NOACTION
 - STATUS: NO-ACTION
-- **D-014 — `$INITCK+` sentinel.** Vintage `-32768`, modern `-2147483648` `[OBSERVED]`. Same sentinel at the documented 32-bit width adaptation (manual `[READ]`). Width-driven, expected. Do not change.
-- **D-016 — signed overflow under `$MATHCK+`.** Vintage 16-bit traps (code 2054), modern 32-bit does not overflow at `32767+1` → prints `32768` `[OBSERVED]`. Expected width adaptation. Do not change.
-- **D-017 — signed overflow under `$MATHCK-`.** Vintage wraps to `-32768`, modern prints `32768` `[OBSERVED]`. Confirms `$MATHCK-` disables checking (manual `[READ]`); the value differs by width. Do not change.
-- CONDITIONAL: the three width entries above (D-014/D-016/D-017) are NO-ACTION **only under the current 32-bit-`INTEGER` decision.** They are the open question in `RM-DEC-INTWIDTH` (section D): if that decision takes the 16-bit fork, all three are reclassified from NO-ACTION to resolved-by-width-change. Until that decision is taken, treat them as NO-ACTION; do not "fix" them piecemeal toward 16-bit — the width is a single project-level call, not three local ones.
-- **Baselines (AGREE-ACCEPT, no divergence):** t001 (REAL default format ` 1.2345600E+02`), t007 (STRING(3) READ stop-at-fill), t008 (STRING(5) blank-pad + marker), t009 (LSTRING(3) whole-line consume + truncate), t011 (STRING `::N` ignored on both sides), t018 (RESET implicit GET / lazy-fill), t023 (temp-file round-trip), t025 (CLOSE-marker), t027 (RETYPE round-trip), **D-034** (`F.MODE` = 0/0 after REWRITE/RESET), **D-035** (bare `OTHERWISE stmt` grammar accepted), **D-036** (`F^` is blank ORD 32 at EOLN). These are evidence-upgrade confirmations only — no code change, and (unlike the width trio) not subject to any open decision.
-- WHY LISTED: so a future agent does not mistake a confirmed agreement for an open bug, or "fix" a width-driven difference piecemeal toward 16-bit behavior. The 32-bit `INTEGER` width is the *currently documented* modern adaptation; whether to keep it is tracked deliberately in `RM-DEC-INTWIDTH`, and any change goes through that decision, not through ad-hoc edits here.
+- **D-014 / D-016 / D-017 — INTEGER width trio: RESOLVED, no longer NO-ACTION.** These were formerly listed here as expected 32-bit width adaptations. `RM-DEC-INTWIDTH` has since taken the 16-bit fork: `INTEGER` is now signed 16-bit, so the sentinel (`-32768`), the `$MATHCK+` overflow trap at `32767+1`, and the `$MATHCK-` wrap to `-32768` all agree with vintage. See the resolved entries in `docs/discrepancies.md` and `RM-DEC-INTWIDTH`. They are kept out of the NO-ACTION list deliberately — do not re-add them as "expected differences."
+- **Baselines (AGREE-ACCEPT, no divergence):** t001 (REAL default format ` 1.2345600E+02`), t007 (STRING(3) READ stop-at-fill), t008 (STRING(5) blank-pad + marker), t009 (LSTRING(3) whole-line consume + truncate), t011 (STRING `::N` ignored on both sides), t018 (RESET implicit GET / lazy-fill), t023 (temp-file round-trip), t025 (CLOSE-marker), t027 (RETYPE round-trip), **D-034** (`F.MODE` = 0/0 after REWRITE/RESET), **D-035** (bare `OTHERWISE stmt` grammar accepted), **D-036** (`F^` is blank ORD 32 at EOLN). These are evidence-upgrade confirmations only — no code change.
+- WHY LISTED: so a future agent does not mistake a confirmed agreement for an open bug. (The INTEGER width is no longer an open question; it was settled in `RM-DEC-INTWIDTH` and the deviation now lives only behind the explicit `INTEGER32`/`INTEGER64` extension types under `-f wide-integers`.)
 
 ---
 

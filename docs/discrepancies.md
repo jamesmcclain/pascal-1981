@@ -105,12 +105,14 @@ is OUTPUT-DIFF, never ACCEPT/REJECT.
 ## D-014 — $INITCK+ sentinel
 - **Probe:** t014.pas (`{$INITCK+} VAR x: INTEGER; BEGIN WRITELN(x) END.`)
 - **Behavior targeted:** Sentinel value for uninitialized INTEGER under `$INITCK+`
-- **Class:** OUTPUT-DIFF (expected — documented width adaptation)
+- **Class:** AGREE (RESOLVED by the 16-bit `INTEGER` width change; was OUTPUT-DIFF)
 - **Vintage (1981):** printed `-32768` [OBSERVED]
-- **Modern (reimplementation):** printed `-2147483648` [OBSERVED]
-- **Adjudication:** matches the manual's `-32768` sentinel at 16-bit width [READ]; the modern value is the same sentinel at the documented 32-bit width adaptation.
-- **Cross-references:** checklist runtime checks / `$INITCK+`; integer-width note.
-- **Severity:** low (expected width-driven difference)
+- **Modern (at time of probe):** printed `-2147483648` — same sentinel at the then-current 32-bit `INTEGER` width [OBSERVED]
+- **Modern (now):** prints `-32768`, matching vintage byte-for-byte [OBSERVED]
+- **Adjudication:** the sentinel is the minimum of the `INTEGER` type; both sides now agree at 16-bit width. Matches the manual's `-32768` sentinel [READ].
+- **Resolution:** resolved by moving `INTEGER` to signed 16-bit (the 16-bit fork of `RM-DEC-INTWIDTH`). The `$INITCK` sentinel now lowers to each integer type's per-width minimum; for `INTEGER` that is `-32768`. Wider arithmetic moved behind the opt-in `INTEGER32`/`INTEGER64` extension types (`-f wide-integers`).
+- **Cross-references:** checklist runtime checks / `$INITCK+`; `RM-DEC-INTWIDTH`; `RM-NOACTION`.
+- **Severity:** resolved (was low).
 - **Follow-up:** none.
 
 ## D-015 — NIL dereference trap behavior
@@ -127,23 +129,27 @@ is OUTPUT-DIFF, never ACCEPT/REJECT.
 ## D-016 — signed integer overflow under $MATHCK+
 - **Probe:** t016.pas (`x := 32767; WRITELN('BEFORE'); x := x + 1; WRITELN(x)`)
 - **Behavior targeted:** INTEGER overflow under default `$MATHCK+`
-- **Class:** OUTPUT-DIFF (expected — documented width adaptation)
+- **Class:** AGREE — both trap (RESOLVED by the 16-bit `INTEGER` width change; was OUTPUT-DIFF)
 - **Vintage (1981):** printed `BEFORE` then runtime error `? Error: Signed Math Overflow` / `Error Code 2054` [OBSERVED]
-- **Modern (reimplementation):** printed `BEFORE` and `32768`, no error [OBSERVED]
-- **Adjudication:** 16-bit vintage overflows and traps (code 2054); 32-bit modern does not overflow at this value — the documented width adaptation. [INFERRED] (code value [OBSERVED])
-- **Cross-references:** checklist runtime checks / `$MATHCK+`; integer-width note.
-- **Severity:** low (expected)
+- **Modern (at time of probe):** printed `BEFORE` and `32768`, no error — at 32-bit width `32767 + 1` did not overflow [OBSERVED]
+- **Modern (now):** prints `BEFORE`, then traps signed overflow at `32767 + 1` (abort path) [OBSERVED]
+- **Adjudication:** with `INTEGER` at 16 bits, `32767 + 1` overflows on both sides under default `$MATHCK+`; both trap. The vintage diagnostic carries code 2054; the modern host aborts (diagnostic/abort-model difference is tracked separately and is by design). The overflow *boundary* now matches, which restores the safety semantics of `$MATHCK+` — overflow that the original would catch is no longer silently absorbed.
+- **Resolution:** resolved by moving `INTEGER` to signed 16-bit (the 16-bit fork of `RM-DEC-INTWIDTH`). Per-width signed-overflow detection now fires at the vintage boundary. A pre-abort `stdout` flush ensures `BEFORE` is captured on the trap path (`RM-XCUT-FLUSH`).
+- **Cross-references:** checklist runtime checks / `$MATHCK+`; `RM-DEC-INTWIDTH`; `RM-NOACTION`; `RM-XCUT-FLUSH`.
+- **Severity:** resolved (was low).
 - **Follow-up:** none.
 
 ## D-017 — signed overflow with $MATHCK-
 - **Probe:** t017.pas (`{$MATHCK-} x := 32767; x := x + 1; WRITELN(x)`)
 - **Behavior targeted:** Overflow behavior when math checking is disabled
-- **Class:** OUTPUT-DIFF (expected — documented width adaptation)
+- **Class:** AGREE (RESOLVED by the 16-bit `INTEGER` width change; was OUTPUT-DIFF)
 - **Vintage (1981):** printed `-32768` [OBSERVED]
-- **Modern (reimplementation):** printed `32768` [OBSERVED]
-- **Adjudication:** confirms the manual's claim that `$MATHCK-` disables the overflow check (silent 16-bit wrap) [READ]; the modern value is the width adaptation.
-- **Cross-references:** checklist runtime checks / `$MATHCK-`; integer-width note.
-- **Severity:** low (expected)
+- **Modern (at time of probe):** printed `32768` — 32-bit width did not wrap at this value [OBSERVED]
+- **Modern (now):** prints `-32768`, matching vintage [OBSERVED]
+- **Adjudication:** with `INTEGER` at 16 bits and `$MATHCK-` disabling the check, `32767 + 1` wraps silently to `-32768` on both sides. Confirms the manual's claim that `$MATHCK-` disables overflow checking (silent 16-bit wrap) [READ].
+- **Resolution:** resolved by moving `INTEGER` to signed 16-bit (the 16-bit fork of `RM-DEC-INTWIDTH`); unchecked 16-bit arithmetic now wraps at the vintage boundary.
+- **Cross-references:** checklist runtime checks / `$MATHCK-`; `RM-DEC-INTWIDTH`; `RM-NOACTION`.
+- **Severity:** resolved (was low).
 - **Follow-up:** none.
 
 ## D-019 — WRITE of an enum value
