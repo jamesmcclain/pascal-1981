@@ -73,7 +73,7 @@ class TypeChecker(ABC):
 class PascalTypeChecker(TypeChecker):
     """Type checker for Pascal-1981."""
 
-    def __init__(self, source_file: Optional[str] = None):
+    def __init__(self, source_file: Optional[str] = None, features: Optional[Dict[str, bool]] = None):
         self.symbol_table = SymbolTable()
         self.errors: List[TypeCheckError] = []
         self.warnings: List[TypeCheckError] = []
@@ -82,7 +82,12 @@ class PascalTypeChecker(TypeChecker):
         self.current_procedure: Optional[ProcDecl] = None
         self.current_interface_decls: Dict[str, Any] = {}
         self.source_file = source_file  # Path to the source file being compiled
+        self.features: Dict[str, bool] = features if features is not None else {}
         self._setup_builtins()
+
+    def feature_enabled(self, name: str) -> bool:
+        """Return whether a named compile-time extension feature is enabled."""
+        return self.features.get(name, False)
 
     def _setup_builtins(self) -> None:
         """Define built-in procedures and functions in the global scope."""

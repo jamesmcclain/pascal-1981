@@ -41,9 +41,9 @@ from .types_map import TypesMapMixin
 class Codegen(CodegenBase, TypesMapMixin, ConstFoldMixin, RuntimeBuiltinsMixin, FilesMixin, SetsMixin, StringsMixin, IoWriteReadMixin, StmtsMixin, DeclsMixin, ExprsMixin):
     """LLVM IR code generator."""
 
-    def __init__(self, verbose: bool = False, source_file: Optional[str] = None, force_flags: Optional[Dict[str, bool]] = None):
+    def __init__(self, verbose: bool = False, source_file: Optional[str] = None, force_flags: Optional[Dict[str, bool]] = None, features: Optional[Dict[str, bool]] = None):
         """Initialize Codegen with all mixins."""
-        super().__init__(verbose=verbose, source_file=source_file, force_flags=force_flags)
+        super().__init__(verbose=verbose, source_file=source_file, force_flags=force_flags, features=features)
 
     # ========================================================================
     # Type System
@@ -70,6 +70,7 @@ def compile_to_llvm(ast: Union[ProgramUnit, ModuleUnit, InterfaceUnit, Implement
                     verbose: bool = False,
                     source_file: Optional[str] = None,
                     force_flags: Optional[Dict[str, bool]] = None,
+                    features: Optional[Dict[str, bool]] = None,
                     # Legacy compat: force_rangeck=True/False is equivalent to
                     # force_flags={'RANGECK': True/False}.
                     force_rangeck: Optional[bool] = None) -> str:
@@ -79,7 +80,7 @@ def compile_to_llvm(ast: Union[ProgramUnit, ModuleUnit, InterfaceUnit, Implement
         merged['RANGECK'] = force_rangeck
     if force_flags:
         merged.update(force_flags)
-    codegen = Codegen(verbose=verbose, source_file=source_file, force_flags=merged or None)
+    codegen = Codegen(verbose=verbose, source_file=source_file, force_flags=merged or None, features=features)
     module = codegen.codegen(ast)
     return str(module)
 

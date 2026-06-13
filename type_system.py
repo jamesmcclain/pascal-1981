@@ -314,6 +314,8 @@ def can_assign(from_type: Type, to_type: Type) -> bool:
         return True
     if isinstance(from_type, IntegerType) and isinstance(to_type, RealType):
         return True
+    if isinstance(from_type, IntegerType) and isinstance(to_type, WordType):
+        return True
     if isinstance(from_type, SetType) and isinstance(to_type, SetType):
         return from_type.element_type.equivalent_to(to_type.element_type)
     if isinstance(from_type, (StringType, LStringType)) and isinstance(to_type, (StringType, LStringType)):

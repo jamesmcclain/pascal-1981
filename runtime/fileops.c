@@ -40,6 +40,8 @@ struct pas_file_fcb {
 
 static void die(const char *msg) {
     fprintf(stderr, "%s\n", msg);
+    fflush(stdout);
+    fflush(stderr);
     abort();
 }
 

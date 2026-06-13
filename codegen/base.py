@@ -76,7 +76,7 @@ class CodegenBase:
     Initializes module state, builder, scope, and shared constants/tables.
     """
 
-    def __init__(self, verbose: bool = False, source_file: Optional[str] = None, force_flags: Optional[Dict[str, bool]] = None):
+    def __init__(self, verbose: bool = False, source_file: Optional[str] = None, force_flags: Optional[Dict[str, bool]] = None, features: Optional[Dict[str, bool]] = None):
         self.module = ir.Module(name="pascal_program")
         self.source_file = source_file
         self.module.triple = "x86_64-pc-linux-gnu"  # Standard Linux target
@@ -108,6 +108,7 @@ class CodegenBase:
         # CLI flag overrides: maps flag name (upper) → forced bool.
         # A key absent from this dict means "use whatever the source says".
         self.force_flags: Dict[str, bool] = force_flags if force_flags is not None else {}
+        self.features: Dict[str, bool] = features if features is not None else {}
         # Metacommand flag state of the innermost statement currently being
         # lowered (set by codegen_stmt).  Expression-level runtime checks
         # (INDEXCK, MATHCK, NILCK) read it via check_enabled().
@@ -120,6 +121,10 @@ class CodegenBase:
         if self.verbose:
             import sys
             print(f'[codegen] {msg}', file=sys.stderr)
+
+    def feature_enabled(self, name: str) -> bool:
+        """Return whether a named compile-time extension feature is enabled."""
+        return self.features.get(name, False)
 
     def check_enabled(self, flag: str) -> bool:
         """Effective value of a runtime-check flag at the current lowering
@@ -143,6 +148,11 @@ class CodegenBase:
         err_block = parent.append_basic_block(label + '_fail')
         self.builder.cbranch(ok_cond, ok_block, err_block)
         self.builder.position_at_end(err_block)
+        fflush_type = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer()])
+        fflush = self.module.globals.get('fflush')
+        if fflush is None:
+            fflush = ir.Function(self.module, fflush_type, name='fflush')
+        self.builder.call(fflush, [ir.Constant(ir.IntType(8).as_pointer(), None)])
         self.builder.call(self.runtime_error_func(), [])
         self.builder.unreachable()
         self.builder.position_at_end(ok_block)
