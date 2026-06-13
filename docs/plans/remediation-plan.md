@@ -39,11 +39,15 @@ grep 'EFFORT: L'           remediation-plan.md   # large items
 grep 'TOUCH:'              remediation-plan.md   # every file an item touches
 grep 'VERIFY:'            remediation-plan.md    # the probe that closes each item
 grep '^- D-0'              remediation-plan.md    # index rows by D-number
+grep 'ANCHOR: RM-DEC'      remediation-plan.md    # standing design decisions
 ```
 
 Per-item field labels are fixed: `PRIORITY:`, `STATUS:`, `D-ENTRY:`, `CLASS:`,
 `BASIS:`, `VINTAGE:`, `MODERN-NOW:`, `TOUCH:`, `ACTION:`, `DECISION:`,
-`EFFORT:`, `RISK-IF-SKIPPED:`, `VERIFY:`, `UPGRADES:`, `XREF:`.
+`EFFORT:`, `RISK-IF-SKIPPED:`, `VERIFY:`, `UPGRADES:`, `XREF:`. Standing
+design-decision items (`RM-DEC-*`, section D) add two: `GOVERNS:` (the
+remediation items the ruling controls — they must not be resolved
+independently of it) and `SEE:` (the standalone discussion note).
 
 `BASIS:` grades the *vintage* claim the fix targets: `OBSERVED` (probe output),
 `INFERRED` (mechanism deduced from output), `UNVERIFIED` (not established by any
@@ -57,8 +61,9 @@ Tiers are correctness-first: P0 = silent or visible wrongness on ordinary valid
 code; P1 = acceptance/format fidelity on features modern already supports; P2 =
 compile-blocking feature gaps (loud failures, no corruption); P3 = error-handling
 behavioral divergence; P4 = diagnostic-only (semantics already match); P5 =
-conditional-compilation skipper (niche); X = cross-cutting; NO-ACTION =
-documented-correct; OPEN = re-probe.
+conditional-compilation skipper (niche); X = cross-cutting; DEC = standing
+design decision (gates the items it governs); NO-ACTION = documented-correct;
+OPEN = re-probe.
 
 | Anchor | D | Prio | Status | One-line | Effort |
 |---|---|---|---|---|---|
@@ -66,6 +71,7 @@ documented-correct; OPEN = re-probe.
 | RM-P0-CASE | D-028 | P0 | TODO-FIX | CASE no-match silently falls through; vintage traps | S |
 | RM-P1-INTPN | D-010 | P1 | DECISION-NEEDED | integer `::N` silently accepted; vintage runtime-rejects | S |
 | RM-P1-ENUMWRITE | D-019 | P1 | DECISION-NEEDED | enum WRITE prints name; vintage prints ordinal | S |
+| RM-DEC-ENUMIO | D-019/D-006/D-030 | DEC | DECISION-NEEDED | enum I/O fork: faithful (ordinal+numeric) vs symbolic (name+name); governs the two enum items | — |
 | RM-P2-WORD | D-032 | P2 | TODO-FIX | WORD assign/convert (`WRD`,`MAXWORD`) rejected | M |
 | RM-P2-PACK | D-031 | P2 | TODO-FIX | `PACK`/`UNPACK` + packed-char-array WRITE rejected | M-L |
 | RM-P2-NULL | D-033 | P2 | TODO-FIX | `NULL` LSTRING constant + `.LEN` field rejected | M |
@@ -81,7 +87,8 @@ documented-correct; OPEN = re-probe.
 | RM-XCUT-IOERR | — | X | TODO-FIX | renumber `io_error` table to vintage codes (gates D-005/12/13/24) | M |
 | RM-XCUT-FLUSH | — | X | TODO-FIX | flush stdout before modern abort (test fidelity, D-005/15/16) | S |
 | RM-XCUT-ENUMBOOL | — | X | DECISION-NEEDED | BOOLEAN-names vs enum-ordinal: do NOT unify (D-019 vs D-020) | S |
-| RM-NOACTION | D-014/16/17 + baselines | — | NO-ACTION | width adaptations + AGREE-ACCEPT; do not change | — |
+| RM-DEC-INTWIDTH | D-014/16/17 | DEC | DECISION-NEEDED | keep 32-bit INTEGER, or move to 16-bit + add INTEGER32/64; reopens the width NO-ACTION items | — |
+| RM-NOACTION | D-014/16/17 + baselines | — | NO-ACTION | width adaptations (conditional on RM-DEC-INTWIDTH) + AGREE-ACCEPT baselines; don't fix piecemeal | — |
 | RM-OPEN-T021 | t021 | OPEN | INVESTIGATE | `ORD(EOL)` verdict `[UNVERIFIED]`; rerun | S |
 | RM-OPEN-T022 | t022 | OPEN | INVESTIGATE | `READSET` delimiter retention; redesign (needs RM-P2-SETCTOR) | M |
 
@@ -92,6 +99,16 @@ ahead of the narrower input/grammar gaps (enum READ, set ctor), **except** that
 `RM-P2-SETCTOR` (D-026) is the prerequisite for closing `RM-OPEN-T022` and may
 be pulled forward if that open item matters. `RM-XCUT-IOERR` should land before
 or with D-012/D-013 since all three touch the same table.
+
+Two standing design decisions (section D) gate other work. `RM-DEC-ENUMIO` must
+be settled *before* `RM-P1-ENUMWRITE` and `RM-P2-ENUMREAD` are implemented —
+those two are halves of one enum-I/O contract and must not be resolved
+independently; whichever fork is chosen sets both. `RM-DEC-INTWIDTH` is a
+deliberately scheduled, larger call rather than an urgent one: the 32-bit status
+quo is documented-acceptable, so this is a "decide on purpose" item, and taking
+the 16-bit fork reclassifies the D-014/16/17 entries in `RM-NOACTION` from
+NO-ACTION to resolved-by-width-change and pulls in a non-trivial
+`INTEGER32`/`INTEGER64` type-system addition plus a suite migration.
 
 ---
 
@@ -169,7 +186,8 @@ or with D-012/D-013 since all three touch the same table.
 - RISK-IF-SKIPPED: any enum-writing program produces different text than vintage (names vs numbers) — pervasive output diff if byte-fidelity matters. Medium.
 - VERIFY: re-run `t019.pas`. If 'match': expect `1`. If 'keep': record the extension; leave t019 as a documented OUTPUT-DIFF. Re-run RM-P0-BOOL's `t020.pas` to confirm BOOLEAN still prints `TRUE`/`FALSE` after whatever change lands here.
 - UPGRADES: checklist 9.8 / enum WRITE (currently `[INFERRED]`).
-- XREF: D-019; RM-P0-BOOL; RM-XCUT-ENUMBOOL.
+- GOVERNED-BY: RM-DEC-ENUMIO — this is the write half of the enum-I/O fork; do not decide it in isolation from enum READ (RM-P2-ENUMREAD). The `DECISION:` above is the local form of that fork's write side.
+- XREF: D-019; RM-P0-BOOL; RM-XCUT-ENUMBOOL; RM-DEC-ENUMIO.
 
 ---
 
@@ -240,12 +258,13 @@ modern rejects at typecheck. Items are largely independent.
 - VINTAGE: with numeric input `1`, `READ(f,x); WRITELN(ORD(x))` compiled (1 `Assumed OUTPUT`), linked, ran, printed `1` — enum READ accepts the ordinal `[OBSERVED]`. (D-006: symbolic input `GREEN` instead gave runtime data-format error 1119 `[OBSERVED]`, so the accepted input form is *numeric ordinal*, not the symbolic name.)
 - MODERN-NOW: rejected at typecheck: `READ argument 2 has unreadable type COL` `[OBSERVED]`.
 - TOUCH: `type_checker.py` — unreadable-READ rejection at ≈L1110 (`READ argument {i+1} has unreadable type`). Runtime side: the numeric reader needs to land the parsed integer into the enum's storage.
-- ACTION: allow enum types as READ targets; read a numeric ordinal and store it as the enum value (match vintage: input `1` → `ORD = 1`). Do NOT attempt symbolic-name input — vintage rejects that at runtime (1119).
+- ACTION: allow enum types as READ targets; read a numeric ordinal and store it as the enum value (match vintage: input `1` → `ORD = 1`). Do NOT attempt symbolic-name input — vintage rejects that at runtime (1119). *This numeric-read target is the **faithful fork** of RM-DEC-ENUMIO (the recommended default).* If that decision instead picks the **symbolic fork**, the read here becomes name-based (a reader the original never had) and must be co-designed with symbolic enum WRITE — do not implement numeric read and symbolic write together (they would not round-trip; see RM-DEC-ENUMIO).
 - EFFORT: M
 - RISK-IF-SKIPPED: programs reading enum-typed values won't compile. Medium (loud).
-- VERIFY: re-run `t030.pas` with `in030`-style numeric input `1`; expect `1`. (D-006's symbolic-input behavior is already settled; no action there beyond this.)
+- VERIFY: re-run `t030.pas` with `in030`-style numeric input `1`; expect `1` (faithful fork). (D-006's symbolic-input behavior is already settled; no action there beyond this.)
 - UPGRADES: checklist 9.7 enum I/O (≈L1062); closes the D-006 open follow-up.
-- XREF: D-030; D-006.
+- GOVERNED-BY: RM-DEC-ENUMIO — this is the read half of the enum-I/O fork; the accepted input form (numeric vs symbolic) is set there, not here.
+- XREF: D-030; D-006; RM-P1-ENUMWRITE; RM-DEC-ENUMIO.
 
 ## ANCHOR: RM-P2-SETCTOR
 **Type-prefixed set constructor `COLORS[RED, BLUE]` rejected (parsed as indexing).**
@@ -436,7 +455,57 @@ strict-abort model is kept by design per the campaign plan.
 - CONSTRAINT: these two WRITE behaviors point in *opposite* directions. RM-P0-BOOL must make BOOLEAN emit the *name*; RM-P1-ENUMWRITE (if 'match' is chosen) must make user enums emit the *ordinal*. A naive "make enum WRITE match vintage by printing the ordinal" applied to BOOLEAN (which is `i8`, enum-like) would re-break t020. Conversely, routing BOOLEAN through the existing `enum_name_table` is the *right* mechanism for BOOLEAN but the *wrong* one for user enums.
 - ACTION: implement BOOLEAN as a named-output special case (table `["FALSE","TRUE"]` or a `select`), distinct from user-enum WRITE. Keep the two code paths separate in `build_write_format_and_args`. Whichever way RM-P1-ENUMWRITE is decided, re-run t020 to confirm BOOLEAN still prints `TRUE`/`FALSE`.
 - EFFORT: S (already folded into RM-P0-BOOL / RM-P1-ENUMWRITE)
-- XREF: D-020; D-019; RM-P0-BOOL; RM-P1-ENUMWRITE.
+- XREF: D-020; D-019; RM-P0-BOOL; RM-P1-ENUMWRITE; RM-DEC-ENUMIO.
+
+---
+
+# D — Design decisions (standing, gate the items they govern)
+
+Two project-level decisions are tracked here rather than buried in the items
+they control. Each is `DECISION-NEEDED`, names what it `GOVERNS:`, and points
+to a standalone discussion note via `SEE:`. The `RECOMMENDATION:` line is my
+lean (consistent with the discussion notes), not a ruling. Settle these before
+implementing the items they govern.
+
+## ANCHOR: RM-DEC-ENUMIO
+**Enum I/O contract — faithful (ordinal write + numeric read) vs symbolic (name write + name read).**
+- PRIORITY: DEC (gates RM-P1-ENUMWRITE [P1] and RM-P2-ENUMREAD [P2] — settle before implementing either)
+- STATUS: DECISION-NEEDED
+- D-ENTRY: D-019 (write); D-006 + D-030 (read)
+- BASIS: OBSERVED — vintage WRITE emits the ordinal `1` (t019); vintage READ accepts a numeric ordinal `1` (t030) and rejects the symbolic name `GREEN` at runtime with code 1119 (t006). Modern WRITE emits the name `GREEN`; modern READ is currently rejected at type-check.
+- DECISION: choose ONE coherent contract for enum I/O. The write format and read format must match each other, or a program cannot read back the enum data it wrote.
+- OPTIONS:
+  - **Faithful fork (recommended default).** WRITE emits the ordinal (`1`); READ consumes a numeric ordinal. Matches 1981 on both ends, round-trips with itself and with the original, machine-friendly. Cost: forgoes symbolic output's readability. Lowers to: RM-P1-ENUMWRITE → ordinal; RM-P2-ENUMREAD → numeric (the path already scoped there).
+  - **Symbolic fork.** WRITE emits the name (`GREEN`); READ consumes the name. Round-trips with itself, human-friendly, arguably a more complete realization of the enum abstraction and uniform with BOOLEAN. Cost: diverges from 1981 on both ends and requires *inventing a symbolic enum reader the original never had*, including its input grammar (case, whitespace, unknown-name handling). Lowers to: RM-P1-ENUMWRITE → keep name (documented extension); RM-P2-ENUMREAD → name-based reader, co-designed with the writer.
+  - **Status quo is NOT an option.** Symbolic write + numeric read (what we drift into if the two items are decided independently) means the compiler's own output is unreadable by its own reader. Do not ship that under either fork.
+- CONSTRAINT: BOOLEAN prints `TRUE`/`FALSE` under *either* fork — that is the *faithful* behavior for booleans (the original also names booleans; see RM-P0-BOOL / RM-XCUT-ENUMBOOL). If the faithful fork is chosen, do NOT collapse BOOLEAN into the user-enum ordinal path.
+- RECOMMENDATION: faithful fork. For a fidelity-first project, make the default match 1981 and offer symbolic names only as an explicitly documented debug/extension mode, never the default round-trip format.
+- GOVERNS: RM-P1-ENUMWRITE (write half), RM-P2-ENUMREAD (read half) — resolve both together per this ruling.
+- RISK-IF-SKIPPED: the two enum items get implemented piecemeal and land the incoherent symbolic-write / numeric-read state — the new compiler cannot read its own enum output.
+- EFFORT: the decision itself is free; downstream cost is the chosen fork's two implementations (faithful ≈ the S+M already on RM-P1-ENUMWRITE / RM-P2-ENUMREAD; symbolic adds reader design + spec).
+- VERIFY: after implementation, a WRITE-then-READ round-trip of an enum value must reproduce the original value. Faithful fork: t019 → `1`, t030 → `1`. Symbolic fork: the round-trip holds on names, and the reader's edge cases are specified and tested.
+- UPGRADES: checklist 9.7 (enum I/O) and 9.8 (enum WRITE) — record the chosen contract and grade.
+- SEE: `June 12th ENUM discussion.md`.
+- XREF: D-019; D-006; D-030; RM-P1-ENUMWRITE; RM-P2-ENUMREAD; RM-XCUT-ENUMBOOL; RM-P0-BOOL.
+
+## ANCHOR: RM-DEC-INTWIDTH
+**INTEGER width — keep 32-bit (status quo), or move to 16-bit + add INTEGER32 / INTEGER64.**
+- PRIORITY: DEC (deferred / deliberately scheduled — the 32-bit status quo is documented-acceptable, and the 16-bit fork is a larger, non-urgent change; decide on purpose, not reactively)
+- STATUS: DECISION-NEEDED
+- D-ENTRY: D-014, D-016, D-017 (one root cause: INTEGER width)
+- BASIS: OBSERVED — vintage 16-bit behavior at each check site: `$INITCK+` sentinel `-32768` (t014); `$MATHCK+` traps `32767+1` as overflow, code 2054 (t016); `$MATHCK-` wraps to `-32768` (t017). Modern maps `INTEGER → i32` (read from `codegen/types_map.py`). `WORD` is already `i16` with `MAXWORD = 65535` (D-032), so 16-bit machinery already exists in the runtime.
+- DECISION: keep `INTEGER` 32-bit, or make `INTEGER` 16-bit (matching 1981) and introduce `INTEGER32` / `INTEGER64` as explicit extension types for wider arithmetic.
+- OPTIONS:
+  - **Keep 32-bit (status quo).** D-014/16/17 remain documented width adaptations (NO-ACTION). Zero churn. Cost: a silent, pervasive deviation — `$MATHCK+` overflow checks do not fire at the vintage boundary (so they can *hide* overflow bugs in ported code), and struct/array layouts, `SIZEOF`/`ADR`, and on-disk record sizes do not match 1981.
+  - **16-bit + INTEGER32/64 (the proposal).** `INTEGER` range / overflow / sentinel / layout match 1981 bit-for-bit; D-014/16/17 become agreements; `$MATHCK+` regains meaning at the right boundary; `MAXINT` becomes `32767`. Width deviations move behind explicit, obviously-non-vintage type names. Costs: (a) any 32-bit-dependent code — including some of the 448 baseline modern tests — now overflows/traps and must be audited and migrated to `INTEGER32`; (b) reverses a documented decision (rationale rewrite + re-grade); (c) forces a literal-overflow policy (`100000` does not fit `i16` — reject, which is faithful, or auto-widen, which is divergent); (d) `INTEGER32`/`INTEGER64` is real type-system surface — assignment compatibility, mixed-arithmetic result types, per-width overflow and WRITE/READ formatting, conversions; (e) a minor per-op runtime cost emulating 16-bit wrap on a 64-bit host.
+- RECOMMENDATION: for a differential-fidelity project, the 16-bit fork is the consistent choice — faithful default, deviations behind explicit opt-in types — but it is a real cost, and the `INTEGER32`/`INTEGER64` design plus the suite migration must be costed before committing.
+- GOVERNS: the NO-ACTION classification of D-014 / D-016 / D-017 in RM-NOACTION (the 16-bit fork reclassifies them to resolved-by-width-change); and any future `INTEGER32` / `INTEGER64` work.
+- RISK-IF-SKIPPED (never deciding): the width deviation stays silent and unexamined, and `$MATHCK+` keeps not catching overflows the original would — which can mask defects in ported programs. Low urgency, not zero.
+- EFFORT: the decision is free; the 16-bit fork's implementation is L (type-system addition + suite migration); keep-32-bit is zero implementation.
+- VERIFY (only if 16-bit fork is taken): t014 → `-32768`; t016 → overflow trap at `32767+1`; t017 → `-32768`; full modern suite re-audited (some fixtures migrate to `INTEGER32`).
+- UPGRADES: D-014/16/17 from "expected width adaptation (NO-ACTION)" to agreements (16-bit fork), or left documented (keep-32-bit).
+- SEE: `June 12th width discussion.md`.
+- XREF: D-014; D-016; D-017; D-032 (WORD already 16-bit); RM-NOACTION.
 
 ---
 
@@ -447,8 +516,9 @@ strict-abort model is kept by design per the campaign plan.
 - **D-014 — `$INITCK+` sentinel.** Vintage `-32768`, modern `-2147483648` `[OBSERVED]`. Same sentinel at the documented 32-bit width adaptation (manual `[READ]`). Width-driven, expected. Do not change.
 - **D-016 — signed overflow under `$MATHCK+`.** Vintage 16-bit traps (code 2054), modern 32-bit does not overflow at `32767+1` → prints `32768` `[OBSERVED]`. Expected width adaptation. Do not change.
 - **D-017 — signed overflow under `$MATHCK-`.** Vintage wraps to `-32768`, modern prints `32768` `[OBSERVED]`. Confirms `$MATHCK-` disables checking (manual `[READ]`); the value differs by width. Do not change.
-- **Baselines (AGREE-ACCEPT, no divergence):** t001 (REAL default format ` 1.2345600E+02`), t007 (STRING(3) READ stop-at-fill), t008 (STRING(5) blank-pad + marker), t009 (LSTRING(3) whole-line consume + truncate), t011 (STRING `::N` ignored on both sides), t018 (RESET implicit GET / lazy-fill), t023 (temp-file round-trip), t025 (CLOSE-marker), t027 (RETYPE round-trip), **D-034** (`F.MODE` = 0/0 after REWRITE/RESET), **D-035** (bare `OTHERWISE stmt` grammar accepted), **D-036** (`F^` is blank ORD 32 at EOLN). These are evidence-upgrade confirmations only — no code change.
-- WHY LISTED: so a future agent does not mistake an expected width adaptation or a confirmed agreement for an open bug and "fix" it toward 16-bit behavior. The 32-bit INTEGER width is the documented modern adaptation; reverting it would regress the whole arithmetic model.
+- CONDITIONAL: the three width entries above (D-014/D-016/D-017) are NO-ACTION **only under the current 32-bit-`INTEGER` decision.** They are the open question in `RM-DEC-INTWIDTH` (section D): if that decision takes the 16-bit fork, all three are reclassified from NO-ACTION to resolved-by-width-change. Until that decision is taken, treat them as NO-ACTION; do not "fix" them piecemeal toward 16-bit — the width is a single project-level call, not three local ones.
+- **Baselines (AGREE-ACCEPT, no divergence):** t001 (REAL default format ` 1.2345600E+02`), t007 (STRING(3) READ stop-at-fill), t008 (STRING(5) blank-pad + marker), t009 (LSTRING(3) whole-line consume + truncate), t011 (STRING `::N` ignored on both sides), t018 (RESET implicit GET / lazy-fill), t023 (temp-file round-trip), t025 (CLOSE-marker), t027 (RETYPE round-trip), **D-034** (`F.MODE` = 0/0 after REWRITE/RESET), **D-035** (bare `OTHERWISE stmt` grammar accepted), **D-036** (`F^` is blank ORD 32 at EOLN). These are evidence-upgrade confirmations only — no code change, and (unlike the width trio) not subject to any open decision.
+- WHY LISTED: so a future agent does not mistake a confirmed agreement for an open bug, or "fix" a width-driven difference piecemeal toward 16-bit behavior. The 32-bit `INTEGER` width is the *currently documented* modern adaptation; whether to keep it is tracked deliberately in `RM-DEC-INTWIDTH`, and any change goes through that decision, not through ad-hoc edits here.
 
 ---
 
