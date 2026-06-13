@@ -67,15 +67,15 @@ OPEN = re-probe.
 
 | Anchor | D | Prio | Status | One-line | Effort |
 |---|---|---|---|---|---|
-| RM-P0-BOOL | D-020 | P0 | TODO-FIX | BOOLEAN WRITE prints raw bytes, not `TRUE`/`FALSE` | S |
+| RM-P0-BOOL | D-020 | P0 | RESOLVED | BOOLEAN WRITE now prints `TRUE`/`FALSE` in all modes | S |
 | RM-P0-CASE | D-028 | P0 | TODO-FIX | CASE no-match silently falls through; vintage traps | S |
 | RM-P1-INTPN | D-010 | P1 | DECISION-NEEDED | integer `::N` silently accepted; vintage runtime-rejects | S |
-| RM-P1-ENUMWRITE | D-019 | P1 | DECISION-NEEDED | enum WRITE prints name; vintage prints ordinal | S |
-| RM-DEC-ENUMIO | D-019/D-006/D-030 | DEC | DECISION-NEEDED | enum I/O fork: faithful (ordinal+numeric) vs symbolic (name+name); governs the two enum items | — |
+| RM-P1-ENUMWRITE | D-019 | P1 | RESOLVED | enum WRITE is ordinal by default; symbolic names require `-f symbolic-enum-io` | S |
+| RM-DEC-ENUMIO | D-019/D-006/D-030 | DEC | DECIDED | faithful default (ordinal write + numeric read); one `symbolic-enum-io` flag gates name write + name read | — |
 | RM-P2-WORD | D-032 | P2 | TODO-FIX | WORD assign/convert (`WRD`,`MAXWORD`) rejected | M |
 | RM-P2-PACK | D-031 | P2 | TODO-FIX | `PACK`/`UNPACK` + packed-char-array WRITE rejected | M-L |
 | RM-P2-NULL | D-033 | P2 | TODO-FIX | `NULL` LSTRING constant + `.LEN` field rejected | M |
-| RM-P2-ENUMREAD | D-030/D-006 | P2 | TODO-FIX | enum READ (numeric ordinal) rejected | M |
+| RM-P2-ENUMREAD | D-030/D-006 | P2 | RESOLVED | enum READ accepts numeric ordinals by default; symbolic names under `-f symbolic-enum-io` | M |
 | RM-P2-SETCTOR | D-026 | P2 | TODO-FIX | type-prefixed set ctor `COLORS[..]` rejected; unblocks t022 | M |
 | RM-P3-READTRAP | D-013 | P3 | TODO-FIX | malformed formatted READ aborts; vintage traps (code 14) | M |
 | RM-P3-ERRSCODE | D-012 | P3 | TODO-FIX | `F.ERRS` returns invented code; vintage = 10 on RESET-missing | S |
@@ -86,7 +86,7 @@ OPEN = re-probe.
 | RM-P5-SKIPQUOTE | D-004 | P5 | RECORD-ONLY | `{` in skipped-`$IF` string: keep modern fix, document | S |
 | RM-XCUT-IOERR | — | X | TODO-FIX | renumber `io_error` table to vintage codes (gates D-005/12/13/24) | M |
 | RM-XCUT-FLUSH | — | X | TODO-FIX | flush stdout before modern abort (test fidelity, D-005/15/16) | S |
-| RM-XCUT-ENUMBOOL | — | X | DECISION-NEEDED | BOOLEAN-names vs enum-ordinal: do NOT unify (D-019 vs D-020) | S |
+| RM-XCUT-ENUMBOOL | — | X | HONORED | BOOLEAN-names vs user-enum-ordinal kept separate (D-019 vs D-020) | S |
 | RM-DEC-INTWIDTH | D-014/16/17 | DEC | DECIDED (16-bit fork, implemented) | INTEGER now 16-bit; INTEGER32/64 added behind `-f wide-integers`; D-014/16/17 resolved | done |
 | RM-NOACTION | baselines | — | NO-ACTION | AGREE-ACCEPT baselines only (the D-014/16/17 width trio is now RESOLVED, see RM-DEC-INTWIDTH); don't fix piecemeal | — |
 | RM-OPEN-T021 | t021 | OPEN | INVESTIGATE | `ORD(EOL)` verdict `[UNVERIFIED]`; rerun | S |
@@ -119,7 +119,7 @@ extension items should reuse it rather than inventing a parallel mechanism.
 ## ANCHOR: RM-P0-BOOL
 **BOOLEAN WRITE emits raw storage bytes instead of `TRUE`/`FALSE`.**
 - PRIORITY: P0 (highest — visible corruption, high-frequency operation, trivial fix)
-- STATUS: TODO-FIX
+- STATUS: RESOLVED
 - D-ENTRY: D-020
 - CLASS: OUTPUT-DIFF
 - BASIS: OBSERVED (vintage `TRUE` / `FALSE` printed in t020)
@@ -175,7 +175,7 @@ extension items should reuse it rather than inventing a parallel mechanism.
 ## ANCHOR: RM-P1-ENUMWRITE
 **Enum WRITE prints the symbolic name; vintage prints the ordinal.**
 - PRIORITY: P1
-- STATUS: DECISION-NEEDED
+- STATUS: RESOLVED
 - D-ENTRY: D-019
 - CLASS: OUTPUT-DIFF
 - BASIS: INFERRED (the modern symbolic-name output is an extension with no vintage or manual basis; vintage ordinal is `[OBSERVED]`)
@@ -253,7 +253,7 @@ modern rejects at typecheck. Items are largely independent.
 ## ANCHOR: RM-P2-ENUMREAD
 **Enum READ (numeric ordinal input) rejected at typecheck.**
 - PRIORITY: P2
-- STATUS: TODO-FIX
+- STATUS: RESOLVED
 - D-ENTRY: D-030 (closes the D-006 follow-up)
 - CLASS: ACCEPT/REJECT
 - BASIS: OBSERVED (vintage accepts numeric input, prints `1`)
@@ -452,7 +452,7 @@ strict-abort model is kept by design per the campaign plan.
 ## ANCHOR: RM-XCUT-ENUMBOOL
 **BOOLEAN prints names; user enums print ordinals — do NOT unify these WRITE paths.**
 - PRIORITY: X (a guard rail, not a task — read before touching RM-P0-BOOL or RM-P1-ENUMWRITE)
-- STATUS: DECISION-NEEDED (the constraint is fixed; the enum side is the open decision)
+- STATUS: HONORED (constraint implemented)
 - BASIS: OBSERVED — vintage BOOLEAN → `TRUE`/`FALSE` (t020); vintage user enum → ordinal `1` (t019).
 - CONSTRAINT: these two WRITE behaviors point in *opposite* directions. RM-P0-BOOL must make BOOLEAN emit the *name*; RM-P1-ENUMWRITE (if 'match' is chosen) must make user enums emit the *ordinal*. A naive "make enum WRITE match vintage by printing the ordinal" applied to BOOLEAN (which is `i8`, enum-like) would re-break t020. Conversely, routing BOOLEAN through the existing `enum_name_table` is the *right* mechanism for BOOLEAN but the *wrong* one for user enums.
 - ACTION: implement BOOLEAN as a named-output special case (table `["FALSE","TRUE"]` or a `select`), distinct from user-enum WRITE. Keep the two code paths separate in `build_write_format_and_args`. Whichever way RM-P1-ENUMWRITE is decided, re-run t020 to confirm BOOLEAN still prints `TRUE`/`FALSE`.
@@ -472,14 +472,14 @@ implementing the items they govern.
 ## ANCHOR: RM-DEC-ENUMIO
 **Enum I/O contract — faithful (ordinal write + numeric read) vs symbolic (name write + name read).**
 - PRIORITY: DEC (gates RM-P1-ENUMWRITE [P1] and RM-P2-ENUMREAD [P2] — settle before implementing either)
-- STATUS: DECISION-NEEDED
+- STATUS: DECIDED
 - D-ENTRY: D-019 (write); D-006 + D-030 (read)
 - BASIS: OBSERVED — vintage WRITE emits the ordinal `1` (t019); vintage READ accepts a numeric ordinal `1` (t030) and rejects the symbolic name `GREEN` at runtime with code 1119 (t006). Modern WRITE emits the name `GREEN`; modern READ is currently rejected at type-check.
-- DECISION: choose ONE coherent contract for enum I/O. The write format and read format must match each other, or a program cannot read back the enum data it wrote.
+- DECISION: settled. The default contract is the faithful fork: WRITE emits the ordinal (`1`) and READ consumes a numeric ordinal. The symbolic fork is retained only as the opt-in `-f symbolic-enum-io` extension, where the same single feature flag gates both name-based WRITE and name-based READ. This is the second extension on the generic `features.py` mechanism after `wide-integers`; no parallel enum-specific flag mechanism exists.
 - OPTIONS:
-  - **Faithful fork (recommended default).** WRITE emits the ordinal (`1`); READ consumes a numeric ordinal. Matches 1981 on both ends, round-trips with itself and with the original, machine-friendly. Cost: forgoes symbolic output's readability. Lowers to: RM-P1-ENUMWRITE → ordinal; RM-P2-ENUMREAD → numeric (the path already scoped there).
-  - **Symbolic fork.** WRITE emits the name (`GREEN`); READ consumes the name. Round-trips with itself, human-friendly, arguably a more complete realization of the enum abstraction and uniform with BOOLEAN. Cost: diverges from 1981 on both ends and requires *inventing a symbolic enum reader the original never had*, including its input grammar (case, whitespace, unknown-name handling). Lowers to: RM-P1-ENUMWRITE → keep name (documented extension); RM-P2-ENUMREAD → name-based reader, co-designed with the writer.
-  - **Status quo is NOT an option.** Symbolic write + numeric read (what we drift into if the two items are decided independently) means the compiler's own output is unreadable by its own reader. Do not ship that under either fork.
+  - **Faithful fork (default).** WRITE emits the ordinal (`1`); READ consumes a numeric ordinal. Matches 1981 on both ends, round-trips with itself and with the original, machine-friendly. Lowers to: RM-P1-ENUMWRITE → ordinal; RM-P2-ENUMREAD → numeric.
+  - **Symbolic fork (extension only).** WRITE emits the name (`GREEN`); READ consumes the name. Round-trips with itself and is human-friendly, but diverges from 1981 on both ends. Enabled only by `symbolic-enum-io`.
+  - **Status quo is NOT an option.** Symbolic write + numeric read means the compiler's own output is unreadable by its own reader. The single feature flag makes that mixed state unreachable.
 - CONSTRAINT: BOOLEAN prints `TRUE`/`FALSE` under *either* fork — that is the *faithful* behavior for booleans (the original also names booleans; see RM-P0-BOOL / RM-XCUT-ENUMBOOL). If the faithful fork is chosen, do NOT collapse BOOLEAN into the user-enum ordinal path.
 - RECOMMENDATION: faithful fork. For a fidelity-first project, make the default match 1981 and offer symbolic names only as an explicitly documented debug/extension mode, never the default round-trip format.
 - GOVERNS: RM-P1-ENUMWRITE (write half), RM-P2-ENUMREAD (read half) — resolve both together per this ruling.

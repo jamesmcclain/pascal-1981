@@ -14,7 +14,7 @@ from ast_nodes import EnumType as ASTEnumType
 from ast_nodes import LStringType as ASTLStringType
 from ast_nodes import *
 from codegen.base import CodegenError
-from type_system import CHAR_TYPE, INTEGER_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, REAL_TYPE, WORD_TYPE
+from type_system import BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, REAL_TYPE, WORD_TYPE
 from type_system import EnumType as ResolvedEnumType
 from type_system import FileType as ResolvedFileType
 from type_system import LStringType, StringType
@@ -42,6 +42,14 @@ class IoWriteReadMixin:
         extra = extra or []
         fn_ty = ir.FunctionType(ir.IntType(32), [llvm_ptr_ty] + extra)
         fn = ir.Function(self.module, fn_ty, name=name)
+        fn.linkage = 'external'
+        return fn
+
+    def _runtime_func(self, name: str, ret_ty: ir.Type, arg_tys: List[ir.Type]) -> ir.Function:
+        for f in self.module.functions:
+            if f.name == name:
+                return f
+        fn = ir.Function(self.module, ir.FunctionType(ret_ty, arg_tys), name=name)
         fn.linkage = 'external'
         return fn
 
@@ -97,10 +105,19 @@ class IoWriteReadMixin:
             pas_ty = self._pas_type(expr)
 
             enum_names = self.write_enum_names(expr)
-            if enum_names is not None:
+            if enum_names is not None and self.feature_enabled('symbolic-enum-io'):
                 table = self.enum_name_table(enum_names)
                 zero = ir.Constant(ir.IntType(32), 0)
-                val = self.builder.load(self.builder.gep(table, [zero, val]))
+                names_ptr = self.builder.gep(table, [zero, zero])
+                fn = self._runtime_func('pas_enum_write_token', ir.IntType(8).as_pointer(),
+                                        [ir.IntType(32), ir.IntType(8).as_pointer().as_pointer(), ir.IntType(32)])
+                val = self.builder.call(fn, [self.coerce_printf_int(val), names_ptr, ir.Constant(ir.IntType(32), len(enum_names))])
+                pas_ty = None
+
+            if self._is_boolean_pas_type(pas_ty) or str(val.type) == 'i1':
+                false_s, true_s = self._boolean_name_constants()
+                is_true = self.builder.icmp_unsigned('!=', val, ir.Constant(val.type, 0))
+                val = self.builder.select(is_true, true_s, false_s)
                 pas_ty = None
 
             if isinstance(pas_ty, (StringType, LStringType, ASTLStringType)):
@@ -233,6 +250,34 @@ class IoWriteReadMixin:
         elif ty is CHAR_TYPE or ty_name == 'CHAR':
             fn = self._read_helper('pas_fread_char' if file_fcb is not None else 'pas_read_char', ptr.type)
             call_args = ([file_fcb, ptr] if file_fcb is not None else [ptr])
+        elif isinstance(ty, (ResolvedEnumType, ASTEnumType)):
+            if self.feature_enabled('symbolic-enum-io'):
+                names = self.enum_value_list(ty)
+                table = self.enum_name_table(names or [])
+                zero = ir.Constant(ir.IntType(32), 0)
+                names_ptr = self.builder.gep(table, [zero, zero]) if names else ir.Constant(ir.IntType(8).as_pointer().as_pointer(), None)
+                tmp = self.builder.alloca(ir.IntType(32), name='read_enum_tmp')
+                if file_fcb is not None:
+                    fn = self._runtime_func('pas_fread_enum_name', ir.IntType(32),
+                                            [self.file_fcb_type().as_pointer(), ir.IntType(32).as_pointer(), ir.IntType(8).as_pointer().as_pointer(), ir.IntType(32)])
+                    call_args = [file_fcb, tmp, names_ptr, ir.Constant(ir.IntType(32), len(names or []))]
+                else:
+                    fn = self._runtime_func('pas_read_enum_name', ir.IntType(32),
+                                            [ir.IntType(32).as_pointer(), ir.IntType(8).as_pointer().as_pointer(), ir.IntType(32)])
+                    call_args = [tmp, names_ptr, ir.Constant(ir.IntType(32), len(names or []))]
+                self.builder.call(fn, call_args)
+                loaded = self.builder.load(tmp)
+                val = loaded if loaded.type == ptr.type.pointee else self.builder.trunc(loaded, ptr.type.pointee)
+                self.builder.store(val, ptr)
+                return
+            tmp = self.builder.alloca(ir.IntType(32), name='read_enum_tmp')
+            fn = self._read_helper('pas_fread_int' if file_fcb is not None else 'pas_read_int', tmp.type)
+            call_args = ([file_fcb, tmp] if file_fcb is not None else [tmp])
+            self.builder.call(fn, call_args)
+            loaded = self.builder.load(tmp)
+            val = loaded if loaded.type == ptr.type.pointee else self.builder.trunc(loaded, ptr.type.pointee)
+            self.builder.store(val, ptr)
+            return
         else:
             is_str, max_len, is_lstring = self.get_string_type_info(ty)
             if not is_str:
@@ -310,6 +355,23 @@ class IoWriteReadMixin:
                 self.builder.call(self.scope.lookup('pas_freadln_skip').llvm_value, [file_fcb])
             else:
                 self.builder.call(self._read_helper('pas_readln_skip', ir.VoidType()), [])
+
+    def _is_boolean_pas_type(self, pas_ty) -> bool:
+        if pas_ty is BOOLEAN_TYPE:
+            return True
+        if isinstance(pas_ty, (NamedType, BuiltinType)):
+            return pas_ty.name.upper() == 'BOOLEAN'
+        return getattr(pas_ty, 'name', '').upper() == 'BOOLEAN'
+
+    def _boolean_name_constants(self) -> tuple[ir.Value, ir.Value]:
+        def const_ptr(text: str) -> ir.Value:
+            data = bytearray(text.encode('utf-8') + b'\0')
+            const = ir.Constant(ir.ArrayType(ir.IntType(8), len(data)), data)
+            g = ir.GlobalVariable(self.module, const.type, name=self.unique_name('boolname'))
+            g.initializer = const
+            g.global_constant = True
+            return self.builder.gep(g, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0)])
+        return const_ptr('FALSE'), const_ptr('TRUE')
 
     def enum_value_list(self, type_expr) -> Optional[List[str]]:
         t = self.resolve_type_alias(type_expr)

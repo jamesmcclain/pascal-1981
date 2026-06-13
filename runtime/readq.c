@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 struct pas_file_fcb {
     int elem_size;
@@ -48,6 +49,66 @@ static void die(const char *msg)
     fflush(stdout);
     fflush(stderr);
     abort();
+}
+
+__attribute__((weak)) const char *pas_enum_write_token(int32_t value, const char **names, int count)
+{
+    enum { RING = 16, WIDTH = 32 };
+    static char bufs[RING][WIDTH];
+    static int slot = 0;
+    if (value >= 0 && value < count && names)
+        return names[value];
+    slot = (slot + 1) % RING;
+    snprintf(bufs[slot], WIDTH, "%d", value);
+    return bufs[slot];
+}
+
+static int read_identifier_token(int (*next)(void), void (*push)(int), char *buf, int cap)
+{
+    int ch = skip_ws_except_nl();
+    (void)next;
+    (void)push;
+    if (ch == EOF)
+        die("unexpected EOF while reading enum");
+    if (!isalpha((unsigned char)ch)) {
+        unread(ch);
+        die("malformed enum input");
+    }
+    int n = 0;
+    do {
+        if (n + 1 < cap)
+            buf[n++] = (char)toupper((unsigned char)ch);
+        ch = getchar();
+    } while (ch != EOF && (isalpha((unsigned char)ch) || isdigit((unsigned char)ch)));
+    unread(ch);
+    buf[n] = '\0';
+    return 0;
+}
+
+int pas_read_enum_name(int32_t *out, const char **names, int count)
+{
+    int ch = skip_ws_except_nl();
+    if (ch == EOF)
+        die("unexpected EOF while reading enum");
+    if (isdigit((unsigned char)ch) || ch == '-' || ch == '+') {
+        unread(ch);
+        long v;
+        if (scanf("%ld", &v) != 1)
+            die("malformed enum input");
+        *out = (int32_t)v;
+        return 0;
+    }
+    unread(ch);
+    char tok[256];
+    read_identifier_token(NULL, NULL, tok, (int)sizeof(tok));
+    for (int i = 0; i < count; i++) {
+        if (names && names[i] && strcmp(tok, names[i]) == 0) {
+            *out = i;
+            return 0;
+        }
+    }
+    die("malformed enum input");
+    return -1;
 }
 
 int pas_read_int(int32_t * out)

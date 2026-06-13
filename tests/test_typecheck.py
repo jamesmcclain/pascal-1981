@@ -176,12 +176,9 @@ class TestReadWriteTypecheck(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("unreadable", " ".join(str(e) for e in result.errors))
 
-    def test_read_enum_rejected(self):
+    def test_read_enum_allowed(self):
         result = typecheck_source("PROGRAM P; TYPE C = (Red, Green); VAR c: C; BEGIN READLN(c) END.")
-        self.assertFalse(result.success)
-        errors = " ".join(str(e) for e in result.errors)
-        self.assertIn("unreadable", errors)
-        self.assertIn("C", errors)
+        self.assertTrue(result.success)
 
     def test_write_enum_still_allowed(self):
         result = typecheck_source("PROGRAM P; TYPE C = (Red, Green); VAR c: C; BEGIN WRITELN(c) END.")
