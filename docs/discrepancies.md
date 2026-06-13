@@ -213,3 +213,81 @@ whether the pipeline produced the next stage's artifact. Observed idioms:
 
 - `Assumed OUTPUT` — on `WRITELN` calls without a program-heading file list (t024: 3, t025: 5, t026: 2); all compiled, linked, and ran.
 - `Unknown Identifier In Expression Assumed Zero` — substitutes zero and may continue (t021; see open item above).
+- t029.pas — READSET delimiter retention with declared set variable (`ABC` / `,`) — AGREE-ACCEPT
+
+## D-030 — enum READ with numeric input
+- **Probe:** t030.pas (`READ(f, x); WRITELN(ORD(x))` with input `1`)
+- **Behavior targeted:** Enum READ numeric-input behavior, per the D-006 follow-up
+- **Class:** ACCEPT/REJECT
+- **Vintage (1981):** accepted compile (1 warning: `Assumed OUTPUT`), linked, ran, and printed `1` [OBSERVED]
+- **Modern (reimplementation):** rejected at typecheck with `READ argument 2 has unreadable type COL` [OBSERVED]
+- **Adjudication:** the vintage compiler accepts enum READ when the input is numeric, confirming the ordinal-input hypothesis from D-006 [OBSERVED]
+- **Cross-references:** D-006 follow-up; checklist around enum I/O
+- **Severity:** medium (missing runtime support for enum input)
+- **Follow-up:** implement enum READ against numeric ordinals
+
+## D-031 — PACK/UNPACK round-trip and index convention
+- **Probe:** t031.pas (`PACK(a, 2, z); WRITELN(z); UNPACK(z, b, 3); ...`)
+- **Behavior targeted:** PACK/UNPACK semantics and index base
+- **Class:** ACCEPT/REJECT
+- **Vintage (1981):** compiled with 3 warnings (`Assumed OUTPUT`), linked, and ran; output `BCD` then `..BCD.` [OBSERVED]
+- **Modern (reimplementation):** rejected at typecheck with `WRITE argument 1 has unwritable type PACKED ARRAY[1..3] OF CHAR` [OBSERVED]
+- **Adjudication:** vintage accepts PACK/UNPACK and uses the expected index convention; modern rejects the packed-string write path here [OBSERVED]
+- **Cross-references:** checklist 4.9; manual PACK/UNPACK index notes
+- **Severity:** medium (missing PACK/UNPACK support / packed-array write gap)
+- **Follow-up:** implement PACK/UNPACK and packed-char-array write support
+
+## D-032 — WORD / MAXWORD / WRD edges
+- **Probe:** t032.pas (`WRITELN(MAXWORD); w := 40000; WRITELN(w); w := WRD(-1); WRITELN(w)`)
+- **Behavior targeted:** WORD range, display, and negative-to-WORD conversion
+- **Class:** ACCEPT/REJECT
+- **Vintage (1981):** compiled with 3 warnings (`Assumed OUTPUT`), linked, and ran; output `65535`, `40000`, `65535` [OBSERVED]
+- **Modern (reimplementation):** rejected at typecheck with `Cannot assign INTEGER to WORD` [OBSERVED]
+- **Adjudication:** vintage treats WORD as a 16-bit unsigned range with `WRD(-1) = 65535`; modern lacks the conversion/assignment path here [OBSERVED]
+- **Cross-references:** checklist 4.9 / WORD, MAXWORD, WRD; manual edges around WORD range
+- **Severity:** medium (missing WORD conversion support)
+- **Follow-up:** implement WORD assignment/conversion semantics, including WRD and MAXWORD
+
+## D-033 — NULL LSTRING constant length and display
+- **Probe:** t033.pas (`l := NULL; WRITELN(ORD(l.LEN)); WRITELN('<', l, '>')`)
+- **Behavior targeted:** `NULL` LSTRING length and textual form
+- **Class:** ACCEPT/REJECT
+- **Vintage (1981):** compiled with 2 warnings (`Assumed OUTPUT`), linked, and ran; output `0` then `<>` [OBSERVED]
+- **Modern (reimplementation):** rejected at typecheck with `Cannot access field on non-record type LSTRING(5)` [OBSERVED]
+- **Adjudication:** vintage treats `NULL` as a zero-length LSTRING constant and prints it as empty between delimiters [OBSERVED]
+- **Cross-references:** manual ~5731; checklist `NULL` LSTRING note
+- **Severity:** medium (missing NULL/LSTRING semantics)
+- **Follow-up:** implement `NULL` as a zero-length LSTRING constant with the vintage length semantics
+
+## D-034 — F.MODE values after REWRITE and RESET
+- **Probe:** t034.pas (`REWRITE(f); WRITELN(ORD(f.MODE)); ... RESET(f); WRITELN(ORD(f.MODE))`)
+- **Behavior targeted:** FILEMODES layout / observable `F.MODE` values
+- **Class:** AGREE-ACCEPT
+- **Vintage (1981):** compiled with 2 warnings (`Assumed OUTPUT`), linked, and ran; output `0` then `0` [OBSERVED]
+- **Modern (reimplementation):** compiled and ran; output `0` then `0` [OBSERVED]
+- **Adjudication:** both sides agree that `ORD(f.MODE)` is `0` in the REWRITE and RESET states observed here [OBSERVED]
+- **Cross-references:** manual 12-32; FILEMODES layout notes
+- **Severity:** baseline
+- **Follow-up:** none
+
+## D-035 — OTHERWISE clause grammar
+- **Probe:** t035.pas (`CASE n OF ... OTHERWISE WRITELN('OTHER') END; WRITELN('AFTER')`)
+- **Behavior targeted:** CASE `OTHERWISE` arm syntax without a colon
+- **Class:** AGREE-ACCEPT
+- **Vintage (1981):** compiled with 4 warnings (`Assumed OUTPUT`), linked, and ran; output `OTHER` then `AFTER` [OBSERVED]
+- **Modern (reimplementation):** compiled and ran; output `OTHER` then `AFTER` [OBSERVED]
+- **Adjudication:** vintage accepts the bare `OTHERWISE stmt` form; grammar confirmed [OBSERVED]
+- **Cross-references:** checklist/CASE grammar extension; D-028 follow-on
+- **Severity:** baseline
+- **Follow-up:** none
+
+## D-036 — F^ blank at line marker
+- **Probe:** t036.pas (`c := f^; WRITELN(ORD(c)); GET(f); IF EOLN(f) THEN WRITELN('L'); WRITELN(ORD(f^))`)
+- **Behavior targeted:** Presentation of `F^` at a TEXT line marker
+- **Class:** AGREE-ACCEPT
+- **Vintage (1981):** compiled with 4 warnings (`Assumed OUTPUT`), linked, and ran; output `65`, `L`, `32` [OBSERVED]
+- **Modern (reimplementation):** compiled and ran; output `65`, `L`, `32` [OBSERVED]
+- **Adjudication:** vintage confirms the manual's blank-at-EOLN behavior; the `F^` presentation is a space (ORD 32) [OBSERVED]
+- **Cross-references:** checklist TEXT line-marker semantics; manual EOLN/F^ notes
+- **Severity:** baseline
+- **Follow-up:** none
