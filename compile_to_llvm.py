@@ -16,18 +16,25 @@ import traceback
 from parser import parse_file
 
 from codegen_llvm import compile_to_llvm
+from features import all_features, resolve_features
 from type_checker import PascalTypeChecker
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Pascal to LLVM IR compiler driver.", formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument('source_file', type=str, help='Source Pascal file (e.g., program.pas)')
+    parser.add_argument('source_file', nargs='?', type=str, help='Source Pascal file (e.g., program.pas)')
     parser.add_argument(
         'output_file',
         nargs='?',  # Optional positional argument
         default=None,
         help='Output LLVM IR file to write to.')
     parser.add_argument('-v', '--verbose', action='store_true', help='Log each declaration/statement and print a full traceback on failure.')
+    parser.add_argument('-f', '--feature', action='append', default=[], metavar='NAME',
+                        help='Enable extension feature NAME; use no-NAME to disable. Repeatable.')
+    parser.add_argument('--dialect', choices=['vintage', 'extended'], default='vintage',
+                        help='Feature umbrella: vintage enables no extensions; extended enables all registered features.')
+    parser.add_argument('--list-features', action='store_true',
+                        help='List registered extension features and exit.')
     # ----------------------------------------------------------------
     # Runtime-check flag overrides
     # Each flag follows the same tri-state convention:
@@ -66,6 +73,16 @@ def main() -> int:
                         help=_flag_help.format(name='INITCK (uninitialised variable detection)'))
     args = parser.parse_args()
 
+    if args.list_features:
+        for feature in all_features():
+            print(f'{feature.name}\tdefault={str(feature.default).lower()}\t{feature.help}')
+        return 0
+
+    try:
+        features = resolve_features(args.dialect, args.feature)
+    except ValueError as exc:
+        parser.error(str(exc))
+
     source_file = args.source_file
     output_file = args.output_file
     verbose = args.verbose
@@ -84,7 +101,7 @@ def main() -> int:
 
         # Type check
         print(f'Type checking...', file=sys.stderr)
-        type_checker = PascalTypeChecker(source_file=source_file)
+        type_checker = PascalTypeChecker(source_file=source_file, features=features)
         check_result = type_checker.check(ast)
 
         if not check_result.success:
@@ -125,7 +142,8 @@ def main() -> int:
                 force_flags[flag_name] = (val == 'on')
 
         ir = compile_to_llvm(ast, verbose=verbose, source_file=source_file,
-                             force_flags=force_flags or None)
+                             force_flags=force_flags or None,
+                             features=features)
 
         # Output
         if output_file:

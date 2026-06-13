@@ -196,7 +196,7 @@ class RuntimeBuiltinsMixin:
 
         a_ptr = self.codegen_expr(a_arg)
         z_ptr = self.codegen_expr(z_arg)
-        i_val = self.codegen_expr(i_arg)
+        i_val = self.coerce_printf_int(self.codegen_expr(i_arg))
 
         a_low = self._designator_array_low(a_arg)
         z_low, z_high = self._designator_array_bounds(z_arg)
@@ -246,7 +246,7 @@ class RuntimeBuiltinsMixin:
 
         z_ptr = self.codegen_expr(z_arg)
         a_ptr = self.codegen_expr(a_arg)
-        i_val = self.codegen_expr(i_arg)
+        i_val = self.coerce_printf_int(self.codegen_expr(i_arg))
 
         a_low = self._designator_array_low(a_arg)
         z_low, z_high = self._designator_array_bounds(z_arg)

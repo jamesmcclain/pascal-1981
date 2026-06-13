@@ -14,6 +14,7 @@ import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
 from ast_nodes import *
+from type_system import INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, WORD_TYPE
 from type_system import LStringType as ResolvedLStringType
 from type_system import StringType as ResolvedStringType
 
@@ -24,7 +25,12 @@ class ExprsMixin:
     def codegen_expr(self, expr: Expression) -> ir.Value:
         """Codegen an expression."""
         if isinstance(expr, IntLiteral):
-            return ir.Constant(ir.IntType(32), expr.value)
+            resolved = getattr(expr, 'resolved_type', INTEGER_TYPE)
+            if resolved == INTEGER64_TYPE:
+                return ir.Constant(ir.IntType(64), expr.value)
+            if resolved == INTEGER32_TYPE:
+                return ir.Constant(ir.IntType(32), expr.value)
+            return ir.Constant(ir.IntType(16), expr.value)
         elif isinstance(expr, RealLiteral):
             return ir.Constant(ir.DoubleType(), expr.value)
         elif isinstance(expr, CharLiteral):
@@ -259,12 +265,47 @@ class ExprsMixin:
         else:
             raise CodegenError(f'Expression type {type(expr).__name__} not yet supported')
 
-    def _mathck_arith(self, op: str, left: 'ir.Value', right: 'ir.Value') -> 'ir.Value':
+    def _type_expr_name(self, type_expr: Type) -> Optional[str]:
+        if isinstance(type_expr, BuiltinType):
+            return type_expr.name.upper()
+        if isinstance(type_expr, NamedType):
+            return type_expr.name.upper()
+        return None
+
+    def _expr_is_unsigned_word(self, expr: Expression) -> bool:
+        """Best-effort Pascal signedness query for checked integer arithmetic.
+
+        Phase 0 keeps INTEGER at i32, but stops selecting signedness from LLVM
+        width. WORD is the only unsigned arithmetic scalar in the vintage core;
+        later INTEGER-family i16/i32/i64 values remain signed.
+        """
+        if isinstance(expr, Identifier):
+            sym = self.scope.lookup(expr.name)
+            return bool(sym and self._type_expr_name(sym.type_expr) == 'WORD')
+        if isinstance(expr, Designator):
+            sym = self.scope.lookup(expr.name)
+            return bool(sym and self._type_expr_name(sym.type_expr) == 'WORD' and not expr.selectors)
+        if isinstance(expr, UnaryOp):
+            return self._expr_is_unsigned_word(expr.operand)
+        if isinstance(expr, BinOp):
+            if expr.op in {'PLUS', 'MINUS', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR'}:
+                return self._expr_is_unsigned_word(expr.left) and self._expr_is_unsigned_word(expr.right)
+        if isinstance(expr, FuncCall):
+            return expr.name.upper() == 'WRD'
+        return False
+
+    def _extend_int_for_pascal_expr(self, value: 'ir.Value', target: ir.IntType, expr: Expression) -> 'ir.Value':
+        """Extend an integer value using the Pascal source type's signedness."""
+        if self._expr_is_unsigned_word(expr):
+            return self.builder.zext(value, target)
+        return self.builder.sext(value, target)
+
+    def _mathck_arith(self, op: str, left: 'ir.Value', right: 'ir.Value', signed: bool) -> 'ir.Value':
         """Integer add/sub/mul with $MATHCK overflow detection.
 
         Manual: "Detects INTEGER and WORD overflow" (default +).  INTEGER
-        (i32) uses the signed llvm.s*.with.overflow intrinsics; WORD (i16,
-        unsigned) uses the unsigned variants.  The manual's exclusion of
+        family values use the signed llvm.s*.with.overflow intrinsics; WORD
+        (unsigned) uses the unsigned variants.  The manual's exclusion of
         the exact -MAXINT-1 result (#8000) is a 16-bit two-pass-compiler
         artifact and is not reproduced: here every signed overflow,
         including INT_MIN, is detected.  When $MATHCK is off (or operand
@@ -275,9 +316,8 @@ class ExprsMixin:
         if not self.check_enabled('MATHCK'):
             return plain(left, right)
         if not (isinstance(left.type, ir.IntType) and left.type == right.type
-                and left.type.width in (16, 32)):
+                and left.type.width in (16, 32, 64)):
             return plain(left, right)
-        signed = left.type.width == 32   # INTEGER; i16 WORD is unsigned
         meth = getattr(self.builder, ('s' if signed else 'u') + op + '_with_overflow')
         res = meth(left, right)
         val = self.builder.extract_value(res, 0)
@@ -306,6 +346,13 @@ class ExprsMixin:
         if self.is_set_value(left) or self.is_set_value(right):
             return self.codegen_set_binop(expr.op, left, right)
 
+        if isinstance(left.type, ir.IntType) and isinstance(right.type, ir.IntType) and left.type.width != right.type.width:
+            target = ir.IntType(max(left.type.width, right.type.width))
+            if left.type.width < target.width:
+                left = self._extend_int_for_pascal_expr(left, target, expr.left)
+            if right.type.width < target.width:
+                right = self._extend_int_for_pascal_expr(right, target, expr.right)
+
         # SLASH is always real division in Pascal (7/2 = 3.5), so force double
         # even when both operands are integer-typed.
         is_real = (isinstance(left.type, ir.DoubleType) or isinstance(right.type, ir.DoubleType) or expr.op == 'SLASH')
@@ -316,11 +363,11 @@ class ExprsMixin:
                 right = self.builder.sitofp(right, ir.DoubleType())
 
         if expr.op == 'PLUS':
-            return self.builder.fadd(left, right) if is_real else self._mathck_arith('add', left, right)
+            return self.builder.fadd(left, right) if is_real else self._mathck_arith('add', left, right, signed=not self._expr_is_unsigned_word(expr))
         elif expr.op == 'MINUS':
-            return self.builder.fsub(left, right) if is_real else self._mathck_arith('sub', left, right)
+            return self.builder.fsub(left, right) if is_real else self._mathck_arith('sub', left, right, signed=not self._expr_is_unsigned_word(expr))
         elif expr.op == 'MUL':
-            return self.builder.fmul(left, right) if is_real else self._mathck_arith('mul', left, right)
+            return self.builder.fmul(left, right) if is_real else self._mathck_arith('mul', left, right, signed=not self._expr_is_unsigned_word(expr))
         elif expr.op == 'SLASH' or expr.op == 'DIV':
             if is_real:
                 return self.builder.fdiv(left, right)
@@ -460,17 +507,17 @@ class ExprsMixin:
             return self.builder.zext(val, ir.IntType(32))
         elif lookup_name == 'ODD':
             val = self.codegen_expr(expr.args[0])
-            one = ir.Constant(ir.IntType(32), 1)
+            one = ir.Constant(val.type, 1)
             result = self.builder.and_(val, one)
-            zero = ir.Constant(ir.IntType(32), 0)
+            zero = ir.Constant(val.type, 0)
             return self.builder.icmp_signed('!=', result, zero)
         elif lookup_name == 'SUCC':
             val = self.codegen_expr(expr.args[0])
-            one = ir.Constant(ir.IntType(32), 1)
+            one = ir.Constant(val.type, 1)
             return self.builder.add(val, one)
         elif lookup_name == 'PRED':
             val = self.codegen_expr(expr.args[0])
-            one = ir.Constant(ir.IntType(32), 1)
+            one = ir.Constant(val.type, 1)
             return self.builder.sub(val, one)
         elif lookup_name == 'ABS':
             val = self.codegen_expr(expr.args[0])

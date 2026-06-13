@@ -6,7 +6,7 @@ This is shared between the type checker and code generator to prevent
 """
 
 from symbol_table import Symbol
-from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, EnumType, FileType, FunctionType, LStringType, PointerType, ProcedureType, RecordType, StringType)
+from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, REAL_TYPE, WORD_TYPE, EnumType, FileType, FunctionType, LStringType, PointerType, ProcedureType, RecordType, StringType)
 
 # Lists of all built-in function and procedure names
 BUILTIN_FUNCTIONS = {
@@ -20,7 +20,7 @@ BUILTIN_PROCEDURES = {
 }
 
 
-def register_builtins(symbol_table) -> None:
+def register_builtins(symbol_table, features=None) -> None:
     """Define built-in procedures, functions, constants, and types in the global scope."""
 
     def define_builtin(name: str, symbol_type, kind: str):
@@ -74,6 +74,9 @@ def register_builtins(symbol_table) -> None:
     # Constants
     define_builtin('MAXINT', INTEGER_TYPE, 'const')
     define_builtin('MAXWORD', WORD_TYPE, 'const')
+    if features and features.get('wide-integers', False):
+        define_builtin('MAXINT32', INTEGER32_TYPE, 'const')
+        define_builtin('MAXINT64', INTEGER64_TYPE, 'const')
     define_builtin('NULL', LStringType(0), 'const')
     filemodes_type = EnumType(['SEQUENTIAL', 'TERMINAL', 'DIRECT'], name='FILEMODES')
     define_builtin('SEQUENTIAL', filemodes_type, 'const')

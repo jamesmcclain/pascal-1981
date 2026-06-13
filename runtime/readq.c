@@ -45,6 +45,8 @@ static void unread(int ch)
 static void die(const char *msg)
 {
     fprintf(stderr, "runtime error: %s\n", msg);
+    fflush(stdout);
+    fflush(stderr);
     abort();
 }
 

@@ -18,7 +18,7 @@ from tests.support import (parse_source, requires_exe, requires_llvm, typecheck_
 
 
 # Codegen helpers (only imported here, not in support.py)
-def compile_to_ir(src: str) -> str:
+def compile_to_ir(src: str, features=None) -> str:
     """
     Parse, type-check, then compile to LLVM IR.
     Returns the IR text as a string.
@@ -26,15 +26,18 @@ def compile_to_ir(src: str) -> str:
     """
     from codegen_llvm import compile_to_llvm
 
+    from type_checker import PascalTypeChecker
+
     ast = parse_source(src)
-    result = typecheck_source(src)
+    checker = PascalTypeChecker(features=features)
+    result = checker.check(ast)
     if not result.success:
         raise RuntimeError(f"Type check failed: {result.errors}")
 
-    return compile_to_llvm(ast)
+    return compile_to_llvm(ast, features=features)
 
 
-def build_and_run(src: str, stdin: str = "") -> tuple:
+def build_and_run(src: str, stdin: str = "", features=None) -> tuple:
     """
     Compile Pascal source to native executable, run it, capture output.
     
@@ -43,12 +46,15 @@ def build_and_run(src: str, stdin: str = "") -> tuple:
     """
     from codegen_llvm import compile_to_llvm
 
+    from type_checker import PascalTypeChecker
+
     ast = parse_source(src)
-    result = typecheck_source(src)
+    checker = PascalTypeChecker(features=features)
+    result = checker.check(ast)
     if not result.success:
         raise RuntimeError(f"Type check failed: {result.errors}")
 
-    ir = compile_to_llvm(ast)
+    ir = compile_to_llvm(ast, features=features)
 
     tmpdir = tempfile.mkdtemp()
     try:
@@ -86,7 +92,7 @@ class TestCodegenIR(unittest.TestCase):
         self.assertNotIn('call i8* @"malloc"', ir)
         # F^ resolves to a typed pointer into the component buffer.
         self.assertIn('bitcast i8*', ir)
-        self.assertIn('to i32*', ir)
+        self.assertIn('to i16*', ir)
         # Binary FILE OF T records structure 0 in the FCB.
         self.assertIn('store i32 0', ir)
 
@@ -118,7 +124,7 @@ class TestCodegenIR(unittest.TestCase):
         """MAXINT and MAXWORD lower as folded constants."""
         src = "PROGRAM P; BEGIN WRITELN(MAXINT); WRITELN(MAXWORD) END."
         ir = compile_to_ir(src)
-        self.assertIn("2147483647", ir)
+        self.assertIn("32767", ir)
         self.assertIn("65535", ir)
 
     def test_predeclared_fillc_works_with_extern_declaration(self):
@@ -223,13 +229,13 @@ class TestCodegenIR(unittest.TestCase):
         """PRED lowers to integer subtraction by one."""
         src = "PROGRAM P; BEGIN WRITELN(PRED(3)) END."
         ir = compile_to_ir(src)
-        self.assertIn("sub i32", ir)
+        self.assertIn("sub i16", ir)
 
     def test_sqr_lowers_to_multiply(self):
         """SQR lowers to multiplication of the operand by itself."""
         src = "PROGRAM P; BEGIN WRITELN(SQR(3)) END."
         ir = compile_to_ir(src)
-        self.assertIn("mul i32", ir)
+        self.assertIn("mul i16", ir)
 
     def test_upper_lower_lowers_to_array_bounds(self):
         """UPPER and LOWER lower to constant array bound values."""
@@ -442,6 +448,43 @@ class TestCodegenBuildRun(unittest.TestCase):
         self.assertEqual(returncode, 0)
         self.assertIn("42", stdout)
 
+    def test_wide_integer_codegen_runtime(self):
+        """INTEGER32/INTEGER64 codegen and WRITE work when wide-integers is enabled."""
+        src = """PROGRAM P;
+VAR x: INTEGER32; y: INTEGER64;
+BEGIN
+  x := 100000;
+  y := x + 9000000000;
+  WRITELN(x);
+  WRITELN(y);
+  WRITELN(MAXINT32);
+  WRITELN(MAXINT64)
+END."""
+        returncode, stdout = build_and_run(src, features={'wide-integers': True})
+        self.assertEqual(returncode, 0)
+        self.assertEqual(
+            [line.strip() for line in stdout.splitlines() if line.strip()],
+            [
+                "100000",
+                "9000100000",
+                "2147483647",
+                "9223372036854775807",
+            ],
+        )
+
+    def test_word_zero_extends_into_wide_integer_arithmetic(self):
+        """WORD operands remain unsigned when mixed into wider integer arithmetic."""
+        src = """PROGRAM P;
+VAR w: WORD; r: INTEGER32;
+BEGIN
+  w := 40000;
+  r := w + 0;
+  WRITELN(r)
+END."""
+        returncode, stdout = build_and_run(src, features={'wide-integers': True})
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "40000")
+
     def test_real_assignment_and_output(self):
         """REAL assignment and output runs and produces correct output."""
         src = "PROGRAM P; VAR x: REAL; BEGIN x := 1.5; WRITELN(x) END."
@@ -525,7 +568,7 @@ class TestCodegenBuildRun(unittest.TestCase):
         """ADS lowers as an address pair: R is the LLVM pointer, S is zero."""
         src = "PROGRAM P; VAR x: INTEGER; s: ADS OF INTEGER; BEGIN s := ADS x END."
         ir = compile_to_ir(src)
-        self.assertIn("{i32*,i16}", ir.replace(" ", ""))
+        self.assertIn("{i16*,i16}", ir.replace(" ", ""))
         self.assertIn("i16 0", ir)
 
     def test_new_dispose_codegen(self):
@@ -1004,11 +1047,11 @@ class TestWrdBywordCodegen(unittest.TestCase):
 
     # --- IR-level: check instruction shape ---
 
-    def test_wrd_integer_emits_trunc(self):
-        """WRD of an INTEGER value lowers to a trunc to i16."""
+    def test_wrd_integer_is_identity_at_i16(self):
+        """WRD of an INTEGER value is already i16 after the width flip."""
         src = "PROGRAM P; VAR i: INTEGER; w: WORD; BEGIN i := -1; w := WRD(i) END."
         ir_text = compile_to_ir(src)
-        self.assertIn("trunc", ir_text)
+        self.assertIn("store i16", ir_text)
 
     def test_wrd_char_emits_zext(self):
         """WRD of a CHAR value lowers to a zext to i16."""
@@ -1168,9 +1211,9 @@ END."""
         src = ("PROGRAM P; TYPE PInt = ^INTEGER; VAR p: PInt; w: WORD; "
                "BEGIN w := RETYPE(WORD, p) END.")
         ir_text = compile_to_ir(src)
-        # Pointer value is spilled to a slot, and the *slot* (i32**) is bitcast.
-        self.assertIn("alloca i32*", ir_text)
-        self.assertIn("bitcast i32**", ir_text)
+        # Pointer value is spilled to a slot, and the *slot* (i16**) is bitcast.
+        self.assertIn("alloca i16*", ir_text)
+        self.assertIn("bitcast i16**", ir_text)
 
     def test_retype_aggregate_address_still_loads_through(self):
         """Checklist 9.9 regression guard: retyping an aggregate (a STRING here,
@@ -1466,14 +1509,14 @@ END."""
         0x000A0005 little-endian: lo WORD = 5, hi WORD = 10."""
         src = """PROGRAM P;
 TYPE Pair = RECORD lo, hi: WORD END;
-VAR i: INTEGER;
+VAR i: INTEGER32;
     w: WORD;
 BEGIN
     i := 16#000A0005;
     w := RETYPE(Pair, i).hi;
     WRITELN(w)
 END."""
-        rc, out = build_and_run(src)
+        rc, out = build_and_run(src, features={'wide-integers': True})
         self.assertEqual(rc, 0)
         self.assertEqual(out.strip(), "10")
 
@@ -1760,7 +1803,7 @@ class TestRuntimeCheckFlags(unittest.TestCase):
     """$INDEXCK / $MATHCK / $NILCK / $INITCK codegen (manual metacommand
     pages: INDEXCK/MATHCK/NILCK/STACKCK default +, INITCK default -).
     The -32768 INITCK sentinel is widened to its 32-bit analogue
-    -2147483648 (INT32_MIN) for this implementation's INTEGER."""
+    -32768 (INT16_MIN) for this implementation's INTEGER."""
 
     def _ir(self, src: str, **kw) -> str:
         from tests.support import parse_source
@@ -1819,17 +1862,17 @@ class TestRuntimeCheckFlags(unittest.TestCase):
     @requires_exe
     def test_mathck_overflow_aborts(self):
         src = ("PROGRAM P; VAR x: INTEGER; "
-               "BEGIN x := 2147483647; x := x + 1 END.")
+               "BEGIN x := 32767; x := x + 1 END.")
         rc, _ = build_and_run(src)
         self.assertNotEqual(rc, 0)
 
     @requires_exe
     def test_mathck_off_overflow_wraps(self):
         src = ("PROGRAM P; VAR x: INTEGER; BEGIN {$MATHCK-} "
-               "x := 2147483647; x := x + 1; WRITELN(x) END.")
+               "x := 32767; x := x + 1; WRITELN(x) END.")
         rc, out = build_and_run(src)
         self.assertEqual(rc, 0)
-        self.assertEqual(out.strip(), '-2147483648')
+        self.assertEqual(out.strip(), '-32768')
 
     @requires_exe
     def test_mathck_div_by_zero_aborts(self):
@@ -1868,11 +1911,11 @@ class TestRuntimeCheckFlags(unittest.TestCase):
     # ---------------- INITCK ----------------
 
     @requires_exe
-    def test_initck_integer_sentinel_is_int32_min(self):
+    def test_initck_integer_sentinel_is_int16_min(self):
         src = "PROGRAM P; {$INITCK+} VAR x: INTEGER; BEGIN WRITELN(x) END."
         rc, out = build_and_run(src)
         self.assertEqual(rc, 0)
-        self.assertEqual(out.strip(), '-2147483648')
+        self.assertEqual(out.strip(), '-32768')
 
     @requires_exe
     def test_initck_default_off_zero_init(self):
