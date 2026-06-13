@@ -1297,7 +1297,7 @@ END."""
 
     @requires_exe
     def test_enum_write_name_runtime(self):
-        """WRITE of an enum variable prints the symbolic member name."""
+        """Default WRITE of an enum variable prints the faithful ordinal."""
         src = f"""PROGRAM P;
 {self.ENUM}
 VAR c: Color;
@@ -1307,7 +1307,7 @@ BEGIN
 END."""
         rc, out = build_and_run(src)
         self.assertEqual(rc, 0)
-        self.assertIn("Green", out)
+        self.assertEqual(out, "1\n")
 
     @requires_exe
     def test_enum_write_names_in_for_loop_runtime(self):
@@ -1319,7 +1319,7 @@ BEGIN
 END."""
         rc, out = build_and_run(src)
         self.assertEqual(rc, 0)
-        self.assertEqual(out.split(), ["Red", "Green", "Blue"])
+        self.assertEqual(out.split(), ["0", "1", "2"])
 
     @requires_exe
     def test_enum_write_bare_member_literal_runtime(self):
@@ -1330,13 +1330,12 @@ BEGIN
 END."""
         rc, out = build_and_run(src)
         self.assertEqual(rc, 0)
-        self.assertIn("Blue", out)
+        self.assertEqual(out, "2\n")
 
-    def test_enum_write_emits_name_table(self):
-        """IR-level: WRITE of an enum value builds an i8* name table and prints
-        with %s rather than emitting the bare ordinal with %d."""
+    def test_symbolic_enum_write_emits_name_table(self):
+        """With -f symbolic-enum-io, enum WRITE builds a name table."""
         src = f"PROGRAM P; {self.ENUM} VAR c: Color; BEGIN c := Red; WRITELN(c) END."
-        ir_text = compile_to_ir(src)
+        ir_text = compile_to_ir(src, features={'symbolic-enum-io': True})
         self.assertIn("enumtab", ir_text)
 
 
@@ -1578,7 +1577,7 @@ def _compile_and_run_c(driver_src: str, runtime_files: list) -> tuple:
         shutil.rmtree(tmpdir)
 
 
-def _build_pascal_with_runtime(src: str, runtime_files: list, stdin: str = "") -> tuple:
+def _build_pascal_with_runtime(src: str, runtime_files: list, stdin: str = "", features=None) -> tuple:
     """Compile Pascal source to IR, link it with the given runtime/*.c stubs,
     run it, and return (returncode, stdout). Unlike build_and_run this links the
     real runtime, so it exercises the Pascal -> IR -> native ABI end to end
@@ -1587,10 +1586,10 @@ def _build_pascal_with_runtime(src: str, runtime_files: list, stdin: str = "") -
     from codegen_llvm import compile_to_llvm
 
     ast = parse_source(src)
-    result = typecheck_source(src)
+    result = typecheck_source(src, features=features)
     if not result.success:
         raise RuntimeError(f"Type check failed: {result.errors}")
-    ir = compile_to_llvm(ast)
+    ir = compile_to_llvm(ast, features=features)
 
     tmpdir = tempfile.mkdtemp()
     try:

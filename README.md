@@ -32,7 +32,7 @@ Add `-v` / `--verbose` for detailed output and full Python tracebacks if compila
 python3 compile_to_llvm.py -v myprogram.pas myprogram.ll
 ```
 
-Optional dialect extensions are controlled with feature flags. The default dialect is vintage IBM Pascal behavior; wider integer types are off unless explicitly enabled:
+Optional dialect extensions are controlled with feature flags. The default dialect is vintage IBM Pascal behavior; wider integer types and symbolic enum I/O are off unless explicitly enabled:
 
 ```bash
 # Show available feature flags
@@ -40,6 +40,9 @@ python3 compile_to_llvm.py --list-features
 
 # Enable INTEGER32 / INTEGER64 and MAXINT32 / MAXINT64
 python3 compile_to_llvm.py -f wide-integers myprogram.pas myprogram.ll
+
+# Enable name-based user enum WRITE and READ as an extension
+python3 compile_to_llvm.py -f symbolic-enum-io myprogram.pas myprogram.ll
 ```
 
 If no output file is specified, LLVM IR is written to stdout:
@@ -68,7 +71,7 @@ Each phase is independent and focused:
 - **Lexer (`lexer.py`)** — tokenizes Pascal source: keywords, identifiers, numbers, operators, strings.
 - **Parser (`parser.py`)** — builds an Abstract Syntax Tree (AST) from tokens. Implements the full IBM Pascal 2.0 grammar. Entry point: `parse_file(path)`.
 - **Type Checker (`type_system.py`, `symbol_table.py`, `type_checker.py`)** — semantic analysis: validates types, scopes, control flow, and module semantics before code generation. All type violations stop the pipeline with clear error messages.
-- **Feature flags (`features.py`)** — generic feature-gating machinery for opt-in dialect extensions such as `wide-integers`.
+- **Feature flags (`features.py`)** — generic feature-gating machinery for opt-in dialect extensions such as `wide-integers` and `symbolic-enum-io`.
 - **Type Checker support (`builtins_registry.py`)** — centralized registration of predeclared identifiers (types, constants, intrinsics); user declarations may shadow builtins.
 - **Codegen (`codegen/` package)** — walks the AST and emits LLVM IR using `llvmlite`. Split by concern: `base`, `decls`, `exprs`, `stmts`, `types_map`, `constfold`, plus feature modules `files` (file-control blocks), `io_write_read`, `strings`, `sets`, and `runtime_builtins`. `codegen_llvm.py` remains as a compatibility shim re-exporting the package.
 - **C Runtime (`runtime/`)** — the file I/O subsystem (`fileops.c`: FCB model, RESET/REWRITE/GET/PUT, ASSIGN/CLOSE/DISCARD, READSET/READFN, EOF/EOLN, mode enforcement), stdin readers (`readq.c`), ENCODE/DECODE (`encode_decode.c`), and the move/scan/fill/position intrinsics.
@@ -124,8 +127,8 @@ This compiler implements the full IBM Pascal 2.0 language, including all semanti
 - Built-ins: `CHR`, `ORD`, plus the intrinsic families `ENCODE`/`DECODE`, `SCANEQ`/`SCANNE`, `POSITN`, and the move/fill block operations
 
 ### Built-in I/O
-- `WRITE`/`WRITELN` — mixed integers, characters, booleans, enums, REALs, strings, and string literals, with `:width`/`:width:frac` field formatting; an optional leading `TEXT` file argument selects the output stream (default `OUTPUT`/stdout)
-- `READ`/`READLN` — scalar and string targets, with an optional leading `TEXT` file argument (default `INPUT`/stdin)
+- `WRITE`/`WRITELN` — mixed integers, characters, booleans, enums, REALs, strings, and string literals, with `:width`/`:width:frac` field formatting; an optional leading `TEXT` file argument selects the output stream (default `OUTPUT`/stdout). User enum values print as ordinals by default, matching IBM Pascal 2.0; `-f symbolic-enum-io` switches user enum output to member names. BOOLEAN always writes `TRUE`/`FALSE`, independent of that flag.
+- `READ`/`READLN` — scalar and string targets, with an optional leading `TEXT` file argument (default `INPUT`/stdin). User enum READ accepts numeric ordinals by default; `-f symbolic-enum-io` switches enum READ to symbolic member names, gated together with symbolic enum WRITE so same-mode enum round-trips stay coherent.
 - File primitives — `RESET`, `REWRITE`, `GET`, `PUT`, and the buffer variable `F^`, over an inline file-control block with a single fill path shared by `F^`, the predicates, and the formatted readers
 - Extended I/O verbs — `ASSIGN` (filename binding; `CHR(0)` spells a temporary file), `CLOSE`, `DISCARD`, `READSET` (scan characters in a `SET OF CHAR`), `READFN` (READLN-like dispatcher that binds filenames to file parameters)
 - Stream predicates — `EOF` and `EOLN`, with line markers presented as blanks per the manual

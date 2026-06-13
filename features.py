@@ -23,6 +23,11 @@ _FEATURES: Dict[str, Feature] = {
         default=False,
         help='Enable extension INTEGER32/INTEGER64 types and wide integer constants.',
     ),
+    'symbolic-enum-io': Feature(
+        name='symbolic-enum-io',
+        default=False,
+        help='Enable symbolic (name-based) enum WRITE and READ instead of the faithful 1981 ordinal/numeric form; BOOLEAN always writes TRUE/FALSE regardless.',
+    ),
 }
 
 

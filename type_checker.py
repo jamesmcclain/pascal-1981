@@ -1164,14 +1164,18 @@ class PascalTypeChecker(TypeChecker):
                 self.error(f"READFN argument {i} has unreadable type {target_type}", stmt)
 
     def _is_writable_type(self, t: Type) -> bool:
-        # WRITE supports printable BOOLEAN and enum values; READ input parsing for those is intentionally absent.
+        # WRITE supports printable BOOLEAN and enum values.  User enums are
+        # ordinal by default and symbolic under -f symbolic-enum-io; BOOLEAN is
+        # always name-based on output.
         wide = (type(INTEGER32_TYPE), type(INTEGER64_TYPE)) if self.feature_enabled('wide-integers') else ()
         return isinstance(t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), EnumType, StringType, LStringType) + wide)
 
     def _is_readable_type(self, t: Type) -> bool:
-        # READ is narrower than WRITE: enum input is deferred to 9.8 follow-on work, and BOOLEAN input is unsupported.
+        # READ remains narrower than WRITE: BOOLEAN input is unsupported, but
+        # user enums are readable in both modes (numeric by default, symbolic
+        # under -f symbolic-enum-io).
         wide = (type(INTEGER32_TYPE), type(INTEGER64_TYPE)) if self.feature_enabled('wide-integers') else ()
-        return isinstance(t, (type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), StringType, LStringType) + wide)
+        return isinstance(t, (type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), EnumType, StringType, LStringType) + wide)
 
     def _check_concat_args(self, stmt: ProcCallStmt) -> None:
         """Type check CONCAT(VAR D: LSTRING; CONST S: STRING).

@@ -459,6 +459,16 @@ int pas_write_fmt(struct pas_file_fcb *f, const char *fmt, ...) {
     return r;
 }
 
+__attribute__((weak)) const char *pas_enum_write_token(int32_t value, const char **names, int count) {
+    enum { RING = 16, WIDTH = 32 };
+    static char bufs[RING][WIDTH];
+    static int slot = 0;
+    if (value >= 0 && value < count && names) return names[value];
+    slot = (slot + 1) % RING;
+    snprintf(bufs[slot], WIDTH, "%d", value);
+    return bufs[slot];
+}
+
 static int fcb_skip_ws_except_nl(struct pas_file_fcb *f, FILE *h) {
     int ch;
     while ((ch = fcb_next_char(f, h)) != EOF) {
@@ -484,6 +494,39 @@ int pas_fread_word(struct pas_file_fcb *f, uint16_t *out) {
     if (v < 0 || v > 65535) die("runtime error: word out of range");
     *out = (uint16_t)v;
     return 0;
+}
+
+int pas_fread_enum_name(struct pas_file_fcb *f, int32_t *out, const char **names, int count) {
+    FILE *h = stream_for(f, 0);
+    int ch = fcb_skip_ws_except_nl(f, h);
+    if (ch == EOF) die("runtime error: unexpected EOF while reading enum");
+    if (isdigit((unsigned char)ch) || ch == '-' || ch == '+') {
+        ungetc(ch, h);
+        long v;
+        if (fscanf(h, "%ld", &v) != 1) die("runtime error: malformed enum input");
+        *out = (int32_t)v;
+        return 0;
+    }
+    if (!isalpha((unsigned char)ch)) {
+        fcb_unget_char(f, h, ch);
+        die("runtime error: malformed enum input");
+    }
+    char tok[256];
+    int n = 0;
+    do {
+        if (n + 1 < (int)sizeof(tok)) tok[n++] = (char)toupper((unsigned char)ch);
+        ch = fcb_next_char(f, h);
+    } while (ch != EOF && (isalpha((unsigned char)ch) || isdigit((unsigned char)ch)));
+    fcb_unget_char(f, h, ch);
+    tok[n] = '\0';
+    for (int i = 0; i < count; i++) {
+        if (names && names[i] && strcmp(tok, names[i]) == 0) {
+            *out = i;
+            return 0;
+        }
+    }
+    die("runtime error: malformed enum input");
+    return -1;
 }
 
 int pas_fread_real(struct pas_file_fcb *f, double *out) {

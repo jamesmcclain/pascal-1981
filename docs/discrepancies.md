@@ -61,13 +61,14 @@ is OUTPUT-DIFF, never ACCEPT/REJECT.
 ## D-006 — READ of an enum value
 - **Probe:** t006.pas (`READ(x); WRITELN(ORD(x))` with input `GREEN`)
 - **Behavior targeted:** Enum input validity and conversion
-- **Class:** ACCEPT/REJECT
+- **Class:** AGREE in default mode (was ACCEPT/REJECT)
 - **Vintage (1981):** compiles and links; fails at runtime with `? Error: Data format error in file USER Error Code 1119` on symbolic input `GREEN` [OBSERVED]
-- **Modern (reimplementation):** rejects at typecheck (enum READ not supported) [OBSERVED]
-- **Adjudication:** vintage accepts enum READ syntactically; the runtime data-format error on `GREEN` suggests it expects numeric/ordinal input rather than symbolic names, but this probe did not test numeric input directly. [INFERRED]
-- **Cross-references:** checklist 9.7 enum I/O (~line 1062); typechecker rules.
-- **Severity:** medium
-- **Follow-up:** follow-on probe feeding a numeric ordinal to confirm the accepted input form before implementing enum READ.
+- **Modern (now):** enum READ is accepted by the checker, but default faithful mode routes input through the numeric reader; symbolic input such as `GREEN` is a data-format error. With `-f symbolic-enum-io`, symbolic names are accepted as a documented extension, not a vintage claim. [OBSERVED]
+- **Adjudication:** vintage accepts enum READ syntactically but rejects symbolic names; D-030 confirms numeric ordinals are the accepted faithful input form. [OBSERVED]
+- **Resolution:** default mode matches the vintage rejection of symbolic input while accepting numeric enum READ. Symbolic name READ is available only under the `symbolic-enum-io` extension flag, gated together with symbolic enum WRITE.
+- **Cross-references:** checklist 9.7 enum I/O (~line 1062); typechecker rules; D-030.
+- **Severity:** resolved in default mode.
+- **Follow-up:** none for the default contract; any further symbolic grammar details are extension behavior.
 
 ## D-010 — INTEGER P::N form
 - **Probe:** t010.pas (INTEGER `WRITELN(x::4)`)
@@ -155,24 +156,26 @@ is OUTPUT-DIFF, never ACCEPT/REJECT.
 ## D-019 — WRITE of an enum value
 - **Probe:** t019.pas (`TYPE col = (RED, GREEN, BLUE); x := GREEN; WRITELN(x)`)
 - **Behavior targeted:** Enum WRITE acceptance and display format
-- **Class:** OUTPUT-DIFF
+- **Class:** AGREE in default mode (was OUTPUT-DIFF)
 - **Vintage (1981):** compiled, linked, printed `1` [OBSERVED]
-- **Modern (reimplementation):** printed `GREEN` [OBSERVED]
-- **Adjudication:** vintage writes the ordinal; the modern symbolic-name output is an extension with no vintage or manual basis. [INFERRED]
-- **Cross-references:** checklist 9.8 / enum WRITE (built [INFERRED]).
-- **Severity:** medium
-- **Follow-up:** decide: align to ordinal output for fidelity, or keep symbolic names as a documented extension.
+- **Modern (now):** default faithful mode prints the ordinal `1`; `-f symbolic-enum-io` prints the symbolic name `GREEN` as a documented extension. [OBSERVED]
+- **Adjudication:** vintage writes the ordinal; ordinal output is the default contract. Symbolic enum WRITE is extension behavior and is gated together with symbolic enum READ to preserve round-trip coherence.
+- **Resolution:** resolved by routing user-enum WRITE through integer formatting by default and through a bounds-guarded name-table helper only when `symbolic-enum-io` is enabled.
+- **Cross-references:** checklist 9.8 / enum WRITE (built [INFERRED]); RM-DEC-ENUMIO.
+- **Severity:** resolved in default mode.
+- **Follow-up:** none.
 
 ## D-020 — WRITE of a BOOLEAN value
 - **Probe:** t020.pas (`b := TRUE; WRITELN(b); b := FALSE; WRITELN(b)`)
 - **Behavior targeted:** BOOLEAN WRITE display format
-- **Class:** OUTPUT-DIFF
+- **Class:** AGREE (was OUTPUT-DIFF)
 - **Vintage (1981):** printed `TRUE` then `FALSE` [OBSERVED]
-- **Modern (reimplementation):** printed raw storage bytes `\x01` then `\x00` (known latent defect, deliberately left unfixed pending this probe) [OBSERVED]
+- **Modern (now):** prints `TRUE` then `FALSE` in both faithful mode and `-f symbolic-enum-io` mode. [OBSERVED]
 - **Adjudication:** vintage formats BOOLEANs as uppercase text with no observed leading padding in this capture. [INFERRED]
-- **Cross-references:** checklist 9.8 / boolean WRITE.
-- **Severity:** high (user-visible formatting bug)
-- **Follow-up:** fix BOOLEAN WRITE lowering to print `TRUE`/`FALSE`; add a field-width probe if padding matters later.
+- **Resolution:** resolved in WRITE lowering by treating BOOLEAN as a name-based special case independent of user-enum I/O mode; zero prints `FALSE`, non-zero prints `TRUE`.
+- **Cross-references:** checklist 9.8 / boolean WRITE; RM-XCUT-ENUMBOOL.
+- **Severity:** resolved.
+- **Follow-up:** add a field-width probe if BOOLEAN padding details matter later.
 
 ## D-024 — formatted WRITE on file in inspection mode
 - **Probe:** t024.pas (`RESET(f); WRITELN('BEFORE'); WRITELN(f, 'BBB'); WRITELN('AFTER'); ...` then read-back)
@@ -224,13 +227,14 @@ whether the pipeline produced the next stage's artifact. Observed idioms:
 ## D-030 — enum READ with numeric input
 - **Probe:** t030.pas (`READ(f, x); WRITELN(ORD(x))` with input `1`)
 - **Behavior targeted:** Enum READ numeric-input behavior, per the D-006 follow-up
-- **Class:** ACCEPT/REJECT
+- **Class:** AGREE in default mode (was ACCEPT/REJECT)
 - **Vintage (1981):** accepted compile (1 warning: `Assumed OUTPUT`), linked, ran, and printed `1` [OBSERVED]
-- **Modern (reimplementation):** rejected at typecheck with `READ argument 2 has unreadable type COL` [OBSERVED]
+- **Modern (now):** default faithful mode accepts numeric enum READ and stores the ordinal; the probe shape prints `1`. [OBSERVED]
 - **Adjudication:** the vintage compiler accepts enum READ when the input is numeric, confirming the ordinal-input hypothesis from D-006 [OBSERVED]
-- **Cross-references:** D-006 follow-up; checklist around enum I/O
-- **Severity:** medium (missing runtime support for enum input)
-- **Follow-up:** implement enum READ against numeric ordinals
+- **Resolution:** resolved by allowing user enum READ targets and lowering default enum READ through the integer reader with no invented range check. `-f symbolic-enum-io` switches the same target to name-based input as an extension.
+- **Cross-references:** D-006 follow-up; checklist around enum I/O; RM-DEC-ENUMIO
+- **Severity:** resolved in default mode.
+- **Follow-up:** none.
 
 ## D-031 — PACK/UNPACK round-trip and index convention
 - **Probe:** t031.pas (`PACK(a, 2, z); WRITELN(z); UNPACK(z, b, 3); ...`)

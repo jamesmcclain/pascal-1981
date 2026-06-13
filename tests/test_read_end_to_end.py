@@ -64,6 +64,44 @@ class TestReadAllTypesEndToEnd(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(out.strip(), "42")
 
+    def test_enum_read_numeric_by_default(self):
+        src = ("PROGRAM P; TYPE Color=(RED,GREEN,BLUE); VAR x: Color;\n"
+               "BEGIN READLN(x); WRITELN(ORD(x)) END.\n")
+        rc, out = _build_pascal_with_runtime(src, ["readq.c"], stdin="1\n")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "1\n")
+
+    def test_enum_read_rejects_symbolic_by_default(self):
+        src = ("PROGRAM P; TYPE Color=(RED,GREEN,BLUE); VAR x: Color;\n"
+               "BEGIN READLN(x); WRITELN(ORD(x)) END.\n")
+        rc, out = _build_pascal_with_runtime(src, ["readq.c"], stdin="GREEN\n")
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(out, "")
+
+    def test_enum_symbolic_read_under_feature(self):
+        src = ("PROGRAM P; TYPE Color=(RED,GREEN,BLUE); VAR x: Color;\n"
+               "BEGIN READLN(x); WRITELN(ORD(x)) END.\n")
+        rc, out = _build_pascal_with_runtime(src, ["readq.c"], stdin="green\n", features={'symbolic-enum-io': True})
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "1\n")
+
+    def test_enum_roundtrip_default_and_symbolic_modes(self):
+        src = ("PROGRAM P; TYPE Color=(RED,GREEN,BLUE); VAR x: Color;\n"
+               "BEGIN READLN(x); WRITELN(x) END.\n")
+        rc, out = _build_pascal_with_runtime(src, ["readq.c"], stdin="2\n")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "2\n")
+        rc, out = _build_pascal_with_runtime(src, ["readq.c"], stdin="BLUE\n", features={'symbolic-enum-io': True})
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "BLUE\n")
+
+    def test_symbolic_enum_out_of_range_write_falls_back_to_ordinal(self):
+        src = ("PROGRAM P; TYPE Color=(RED,GREEN); VAR x: Color;\n"
+               "BEGIN READLN(x); WRITELN(x) END.\n")
+        rc, out = _build_pascal_with_runtime(src, ["readq.c"], stdin="5\n", features={'symbolic-enum-io': True})
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "5\n")
+
 
 if __name__ == "__main__":
     unittest.main()

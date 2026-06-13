@@ -227,13 +227,11 @@ class TestStringIntrinsicCapacityIR(unittest.TestCase):
 @requires_llvm
 class TestReadDispatchCodegen(unittest.TestCase):
 
-    def test_read_non_string_fallthrough_raises_codegen_error(self):
-        """Pin the _builtin_read else branch itself, independent of the checker."""
-        from codegen.base import CodegenError
-        from codegen_llvm import compile_to_llvm
+    def test_enum_read_uses_numeric_reader_by_default(self):
+        """Enum READ is readable and lowers through the integer reader by default."""
         src = "PROGRAM P; TYPE C = (Red, Green); VAR c: C; BEGIN READLN(c) END."
-        with self.assertRaisesRegex(CodegenError, "READ/READLN cannot read"):
-            compile_to_llvm(parse_source(src))
+        ir = compile_to_ir(src)
+        self.assertIn('call i32 @"pas_read_int"', ir)
 
     def test_lstring_read_uses_declared_capacity(self):
         src = "PROGRAM P; VAR s: LSTRING(5); BEGIN READLN(s) END."
