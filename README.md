@@ -83,13 +83,13 @@ The grammar this dialect implements is formally specified in [`docs/ebnf_grammar
 
 ## Supported Language Features
 
-This compiler implements the full IBM Pascal 2.0 language, including all semantic rules and dialectal extensions. The checklist of features and gaps is tracked in [`docs/Grand_Unified_Checklist.md`](docs/Grand_Unified_Checklist.md).
+This compiler implements the full IBM Pascal 2.0 language, including all semantic rules and dialectal extensions.
 
 ### Types
 - `INTEGER` (16-bit signed, matching IBM Pascal 2.0; range `-32768..32767`; `MAXINT = 32767`)
 - `INTEGER32` / `INTEGER64` (opt-in extension types enabled with `-f wide-integers`; also enables `MAXINT32` and `MAXINT64`)
 - `BOOLEAN` (one byte; stored as `i8` so address-of / `sizeof` / fills are byte-consistent)
-- `REAL` (64-bit float; constants, division, unary minus, and mixed arithmetic are codegen-hardened — see checklist 9.1 — and the default `WRITE` format matches the manual's 14-wide exponential, e.g. `WRITE(123.456)` prints ` 1.2345600E+02`)
+- `REAL` (64-bit float; constants, division, unary minus, and mixed arithmetic are codegen-hardened, and the default `WRITE` format matches the manual's 14-wide exponential, e.g. `WRITE(123.456)` prints ` 1.2345600E+02`)
 - `WORD` (16-bit unsigned)
 - `CHAR` (8-bit)
 - `ARRAY[low..high] OF type` — bounds may be constant expressions, including named `CONST`s
@@ -127,14 +127,12 @@ This compiler implements the full IBM Pascal 2.0 language, including all semanti
 - Built-ins: `CHR`, `ORD`, plus the intrinsic families `ENCODE`/`DECODE`, `SCANEQ`/`SCANNE`, `POSITN`, and the move/fill block operations
 
 ### Built-in I/O
-- `WRITE`/`WRITELN` — mixed integers, characters, booleans, enums, REALs, strings, and string literals, with `:width`/`:width:frac` field formatting; an optional leading `TEXT` file argument selects the output stream (default `OUTPUT`/stdout). User enum values print as ordinals by default, matching IBM Pascal 2.0; `-f symbolic-enum-io` switches user enum output to member names. BOOLEAN always writes `TRUE`/`FALSE`, independent of that flag.
+- `WRITE`/`WRITELN` — mixed integers, characters, booleans, enums, REALs, strings, and string literals, with `:width`/`:width:frac` field formatting; an optional leading `TEXT` file argument selects the output stream (default `OUTPUT`/stdout). User enum values print as ordinals by default, matching IBM Pascal 2.0; `-f symbolic-enum-io` switches user enum output to member names. BOOLEAN always writes `TRUE`/`FALSE`, independent of that flag. The `::N` precision operand on STRING/LSTRING values is ignored by default (matching the vintage compiler, which prints the whole value); `-f string-precision` makes it truncate to `N` characters.
 - `READ`/`READLN` — scalar and string targets, with an optional leading `TEXT` file argument (default `INPUT`/stdin). User enum READ accepts numeric ordinals by default; `-f symbolic-enum-io` switches enum READ to symbolic member names, gated together with symbolic enum WRITE so same-mode enum round-trips stay coherent.
 - File primitives — `RESET`, `REWRITE`, `GET`, `PUT`, and the buffer variable `F^`, over an inline file-control block with a single fill path shared by `F^`, the predicates, and the formatted readers
-- Extended I/O verbs — `ASSIGN` (filename binding; `CHR(0)` spells a temporary file), `CLOSE`, `DISCARD`, `READSET` (scan characters in a `SET OF CHAR`), `READFN` (READLN-like dispatcher that binds filenames to file parameters)
+- Extended I/O verbs — `ASSIGN` (filename binding; `CHR(0)` spells a temporary file), `CLOSE`, `DISCARD`, `READSET` (scan characters in a `SET OF CHAR`; the delimiter set must be a declared `SET OF CHAR` value, matching the vintage compiler — an inline set-constructor literal such as `['A'..'Z']` is rejected unless `-f readset-set-literal` is enabled), `READFN` (READLN-like dispatcher that binds filenames to file parameters)
 - Stream predicates — `EOF` and `EOLN`, with line markers presented as blanks per the manual
 - Mode enforcement — writing a file in inspection mode, writing a closed file, or reading a file in generation mode aborts with a runtime error rather than corrupting data
-
-Coverage and known gaps for the file subsystem are tracked in checklist Section 8.
 
 ## Systems-Programming Extensions
 
@@ -154,13 +152,9 @@ This is a **full reimplementation** of IBM Pascal 2.0. The goal is not a subset 
 
 **Reference:** The original compiler manual is [here](https://archive.org/details/ibm-pascal-compiler-aug-81) — this is the source of truth for dialect semantics and feature completeness.
 
-Progress toward full coverage is tracked in [`docs/Grand_Unified_Checklist.md`](docs/Grand_Unified_Checklist.md), which lists:
+Dialect coverage is complete: the planned feature checklist has been worked through, and the remaining differential questions against the genuine 1981 compiler have been settled and recorded in [`docs/discrepancies.md`](docs/discrepancies.md). Behaviors that the vintage compiler does not have, but that this implementation offers as deliberate extensions, are gated behind opt-in feature flags (see `features.py` / `--list-features`) so the default build stays faithful to IBM Pascal 2.0. The formal grammar lives in [`docs/ebnf_grammar.md`](docs/ebnf_grammar.md), and the executed remediation plans are kept under [`docs/plans/`](docs/plans/) for the record.
 
-- ✅ Completed features with test evidence
-- 🚧 In-progress and planned work
-- 📋 Known gaps with effort estimates
-
-Features are prioritized by impact (correctness traps first, then missing grammar, then semantic edge cases) and effort. The test suite is organized to run independently at each layer, so development can proceed without the full LLVM toolchain.
+The test suite is organized to run independently at each layer, so development can proceed without the full LLVM toolchain.
 
 ## File Structure
 
@@ -203,7 +197,7 @@ pascal-1981/
 ├─ Documentation
 │  ├── docs/
 │  │  ├── ebnf_grammar.md        # Formal grammar specification (reference document)
-│  │  ├── Grand_Unified_Checklist.md  # Feature completeness tracker (priorities, effort, gaps)
+│  │  ├── discrepancies.md       # Differential findings vs. the 1981 compiler (graded, with resolutions)
 │  │  └── plans/                 # Remediation and completion plans (executed plans kept for the record)
 │
 ├─ Runtime & Build

@@ -89,7 +89,7 @@ OPEN = re-probe.
 | RM-XCUT-ENUMBOOL | — | X | HONORED | BOOLEAN-names vs user-enum-ordinal kept separate (D-019 vs D-020) | S |
 | RM-DEC-INTWIDTH | D-014/16/17 | DEC | DECIDED (16-bit fork, implemented) | INTEGER now 16-bit; INTEGER32/64 added behind `-f wide-integers`; D-014/16/17 resolved | done |
 | RM-NOACTION | baselines | — | NO-ACTION | AGREE-ACCEPT baselines only (the D-014/16/17 width trio is now RESOLVED, see RM-DEC-INTWIDTH); don't fix piecemeal | — |
-| RM-OPEN-T021 | t021 | OPEN | INVESTIGATE | `ORD(EOL)` verdict `[UNVERIFIED]`; rerun | S |
+| RM-OPEN-T021 | t021 | — | RESOLVED | `ORD(EOL)` AGREE-REJECT (both reject; `EOL` not a valid identifier) — closed, no action | S |
 | RM-OPEN-T022 | D-022 | P2 | RESOLVED | READSET inline set-literal rejected by default (vintage); `-f readset-set-literal` accepts | S |
 | RM-OPEN-T011 | D-011 | P1 | RESOLVED | STRING `::N` ignored by default (vintage `ABCDE`); `-f string-precision` truncates (`ABC`) | S |
 
@@ -527,21 +527,24 @@ implementing the items they govern.
 
 # OPEN — re-probe / redesign (investigation, not remediation)
 
-> Note: RM-OPEN-T011 (D-011) and RM-OPEN-T022 (D-022) have since been **RESOLVED**
-> (fresh vintage ground truth obtained; default behavior now matches vintage, with
-> the prior extended behavior gated behind a feature flag). Their full entries are
-> retained below under their original anchors with `STATUS: RESOLVED`. RM-OPEN-T021
-> remains the only genuinely open investigation.
+> Note: all three items in this section — RM-OPEN-T011 (D-011), RM-OPEN-T022 (D-022),
+> and RM-OPEN-T021 — have since been **RESOLVED** (fresh vintage ground truth obtained
+> for each). T011 and T022 became real divergences now matched by default with the
+> prior extended behavior behind a feature flag; T021 came back AGREE-REJECT (both
+> compilers reject `EOL`) and is closed as a no-action exploration. Their full entries
+> are retained below under their original anchors with `STATUS: RESOLVED`. There are no
+> longer any open investigations.
 
 ## ANCHOR: RM-OPEN-T021
-**`WRITELN(ORD(EOL))` — vintage verdict `[UNVERIFIED]`; rerun required.**
-- STATUS: INVESTIGATE
-- BASIS: UNVERIFIED — vintage pas1 emitted `Unknown Identifier In Expression Assumed Zero` (a warning-with-recovery idiom, *not* a clean hard stop), logged as AGREE-REJECT before the warnings-are-not-rejections rule. Whether pas2 produced an `.obj` and what the exe printed was never verified.
-- MODERN-NOW: rejects at typecheck (`Undefined variable: EOL`) `[OBSERVED]`.
-- ACTION: rerun `t021.pas` under the differential-testing skill; determine whether pas2 emits an `.obj` and what the exe prints, then re-grade. This is a re-probe, not a code change. The EOL checklist item (≈L1032) stays open until rerun.
-- EFFORT: S (one probe rerun)
-- VERIFY: a clean run with a definite verdict (REJECT vs an actual printed value).
-- XREF: t021 open item; checklist EOL (≈L1032).
+**`WRITELN(ORD(EOL))` — RESOLVED: AGREE-REJECT (both compilers reject; no code change).**
+- STATUS: RESOLVED (NO-ACTION — AGREE-REJECT exploration, closed)
+- BASIS: OBSERVED — reran differentially. Vintage pas1 emitted `^260 Unknown Identifier In Expression Assumed Zero` + warning 238 and reported `1 error detected`; no `pasibf.bin`/`.sym` produced, and pas2 then failed with `File Access Error In PASIBF.SYM`. The nonzero error count is the verdict (the "Assumed Zero" recovery text does not override it), and the missing artifact confirms it: pas1 **rejected**.
+- MODERN-NOW: rejects at typecheck (`Undefined variable: EOL`), no `.ll` produced `[OBSERVED]`.
+- ACTION: none. Both sides reject — `EOL` is not a valid predeclared identifier on either compiler. Per the AGREE-REJECT convention this is a closed exploration, not a discrepancy: no entry in `docs/discrepancies.md` beyond the closing note, and no modern code change.
+- EFFORT: S (was one probe rerun; now done)
+- VERIFY: PASSED — definite REJECT/REJECT verdict pair; no artifact on either side.
+- UPGRADES: checklist EOL item (≈L1032) reclassified from `[UNVERIFIED]` to AGREE-REJECT (closed); `EOL` is a documentation/reserved token with no usable expression semantics.
+- XREF: t021 open item (now closed); checklist EOL (≈L1032).
 
 ## ANCHOR: RM-OPEN-T022
 **`READSET` inline set-literal — RESOLVED: default rejects (vintage), extension flag accepts.**
@@ -616,6 +619,6 @@ anti-confabulation discipline):
 - **Integer `::N` — vintage error timing** (D-010): vintage makes it a *runtime* data-format error (1123). Whether a *compile-time* rejection is an acceptable match, or fidelity demands the runtime timing, is a maintainer decision, not a fact.
 - **Duplicate `$ELSE` and non-quote-aware skipper** (D-003, D-004): vintage behavior on malformed directives is `[INFERRED]` from single probes and is not in the manual. Treat the deduced mechanisms as hypotheses, not ground truth.
 - **`F.ERRS` full code table**: only codes 10 (RESET-missing) and 14 (malformed READ) are `[OBSERVED]` via `F.ERRS`; the rest of the vintage `F.ERRS` numbering is unprobed. Do not invent values to fill the table — probe or leave noted.
-- **t021 EOL verdict**: `[UNVERIFIED]`; see RM-OPEN-T021. Do not record a verdict until rerun. (t011 STRING `::N` and t022 READSET inline-literal are now RESOLVED with fresh vintage ground truth — vintage ignores STRING `::N` and rejects the inline READSET literal; both defaults match, with the extended behavior behind `string-precision` / `readset-set-literal` respectively.)
+- **t021 EOL verdict**: RESOLVED as AGREE-REJECT — both compilers reject `EOL` (vintage pas1 `1 error detected`, no artifact; modern typecheck `Undefined variable: EOL`). `EOL` is not a usable predeclared identifier; see RM-OPEN-T021. (t011 STRING `::N` and t022 READSET inline-literal are likewise RESOLVED with fresh vintage ground truth — vintage ignores STRING `::N` and rejects the inline READSET literal; both defaults match, with the extended behavior behind `string-precision` / `readset-set-literal` respectively.)
 - **Vintage symbolic enum READ** (D-006): `GREEN` gave runtime error 1119; this establishes that symbolic *names* are not accepted as input, but the full accepted-input grammar beyond a single numeric ordinal (`1`, t030) is not exhaustively probed.
 - **Line numbers in every `TOUCH:` field are `≈`** and read from the `probes-branch` snapshot; they will drift as code changes. The function/string anchors in each `TOUCH:` are the durable locators — grep those, not the line numbers.
