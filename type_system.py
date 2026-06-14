@@ -327,8 +327,7 @@ def fixed_char_array_len(t: Type) -> Optional[int]:
     Differential evidence currently covers PACKED fixed character arrays as
     vintage string-compatible storage; keep the predicate narrow.
     """
-    if (isinstance(t, ArrayType) and t.packed and t.element_type.equivalent_to(CHAR_TYPE)
-            and isinstance(t.lower_bound, int) and isinstance(t.upper_bound, int)):
+    if (isinstance(t, ArrayType) and t.packed and t.element_type.equivalent_to(CHAR_TYPE) and isinstance(t.lower_bound, int) and isinstance(t.upper_bound, int)):
         return t.upper_bound - t.lower_bound + 1
     return None
 

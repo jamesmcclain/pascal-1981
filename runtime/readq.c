@@ -15,7 +15,8 @@ struct pas_file_fcb {
     int filemode;
 };
 
-__attribute__((weak)) void pas_file_attach_std(struct pas_file_fcb *in, struct pas_file_fcb *out)
+__attribute__((weak))
+void pas_file_attach_std(struct pas_file_fcb *in, struct pas_file_fcb *out)
 {
     if (in && !(in->mode & 8)) {
         in->handle = stdin;
@@ -51,7 +52,8 @@ static void die(const char *msg)
     abort();
 }
 
-__attribute__((weak)) const char *pas_enum_write_token(int32_t value, const char **names, int count)
+__attribute__((weak))
+const char *pas_enum_write_token(int32_t value, const char **names, int count)
 {
     enum { RING = 16, WIDTH = 32 };
     static char bufs[RING][WIDTH];
@@ -63,44 +65,44 @@ __attribute__((weak)) const char *pas_enum_write_token(int32_t value, const char
     return bufs[slot];
 }
 
-static int read_identifier_token(int (*next)(void), void (*push)(int), char *buf, int cap)
+static int read_identifier_token(int (*next)(void), void(*push)(int), char *buf, int cap)
 {
     int ch = skip_ws_except_nl();
-    (void)next;
-    (void)push;
+    (void) next;
+    (void) push;
     if (ch == EOF)
         die("unexpected EOF while reading enum");
-    if (!isalpha((unsigned char)ch)) {
+    if (!isalpha((unsigned char) ch)) {
         unread(ch);
         die("malformed enum input");
     }
     int n = 0;
     do {
         if (n + 1 < cap)
-            buf[n++] = (char)toupper((unsigned char)ch);
+            buf[n++] = (char) toupper((unsigned char) ch);
         ch = getchar();
-    } while (ch != EOF && (isalpha((unsigned char)ch) || isdigit((unsigned char)ch)));
+    } while (ch != EOF && (isalpha((unsigned char) ch) || isdigit((unsigned char) ch)));
     unread(ch);
     buf[n] = '\0';
     return 0;
 }
 
-int pas_read_enum_name(int32_t *out, const char **names, int count)
+int pas_read_enum_name(int32_t * out, const char **names, int count)
 {
     int ch = skip_ws_except_nl();
     if (ch == EOF)
         die("unexpected EOF while reading enum");
-    if (isdigit((unsigned char)ch) || ch == '-' || ch == '+') {
+    if (isdigit((unsigned char) ch) || ch == '-' || ch == '+') {
         unread(ch);
         long v;
         if (scanf("%ld", &v) != 1)
             die("malformed enum input");
-        *out = (int32_t)v;
+        *out = (int32_t) v;
         return 0;
     }
     unread(ch);
     char tok[256];
-    read_identifier_token(NULL, NULL, tok, (int)sizeof(tok));
+    read_identifier_token(NULL, NULL, tok, (int) sizeof(tok));
     for (int i = 0; i < count; i++) {
         if (names && names[i] && strcmp(tok, names[i]) == 0) {
             *out = i;

@@ -26,7 +26,6 @@ def compile_to_ir(src: str, features=None) -> str:
     Requires llvmlite.
     """
     from codegen_llvm import compile_to_llvm
-
     from type_checker import PascalTypeChecker
 
     ast = parse_source(src)
@@ -46,7 +45,6 @@ def build_and_run(src: str, stdin: str = "", features=None) -> tuple:
     Requires llvmlite + clang.
     """
     from codegen_llvm import compile_to_llvm
-
     from type_checker import PascalTypeChecker
 
     ast = parse_source(src)
@@ -509,8 +507,7 @@ END."""
                 f.write(ir)
             repo = os.path.dirname(os.path.dirname(__file__))
             runtime_sources = glob.glob(os.path.join(repo, "runtime", "*.c"))
-            clang = subprocess.run(["clang", ll_path, *runtime_sources, "-o", exe_path, "-lm", "-w"],
-                                   capture_output=True, text=True)
+            clang = subprocess.run(["clang", ll_path, *runtime_sources, "-o", exe_path, "-lm", "-w"], capture_output=True, text=True)
             self.assertEqual(clang.returncode, 0, msg=clang.stderr)
             run = subprocess.run([exe_path], cwd=tmpdir, capture_output=True, text=True, timeout=15)
             self.assertEqual(run.returncode, 0, msg=run.stderr)
@@ -539,8 +536,7 @@ END."""
                 f.write(ir)
             repo = os.path.dirname(os.path.dirname(__file__))
             runtime_sources = glob.glob(os.path.join(repo, "runtime", "*.c"))
-            clang = subprocess.run(["clang", ll_path, *runtime_sources, "-o", exe_path, "-lm", "-w"],
-                                   capture_output=True, text=True)
+            clang = subprocess.run(["clang", ll_path, *runtime_sources, "-o", exe_path, "-lm", "-w"], capture_output=True, text=True)
             self.assertEqual(clang.returncode, 0, msg=clang.stderr)
             run = subprocess.run([exe_path], cwd=tmpdir, capture_output=True, text=True, timeout=15)
             self.assertEqual(run.returncode, 0, msg=run.stderr)
@@ -568,8 +564,7 @@ END."""
                 f.write(ir)
             repo = os.path.dirname(os.path.dirname(__file__))
             runtime_sources = glob.glob(os.path.join(repo, "runtime", "*.c"))
-            clang = subprocess.run(["clang", ll_path, *runtime_sources, "-o", exe_path, "-lm", "-w"],
-                                   capture_output=True, text=True)
+            clang = subprocess.run(["clang", ll_path, *runtime_sources, "-o", exe_path, "-lm", "-w"], capture_output=True, text=True)
             self.assertEqual(clang.returncode, 0, msg=clang.stderr)
             run = subprocess.run([exe_path], cwd=tmpdir, capture_output=True, text=True, timeout=15)
             self.assertNotEqual(run.returncode, 0)
@@ -603,7 +598,8 @@ BEGIN
 END."""
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
-        self.assertEqual(stdout, "--- Dojo Status Set Training ---\nAlert: Fighter is taking damage over time!\nSuccess: Poison cleared.\nStatus Clear: No active impairments detected.\n")
+        self.assertEqual(stdout,
+                         "--- Dojo Status Set Training ---\nAlert: Fighter is taking damage over time!\nSuccess: Poison cleared.\nStatus Clear: No active impairments detected.\n")
 
     def test_value_record_field_initializers_runtime(self):
         """VALUE dotted record-field initializers compile and run."""
@@ -2117,8 +2113,8 @@ class TestStringCapacityGatesRespectRangeck(unittest.TestCase):
     """
 
     def _guards(self, src: str, **kw) -> int:
-        from tests.support import parse_source
         from codegen_llvm import compile_to_llvm
+        from tests.support import parse_source
         ir = compile_to_llvm(parse_source(src), **kw)
         return ir.count('_overflow') // 2
 
@@ -2166,8 +2162,8 @@ class TestRuntimeCheckFlags(unittest.TestCase):
     -32768 (INT16_MIN) for this implementation's INTEGER."""
 
     def _ir(self, src: str, **kw) -> str:
-        from tests.support import parse_source
         from codegen_llvm import compile_to_llvm
+        from tests.support import parse_source
         return compile_to_llvm(parse_source(src), **kw)
 
     # ---------------- INDEXCK ----------------
@@ -2298,8 +2294,7 @@ class TestRuntimeCheckFlags(unittest.TestCase):
     def test_force_flags_override_for_new_checks(self):
         ir_off = self._ir(self.IDX, force_flags={'INDEXCK': False})
         self.assertNotIn('indexck_fail', ir_off)
-        ir_on = self._ir(self.ADD.replace('BEGIN', 'BEGIN {$MATHCK-}'),
-                         force_flags={'MATHCK': True})
+        ir_on = self._ir(self.ADD.replace('BEGIN', 'BEGIN {$MATHCK-}'), force_flags={'MATHCK': True})
         self.assertIn('with.overflow', ir_on)
 
 
@@ -2363,4 +2358,3 @@ class TestValueInitializerCodegen(unittest.TestCase):
         rc, out = build_and_run(src)
         self.assertEqual(rc, 0)
         self.assertEqual(out, "  ABCDE\n")
-

@@ -315,12 +315,10 @@ class TestMetacommands(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_tier1_all_absorbed_silently(self):
-        tier1 = (
-            "{$LIST-} {$LIST+} {$OCODE-} {$SYMTAB-} "
-            "{$TITLE:'Test'} {$SUBTITLE:'Sub'} "
-            "{$PAGE:1} {$PAGE} {$PAGEIF:5} {$PAGESIZE:60} "
-            "{$LINESIZE:132} {$ERRORS:10} {$SKIP:3}"
-        )
+        tier1 = ("{$LIST-} {$LIST+} {$OCODE-} {$SYMTAB-} "
+                 "{$TITLE:'Test'} {$SUBTITLE:'Sub'} "
+                 "{$PAGE:1} {$PAGE} {$PAGEIF:5} {$PAGESIZE:60} "
+                 "{$LINESIZE:132} {$ERRORS:10} {$SKIP:3}")
         try:
             self._flags_after(tier1)
         except Exception as e:
@@ -355,64 +353,50 @@ class TestMetacommands(unittest.TestCase):
 
     def test_if_true_includes_then_branch(self):
         """$IF 1 $THEN: body inside should be tokenized."""
-        kinds = self._token_kinds(
-            'PROGRAM P; BEGIN {$IF 1 $THEN} WRITELN {$END} END.'
-        )
+        kinds = self._token_kinds('PROGRAM P; BEGIN {$IF 1 $THEN} WRITELN {$END} END.')
         self.assertIn('IDENTIFIER', kinds)  # WRITELN is an identifier here
 
     def test_if_false_skips_then_branch(self):
         """$IF 0 $THEN: identifiers inside skipped block must not appear."""
-        identifiers = [t for t in self._tokens(
-            'PROGRAM P; BEGIN {$IF 0 $THEN} GARBAGE {$END} END.'
-        ) if t.kind == 'IDENTIFIER']
+        identifiers = [t for t in self._tokens('PROGRAM P; BEGIN {$IF 0 $THEN} GARBAGE {$END} END.') if t.kind == 'IDENTIFIER']
         names = [t.value for t in identifiers]
         self.assertNotIn('GARBAGE', names)
 
     def test_if_true_skips_else_branch(self):
         """True condition: else-branch garbage must be skipped."""
-        kinds = self._token_kinds(
-            'PROGRAM P; BEGIN {$IF 1 $THEN} WRITELN {$ELSE} @@@ BAD @@@ {$END} END.'
-        )
+        kinds = self._token_kinds('PROGRAM P; BEGIN {$IF 1 $THEN} WRITELN {$ELSE} @@@ BAD @@@ {$END} END.')
         # WRITELN identifier present, no other stray tokens
-        identifiers = [t for t in self._tokens(
-            'PROGRAM P; BEGIN {$IF 1 $THEN} WRITELN {$ELSE} @@@ BAD @@@ {$END} END.'
-        ) if t.kind == 'IDENTIFIER']
+        identifiers = [t for t in self._tokens('PROGRAM P; BEGIN {$IF 1 $THEN} WRITELN {$ELSE} @@@ BAD @@@ {$END} END.') if t.kind == 'IDENTIFIER']
         names = [t.value for t in identifiers]
         self.assertIn('WRITELN', names)
         self.assertNotIn('BAD', names)
 
     def test_if_false_uses_else_branch(self):
         """False condition: else-branch must be tokenized."""
-        identifiers = [t for t in self._tokens(
-            'PROGRAM P; BEGIN {$IF 0 $THEN} BAD {$ELSE} WRITELN {$END} END.'
-        ) if t.kind == 'IDENTIFIER']
+        identifiers = [t for t in self._tokens('PROGRAM P; BEGIN {$IF 0 $THEN} BAD {$ELSE} WRITELN {$END} END.') if t.kind == 'IDENTIFIER']
         names = [t.value for t in identifiers]
         self.assertNotIn('BAD', names)
         self.assertIn('WRITELN', names)
 
     def test_nested_if_outer_true_inner_false(self):
         """Nested $IF: inner false block must not leak tokens."""
-        identifiers = [t for t in self._tokens(
-            'PROGRAM P; BEGIN '
-            '{$IF 1 $THEN} '
-            '  {$IF 0 $THEN} BAD {$ELSE} GOOD {$END} '
-            '{$END} '
-            'END.'
-        ) if t.kind == 'IDENTIFIER']
+        identifiers = [t for t in self._tokens('PROGRAM P; BEGIN '
+                                               '{$IF 1 $THEN} '
+                                               '  {$IF 0 $THEN} BAD {$ELSE} GOOD {$END} '
+                                               '{$END} '
+                                               'END.') if t.kind == 'IDENTIFIER']
         names = [t.value for t in identifiers]
         self.assertNotIn('BAD', names)
         self.assertIn('GOOD', names)
 
     def test_nested_if_outer_false_skips_entire_block(self):
         """When outer $IF is false, inner $IF/$END must not confuse depth tracking."""
-        identifiers = [t for t in self._tokens(
-            'PROGRAM P; BEGIN '
-            '{$IF 0 $THEN} '
-            '  {$IF 1 $THEN} BAD {$END} '
-            '  ALSO_BAD '
-            '{$END} '
-            'END.'
-        ) if t.kind == 'IDENTIFIER']
+        identifiers = [t for t in self._tokens('PROGRAM P; BEGIN '
+                                               '{$IF 0 $THEN} '
+                                               '  {$IF 1 $THEN} BAD {$END} '
+                                               '  ALSO_BAD '
+                                               '{$END} '
+                                               'END.') if t.kind == 'IDENTIFIER']
         names = [t.value for t in identifiers]
         self.assertNotIn('BAD', names)
         self.assertNotIn('ALSO_BAD', names)
@@ -469,10 +453,8 @@ class TestMetacommandSkipRegressions(unittest.TestCase):
         """D-003: a second depth-1 $ELSE while skipping a true branch's
         else-body terminates the skip; source after that second $ELSE leaks
         back into tokenization, matching the observed vintage behavior."""
-        names = self._identifiers(
-            'PROGRAM P; BEGIN {$IF 1 $THEN} GOOD '
-            '{$ELSE} BAD1 {$ELSE} GOOD2 {$END} END.'
-        )
+        names = self._identifiers('PROGRAM P; BEGIN {$IF 1 $THEN} GOOD '
+                                  '{$ELSE} BAD1 {$ELSE} GOOD2 {$END} END.')
         self.assertIn('GOOD', names)
         self.assertNotIn('BAD1', names)
         self.assertIn('GOOD2', names)
@@ -480,18 +462,14 @@ class TestMetacommandSkipRegressions(unittest.TestCase):
     def test_string_literal_with_brace_in_skipped_block(self):
         """A '{' inside a quoted string in a skipped block must not be
         treated as a comment opener (previously: Unterminated $IF)."""
-        names = self._identifiers(
-            "PROGRAM P; VAR s: INTEGER; BEGIN "
-            "{$IF 0 $THEN} x := '{' ; BAD {$END} s := 1 END."
-        )
+        names = self._identifiers("PROGRAM P; VAR s: INTEGER; BEGIN "
+                                  "{$IF 0 $THEN} x := '{' ; BAD {$END} s := 1 END.")
         self.assertNotIn('BAD', names)
         self.assertIn('s', [n.lower() for n in names if n])
 
     def test_string_literal_with_paren_star_in_skipped_block(self):
         """'(*' inside a quoted string in a skipped block is also inert."""
-        names = self._identifiers(
-            "PROGRAM P; BEGIN {$IF 0 $THEN} x := '(*' ; BAD {$END} END."
-        )
+        names = self._identifiers("PROGRAM P; BEGIN {$IF 0 $THEN} x := '(*' ; BAD {$END} END.")
         self.assertNotIn('BAD', names)
 
 
@@ -499,8 +477,8 @@ class TestForceFlagDefaults(unittest.TestCase):
     """effective_flag must use manual defaults, not blanket True."""
 
     def test_default_for_off_flag_is_false(self):
-        from codegen import Codegen
         from ast_nodes import EmptyStmt
+        from codegen import Codegen
         cg = Codegen()
         stmt = EmptyStmt()
         # ENTRY and INITCK default off per the manual.
@@ -510,16 +488,16 @@ class TestForceFlagDefaults(unittest.TestCase):
         self.assertTrue(cg.effective_flag('RANGECK', stmt))
 
     def test_meta_flags_on_stmt_take_effect(self):
-        from codegen import Codegen
         from ast_nodes import EmptyStmt
+        from codegen import Codegen
         cg = Codegen()
         stmt = EmptyStmt()
         stmt.meta_flags = {'MATHCK': False}
         self.assertFalse(cg.effective_flag('MATHCK', stmt))
 
     def test_force_flags_override_stmt(self):
-        from codegen import Codegen
         from ast_nodes import EmptyStmt
+        from codegen import Codegen
         cg = Codegen(force_flags={'MATHCK': True})
         stmt = EmptyStmt()
         stmt.meta_flags = {'MATHCK': False}
@@ -531,17 +509,13 @@ class TestWriteDoubleColon(unittest.TestCase):
 
     def test_double_colon_parses(self):
         from tests.support import parse_source
-        ast = parse_source(
-            'PROGRAM P; VAR x: REAL; BEGIN WRITELN(x::2) END.'
-        )
+        ast = parse_source('PROGRAM P; VAR x: REAL; BEGIN WRITELN(x::2) END.')
         self.assertIsNotNone(ast)
 
     def test_double_colon_width_none_precision_set(self):
-        from tests.support import parse_source
         from ast_nodes import WriteArg
-        ast = parse_source(
-            'PROGRAM P; VAR x: REAL; BEGIN WRITELN(x::2) END.'
-        )
+        from tests.support import parse_source
+        ast = parse_source('PROGRAM P; VAR x: REAL; BEGIN WRITELN(x::2) END.')
         stmt = ast.block.body[0]
         arg = stmt.args[0]
         self.assertIsInstance(arg, WriteArg)
@@ -550,11 +524,9 @@ class TestWriteDoubleColon(unittest.TestCase):
 
     def test_full_form_still_parses(self):
         """P:M:N must be unaffected."""
-        from tests.support import parse_source
         from ast_nodes import WriteArg
-        ast = parse_source(
-            'PROGRAM P; VAR x: REAL; BEGIN WRITELN(x:8:3) END.'
-        )
+        from tests.support import parse_source
+        ast = parse_source('PROGRAM P; VAR x: REAL; BEGIN WRITELN(x:8:3) END.')
         arg = ast.block.body[0].args[0]
         self.assertIsNotNone(arg.width)
         self.assertIsNotNone(arg.precision)

@@ -15,10 +15,10 @@ from llvmlite.ir import IRBuilder
 
 from ast_nodes import *
 from type_system import INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, WORD_TYPE
-
-from .base import CodegenError
 from type_system import LStringType as ResolvedLStringType
 from type_system import StringType as ResolvedStringType
+
+from .base import CodegenError
 
 
 class ExprsMixin:
@@ -329,8 +329,7 @@ class ExprsMixin:
         plain = getattr(self.builder, op)
         if not self.check_enabled('MATHCK'):
             return plain(left, right)
-        if not (isinstance(left.type, ir.IntType) and left.type == right.type
-                and left.type.width in (16, 32, 64)):
+        if not (isinstance(left.type, ir.IntType) and left.type == right.type and left.type.width in (16, 32, 64)):
             return plain(left, right)
         meth = getattr(self.builder, ('s' if signed else 'u') + op + '_with_overflow')
         res = meth(left, right)

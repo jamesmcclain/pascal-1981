@@ -281,6 +281,7 @@ class DeclsMixin:
         INTEGERs and pointers (the two classes the manual names) and leaves
         aggregates to their existing zero/blank initialization.
         """
+
         def flag(name: str) -> bool:
             if name in self.force_flags:
                 return self.force_flags[name]

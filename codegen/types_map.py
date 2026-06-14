@@ -16,8 +16,8 @@ import llvmlite.ir as ir
 
 from ast_nodes import *
 from codegen.base import CodegenError
-from type_system import ArrayType as ResolvedArrayType
 from type_system import CHAR_TYPE
+from type_system import ArrayType as ResolvedArrayType
 from type_system import LStringType as ResolvedLStringType
 from type_system import StringType as ResolvedStringType
 
@@ -336,9 +336,7 @@ class TypesMapMixin:
                     # Constant indices provably in range skip the check;
                     # checks are emitted only when both bounds are known.
                     low_b, high_b = self._array_bounds_or_none(cur_type)
-                    if (low_b is not None and high_b is not None
-                            and isinstance(index.type, ir.IntType)
-                            and self.check_enabled('INDEXCK')):
+                    if (low_b is not None and high_b is not None and isinstance(index.type, ir.IntType) and self.check_enabled('INDEXCK')):
                         const_idx = None
                         try:
                             const_idx = self.eval_const_expr(selector.index_or_field)

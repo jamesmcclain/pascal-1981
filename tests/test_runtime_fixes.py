@@ -460,11 +460,12 @@ class TestResetModeTransitions(unittest.TestCase):
         pending implicit GET, not reusing the stale buffered component."""
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "midstream.txt"
-            src = ("PROGRAM P; VAR f: TEXT; c1, c2, c3: CHAR; BEGIN "
-                   f"ASSIGN(f, '{path}'); REWRITE(f); WRITELN(f, 'XYZ'); CLOSE(f); "
-                   "RESET(f); c1 := f^; GET(f); c2 := f^; "   # X then Y; mid-stream
-                   "RESET(f); c3 := f^; "                     # rewind: X again
-                   "WRITELN(c1); WRITELN(c2); WRITELN(c3) END.")
+            src = (
+                "PROGRAM P; VAR f: TEXT; c1, c2, c3: CHAR; BEGIN "
+                f"ASSIGN(f, '{path}'); REWRITE(f); WRITELN(f, 'XYZ'); CLOSE(f); "
+                "RESET(f); c1 := f^; GET(f); c2 := f^; "  # X then Y; mid-stream
+                "RESET(f); c3 := f^; "  # rewind: X again
+                "WRITELN(c1); WRITELN(c2); WRITELN(c3) END.")
             rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
             self.assertEqual(rc, 0)
             self.assertEqual(out, "X\nY\nX\n")
@@ -686,12 +687,13 @@ class TestTrappedIO(unittest.TestCase):
             path = Path(td) / "one.txt"
             with open(path, 'w') as fh:
                 fh.write("A\n")
-            src = ("PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
-                   f"ASSIGN(f, '{path}'); RESET(f); f.TRAP := TRUE; "
-                   "c := f^; GET(f); GET(f); "      # A, marker, now at eof
-                   "GET(f); "                        # past eof: trapped
-                   "IF f.ERRS <> 0 THEN WRITELN('trapped'); "
-                   "WRITELN(c) END.")
+            src = (
+                "PROGRAM P; VAR f: TEXT; c: CHAR; BEGIN "
+                f"ASSIGN(f, '{path}'); RESET(f); f.TRAP := TRUE; "
+                "c := f^; GET(f); GET(f); "  # A, marker, now at eof
+                "GET(f); "  # past eof: trapped
+                "IF f.ERRS <> 0 THEN WRITELN('trapped'); "
+                "WRITELN(c) END.")
             rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
             self.assertEqual(rc, 0)
             self.assertEqual(out, "trapped\nA\n")

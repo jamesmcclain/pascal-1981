@@ -282,25 +282,20 @@ class TestReadWriteTypecheck(unittest.TestCase):
         self.assertFalse(rej.success)
         self.assertIn("Character Set Expected", " ".join(str(e) for e in rej.errors))
         # A declared SET OF CHAR variable is the faithful accepted form.
-        ok_var = typecheck_source(
-            "PROGRAM P; TYPE cs = SET OF CHAR; VAR s: LSTRING(8); cset: cs; "
-            "BEGIN cset := ['A'..'Z']; READSET(s, cset) END.")
+        ok_var = typecheck_source("PROGRAM P; TYPE cs = SET OF CHAR; VAR s: LSTRING(8); cset: cs; "
+                                  "BEGIN cset := ['A'..'Z']; READSET(s, cset) END.")
         self.assertTrue(ok_var.success, msg=" ".join(str(e) for e in ok_var.errors))
         # The inline literal is accepted only under -f readset-set-literal.
-        ok_ext = typecheck_source(
-            "PROGRAM P; VAR s: LSTRING(8); BEGIN READSET(s, ['A'..'Z']) END.",
-            features={"readset-set-literal": True})
+        ok_ext = typecheck_source("PROGRAM P; VAR s: LSTRING(8); BEGIN READSET(s, ['A'..'Z']) END.", features={"readset-set-literal": True})
         self.assertTrue(ok_ext.success, msg=" ".join(str(e) for e in ok_ext.errors))
         # Destination must be LSTRING (use a set variable to isolate the error).
-        bad_dest = typecheck_source(
-            "PROGRAM P; TYPE cs = SET OF CHAR; VAR s: STRING(8); cset: cs; "
-            "BEGIN cset := ['A'..'Z']; READSET(s, cset) END.")
+        bad_dest = typecheck_source("PROGRAM P; TYPE cs = SET OF CHAR; VAR s: STRING(8); cset: cs; "
+                                    "BEGIN cset := ['A'..'Z']; READSET(s, cset) END.")
         self.assertFalse(bad_dest.success)
         self.assertIn("LSTRING", " ".join(str(e) for e in bad_dest.errors))
         # A non-CHAR declared set is rejected as not SET OF CHAR.
-        bad_set = typecheck_source(
-            "PROGRAM P; TYPE ns = SET OF 0..7; VAR s: LSTRING(8); nset: ns; "
-            "BEGIN nset := [1..3]; READSET(s, nset) END.")
+        bad_set = typecheck_source("PROGRAM P; TYPE ns = SET OF 0..7; VAR s: LSTRING(8); nset: ns; "
+                                   "BEGIN nset := [1..3]; READSET(s, nset) END.")
         self.assertFalse(bad_set.success)
         self.assertIn("SET OF CHAR", " ".join(str(e) for e in bad_set.errors))
 

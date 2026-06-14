@@ -33,8 +33,8 @@ from ast_nodes import SubrangeType as ASTSubrangeType
 from ast_nodes import (TypeDecl, UnaryOp, UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WriteArg)
 from builtins_registry import register_builtins
 from symbol_table import SourceLocation, Symbol, SymbolTable
-from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, EnumType, FileType, FunctionType, LStringType, PointerType, ProcedureType,
-                         RecordType, SetType, StringType, Type, binary_op_result_type, can_assign, is_fixed_char_array, unary_op_result_type)
+from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, EnumType, FileType, FunctionType, LStringType,
+                         PointerType, ProcedureType, RecordType, SetType, StringType, Type, binary_op_result_type, can_assign, is_fixed_char_array, unary_op_result_type)
 
 
 @dataclass
@@ -1178,14 +1178,12 @@ class PascalTypeChecker(TypeChecker):
         # constructor such as CHARSET['A'..'Z']). The vintage pas1 rejects an
         # inline, untyped set-constructor literal here with "Character Set
         # Expected". Allow it only under -f readset-set-literal.
-        if (isinstance(set_arg, SetConstructor) and set_arg.type_name is None
-                and not self.feature_enabled('readset-set-literal')):
+        if (isinstance(set_arg, SetConstructor) and set_arg.type_name is None and not self.feature_enabled('readset-set-literal')):
             self.error(
                 "Character Set Expected: READSET set argument must be a declared "
                 "SET OF CHAR value (a set variable or a type-prefixed constructor "
                 "like CHARSET['A'..'Z']), not an inline set literal "
-                "(enable -f readset-set-literal to accept inline set constructors)",
-                stmt)
+                "(enable -f readset-set-literal to accept inline set constructors)", stmt)
             return
         set_type = self.infer_expression_type(set_arg)
         if not isinstance(set_type, SetType) or not set_type.element_type.equivalent_to(CHAR_TYPE):
@@ -1221,7 +1219,8 @@ class PascalTypeChecker(TypeChecker):
         # ordinal by default and symbolic under -f symbolic-enum-io; BOOLEAN is
         # always name-based on output.
         wide = (type(INTEGER32_TYPE), type(INTEGER64_TYPE)) if self.feature_enabled('wide-integers') else ()
-        return isinstance(t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), EnumType, StringType, LStringType) + wide) or is_fixed_char_array(t)
+        return isinstance(
+            t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), EnumType, StringType, LStringType) + wide) or is_fixed_char_array(t)
 
     def _is_readable_type(self, t: Type) -> bool:
         # READ remains narrower than WRITE: BOOLEAN input is unsupported, but

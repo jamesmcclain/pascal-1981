@@ -138,44 +138,42 @@ class LexerError(Exception):
 # codegen can read the in-effect state at any source location.  Defaults are
 # per the manual (§4-10 … §4-35).
 _ON_OFF_FLAGS: dict[str, bool] = {
-    'BRAVE':   True,   # errors/warnings to display         (default +)
-    'DEBUG':   True,   # master runtime debug switch        (default +)
-    'ENTRY':   False,  # proc entry/exit for debugger       (default -)
-    'GOTO':    False,  # flag GOTO statements               (default -)
-    'INDEXCK': True,   # array index range check            (default +)
-    'INITCK':  False,  # initialise uninitialised variables (default -)
-    'LINE':    False,  # line-number calls for debugger     (default -)
-    'LIST':    True,   # source listing                     (default +)
-    'MATHCK':  True,   # integer overflow / div-by-zero     (default +)
-    'NILCK':   True,   # pointer dereference check          (default +)
-    'OCODE':   True,   # object-code listing                (default +)
-    'RANGECK': True,   # subrange validity                  (default +)
+    'BRAVE': True,  # errors/warnings to display         (default +)
+    'DEBUG': True,  # master runtime debug switch        (default +)
+    'ENTRY': False,  # proc entry/exit for debugger       (default -)
+    'GOTO': False,  # flag GOTO statements               (default -)
+    'INDEXCK': True,  # array index range check            (default +)
+    'INITCK': False,  # initialise uninitialised variables (default -)
+    'LINE': False,  # line-number calls for debugger     (default -)
+    'LIST': True,  # source listing                     (default +)
+    'MATHCK': True,  # integer overflow / div-by-zero     (default +)
+    'NILCK': True,  # pointer dereference check          (default +)
+    'OCODE': True,  # object-code listing                (default +)
+    'RANGECK': True,  # subrange validity                  (default +)
     'RUNTIME': False,  # runtime error location mode        (default -)
-    'STACKCK': True,   # stack overflow check               (default +)
-    'SYMTAB':  True,   # symbol-table listing               (default +)
-    'WARN':    True,   # warnings                           (default +)
+    'STACKCK': True,  # stack overflow check               (default +)
+    'SYMTAB': True,  # symbol-table listing               (default +)
+    'WARN': True,  # warnings                           (default +)
 }
 
 # $DEBUG master switch controls these sub-flags (manual §4-11).
-_DEBUG_SUB_FLAGS: frozenset[str] = frozenset(
-    {'ENTRY', 'INDEXCK', 'INITCK', 'MATHCK', 'NILCK', 'RANGECK', 'STACKCK'}
-)
+_DEBUG_SUB_FLAGS: frozenset[str] = frozenset({'ENTRY', 'INDEXCK', 'INITCK', 'MATHCK', 'NILCK', 'RANGECK', 'STACKCK'})
 
 # INTEGER metacommands (listing/output — no semantic effect on codegen).
 # Defaults from the manual where stated.
 _INT_META_DEFAULTS: dict[str, int] = {
-    'ERRORS':   25,
+    'ERRORS': 25,
     'LINESIZE': 79,
-    'PAGE':      1,
-    'PAGEIF':    0,
+    'PAGE': 1,
+    'PAGEIF': 0,
     'PAGESIZE': 53,
-    'SKIP':      0,
+    'SKIP': 0,
 }
 
 # STRING metacommands (listing/output — no semantic effect on codegen).
 _STR_META_DEFAULTS: dict[str, str] = {
     'SUBTITLE': '',
-    'TITLE':    '',
+    'TITLE': '',
 }
 
 
@@ -326,7 +324,7 @@ class Lexer:
         opener inside a quoted string does not start a comment, so e.g.
         x := '{' inside a skipped block cannot derail $IF/$END tracking.
         """
-        self._consume_to(current_closer)   # close the comment we're in
+        self._consume_to(current_closer)  # close the comment we're in
         depth = 1
         while self.current():
             if self.current() == "'":
@@ -342,7 +340,7 @@ class Lexer:
                 inner_closer = '*)' if is_paren else '}'
                 self.advance(2 if is_paren else 1)
                 if self.current() == '$':
-                    self.advance()         # consume '$'
+                    self.advance()  # consume '$'
                     self.skip_whitespace()
                     tag = self._read_meta_name()
                     if tag == 'IF':
@@ -438,7 +436,7 @@ class Lexer:
                     # False branch: skip source to $ELSE or $END.
                     result = self._skip_source_block(closer, stop_at_else=True)
                     if result == 'END':
-                        return   # no else-branch; done
+                        return  # no else-branch; done
                     # result == 'ELSE': tokenize continues normally into else-branch;
                     # the eventual {$END} comment will be a no-op.
                 else:
@@ -500,8 +498,7 @@ class Lexer:
                 if self.current().isalpha() or self.current() == '_':
                     ident = self._read_meta_name()
                 if ident:
-                    print(f"[Pascal] $INCONST: '{ident}' — non-interactive build, using 0",
-                          file=sys.stderr)
+                    print(f"[Pascal] $INCONST: '{ident}' — non-interactive build, using 0", file=sys.stderr)
                     self._meta_consts[ident] = 0
 
             # ── Tier 1 / Tier 2: flag and listing metacommands ──────────

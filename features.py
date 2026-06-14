@@ -18,25 +18,30 @@ class Feature:
 
 
 _FEATURES: Dict[str, Feature] = {
-    'wide-integers': Feature(
+    'wide-integers':
+    Feature(
         name='wide-integers',
         default=False,
         help='Enable extension INTEGER32/INTEGER64 types and wide integer constants.',
     ),
-    'symbolic-enum-io': Feature(
+    'symbolic-enum-io':
+    Feature(
         name='symbolic-enum-io',
         default=False,
         help='Enable symbolic (name-based) enum WRITE and READ instead of the faithful 1981 ordinal/numeric form; BOOLEAN always writes TRUE/FALSE regardless.',
     ),
-    'string-precision': Feature(
+    'string-precision':
+    Feature(
         name='string-precision',
         default=False,
         help='Honor the ::N precision operand on STRING/LSTRING WRITE values (truncate to N chars). The faithful 1981 default ignores ::N on strings and prints the whole value.',
     ),
-    'readset-set-literal': Feature(
+    'readset-set-literal':
+    Feature(
         name='readset-set-literal',
         default=False,
-        help="Accept an inline set-constructor literal (e.g. ['A'..'Z']) as the READSET set argument. The faithful 1981 default rejects it (Character Set Expected) and requires a declared SET OF CHAR value or a type-prefixed constructor.",
+        help=
+        "Accept an inline set-constructor literal (e.g. ['A'..'Z']) as the READSET set argument. The faithful 1981 default rejects it (Character Set Expected) and requires a declared SET OF CHAR value or a type-prefixed constructor.",
     ),
 }
 

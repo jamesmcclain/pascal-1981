@@ -66,14 +66,15 @@ class Codegen(CodegenBase, TypesMapMixin, ConstFoldMixin, RuntimeBuiltinsMixin, 
         return next(f for f in self.module.functions if f.name == name)
 
 
-def compile_to_llvm(ast: Union[ProgramUnit, ModuleUnit, InterfaceUnit, ImplementationUnit],
-                    verbose: bool = False,
-                    source_file: Optional[str] = None,
-                    force_flags: Optional[Dict[str, bool]] = None,
-                    features: Optional[Dict[str, bool]] = None,
-                    # Legacy compat: force_rangeck=True/False is equivalent to
-                    # force_flags={'RANGECK': True/False}.
-                    force_rangeck: Optional[bool] = None) -> str:
+def compile_to_llvm(
+        ast: Union[ProgramUnit, ModuleUnit, InterfaceUnit, ImplementationUnit],
+        verbose: bool = False,
+        source_file: Optional[str] = None,
+        force_flags: Optional[Dict[str, bool]] = None,
+        features: Optional[Dict[str, bool]] = None,
+        # Legacy compat: force_rangeck=True/False is equivalent to
+        # force_flags={'RANGECK': True/False}.
+        force_rangeck: Optional[bool] = None) -> str:
     """Compile AST to LLVM IR string."""
     merged: Dict[str, bool] = {}
     if force_rangeck is not None:
