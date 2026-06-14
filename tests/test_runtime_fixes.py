@@ -722,7 +722,9 @@ class TestTrapErrsAsWriteArguments(unittest.TestCase):
                    "WRITELN(f.ERRS) END.")
             rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
             self.assertEqual(rc, 0)
-            self.assertEqual(out, "1\n")
+            # D-012/RM-P3-ERRSCODE: trapped RESET missing/open failure uses
+            # the observed vintage program-visible F.ERRS code 10.
+            self.assertEqual(out, "10\n")
 
     def test_trap_field_readable_as_boolean(self):
         """f.TRAP reads back as a BOOLEAN.  Observed via IF rather than
