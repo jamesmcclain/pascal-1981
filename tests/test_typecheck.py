@@ -364,6 +364,11 @@ class TestTypeCompatibility(unittest.TestCase):
         result = typecheck_source("PROGRAM P; TYPE S = SET OF 1..10; VAR x: S; BEGIN x := S[1..3] END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
+    def test_typed_set_constructor_comma_elements(self):
+        """D-026: TypeName[a, b] is a typed set constructor, not array indexing."""
+        result = typecheck_source("PROGRAM P; TYPE C = (Red, Blue, Green); S = SET OF C; VAR x: S; BEGIN x := S[Red, Blue] END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
     def test_typed_set_constructor_rejects_variable_range(self):
         """Type-prefixed set constructors reject variable elements per the manual."""
         result = typecheck_source("PROGRAM P; TYPE S = SET OF 1..10; VAR x: S; VAR i, j: INTEGER; BEGIN x := S[i..j] END.")

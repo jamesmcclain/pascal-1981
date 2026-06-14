@@ -798,6 +798,23 @@ END."""
         self.assertEqual(returncode, 0)
         self.assertEqual(stdout.strip(), "2\n4")
 
+    def test_typed_set_constructor_comma_elements_runtime_d026(self):
+        """D-026: COLORS[RED, BLUE] executes as a typed set constructor."""
+        src = """
+        PROGRAM P;
+        TYPE COLOR = (RED, BLUE, GREEN);
+             COLORS = SET OF COLOR;
+        VAR s: COLORS;
+        BEGIN
+          s := COLORS [RED, BLUE];
+          IF RED IN s THEN WRITELN('R');
+          IF GREEN IN s THEN WRITELN('G')
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout, "R\n")
+
     def test_set_dynamic_element_runtime(self):
         """Set constructors with runtime element values build the right set."""
         src = """

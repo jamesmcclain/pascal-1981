@@ -2026,8 +2026,27 @@ class PascalTypeChecker(TypeChecker):
             return self.is_constant_set_element(expr.left) and self.is_constant_set_element(expr.right)
         return False
 
+    def _designator_as_typed_set_constructor(self, designator: Designator) -> Optional[SetConstructor]:
+        """Return a typed set constructor for TypeName[...] designators.
+
+        The parser cannot reliably distinguish array indexing from IBM
+        Pascal's type-prefixed set constructor without symbol information.
+        At semantic time, reinterpret only bracket-only designators whose base
+        name is a declared set type.
+        """
+        if not designator.selectors or not all(sel.kind == 'INDEX' for sel in designator.selectors):
+            return None
+        sym = self.symbol_table.lookup(designator.name)
+        if not sym or sym.kind != 'type' or not isinstance(sym.type, SetType):
+            return None
+        return SetConstructor([sel.index_or_field for sel in designator.selectors], designator.name)
+
     def infer_designator_type(self, designator: Designator) -> Optional[Type]:
         """Infer the type of a designator (with selectors for array/record access)."""
+        typed_set = self._designator_as_typed_set_constructor(designator)
+        if typed_set is not None:
+            return self.infer_expression_type(typed_set)
+
         # Special case: inside a function, referencing the function name gets the return type
         if self.current_function and designator.name == self.current_function.name:
             current_type = self.current_function_return_type

@@ -76,7 +76,7 @@ OPEN = re-probe.
 | RM-P2-PACK | D-031 | P2 | RESOLVED | `PACK`/`UNPACK` + packed-char-array WRITE now match probed behavior | M-L |
 | RM-P2-NULL | D-033 | P2 | RESOLVED | `NULL` LSTRING constant + `.LEN` field now match probed behavior | M |
 | RM-P2-ENUMREAD | D-030/D-006 | P2 | RESOLVED | enum READ accepts numeric ordinals by default; symbolic names under `-f symbolic-enum-io` | M |
-| RM-P2-SETCTOR | D-026 | P2 | TODO-FIX | type-prefixed set ctor `COLORS[..]` rejected; unblocks t022 | M |
+| RM-P2-SETCTOR | D-026 | P2 | RESOLVED | type-prefixed set ctor `COLORS[..]` accepted; unblocks t022 | M |
 | RM-P3-READTRAP | D-013 | P3 | TODO-FIX | malformed formatted READ aborts; vintage traps (code 14) | M |
 | RM-P3-ERRSCODE | D-012 | P3 | TODO-FIX | `F.ERRS` returns invented code; vintage = 10 on RESET-missing | S |
 | RM-P4-PUTCODE | D-005 | P4 | RECORD-ONLY | PUT-after-GET: record vintage op-error code 1110 | S |
@@ -271,14 +271,14 @@ modern rejects at typecheck. Items are largely independent.
 ## ANCHOR: RM-P2-SETCTOR
 **Type-prefixed set constructor `COLORS[RED, BLUE]` rejected (parsed as indexing).**
 - PRIORITY: P2 (consider pulling forward — unblocks RM-OPEN-T022)
-- STATUS: TODO-FIX
+- STATUS: RESOLVED
 - D-ENTRY: D-026
 - CLASS: ACCEPT/REJECT (settled on rerun; an earlier run misread vintage `Assumed OUTPUT` warnings as rejection)
 - BASIS: INFERRED (vintage implements the constructor; modern parses it as indexing) — vintage acceptance + output `R` is `[OBSERVED]`
 - VINTAGE: pas1 accepted (2 `Assumed OUTPUT` warnings), linked, ran; `s := COLORS[RED,BLUE]; IF RED IN s ...` printed `R` (and not `G`) `[OBSERVED]`.
-- MODERN-NOW: rejected at typecheck: `Cannot index non-array type SET OF COLOR` `[OBSERVED]`.
-- TOUCH: `parser.py` / `type_checker.py` — the `Cannot index non-array type` rejection at ≈L1605 / L1936. The modern front end reads `TypeName[...]` as array indexing; it needs to recognize the type-prefixed *set constructor* form when the prefix names a set/base type.
-- ACTION: parse/typecheck `<SetType>[ elements ]` as a set constructor (value of the named set type) rather than an index, when the prefix is a set or its base type.
+- MODERN-NOW: compiles and runs `t026.pas`, printing `R` only `[OBSERVED]`.
+- TOUCH: `type_checker.py` / `codegen/exprs.py` — bracket-only `Designator` nodes whose prefix names a declared `SET OF ...` type are reinterpreted semantically as typed set constructors; ordinary array indexing remains unchanged.
+- ACTION: done; typecheck regression covers comma-element constructors and runtime regression `test_typed_set_constructor_comma_elements_runtime_d026` pins the observed probe.
 - EFFORT: M
 - RISK-IF-SKIPPED: programs using type-prefixed set constructors won't compile; **and** RM-OPEN-T022 (READSET delimiter retention) stays blocked, since its redesign feeds a declared `SET OF CHAR` via exactly this construct (`CHARSET['A'..'Z']`). Medium.
 - VERIFY: re-run `t026.pas`; expect `R` only. Then unblock RM-OPEN-T022.

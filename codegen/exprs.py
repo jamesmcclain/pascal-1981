@@ -139,6 +139,11 @@ class ExprsMixin:
         elif isinstance(expr, SetConstructor):
             return self.codegen_set_constructor(expr)
         elif isinstance(expr, Designator):
+            if expr.selectors and all(sel.kind == 'INDEX' for sel in expr.selectors):
+                alias = self.type_aliases.get(expr.name.upper())
+                if isinstance(self.resolve_type_alias(alias), SetType):
+                    return self.codegen_set_constructor(SetConstructor([sel.index_or_field for sel in expr.selectors], expr.name))
+
             symbol = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
             if not symbol:
                 raise CodegenError(f'Undefined variable: {expr.name}')

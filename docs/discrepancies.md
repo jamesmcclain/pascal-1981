@@ -194,11 +194,12 @@ is OUTPUT-DIFF, never ACCEPT/REJECT.
 - **Behavior targeted:** Type-prefixed set constructor acceptance
 - **Class:** ACCEPT/REJECT (settled on rerun; an earlier run misread vintage warnings as rejection)
 - **Vintage (1981):** pas1 accepted with 2 warnings (`Assumed OUTPUT`), linked, ran; output `R` [OBSERVED]
-- **Modern (reimplementation):** rejected at typecheck with `Cannot index non-array type SET OF COLOR` [OBSERVED]
-- **Adjudication:** vintage implements the type-prefixed set constructor; modern parses it as indexing and rejects. [INFERRED]
+- **Modern (at time of probe):** rejected at typecheck with `Cannot index non-array type SET OF COLOR` [OBSERVED]
+- **Modern (now):** compiles, links, and runs; output `R` [OBSERVED]
+- **Adjudication:** vintage implements the type-prefixed set constructor; modern now reinterprets `TypeName[...]` as a typed set constructor when `TypeName` denotes a set type, while preserving ordinary array indexing otherwise. [INFERRED]
 - **Cross-references:** checklist 2.9 (built [INFERRED] — now vintage-confirmed as real syntax).
-- **Severity:** medium (grammar/semantics gap)
-- **Follow-up:** implement the type-prefixed set constructor.
+- **Severity:** resolved (was medium: grammar/semantics gap)
+- **Resolution:** fixed by semantic/codegen recognition of set-type-prefixed bracket expressions; regression `test_typed_set_constructor_comma_elements_runtime_d026` pins the probe.
 
 ## D-028 — CASE no-match under default $RANGECK
 - **Probe:** t028.pas (`n := 5; CASE n OF 1: WRITELN('ONE'); 2: WRITELN('TWO') END; WRITELN('AFTER')`)
