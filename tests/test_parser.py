@@ -120,6 +120,13 @@ class TestParserJudgmentCalls(unittest.TestCase):
         self.assertEqual(expr.type_name, "S")
         self.assertEqual(type(expr.elements[0]).__name__, "RangeExpr")
 
+    def test_value_empty_set_constructor_parses(self):
+        """VALUE declarations accept set constants such as the empty set []."""
+        ast = parse_source("PROGRAM P; TYPE S = SET OF 1..10; VAR x: S; VALUE x := []; BEGIN END.")
+        value = ast.block.decls[-1].value
+        self.assertEqual(type(value).__name__, "SetConstructor")
+        self.assertEqual(value.elements, [])
+
     def test_array_indexing_still_parses_as_designator(self):
         """Plain IDENTIFIER[...] without '..' remains array indexing."""
         ast = parse_source("PROGRAM P; VAR a: ARRAY[1..3] OF INTEGER; x: INTEGER; BEGIN x := a[1] END.")

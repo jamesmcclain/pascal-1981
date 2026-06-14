@@ -126,6 +126,25 @@ END.
         result = typecheck_source("PROGRAM P; VAR f: TEXT; BEGIN WRITELN(OUTPUT, 'ok'); WRITELN(f, 'ok') END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
+    def test_value_empty_set_uses_target_type(self):
+        """An empty set in VALUE is typed by the target SET variable."""
+        src = "PROGRAM P; TYPE C = (Red, Green); S = SET OF C; VAR x: S; VALUE x := []; BEGIN END."
+        result = typecheck_source(src)
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_empty_set_comparison_uses_other_operand_type(self):
+        """Set comparison against [] is typed from the non-empty/designator side."""
+        src = "PROGRAM P; TYPE C = (Red, Green); S = SET OF C; VAR x: S; BEGIN IF x = [] THEN WRITELN(1) END."
+        result = typecheck_source(src)
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_value_set_rejects_wrong_element_type(self):
+        """VALUE set elements must match the target set base type."""
+        src = "PROGRAM P; TYPE C = (Red, Green); S = SET OF C; VAR x: S; VALUE x := ['X']; BEGIN END."
+        result = typecheck_source(src)
+        self.assertFalse(result.success)
+        self.assertIn("Cannot initialize", " ".join(str(e) for e in result.errors))
+
     def test_file_buffer_variable_has_element_type(self):
         """F^ is the current component buffer of FILE OF T; TEXT^ is CHAR."""
         src = "PROGRAM P; VAR f: FILE OF INTEGER; t: TEXT; x: INTEGER; c: CHAR; BEGIN f^ := 42; x := f^; t^ := 'A'; c := t^ END."

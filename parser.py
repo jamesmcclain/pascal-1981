@@ -271,10 +271,28 @@ class Parser:
                 self.pos += 1
             else:
                 self.error('expected = or := in value declaration')
-            value = self.parse_constant()
+            value = self.parse_value_initializer()
             self.expect('SEMICOLON')
             decls.append(ValueDecl(name, value))
         return decls
+
+    def parse_value_initializer(self) -> Expression:
+        """Parse a VALUE-section constant initializer.
+
+        IBM Pascal accepts set constants such as [] in VALUE declarations.
+        Keep this narrower than a general expression so VALUE does not silently
+        admit arbitrary runtime expressions.
+        """
+        if self.current().kind == 'LBRACKET':
+            self.pos += 1
+            elements: List[Expression] = []
+            if self.current().kind != 'RBRACKET':
+                elements.append(self.parse_set_element())
+                while self.match('COMMA'):
+                    elements.append(self.parse_set_element())
+            self.expect('RBRACKET')
+            return SetConstructor(elements)
+        return self.parse_constant()
 
     def parse_label_decl(self) -> LabelDecl:
         self.expect('LABEL')

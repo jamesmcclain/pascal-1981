@@ -258,10 +258,54 @@ whether the pipeline produced the next stage's artifact. Observed idioms:
 - **Severity:** medium (missing WORD conversion support)
 - **Follow-up:** implement WORD assignment/conversion semantics, including WRD and MAXWORD
 
+## D-033 — NULL LSTRING constant length and display
+- **Probe:** t033.pas (`l := NULL; WRITELN(ORD(l.LEN)); WRITELN('<', l, '>')`)
+- **Behavior targeted:** `NULL` LSTRING length and textual form
+- **Class:** ACCEPT/REJECT
+- **Vintage (1981):** compiled with 2 warnings (`Assumed OUTPUT`), linked, and ran; output `0` then `<>` [OBSERVED]
+- **Modern (reimplementation):** rejected at typecheck with `Cannot access field on non-record type LSTRING(5)` [OBSERVED]
+- **Adjudication:** vintage treats `NULL` as a zero-length LSTRING constant and prints it as empty between delimiters [OBSERVED]
+- **Cross-references:** manual ~5731; checklist `NULL` LSTRING note
+- **Severity:** medium (missing NULL/LSTRING semantics)
+- **Follow-up:** implement `NULL` as a zero-length LSTRING constant with the vintage length semantics
+
+## D-034 — F.MODE values after REWRITE and RESET
+- **Probe:** t034.pas (`REWRITE(f); WRITELN(ORD(f.MODE)); ... RESET(f); WRITELN(ORD(f.MODE))`)
+- **Behavior targeted:** FILEMODES layout / observable `F.MODE` values
+- **Class:** AGREE-ACCEPT
+- **Vintage (1981):** compiled with 2 warnings (`Assumed OUTPUT`), linked, and ran; output `0` then `0` [OBSERVED]
+- **Modern (reimplementation):** compiled and ran; output `0` then `0` [OBSERVED]
+- **Adjudication:** both sides agree that `ORD(f.MODE)` is `0` in the REWRITE and RESET states observed here [OBSERVED]
+- **Cross-references:** manual 12-32; FILEMODES layout notes
+- **Severity:** baseline
+- **Follow-up:** none
+
+## D-035 — OTHERWISE clause grammar
+- **Probe:** t035.pas (`CASE n OF ... OTHERWISE WRITELN('OTHER') END; WRITELN('AFTER')`)
+- **Behavior targeted:** CASE `OTHERWISE` arm syntax without a colon
+- **Class:** AGREE-ACCEPT
+- **Vintage (1981):** compiled with 4 warnings (`Assumed OUTPUT`), linked, and ran; output `OTHER` then `AFTER` [OBSERVED]
+- **Modern (reimplementation):** compiled and ran; output `OTHER` then `AFTER` [OBSERVED]
+- **Adjudication:** vintage accepts the bare `OTHERWISE stmt` form; grammar confirmed [OBSERVED]
+- **Cross-references:** checklist/CASE grammar extension; D-028 follow-on
+- **Severity:** baseline
+- **Follow-up:** none
+
+## D-036 — F^ blank at line marker
+- **Probe:** t036.pas (`c := f^; WRITELN(ORD(c)); GET(f); IF EOLN(f) THEN WRITELN('L'); WRITELN(ORD(f^))`)
+- **Behavior targeted:** Presentation of `F^` at a TEXT line marker
+- **Class:** AGREE-ACCEPT
+- **Vintage (1981):** compiled with 4 warnings (`Assumed OUTPUT`), linked, and ran; output `65`, `L`, `32` [OBSERVED]
+- **Modern (reimplementation):** compiled and ran; output `65`, `L`, `32` [OBSERVED]
+- **Adjudication:** vintage confirms the manual's blank-at-EOLN behavior; the `F^` presentation is a space (ORD 32) [OBSERVED]
+- **Cross-references:** checklist TEXT line-marker semantics; manual EOLN/F^ notes
+- **Severity:** baseline
+- **Follow-up:** none
+
 ## D-037 — set literal operations in Lesson5
 - **Probe:** `~/Lesson5.pas`
 - **Behavior targeted:** set construction and set arithmetic using `[]`, `+`, `-`, `*`, and `IN`
-- **Class:** REJECT/ACCEPT
+- **Class:** ACCEPT/REJECT (RESOLVED in the reimplementation)
 - **Vintage (1981):** pas1 accepted with 4 warnings (`Assumed OUTPUT`), pas2 produced `t001.obj`, link produced `t001.exe`, and run output was:
   ```text
   --- Dojo Status Set Training ---
@@ -269,10 +313,12 @@ whether the pipeline produced the next stage's artifact. Observed idioms:
   Success: Poison cleared.
   Status Clear: No active impairments detected.
   ``` [OBSERVED]
-- **Modern (reimplementation):** parser rejected at line 15, column 22 with `expected constant at line 15, column 22 (token LBRACKET '[')` [OBSERVED]
-- **Adjudication:** not consulted; this is a grammar/semantics gap, but which side is intended to be right is [UNVERIFIED]
-- **Cross-references:** set constructor and set-operator support; no prior Lesson5-specific probe
-- **Severity:** high (modern rejects a program the vintage compiler accepts)
+- **Modern (at time of probe):** parser rejected at line 15, column 22 with `expected constant at line 15, column 22 (token LBRACKET '[')` [OBSERVED]
+- **Modern (now):** accepts, compiles, and runs with matching output [OBSERVED]
+- **Adjudication:** vintage accepted set constants in VALUE and set arithmetic in this probe; modern now matches the observed behavior [OBSERVED]
+- **Cross-references:** set constructor and set-operator support; parser/typechecker/codegen VALUE set initializer support
+- **Severity:** resolved (was high: modern rejected a program the vintage compiler accepts)
+- **Resolution:** fixed by allowing constant set constructors in VALUE declarations, context-typing empty sets from the target/peer set type, and emitting constant set VALUE initializers.
 - **Source:**
   ```pascal
   PROGRAM Lesson5;
@@ -326,47 +372,3 @@ whether the pipeline produced the next stage's artifact. Observed idioms:
       END;
   END.
   ```
-
-## D-033 — NULL LSTRING constant length and display
-- **Probe:** t033.pas (`l := NULL; WRITELN(ORD(l.LEN)); WRITELN('<', l, '>')`)
-- **Behavior targeted:** `NULL` LSTRING length and textual form
-- **Class:** ACCEPT/REJECT
-- **Vintage (1981):** compiled with 2 warnings (`Assumed OUTPUT`), linked, and ran; output `0` then `<>` [OBSERVED]
-- **Modern (reimplementation):** rejected at typecheck with `Cannot access field on non-record type LSTRING(5)` [OBSERVED]
-- **Adjudication:** vintage treats `NULL` as a zero-length LSTRING constant and prints it as empty between delimiters [OBSERVED]
-- **Cross-references:** manual ~5731; checklist `NULL` LSTRING note
-- **Severity:** medium (missing NULL/LSTRING semantics)
-- **Follow-up:** implement `NULL` as a zero-length LSTRING constant with the vintage length semantics
-
-## D-034 — F.MODE values after REWRITE and RESET
-- **Probe:** t034.pas (`REWRITE(f); WRITELN(ORD(f.MODE)); ... RESET(f); WRITELN(ORD(f.MODE))`)
-- **Behavior targeted:** FILEMODES layout / observable `F.MODE` values
-- **Class:** AGREE-ACCEPT
-- **Vintage (1981):** compiled with 2 warnings (`Assumed OUTPUT`), linked, and ran; output `0` then `0` [OBSERVED]
-- **Modern (reimplementation):** compiled and ran; output `0` then `0` [OBSERVED]
-- **Adjudication:** both sides agree that `ORD(f.MODE)` is `0` in the REWRITE and RESET states observed here [OBSERVED]
-- **Cross-references:** manual 12-32; FILEMODES layout notes
-- **Severity:** baseline
-- **Follow-up:** none
-
-## D-035 — OTHERWISE clause grammar
-- **Probe:** t035.pas (`CASE n OF ... OTHERWISE WRITELN('OTHER') END; WRITELN('AFTER')`)
-- **Behavior targeted:** CASE `OTHERWISE` arm syntax without a colon
-- **Class:** AGREE-ACCEPT
-- **Vintage (1981):** compiled with 4 warnings (`Assumed OUTPUT`), linked, and ran; output `OTHER` then `AFTER` [OBSERVED]
-- **Modern (reimplementation):** compiled and ran; output `OTHER` then `AFTER` [OBSERVED]
-- **Adjudication:** vintage accepts the bare `OTHERWISE stmt` form; grammar confirmed [OBSERVED]
-- **Cross-references:** checklist/CASE grammar extension; D-028 follow-on
-- **Severity:** baseline
-- **Follow-up:** none
-
-## D-036 — F^ blank at line marker
-- **Probe:** t036.pas (`c := f^; WRITELN(ORD(c)); GET(f); IF EOLN(f) THEN WRITELN('L'); WRITELN(ORD(f^))`)
-- **Behavior targeted:** Presentation of `F^` at a TEXT line marker
-- **Class:** AGREE-ACCEPT
-- **Vintage (1981):** compiled with 4 warnings (`Assumed OUTPUT`), linked, and ran; output `65`, `L`, `32` [OBSERVED]
-- **Modern (reimplementation):** compiled and ran; output `65`, `L`, `32` [OBSERVED]
-- **Adjudication:** vintage confirms the manual's blank-at-EOLN behavior; the `F^` presentation is a space (ORD 32) [OBSERVED]
-- **Cross-references:** checklist TEXT line-marker semantics; manual EOLN/F^ notes
-- **Severity:** baseline
-- **Follow-up:** none
