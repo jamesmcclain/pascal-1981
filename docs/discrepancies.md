@@ -243,11 +243,12 @@ whether the pipeline produced the next stage's artifact. Observed idioms:
 - **Behavior targeted:** PACK/UNPACK semantics and index base
 - **Class:** ACCEPT/REJECT
 - **Vintage (1981):** compiled with 3 warnings (`Assumed OUTPUT`), linked, and ran; output `BCD` then `..BCD.` [OBSERVED]
-- **Modern (reimplementation):** rejected at typecheck with `WRITE argument 1 has unwritable type PACKED ARRAY[1..3] OF CHAR` [OBSERVED]
-- **Adjudication:** vintage accepts PACK/UNPACK and uses the expected index convention; modern rejects the packed-string write path here [OBSERVED]
+- **Modern (at time of probe):** rejected at typecheck with `WRITE argument 1 has unwritable type PACKED ARRAY[1..3] OF CHAR` [OBSERVED]
+- **Modern (now):** compiles and prints `BCD` then `..BCD.` [OBSERVED]
+- **Adjudication:** vintage accepts PACK/UNPACK and uses the expected index convention; modern now matches this packed-char-array WRITE and PACK/UNPACK round trip [OBSERVED]
 - **Cross-references:** checklist 4.9; manual PACK/UNPACK index notes
-- **Severity:** medium (missing PACK/UNPACK support / packed-array write gap)
-- **Follow-up:** implement PACK/UNPACK and packed-char-array write support
+- **Severity:** resolved (was medium: missing PACK/UNPACK support / packed-array write gap)
+- **Resolution:** fixed by existing PACK/UNPACK lowering and packed-char-array WRITE support; regression `test_pack_unpack_probe_d031_char_round_trip` pins the probed behavior.
 
 ## D-032 — WORD / MAXWORD / WRD edges
 - **Probe:** t032.pas (`WRITELN(MAXWORD); w := 40000; WRITELN(w); w := WRD(-1); WRITELN(w)`)

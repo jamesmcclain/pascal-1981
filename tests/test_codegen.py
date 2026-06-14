@@ -1561,6 +1561,27 @@ END."""
         self.assertEqual(lines[0], "40")
         self.assertEqual(lines[1], "999")
 
+    @requires_exe
+    def test_pack_unpack_probe_d031_char_round_trip(self):
+        """D-031: PACK/UNPACK index convention and packed-char-array WRITE."""
+        src = """PROGRAM P;
+VAR a: ARRAY [1..6] OF CHAR;
+    z: PACKED ARRAY [1..3] OF CHAR;
+    b: ARRAY [1..6] OF CHAR;
+    i: INTEGER;
+BEGIN
+  FOR i := 1 TO 6 DO a[i] := CHR(ORD('A') + i - 1);
+  PACK(a, 2, z);
+  WRITELN(z);
+  FOR i := 1 TO 6 DO b[i] := '.';
+  UNPACK(z, b, 3);
+  FOR i := 1 TO 6 DO WRITE(b[i]);
+  WRITELN
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "BCD\n..BCD.\n")
+
 
 class TestArrayLowerBoundIndexing(unittest.TestCase):
     """Regression tests: Pascal array indices are relative to the declared

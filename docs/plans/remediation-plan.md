@@ -73,7 +73,7 @@ OPEN = re-probe.
 | RM-P1-ENUMWRITE | D-019 | P1 | RESOLVED | enum WRITE is ordinal by default; symbolic names require `-f symbolic-enum-io` | S |
 | RM-DEC-ENUMIO | D-019/D-006/D-030 | DEC | DECIDED | faithful default (ordinal write + numeric read); one `symbolic-enum-io` flag gates name write + name read | — |
 | RM-P2-WORD | D-032 | P2 | RESOLVED | WORD assign/convert (`WRD`,`MAXWORD`) now matches probed vintage edges | M |
-| RM-P2-PACK | D-031 | P2 | TODO-FIX | `PACK`/`UNPACK` + packed-char-array WRITE rejected | M-L |
+| RM-P2-PACK | D-031 | P2 | RESOLVED | `PACK`/`UNPACK` + packed-char-array WRITE now match probed behavior | M-L |
 | RM-P2-NULL | D-033 | P2 | TODO-FIX | `NULL` LSTRING constant + `.LEN` field rejected | M |
 | RM-P2-ENUMREAD | D-030/D-006 | P2 | RESOLVED | enum READ accepts numeric ordinals by default; symbolic names under `-f symbolic-enum-io` | M |
 | RM-P2-SETCTOR | D-026 | P2 | TODO-FIX | type-prefixed set ctor `COLORS[..]` rejected; unblocks t022 | M |
@@ -219,14 +219,14 @@ modern rejects at typecheck. Items are largely independent.
 ## ANCHOR: RM-P2-PACK
 **`PACK`/`UNPACK` and packed-char-array WRITE rejected.**
 - PRIORITY: P2
-- STATUS: TODO-FIX
+- STATUS: RESOLVED
 - D-ENTRY: D-031
 - CLASS: ACCEPT/REJECT
 - BASIS: OBSERVED (vintage output `BCD` then `..BCD.`)
 - VINTAGE: compiled (3 `Assumed OUTPUT` warnings), linked, ran; `PACK(a,2,z)` then `WRITELN(z)` → `BCD`; `UNPACK(z,b,3)` round-trip → `..BCD.`; uses the expected index convention `[OBSERVED]`.
-- MODERN-NOW: rejected at typecheck: `WRITE argument 1 has unwritable type PACKED ARRAY[1..3] OF CHAR` `[OBSERVED]`.
-- TOUCH: `type_checker.py` — `PACK`/`UNPACK` arg checks at ≈L929-933 and `_check_pack_args` at ≈L1208+; the packed-array WRITE rejection at ≈L1080 (`unwritable type`). Two sub-gaps: (1) `PACK`/`UNPACK` semantics + index base, (2) writing a packed char array as a string.
-- ACTION: implement `PACK`/`UNPACK` lowering with the vintage index convention (confirmed by `BCD` / `..BCD.`), and allow a `PACKED ARRAY[..] OF CHAR` as a writable string in the WRITE path.
+- MODERN-NOW: compiles and prints `BCD` then `..BCD.` for the D-031 probe `[OBSERVED]`.
+- TOUCH: already resolved by existing support: `type_checker.py` validates `PACK`/`UNPACK` arguments, `codegen/stmts.py` lowers calls through runtime helpers, and the WRITE path treats `PACKED ARRAY[..] OF CHAR` as writable string data.
+- ACTION: done; added regression `test_pack_unpack_probe_d031_char_round_trip` to pin PACK start index, UNPACK start index, and packed-char-array WRITE.
 - EFFORT: M-L (two distinct pieces; biggest P2 item)
 - RISK-IF-SKIPPED: programs using `PACK`/`UNPACK` or printing packed char arrays won't compile. Medium (loud).
 - VERIFY: re-run `t031.pas`; expect `BCD` then `..BCD.`.
