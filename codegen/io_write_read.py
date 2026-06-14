@@ -120,13 +120,14 @@ class IoWriteReadMixin:
                 val = self.builder.select(is_true, true_s, false_s)
                 pas_ty = None
 
-            if isinstance(pas_ty, (StringType, LStringType, ASTLStringType)):
+            is_str_like, str_len, is_lstring_like = self.get_string_type_info(pas_ty)
+            if isinstance(pas_ty, (StringType, LStringType, ASTLStringType)) or is_str_like:
                 zero = ir.Constant(ir.IntType(32), 0)
-                if isinstance(pas_ty, (LStringType, ASTLStringType)):
+                if isinstance(pas_ty, (LStringType, ASTLStringType)) or is_lstring_like:
                     length = self.builder.zext(self.builder.load(self.builder.gep(val, [zero, zero])), ir.IntType(32))
                     val = self.builder.gep(val, [zero, ir.Constant(ir.IntType(32), 1)])
                 else:
-                    length = ir.Constant(ir.IntType(32), getattr(pas_ty, 'max_len', 256))
+                    length = ir.Constant(ir.IntType(32), str_len)
                     val = self.builder.gep(val, [zero, zero])
                 if width is None and precision is None:
                     fmt_parts.append('%.*s')

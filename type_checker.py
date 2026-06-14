@@ -30,11 +30,11 @@ from ast_nodes import (RepeatStmt, ReturnStmt, RetypeExpr, Selector, SetConstruc
 from ast_nodes import SetType as ASTSetType
 from ast_nodes import SizeofExpr, Statement, StringLiteral
 from ast_nodes import SubrangeType as ASTSubrangeType
-from ast_nodes import (TypeDecl, UnaryOp, UpperExpr, UseClause, VarDecl, WhileStmt, WriteArg)
+from ast_nodes import (TypeDecl, UnaryOp, UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WriteArg)
 from builtins_registry import register_builtins
 from symbol_table import SourceLocation, Symbol, SymbolTable
 from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, EnumType, FileType, FunctionType, LStringType, PointerType, ProcedureType,
-                         RecordType, SetType, StringType, Type, binary_op_result_type, can_assign, unary_op_result_type)
+                         RecordType, SetType, StringType, Type, binary_op_result_type, can_assign, is_fixed_char_array, unary_op_result_type)
 
 
 @dataclass
@@ -522,6 +522,35 @@ class PascalTypeChecker(TypeChecker):
             self.check_func_decl(decl)
         elif isinstance(decl, ProcDecl):
             self.check_proc_decl(decl)
+        elif isinstance(decl, ValueDecl):
+            self.check_value_decl(decl)
+
+    def check_value_decl(self, decl: ValueDecl) -> None:
+        """Type check a VALUE-section initializer."""
+        sym = self.symbol_table.lookup(decl.name)
+        if not sym:
+            self.error(f"Undefined variable in VALUE section: {decl.name}", decl)
+            return
+        if sym.kind != 'var':
+            self.error(f"VALUE target '{decl.name}' is not a variable", decl)
+            return
+        if not self.is_constant_set_element(decl.value):
+            self.error("VALUE initializer must be constant", decl)
+            return
+        value_type = self.infer_expression_type(decl.value)
+        if value_type and not can_assign(value_type, sym.type):
+            self.error(f"Cannot initialize {sym.type} with {value_type} in VALUE section", decl)
+
+    def _can_pass_value_argument(self, arg_type: Type, param_type: Type) -> bool:
+        """Assignment compatibility for by-value parameters.
+
+        STRING without an explicit bound is represented in the builtin table as
+        STRING(255); use capacity semantics for that super-array-like formal,
+        while ordinary assignment to STRING(n) remains exact-length.
+        """
+        if isinstance(param_type, StringType) and param_type.max_len == 255 and isinstance(arg_type, (StringType, LStringType)):
+            return arg_type.max_len <= param_type.max_len
+        return can_assign(arg_type, param_type)
 
     def check_var_decl(self, decl: VarDecl) -> None:
         """Type check a variable declaration."""
@@ -1016,7 +1045,7 @@ class PascalTypeChecker(TypeChecker):
                 if stmt.name.upper() not in ['WRITELN', 'WRITE', 'READLN'] and arg_type:
                     if i < len(sym.type.params):
                         _, param_type = sym.type.params[i]
-                        if not can_assign(arg_type, param_type):
+                        if not self._can_pass_value_argument(arg_type, param_type):
                             self.error(f"Argument {i+1} type mismatch: expected {param_type}, got {arg_type}", stmt)
             return
 
@@ -1168,7 +1197,7 @@ class PascalTypeChecker(TypeChecker):
         # ordinal by default and symbolic under -f symbolic-enum-io; BOOLEAN is
         # always name-based on output.
         wide = (type(INTEGER32_TYPE), type(INTEGER64_TYPE)) if self.feature_enabled('wide-integers') else ()
-        return isinstance(t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), EnumType, StringType, LStringType) + wide)
+        return isinstance(t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), EnumType, StringType, LStringType) + wide) or is_fixed_char_array(t)
 
     def _is_readable_type(self, t: Type) -> bool:
         # READ remains narrower than WRITE: BOOLEAN input is unsupported, but
@@ -1739,7 +1768,7 @@ class PascalTypeChecker(TypeChecker):
                     if expr.args:
                         for i, (arg, (param_name, param_type)) in enumerate(zip(expr.args, sym.type.params)):
                             arg_type = self.infer_expression_type(arg)
-                            if arg_type and not can_assign(arg_type, param_type):
+                            if arg_type and not self._can_pass_value_argument(arg_type, param_type):
                                 self.error(f"Argument {i+1} type mismatch: expected {param_type}, got {arg_type}", expr)
                     return sym.type.return_type
                 return None
@@ -1938,7 +1967,7 @@ class PascalTypeChecker(TypeChecker):
                 if expr.args:
                     for i, (arg, (param_name, param_type)) in enumerate(zip(expr.args, sym.type.params)):
                         arg_type = self.infer_expression_type(arg)
-                        if arg_type and not can_assign(arg_type, param_type):
+                        if arg_type and not self._can_pass_value_argument(arg_type, param_type):
                             self.error(f"Argument {i+1} type mismatch: expected {param_type}, got {arg_type}", expr)
                 return sym.type.return_type
             return None

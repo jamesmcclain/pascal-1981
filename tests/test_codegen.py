@@ -111,6 +111,17 @@ class TestCodegenIR(unittest.TestCase):
         # No per-file heap allocation.
         self.assertNotIn('@"pas_file_create"', ir)
 
+    def test_codegen_error_imported_for_expr_failures(self):
+        """Codegen expression errors should raise CodegenError, not NameError."""
+        from codegen import CodegenError
+        from codegen_llvm import compile_to_llvm
+
+        src = ("PROGRAM P; VAR i: INTEGER; "
+               "BEGIN FOR i := 1 TO 1 DO IF MissingName = 1 THEN WRITELN(i) END.")
+        ast = parse_source(src)
+        with self.assertRaisesRegex(CodegenError, "Undefined variable: MissingName"):
+            compile_to_llvm(ast)
+
     def test_simple_writeln(self):
         """Simple WRITELN generates valid IR."""
         src = "PROGRAM P; BEGIN WRITELN(42) END."
@@ -191,7 +202,7 @@ class TestCodegenIR(unittest.TestCase):
     def test_predeclared_abort_generates_abort_call(self):
         """ABORT should lower to the runtime abort handler, carrying the message,
         error code, and status (manual: CONST STRING, WORD, WORD)."""
-        ir = compile_to_ir("PROGRAM P; VAR s: STRING(10); BEGIN s := 'oops'; ABORT(s, WRD(3), WRD(7)) END.")
+        ir = compile_to_ir("PROGRAM P; VAR s: STRING(4); BEGIN s := 'oops'; ABORT(s, WRD(3), WRD(7)) END.")
         self.assertIn("pabort", ir.lower())
         # void pabort(i8*, i32, i16, i16): message pointer + length + two words.
         self.assertIn("call void @\"pabort\"", ir)
@@ -986,6 +997,40 @@ END."""
         self.assertEqual(returncode, 0)
         self.assertEqual(stdout.strip(), "15")
 
+    def test_packed_char_array_string_assignment_and_write_runtime(self):
+        """PACKED ARRAY[..] OF CHAR accepts string literal assignment and WRITE."""
+        src = """
+        PROGRAM P;
+        TYPE NAME = PACKED ARRAY[1..10] OF CHAR;
+        VAR s: NAME;
+        BEGIN
+            s := 'Mr. Karate';
+            WRITELN(s)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "Mr. Karate")
+
+    def test_lesson1b_packed_char_array_runtime(self):
+        """Lesson1b-style packed char array string storage matches vintage output."""
+        src = """
+        PROGRAM Lesson1b;
+        TYPE NAME = PACKED ARRAY[1..10] OF CHAR;
+        VAR TrainerName : NAME; FighterSymbol : CHAR; TrainingRounds : INTEGER;
+        BEGIN
+            TrainerName := 'Mr. Karate';
+            FighterSymbol := 'K';
+            TrainingRounds := 10;
+            WRITELN('Coach: Welcome to the dojo, ', TrainerName);
+            WRITELN('Symbol: ', FighterSymbol);
+            WRITELN('Rounds Scheduled: ', TrainingRounds:2)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout, "Coach: Welcome to the dojo, Mr. Karate\nSymbol: K\nRounds Scheduled: 10\n")
+
     def test_string_concat_runtime(self):
         """CONCAT appends a string to an LSTRING."""
         src = """
@@ -1007,7 +1052,7 @@ END."""
         src = """
         PROGRAM P;
         VAR
-            src_str: STRING(10);
+            src_str: STRING(6);
             dest_lstr: LSTRING(20);
         BEGIN
             src_str := 'pascal';
@@ -1027,7 +1072,7 @@ END."""
             src_str: STRING(5);
             dest_str: STRING(10);
         BEGIN
-            src_str := 'abc';
+            src_str := 'abc  ';
             COPYSTR(src_str, dest_str);
             WRITELN(dest_str)
         END.
@@ -1940,3 +1985,39 @@ class TestRuntimeCheckFlags(unittest.TestCase):
         ir_on = self._ir(self.ADD.replace('BEGIN', 'BEGIN {$MATHCK-}'),
                          force_flags={'MATHCK': True})
         self.assertIn('with.overflow', ir_on)
+
+
+@requires_llvm
+class TestValueInitializerCodegen(unittest.TestCase):
+    """VALUE-section runtime initialization."""
+
+    @requires_exe
+    def test_value_initializes_scalars_runtime(self):
+        src = ("PROGRAM P; VAR i: INTEGER; r: REAL; c: CHAR; "
+               "VALUE i := 123; r := 4.5; c := 'K'; "
+               "BEGIN WRITELN(i:1); WRITELN(r:4:1); WRITELN(c) END.")
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "123\n 4.5\nK\n")
+
+    @requires_exe
+    def test_value_initializes_string_runtime(self):
+        src = "PROGRAM P; VAR s: STRING(10); VALUE s := 'Mr. Karate'; BEGIN WRITELN(s) END."
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "Mr. Karate\n")
+
+    @requires_exe
+    def test_value_initializes_lstring_runtime(self):
+        src = "PROGRAM P; VAR s: LSTRING(14); VALUE s := 'Mr. Karate'; BEGIN WRITELN(s) END."
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "Mr. Karate\n")
+
+    @requires_exe
+    def test_value_initializes_packed_char_array_runtime(self):
+        src = ("PROGRAM P; TYPE NAME = PACKED ARRAY[1..10] OF CHAR; "
+               "VAR s: NAME; VALUE s := 'Mr. Karate'; BEGIN WRITELN(s) END.")
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "Mr. Karate\n")

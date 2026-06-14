@@ -15,6 +15,8 @@ from llvmlite.ir import IRBuilder
 
 from ast_nodes import *
 from type_system import INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, WORD_TYPE
+
+from .base import CodegenError
 from type_system import LStringType as ResolvedLStringType
 from type_system import StringType as ResolvedStringType
 
@@ -131,6 +133,8 @@ class ExprsMixin:
                 return symbol.llvm_value  # Return pointer to aggregate
             elif isinstance(symbol.type_expr, NamedType) and symbol.type_expr.name.upper() in {'STRING', 'LSTRING'}:
                 return symbol.llvm_value  # Return pointer to aggregate
+            elif isinstance(symbol.type_expr, NamedType) and isinstance(self.resolve_type_alias(symbol.type_expr), ArrayType):
+                return symbol.llvm_value  # Return pointer to aggregate alias
             return self.builder.load(symbol.llvm_value)
         elif isinstance(expr, SetConstructor):
             return self.codegen_set_constructor(expr)

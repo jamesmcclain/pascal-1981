@@ -15,7 +15,7 @@ from llvmlite.ir import IRBuilder
 
 from ast_nodes import *
 
-from .base import Scope
+from .base import CodegenError, Scope
 
 
 class DeclsMixin:
@@ -145,8 +145,7 @@ class DeclsMixin:
         elif isinstance(decl, TypeDecl):
             self.codegen_type_decl(decl)
         elif isinstance(decl, ValueDecl):
-            # VALUE declarations don't generate code
-            pass
+            self.codegen_value_decl(decl)
         elif isinstance(decl, LabelDecl):
             # Label declarations don't generate code
             pass
@@ -174,6 +173,47 @@ class DeclsMixin:
                 # Remember which enum each member belongs to so WRITE can print
                 # the symbolic name of a bare member literal (checklist 9.8).
                 self.enum_member_names[member.upper()] = list(decl.type_expr.values)
+
+    def _decode_string_literal(self, expr: StringLiteral) -> str:
+        text = expr.value
+        if text.startswith("'") and text.endswith("'"):
+            text = text[1:-1]
+        return text.replace("''", "'")
+
+    def _value_initializer_constant(self, expr: Expression, type_expr: Type) -> ir.Constant:
+        """Build an LLVM constant for a VALUE-section initializer."""
+        llvm_type = self.llvm_type(type_expr)
+        is_str, max_len, is_lstring = self.get_string_type_info(type_expr)
+        if is_str and isinstance(expr, StringLiteral):
+            data = self._decode_string_literal(expr).encode('latin1')
+            if is_lstring:
+                raw = bytearray(max_len + 1)
+                raw[0] = len(data)
+                raw[1:1 + len(data)] = data
+                return ir.Constant(llvm_type, raw)
+            raw = bytearray(data)
+            if len(raw) < max_len:
+                raw.extend(b' ' * (max_len - len(raw)))
+            return ir.Constant(llvm_type, raw[:max_len])
+
+        value = self.eval_const_expr(expr)
+        if isinstance(llvm_type, ir.IntType):
+            return ir.Constant(llvm_type, int(value))
+        if isinstance(llvm_type, (ir.FloatType, ir.DoubleType)):
+            return ir.Constant(llvm_type, float(value))
+        raise CodegenError(f'Unsupported VALUE initializer for {type(type_expr).__name__}')
+
+    def codegen_value_decl(self, decl: ValueDecl) -> None:
+        """Apply a VALUE-section initializer to static/global storage."""
+        sym = self.scope.lookup(decl.name)
+        if not sym:
+            raise CodegenError(f'Undefined variable in VALUE section: {decl.name}')
+        slot = sym.llvm_value
+        init = self._value_initializer_constant(decl.value, sym.type_expr)
+        if isinstance(slot, ir.GlobalVariable):
+            slot.initializer = init
+            return
+        raise CodegenError(f'VALUE initializer for non-static variable not supported: {decl.name}')
 
     def _initck_sentinel(self, decl: VarDecl, llvm_type) -> Optional[ir.Constant]:
         """$INITCK sentinel constant for a scalar variable, or None.
