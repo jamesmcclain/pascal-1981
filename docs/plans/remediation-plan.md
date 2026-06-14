@@ -76,7 +76,7 @@ OPEN = re-probe.
 | RM-P2-PACK | D-031 | P2 | RESOLVED | `PACK`/`UNPACK` + packed-char-array WRITE now match probed behavior | M-L |
 | RM-P2-NULL | D-033 | P2 | RESOLVED | `NULL` LSTRING constant + `.LEN` field now match probed behavior | M |
 | RM-P2-ENUMREAD | D-030/D-006 | P2 | RESOLVED | enum READ accepts numeric ordinals by default; symbolic names under `-f symbolic-enum-io` | M |
-| RM-P2-SETCTOR | D-026 | P2 | RESOLVED | type-prefixed set ctor `COLORS[..]` accepted; unblocks t022 | M |
+| RM-P2-SETCTOR | D-026 | P2 | RESOLVED | type-prefixed set ctor `COLORS[..]` accepted; t022 modern side now also accepts bare `['A'..'Z']` | M |
 | RM-P3-READTRAP | D-013 | P3 | RESOLVED | malformed formatted READ traps through `F.ERRS=14` when `F.TRAP` is set | M |
 | RM-P3-ERRSCODE | D-012 | P3 | RESOLVED | trapped RESET-missing now returns observed vintage `F.ERRS=10` | S |
 | RM-P4-PUTCODE | D-005 | P4 | RECORD-ONLY | PUT-after-GET: record vintage op-error code 1110 | S |
@@ -90,14 +90,16 @@ OPEN = re-probe.
 | RM-DEC-INTWIDTH | D-014/16/17 | DEC | DECIDED (16-bit fork, implemented) | INTEGER now 16-bit; INTEGER32/64 added behind `-f wide-integers`; D-014/16/17 resolved | done |
 | RM-NOACTION | baselines | — | NO-ACTION | AGREE-ACCEPT baselines only (the D-014/16/17 width trio is now RESOLVED, see RM-DEC-INTWIDTH); don't fix piecemeal | — |
 | RM-OPEN-T021 | t021 | OPEN | INVESTIGATE | `ORD(EOL)` verdict `[UNVERIFIED]`; rerun | S |
-| RM-OPEN-T022 | t022 | OPEN | INVESTIGATE | `READSET` delimiter retention; redesign (needs RM-P2-SETCTOR) | M |
+| RM-OPEN-T022 | D-022 | P2 | RESOLVED | READSET inline set-literal rejected by default (vintage); `-f readset-set-literal` accepts | S |
+| RM-OPEN-T011 | D-011 | P1 | RESOLVED | STRING `::N` ignored by default (vintage `ABCDE`); `-f string-precision` truncates (`ABC`) | S |
 
 Sequencing note: P0 → P1 are cheap, high-value, and should land first. Within
 P2 the items are largely independent and may be resequenced by team preference;
 the recommended order is most-fundamental-type-first (WORD, PACK, NULL/LSTRING)
-ahead of the narrower input/grammar gaps (enum READ, set ctor), **except** that
-`RM-P2-SETCTOR` (D-026) is the prerequisite for closing `RM-OPEN-T022` and may
-be pulled forward if that open item matters. `RM-XCUT-IOERR` landed with
+ahead of the narrower input/grammar gaps (enum READ, set ctor). `RM-P2-SETCTOR`
+(D-026) has landed; it incidentally settled the modern side of `RM-OPEN-T022`
+(modern now accepts the bare `['A'..'Z']` READSET literal), leaving only a
+vintage rerun there. `RM-XCUT-IOERR` landed with
 D-012/D-013 for the observed program-visible `F.ERRS` values.
 
 Two standing design decisions (section D) gate other work. `RM-DEC-ENUMIO` must
@@ -110,7 +112,9 @@ independently; whichever fork is chosen sets both. `RM-DEC-INTWIDTH` has been
 NO-ACTION). The feature-flag mechanism introduced for that work (`features.py`,
 exposed via `-f`/`--feature`, `--dialect`, and `--list-features`) is the
 established pattern for gating any future "extends beyond vintage" behavior; new
-extension items should reuse it rather than inventing a parallel mechanism.
+extension items should reuse it rather than inventing a parallel mechanism. As of
+this revision four features are registered: `wide-integers`, `symbolic-enum-io`,
+`string-precision` (D-011), and `readset-set-literal` (D-022).
 
 ---
 
@@ -163,14 +167,14 @@ extension items should reuse it rather than inventing a parallel mechanism.
 - BASIS: OBSERVED (vintage data-format error code 1123)
 - VINTAGE: compiled and linked, then failed at runtime: `? Error: Data format error in file USER` / `Error Code 1123` `[OBSERVED]`.
 - MODERN-NOW: rejects `WRITELN(x::4)` at typecheck with `WRITE precision (::N) is not valid for INTEGER-compatible values` `[OBSERVED]`.
-- TOUCH: `type_checker.py` → `_check_write_args` rejects precision on INTEGER-compatible WRITE values. Contrast: REAL `::N` IS still honored by `codegen/io_write_read.py`; STRING `::N` remains accepted-and-ignored on BOTH sides (t011, AGREE-ACCEPT) so string stays intentionally lenient.
+- TOUCH: `type_checker.py` → `_check_write_args` rejects precision on INTEGER-compatible WRITE values. Contrast: REAL `::N` IS still honored by `codegen/io_write_read.py`. STRING `::N` is accepted but **ignored by default** (faithful — vintage prints the whole string; `s::3` on `'ABCDE'` → `ABCDE`), with truncation available under `-f string-precision`; see D-011 / RM-OPEN-T011. So each type's `::N` is now settled: REAL honored (D-002), INTEGER rejected (D-010), STRING ignored (D-011).
 - DECISION: decided — match vintage by rejecting integer `::N`. The vintage compiler reports a runtime data-format error (1123); modern deliberately rejects at compile time as the remediation plan allowed, so no exact runtime-code fidelity is claimed.
 - ACTION: done.
 - EFFORT: S
 - RISK-IF-SKIPPED: a ported program using integer `::N` that the vintage runtime would have rejected instead runs silently on modern — masks a real defect in the ported source. Medium (labeled high in the log for the accept-vs-reject fidelity gap).
 - VERIFY: re-run `t010.pas`. If 'match' chosen: modern must error (runtime 1123-equivalent, or a documented compile error). If 'keep': record the extension and leave t010 as a documented OUTPUT-DIFF.
 - UPGRADES: checklist 8.3 / I/O formatting; EBNF `io_data_param`.
-- XREF: D-010; D-002 (REAL `::N`); t011 (STRING `::N`, AGREE-ACCEPT).
+- XREF: D-010; D-002 (REAL `::N`); D-011 / RM-OPEN-T011 (STRING `::N` — ignored by default, truncation behind `-f string-precision`).
 
 ## ANCHOR: RM-P1-ENUMWRITE
 **Enum WRITE prints the symbolic name; vintage prints the ordinal.**
@@ -270,7 +274,7 @@ modern rejects at typecheck. Items are largely independent.
 
 ## ANCHOR: RM-P2-SETCTOR
 **Type-prefixed set constructor `COLORS[RED, BLUE]` rejected (parsed as indexing).**
-- PRIORITY: P2 (consider pulling forward — unblocks RM-OPEN-T022)
+- PRIORITY: P2 (now landed; historically considered for pull-forward as it settled the t022 modern side)
 - STATUS: RESOLVED
 - D-ENTRY: D-026
 - CLASS: ACCEPT/REJECT (settled on rerun; an earlier run misread vintage `Assumed OUTPUT` warnings as rejection)
@@ -280,8 +284,8 @@ modern rejects at typecheck. Items are largely independent.
 - TOUCH: `type_checker.py` / `codegen/exprs.py` — bracket-only `Designator` nodes whose prefix names a declared `SET OF ...` type are reinterpreted semantically as typed set constructors; ordinary array indexing remains unchanged.
 - ACTION: done; typecheck regression covers comma-element constructors and runtime regression `test_typed_set_constructor_comma_elements_runtime_d026` pins the observed probe.
 - EFFORT: M
-- RISK-IF-SKIPPED: programs using type-prefixed set constructors won't compile; **and** RM-OPEN-T022 (READSET delimiter retention) stays blocked, since its redesign feeds a declared `SET OF CHAR` via exactly this construct (`CHARSET['A'..'Z']`). Medium.
-- VERIFY: re-run `t026.pas`; expect `R` only. Then unblock RM-OPEN-T022.
+- RISK-IF-SKIPPED: programs using type-prefixed set constructors won't compile. (Historically this also gated RM-OPEN-T022, but that is now moot: with the typed-set work landed, modern accepts the bare `['A'..'Z']` READSET literal directly, so the t022 modern side is settled and only a vintage rerun remains.) Medium.
+- VERIFY: re-run `t026.pas`; expect `R` only. (t022's modern side is already confirmed accepting bare `['A'..'Z']`; see RM-OPEN-T022 for the remaining vintage rerun.)
 - UPGRADES: checklist 2.9 (currently `[INFERRED]` → vintage-confirmed real syntax).
 - XREF: D-026; RM-OPEN-T022.
 
@@ -516,12 +520,18 @@ implementing the items they govern.
 ## ANCHOR: RM-NOACTION
 - STATUS: NO-ACTION
 - **D-014 / D-016 / D-017 — INTEGER width trio: RESOLVED, no longer NO-ACTION.** These were formerly listed here as expected 32-bit width adaptations. `RM-DEC-INTWIDTH` has since taken the 16-bit fork: `INTEGER` is now signed 16-bit, so the sentinel (`-32768`), the `$MATHCK+` overflow trap at `32767+1`, and the `$MATHCK-` wrap to `-32768` all agree with vintage. See the resolved entries in `docs/discrepancies.md` and `RM-DEC-INTWIDTH`. They are kept out of the NO-ACTION list deliberately — do not re-add them as "expected differences."
-- **Baselines (AGREE-ACCEPT, no divergence):** t001 (REAL default format ` 1.2345600E+02`), t007 (STRING(3) READ stop-at-fill), t008 (STRING(5) blank-pad + marker), t009 (LSTRING(3) whole-line consume + truncate), t011 (STRING `::N` ignored on both sides), t018 (RESET implicit GET / lazy-fill), t023 (temp-file round-trip), t025 (CLOSE-marker), t027 (RETYPE round-trip), **D-034** (`F.MODE` = 0/0 after REWRITE/RESET), **D-035** (bare `OTHERWISE stmt` grammar accepted), **D-036** (`F^` is blank ORD 32 at EOLN). These are evidence-upgrade confirmations only — no code change.
+- **Baselines (AGREE-ACCEPT, no divergence):** t001 (REAL default format ` 1.2345600E+02`), t007 (STRING(3) READ stop-at-fill), t008 (STRING(5) blank-pad + marker), t009 (LSTRING(3) whole-line consume + truncate), t018 (RESET implicit GET / lazy-fill), t023 (temp-file round-trip), t025 (CLOSE-marker), t027 (RETYPE round-trip), **D-034** (`F.MODE` = 0/0 after REWRITE/RESET), **D-035** (bare `OTHERWISE stmt` grammar accepted), **D-036** (`F^` is blank ORD 32 at EOLN). These are evidence-upgrade confirmations only — no code change. **(t011 STRING `::N` is NOT a baseline — vintage ignores the precision but modern had been truncating; resolved as D-011 / RM-OPEN-T011, default now ignores `::N`, truncation behind `-f string-precision`.)**
 - WHY LISTED: so a future agent does not mistake a confirmed agreement for an open bug. (The INTEGER width is no longer an open question; it was settled in `RM-DEC-INTWIDTH` and the deviation now lives only behind the explicit `INTEGER32`/`INTEGER64` extension types under `-f wide-integers`.)
 
 ---
 
 # OPEN — re-probe / redesign (investigation, not remediation)
+
+> Note: RM-OPEN-T011 (D-011) and RM-OPEN-T022 (D-022) have since been **RESOLVED**
+> (fresh vintage ground truth obtained; default behavior now matches vintage, with
+> the prior extended behavior gated behind a feature flag). Their full entries are
+> retained below under their original anchors with `STATUS: RESOLVED`. RM-OPEN-T021
+> remains the only genuinely open investigation.
 
 ## ANCHOR: RM-OPEN-T021
 **`WRITELN(ORD(EOL))` — vintage verdict `[UNVERIFIED]`; rerun required.**
@@ -534,13 +544,36 @@ implementing the items they govern.
 - XREF: t021 open item; checklist EOL (≈L1032).
 
 ## ANCHOR: RM-OPEN-T022
-**`READSET` delimiter retention — `[UNVERIFIED]`; redesign (blocked on RM-P2-SETCTOR).**
-- STATUS: INVESTIGATE (blocked: needs D-026 implemented)
-- BASIS: UNVERIFIED — original `READSET(f, l, ['A'..'Z'])` probe: vintage pas1 `Character Set Expected` `[OBSERVED]`; modern also rejected at typecheck but the recorded diagnostic was a copy-paste from t026 and was discarded. The delimiter-retention question itself is unanswered.
-- ACTION: redesign the probe to pass a declared `SET OF CHAR` value — via the type-prefixed constructor (`CHARSET['A'..'Z']`, which becomes valid once RM-P2-SETCTOR / D-026 lands) or a set variable — then run it differentially to settle delimiter retention. Note t029 already settled READSET delimiter retention *with a declared set variable* (`ABC` / `,`, AGREE-ACCEPT); this redesign extends that to the constructor form.
-- EFFORT: M (redesign + run; gated on D-026)
-- VERIFY: a clean differential run answering the delimiter-retention question.
-- XREF: t022 open item; D-026 / RM-P2-SETCTOR; t029 (READSET with set variable, AGREE-ACCEPT).
+**`READSET` inline set-literal — RESOLVED: default rejects (vintage), extension flag accepts.**
+- STATUS: RESOLVED
+- D-ENTRY: D-022
+- CLASS: ACCEPT/REJECT
+- BASIS: OBSERVED — vintage pas1 rejects `READSET(f, l, ['A'..'Z'])` at line 18 with `^243 Character Set Expected` (no `.obj`, pas2/link not run); modern previously accepted and ran (`ABC` / `,`).
+- VINTAGE: rejects the inline set-constructor literal as the READSET set argument; requires a declared `SET OF CHAR` value `[OBSERVED]`. (t029 confirms the set-variable form is AGREE-ACCEPT with the comma retained.)
+- MODERN-NOW: default faithful mode rejects the inline literal at typecheck (`Character Set Expected: READSET set argument must be a declared SET OF CHAR value ...`), matching vintage. The accept-and-run behavior is the opt-in `-f readset-set-literal` extension (output `ABC` / `,`). `[OBSERVED]`
+- TOUCH: `type_checker.py` → `_check_readset_args` rejects an untyped `SetConstructor` (`type_name is None`) by default; accepts it only under `readset-set-literal`. Set variables and type-prefixed constructors (`CHARSET['A'..'Z']`, D-026) are unaffected.
+- ACTION: done. Feature `readset-set-literal` registered in `features.py` (fourth extension after `wide-integers`, `symbolic-enum-io`, `string-precision`).
+- EFFORT: S
+- RISK-IF-SKIPPED: closed — modern no longer accepts a READSET form vintage rejects; the extension is explicit and documented.
+- VERIFY: PASSED — t022 default → typecheck reject (`Character Set Expected`); `-f readset-set-literal` → `ABC` / `,`. Regressions `test_readset_typechecks_lstring_and_setofchar` and `test_readset_inline_literal_delimiter_retention_d022`; the three pre-existing inline-literal READSET runtime tests were moved onto the flag.
+- UPGRADES: manual 12-31 READSET signature; checklist READSET notes.
+- XREF: D-022; D-026 / RM-P2-SETCTOR; t029 (READSET with set variable, AGREE-ACCEPT).
+
+## ANCHOR: RM-OPEN-T011
+**STRING `::N` — RESOLVED: default ignores precision (vintage), extension flag truncates.**
+- STATUS: RESOLVED
+- D-ENTRY: D-011
+- CLASS: AGREE in default mode (was OUTPUT-DIFF)
+- BASIS: OBSERVED — vintage prints `ABCDE` (precision ignored); modern had been printing `ABC` (truncating).
+- VINTAGE: `s := 'ABCDE'; WRITELN(s::3)` → `ABCDE`; the `::N` precision is ignored on strings `[OBSERVED]`.
+- MODERN-NOW: default faithful mode ignores `::N` on STRING/LSTRING and prints `ABCDE`, matching vintage; `-f string-precision` honors `::N` and prints `ABC`. `[OBSERVED]`
+- TOUCH: `codegen/io_write_read.py` STRING/LSTRING WRITE branch drops the `::N` precision by default (`P::N` → whole value at default width; `P:M:N` → pad to M, ignore N); the truncating lowering is gated behind `string-precision`.
+- ACTION: done. Feature `string-precision` registered in `features.py`.
+- EFFORT: S
+- RISK-IF-SKIPPED: closed — the silent truncation that diverged from vintage (and matched none of the documented `::N` semantics) is removed from the default; truncation is now explicit opt-in.
+- VERIFY: PASSED — t011 default → `ABCDE`; `-f string-precision` → `ABC`; `s:7:3` default → `  ABCDE` (width still pads, N ignored). Regressions `test_string_precision_ignored_by_default_d011`, `test_string_precision_honored_with_feature_d011`, `test_string_width_still_pads_and_ignores_precision_by_default_d011`.
+- UPGRADES: checklist 8.3 / I/O formatting; EBNF `io_data_param` (STRING `::N` leg now OBSERVED).
+- XREF: D-011; D-002 (REAL `::N`); D-010 (INTEGER `::N`); RM-P1-INTPN.
 
 ---
 
@@ -555,7 +588,7 @@ Modern side (per item):
 2. `compile_to_llvm.py` on the item's probe → `clang` + `runtime/*.c` → run under `timeout 15s`. The driver exit code IS meaningful on the modern side.
 3. Run the full modern suite (the campaign baseline was 448 tests OK at the probed commit) to catch regressions — especially after RM-XCUT-IOERR (table renumber), RM-P0-CASE (CASE codegen), and RM-P1-ENUMWRITE / RM-P0-BOOL (shared WRITE builder).
 
-Vintage side (only when a fix needs fresh vintage ground truth, e.g. a follow-on probe or RM-OPEN-T021/T022):
+Vintage side (only when a fix needs fresh vintage ground truth, e.g. a follow-on probe or RM-OPEN-T021):
 1. Fresh single-use unpack of the vintage zip per probe.
 2. `unix2dos` the source before compiling.
 3. `pas1 tNNN.pas;` → `pas2` → `link tNNN.obj,tNNN.exe;` → run with DOS-side `>` redirection (`< in0NN.txt` for input probes); check both `tNNN.exe` and `TNNN.EXE`.
@@ -583,6 +616,6 @@ anti-confabulation discipline):
 - **Integer `::N` — vintage error timing** (D-010): vintage makes it a *runtime* data-format error (1123). Whether a *compile-time* rejection is an acceptable match, or fidelity demands the runtime timing, is a maintainer decision, not a fact.
 - **Duplicate `$ELSE` and non-quote-aware skipper** (D-003, D-004): vintage behavior on malformed directives is `[INFERRED]` from single probes and is not in the manual. Treat the deduced mechanisms as hypotheses, not ground truth.
 - **`F.ERRS` full code table**: only codes 10 (RESET-missing) and 14 (malformed READ) are `[OBSERVED]` via `F.ERRS`; the rest of the vintage `F.ERRS` numbering is unprobed. Do not invent values to fill the table — probe or leave noted.
-- **t021 EOL verdict** and **t022 READSET-via-constructor delimiter retention**: both `[UNVERIFIED]`; see RM-OPEN-T021 / RM-OPEN-T022. Do not record a verdict until rerun.
+- **t021 EOL verdict**: `[UNVERIFIED]`; see RM-OPEN-T021. Do not record a verdict until rerun. (t011 STRING `::N` and t022 READSET inline-literal are now RESOLVED with fresh vintage ground truth — vintage ignores STRING `::N` and rejects the inline READSET literal; both defaults match, with the extended behavior behind `string-precision` / `readset-set-literal` respectively.)
 - **Vintage symbolic enum READ** (D-006): `GREEN` gave runtime error 1119; this establishes that symbolic *names* are not accepted as input, but the full accepted-input grammar beyond a single numeric ordinal (`1`, t030) is not exhaustively probed.
 - **Line numbers in every `TOUCH:` field are `≈`** and read from the `probes-branch` snapshot; they will drift as code changes. The function/string anchors in each `TOUCH:` are the durable locators — grep those, not the line numbers.

@@ -135,7 +135,23 @@ class IoWriteReadMixin:
                 elif width is not None and precision is None:
                     fmt_parts.append('%*.*s')
                     printf_args.extend([self.coerce_printf_int(self.codegen_expr(width)), length, val])
+                elif precision is not None and not self.feature_enabled('string-precision'):
+                    # Faithful 1981 default: ::N precision is IGNORED on
+                    # STRING/LSTRING values (D-011 — vintage prints the whole
+                    # string; `s::3` on 'ABCDE' -> 'ABCDE', not 'ABC'). Fall
+                    # back to the same lowering as if no precision were given:
+                    # P:M:N pads to width M and ignores N; P::N prints the
+                    # whole value at the default width. Opt in to the
+                    # truncating behavior with -f string-precision.
+                    if width is not None:
+                        fmt_parts.append('%*.*s')
+                        printf_args.extend([self.coerce_printf_int(self.codegen_expr(width)), length, val])
+                    else:
+                        fmt_parts.append('%.*s')
+                        printf_args.extend([length, val])
                 else:
+                    # -f string-precision: honor ::N by truncating to N chars
+                    # (extension; not 1981 behavior).
                     fmt_parts.append('%*.*s')
                     printf_args.extend([
                         self.coerce_printf_int(self.codegen_expr(width)) if width is not None else ir.Constant(ir.IntType(32), 0),

@@ -9,7 +9,7 @@ is OUTPUT-DIFF, never ACCEPT/REJECT.
 - t007.pas — STRING(3) READ stops at fill (`ABC` / `D` / `E`) — AGREE-ACCEPT
 - t008.pas — STRING(5) READ blank-pads and leaves marker (`eol` / `AB   |`) — AGREE-ACCEPT
 - t009.pas — LSTRING(3) READ consumes whole line and truncates (`ABC` / `X`) — AGREE-ACCEPT
-- t011.pas — STRING `WRITELN(s::3)`: both accept, both print `ABCDE` (precision ignored on both sides) — AGREE-ACCEPT
+- ~~t011.pas — STRING `WRITELN(s::3)`: both accept, both print `ABCDE` (precision ignored on both sides) — AGREE-ACCEPT~~ **RESOLVED as D-011: vintage prints `ABCDE` (precision ignored) [OBSERVED]; modern had been truncating to `ABC` and now ignores `::N` on strings by default to match (truncation moved behind `-f string-precision`). See D-011.**
 - t018.pas — RESET implicit GET / lazy-fill (`eof` then `A`) — AGREE-ACCEPT; upgrades the lazy-fill equivalence claim to vintage-[OBSERVED]
 - t023.pas — ASSIGN(f, CHR(0)) temp file round-trip (`42`); manual 12-30 documents temp files [READ] — AGREE-ACCEPT
 - t025.pas — final line marker appended at CLOSE (`X` / `L` / `E`); confirms the manual's CLOSE-marker claim [READ] — AGREE-ACCEPT
@@ -82,6 +82,19 @@ is OUTPUT-DIFF, never ACCEPT/REJECT.
 - **Cross-references:** checklist 8.3 / I/O formatting; EBNF `io_data_param`.
 - **Severity:** resolved (was high: modern accepted and ran a form the vintage runtime rejects)
 - **Resolution:** fixed by rejecting `::N` precision on INTEGER-compatible WRITE values during type checking; REAL `::N` and STRING `::N` behavior is preserved.
+
+## D-011 — STRING P::N (precision) truncation
+- **Probe:** t011.pas (`s := 'ABCDE'; WRITELN(s::3)`)
+- **Behavior targeted:** Meaning of the `::N` precision operand on a STRING WRITE value
+- **Class:** AGREE in default mode (was OUTPUT-DIFF; RESOLVED in the reimplementation)
+- **Vintage (1981):** pas1 accepted (1 warning, `Assumed OUTPUT`), pas2 + link succeeded; runtime output `ABCDE` — the `::3` precision is **ignored** and the whole string prints [OBSERVED].
+- **Modern (at time of probe):** printed `ABC` — STRING `::N` lowered to `printf("%*.*s", 0, N, ...)` in `codegen/io_write_read.py`, so `::3` truncated to the first three characters [OBSERVED].
+- **Modern (now):** default faithful mode ignores `::N` on STRING/LSTRING values and prints `ABCDE`, matching vintage byte-for-byte. The truncating behavior is available as the opt-in `-f string-precision` extension, which prints `ABC`. [OBSERVED]
+- **Adjudication:** vintage ignores the precision operand on strings; ordinal-style truncation is not 1981 behavior. The earlier baseline grading (AGREE-ACCEPT, "both print ABCDE") had the right vintage value but mis-stated the modern side, which actually truncated — now corrected and resolved. Note D-002 settled REAL `::N` (honored, default 14-char field) and D-010 settled INTEGER `::N` (rejected); STRING `::N` is ignored, completing the three legs.
+- **Resolution:** in WRITE lowering, STRING/LSTRING values drop the `::N` precision by default (`P::N` prints the whole value at default width; `P:M:N` pads to width M and ignores N). The truncating lowering is gated behind the `string-precision` feature (third extension on the generic `features.py` mechanism after `wide-integers` and `symbolic-enum-io`).
+- **Cross-references:** checklist 8.3 / I/O formatting; EBNF `io_data_param`; D-002 (REAL `::N`); D-010 (INTEGER `::N`); RM-OPEN-T011 / RM-P1-INTPN.
+- **Severity:** resolved (was medium: unguarded silent truncation diverging from vintage).
+- **Follow-up:** none for the default contract; `string-precision` is documented extension behavior. Regressions `test_string_precision_ignored_by_default_d011`, `test_string_precision_honored_with_feature_d011`, and `test_string_width_still_pads_and_ignores_precision_by_default_d011` pin both modes.
 
 ## D-012 — RESET missing-file F.ERRS code
 - **Probe:** t012.pas (`ASSIGN(f, 'NOFILE.XYZ'); f.TRAP := TRUE; RESET(f); WRITELN(f.ERRS)`)
@@ -181,6 +194,19 @@ is OUTPUT-DIFF, never ACCEPT/REJECT.
 - **Severity:** resolved.
 - **Follow-up:** add a field-width probe if BOOLEAN padding details matter later.
 
+## D-022 — inline set-constructor literal as READSET set argument
+- **Probe:** t022.pas (`READSET(f, l, ['A'..'Z'])`)
+- **Behavior targeted:** Whether an inline, untyped set-constructor literal is accepted as the READSET delimiter-set argument, and READSET delimiter retention
+- **Class:** ACCEPT/REJECT (RESOLVED in default mode)
+- **Vintage (1981):** pas1 rejected at line 18 with `^243 Character Set Expected`; no `.obj` produced, pas2/link not run, no runtime output [OBSERVED]. Vintage requires a declared `SET OF CHAR` value here, not an inline bracket literal (t029 confirms READSET with a declared set variable is AGREE-ACCEPT, retaining the comma delimiter).
+- **Modern (at time of probe):** accepted, compiled, linked, and ran; output `ABC` then `,` (READSET consumed `ABC` and left the comma unconsumed) [OBSERVED].
+- **Modern (now):** default faithful mode rejects the inline literal at typecheck with `Character Set Expected: READSET set argument must be a declared SET OF CHAR value ...`, matching the vintage rejection. The accept-and-run behavior is available as the opt-in `-f readset-set-literal` extension, which prints `ABC` / `,`. [OBSERVED]
+- **Adjudication:** vintage rejects an inline set-constructor literal as the READSET set argument (`Character Set Expected`); the faithful default now matches that rejection while a declared `SET OF CHAR` value (set variable, or a type-prefixed constructor such as `CHARSET['A'..'Z']`, D-026) is accepted. The delimiter-retention answer (comma retained) is observed on modern under the extension and agrees with t029's set-variable result; the *vintage* constructor-form retention remains a possible follow-on but t029 already settles the set-variable form.
+- **Resolution:** in `type_checker.py` `_check_readset_args`, an untyped `SetConstructor` argument (`type_name is None`) is rejected by default with a `Character Set Expected` diagnostic; the inline-literal form is accepted only under the `readset-set-literal` feature (fourth extension on `features.py`). Declared set variables and type-prefixed constructors are unaffected.
+- **Cross-references:** manual 12-31 (READSET signature); D-026 (type-prefixed set constructor); t029 (READSET with set variable, AGREE-ACCEPT); RM-OPEN-T022.
+- **Severity:** resolved (was an undocumented ACCEPT/REJECT split — modern accepted a program vintage rejects).
+- **Follow-up:** none for the default contract. Regressions: `test_readset_typechecks_lstring_and_setofchar` (default reject + flag accept + set-variable accept) and `test_readset_inline_literal_delimiter_retention_d022` (runtime under the flag).
+
 ## D-024 — formatted WRITE on file in inspection mode
 - **Probe:** t024.pas (`RESET(f); WRITELN('BEFORE'); WRITELN(f, 'BBB'); WRITELN('AFTER'); ...` then read-back)
 - **Behavior targeted:** Formatted WRITE while a file is open in inspection/read mode
@@ -219,7 +245,7 @@ is OUTPUT-DIFF, never ACCEPT/REJECT.
 ## Open items and probe-redesign notes
 
 - **t021 (`WRITELN(ORD(EOL))`) — verdict suspect; rerun required.** Vintage pas1 emitted `Unknown Identifier In Expression Assumed Zero`, which is pas1's warning-with-recovery idiom, not a clean hard stop; the run was logged as AGREE-REJECT before the warnings-are-not-rejections rule was adopted (cf. the t026 misread). Whether pas2 produced an `.obj` and what the exe printed was not verified. Modern rejects at typecheck (`Undefined variable: EOL`) [OBSERVED]. Until rerun, the vintage verdict is [UNVERIFIED]; the EOL checklist item (~line 1032) stays open.
-- **t022 (`READSET(f, l, ['A'..'Z'])`) — AGREE-REJECT; redesign.** Vintage pas1: `Character Set Expected` [OBSERVED]. Modern also rejected at typecheck (exact diagnostic not reliably captured — the originally recorded text appears to have been copy-pasted from t026 and is discarded). The delimiter-retention question remains [UNVERIFIED]. Redesign: pass a declared `SET OF CHAR` value, e.g. via a type-prefixed constructor (`CHARSET ['A'..'Z']`, now known-good per D-026) or a set variable.
+- **t022 (`READSET(f, l, ['A'..'Z'])`) — RESOLVED as D-022.** Vintage pas1 rejects the inline set-constructor literal with `^243 Character Set Expected` [OBSERVED]. The modern default now matches that rejection; the accept-and-run behavior (output `ABC` / `,`, comma retained) is gated behind `-f readset-set-literal`. See D-022. (The earlier "modern also rejected at typecheck" note was a stale copy-paste from t026 and is withdrawn; the residual vintage-constructor-form delimiter-retention question is covered for the set-variable form by t029.)
 
 ## Notes — vintage warning idioms observed (not rejections)
 

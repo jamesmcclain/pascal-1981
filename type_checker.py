@@ -1172,7 +1172,22 @@ class PascalTypeChecker(TypeChecker):
                 self.error("READSET destination must be mutable", stmt)
             if not isinstance(dest_type, LStringType):
                 self.error(f"READSET destination must be LSTRING, got {dest_type}", stmt)
-        set_type = self.infer_expression_type(stmt.args[start + 1])
+        set_arg = stmt.args[start + 1]
+        # Faithful 1981 default (D-022): the READSET set argument must be a
+        # declared SET OF CHAR value (a set variable, or a type-prefixed
+        # constructor such as CHARSET['A'..'Z']). The vintage pas1 rejects an
+        # inline, untyped set-constructor literal here with "Character Set
+        # Expected". Allow it only under -f readset-set-literal.
+        if (isinstance(set_arg, SetConstructor) and set_arg.type_name is None
+                and not self.feature_enabled('readset-set-literal')):
+            self.error(
+                "Character Set Expected: READSET set argument must be a declared "
+                "SET OF CHAR value (a set variable or a type-prefixed constructor "
+                "like CHARSET['A'..'Z']), not an inline set literal "
+                "(enable -f readset-set-literal to accept inline set constructors)",
+                stmt)
+            return
+        set_type = self.infer_expression_type(set_arg)
         if not isinstance(set_type, SetType) or not set_type.element_type.equivalent_to(CHAR_TYPE):
             self.error(f"READSET set argument must be SET OF CHAR, got {set_type}", stmt)
 

@@ -37,16 +37,16 @@ def compile_to_ir(src: str) -> str:
     return compile_to_llvm(ast)
 
 
-def build_run_linked(src: str, runtime_files, stdin: str = "") -> tuple:
+def build_run_linked(src: str, runtime_files, stdin: str = "", features=None) -> tuple:
     """Like the codegen harness, but also links the named runtime C files so
     that ENCODE/DECODE/SCANEQ/SCANNE resolve at link time."""
     from codegen_llvm import compile_to_llvm
     from type_checker import PascalTypeChecker
     ast = parse_source(src)
-    result = PascalTypeChecker().check(ast)
+    result = PascalTypeChecker(features=features).check(ast)
     if not result.success:
         raise RuntimeError(f"Type check failed: {result.errors}")
-    ir = compile_to_llvm(ast)
+    ir = compile_to_llvm(ast, features=features)
     tmpdir = tempfile.mkdtemp()
     try:
         ll_path = os.path.join(tmpdir, "prog.ll")
@@ -266,16 +266,29 @@ class TestFileBufferModel(unittest.TestCase):
     def test_readset_reads_allowed_chars_and_leaves_delimiter(self):
         src = ("PROGRAM P; VAR s: LSTRING(10); c: CHAR; BEGIN "
                "READSET(s, ['A'..'Z']); READ(INPUT, c); WRITELN(s); WRITELN(c) END.")
-        rc, out = build_run_linked(src, ["fileops.c", "readq.c"], stdin="  \tABC1Z\n")
+        rc, out = build_run_linked(src, ["fileops.c", "readq.c"], stdin="  \tABC1Z\n", features={"readset-set-literal": True})
         self.assertEqual(rc, 0)
         self.assertEqual(out, "ABC\n1\n")
 
     def test_readset_capacity_stops_without_consuming_next_char(self):
         src = ("PROGRAM P; VAR s: LSTRING(3); c: CHAR; BEGIN "
                "READSET(s, ['A'..'Z']); READ(INPUT, c); WRITELN(s); WRITELN(c) END.")
-        rc, out = build_run_linked(src, ["fileops.c", "readq.c"], stdin="ABCDE\n")
+        rc, out = build_run_linked(src, ["fileops.c", "readq.c"], stdin="ABCDE\n", features={"readset-set-literal": True})
         self.assertEqual(rc, 0)
         self.assertEqual(out, "ABC\nD\n")
+
+    def test_readset_inline_literal_delimiter_retention_d022(self):
+        """D-022: under -f readset-set-literal the original t022 shape compiles
+        and runs; READSET consumes ABC and leaves the comma unconsumed."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "t022in.txt"
+            src = ("PROGRAM P; VAR f: TEXT; l: LSTRING(10); c: CHAR; BEGIN "
+                   f"ASSIGN(f, '{path}'); REWRITE(f); WRITELN(f, 'ABC,DEF'); CLOSE(f); "
+                   f"ASSIGN(f, '{path}'); RESET(f); "
+                   "READSET(f, l, ['A'..'Z']); WRITELN(l); READ(f, c); WRITELN(c); CLOSE(f) END.")
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"], features={"readset-set-literal": True})
+            self.assertEqual(rc, 0)
+            self.assertEqual(out, "ABC\n,\n")
 
     def test_readfn_reads_filename_and_does_not_consume_line_marker(self):
         with tempfile.TemporaryDirectory() as td:
@@ -313,7 +326,7 @@ class TestFileBufferModel(unittest.TestCase):
             src = ("PROGRAM P; VAR f: TEXT; s: LSTRING(10); BEGIN "
                    f"ASSIGN(f, '{path}'); REWRITE(f); WRITELN(f, 'HELLO 1'); CLOSE(f); "
                    "RESET(f); READSET(f, s, ['A'..'Z']); WRITELN(s) END.")
-            rc, out = build_run_linked(src, ["fileops.c", "readq.c"])
+            rc, out = build_run_linked(src, ["fileops.c", "readq.c"], features={"readset-set-literal": True})
             self.assertEqual(rc, 0)
             self.assertEqual(out, "HELLO\n")
 

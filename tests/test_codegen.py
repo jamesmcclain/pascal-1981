@@ -2337,3 +2337,30 @@ class TestValueInitializerCodegen(unittest.TestCase):
         rc, out = build_and_run(src)
         self.assertEqual(rc, 0)
         self.assertEqual(out, "Mr. Karate\n")
+
+    # ---- D-011: STRING ::N precision ----
+    # Faithful 1981 default ignores ::N on strings (prints the whole value);
+    # the truncating behavior is the opt-in -f string-precision extension.
+
+    @requires_exe
+    def test_string_precision_ignored_by_default_d011(self):
+        src = "PROGRAM P; VAR s: STRING(5); BEGIN s := 'ABCDE'; WRITELN(s::3) END."
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "ABCDE\n")
+
+    @requires_exe
+    def test_string_precision_honored_with_feature_d011(self):
+        src = "PROGRAM P; VAR s: STRING(5); BEGIN s := 'ABCDE'; WRITELN(s::3) END."
+        rc, out = build_and_run(src, features={"string-precision": True})
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "ABC\n")
+
+    @requires_exe
+    def test_string_width_still_pads_and_ignores_precision_by_default_d011(self):
+        # P:M:N — width M still pads; N is ignored by default.
+        src = "PROGRAM P; VAR s: STRING(5); BEGIN s := 'ABCDE'; WRITELN(s:7:3) END."
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "  ABCDE\n")
+
