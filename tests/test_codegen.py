@@ -191,7 +191,7 @@ class TestCodegenIR(unittest.TestCase):
     def test_predeclared_abort_generates_abort_call(self):
         """ABORT should lower to the runtime abort handler, carrying the message,
         error code, and status (manual: CONST STRING, WORD, WORD)."""
-        ir = compile_to_ir("PROGRAM P; VAR s: STRING(10); BEGIN s := 'oops'; ABORT(s, WRD(3), WRD(7)) END.")
+        ir = compile_to_ir("PROGRAM P; VAR s: STRING(4); BEGIN s := 'oops'; ABORT(s, WRD(3), WRD(7)) END.")
         self.assertIn("pabort", ir.lower())
         # void pabort(i8*, i32, i16, i16): message pointer + length + two words.
         self.assertIn("call void @\"pabort\"", ir)
@@ -1041,7 +1041,7 @@ END."""
         src = """
         PROGRAM P;
         VAR
-            src_str: STRING(10);
+            src_str: STRING(6);
             dest_lstr: LSTRING(20);
         BEGIN
             src_str := 'pascal';
@@ -1061,7 +1061,7 @@ END."""
             src_str: STRING(5);
             dest_str: STRING(10);
         BEGIN
-            src_str := 'abc';
+            src_str := 'abc  ';
             COPYSTR(src_str, dest_str);
             WRITELN(dest_str)
         END.

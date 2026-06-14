@@ -55,14 +55,17 @@ class TestVariableScope(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("Cannot assign", " ".join(str(e) for e in result.errors))
 
-    def test_string_literal_assigns_when_capacity_fits(self):
-        """String literals can initialize compatible STRING/LSTRING storage."""
-        result = typecheck_source("PROGRAM P; VAR a: STRING(10); VAR b: LSTRING(10); BEGIN a := 'abc'; b := 'abc' END.")
+    def test_string_literal_assigns_to_exact_string_and_fitting_lstring(self):
+        """STRING(n) needs exact literal length; LSTRING(n) uses capacity."""
+        result = typecheck_source("PROGRAM P; VAR a: STRING(3); VAR b: LSTRING(10); BEGIN a := 'abc'; b := 'abc' END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
-    def test_string_literal_assignment_rejects_overflow(self):
-        """String literal assignment rejects destinations that are too small."""
+    def test_string_literal_assignment_rejects_fixed_string_length_mismatch(self):
+        """STRING(n) assignment follows vintage exact-length fixed-string rules."""
         result = typecheck_source("PROGRAM P; VAR a: STRING(2); BEGIN a := 'abc' END.")
+        self.assertFalse(result.success)
+        self.assertIn("Cannot assign", " ".join(str(e) for e in result.errors))
+        result = typecheck_source("PROGRAM P; VAR a: STRING(10); BEGIN a := 'abc' END.")
         self.assertFalse(result.success)
         self.assertIn("Cannot assign", " ".join(str(e) for e in result.errors))
 
@@ -593,7 +596,7 @@ class TestCallValidation(unittest.TestCase):
 
     def test_predeclared_abort_procedure(self):
         """ABORT should be available without a manual declaration."""
-        result = typecheck_source("PROGRAM P; VAR s: STRING(10); BEGIN s := 'oops'; ABORT(s, WRD(0), WRD(0)) END.")
+        result = typecheck_source("PROGRAM P; VAR s: STRING(4); BEGIN s := 'oops'; ABORT(s, WRD(0), WRD(0)) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_string_edit_intrinsics_typecheck(self):

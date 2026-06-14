@@ -362,7 +362,9 @@ def can_assign(from_type: Type, to_type: Type) -> bool:
         return True
     if isinstance(from_type, SetType) and isinstance(to_type, SetType):
         return from_type.element_type.equivalent_to(to_type.element_type)
-    if isinstance(from_type, (StringType, LStringType)) and isinstance(to_type, (StringType, LStringType)):
+    if isinstance(from_type, (StringType, LStringType)) and isinstance(to_type, StringType):
+        return from_type.max_len == to_type.max_len
+    if isinstance(from_type, (StringType, LStringType)) and isinstance(to_type, LStringType):
         return from_type.max_len <= to_type.max_len
     char_array_len = fixed_char_array_len(to_type)
     if isinstance(from_type, (StringType, LStringType)) and char_array_len is not None:

@@ -541,6 +541,17 @@ class PascalTypeChecker(TypeChecker):
         if value_type and not can_assign(value_type, sym.type):
             self.error(f"Cannot initialize {sym.type} with {value_type} in VALUE section", decl)
 
+    def _can_pass_value_argument(self, arg_type: Type, param_type: Type) -> bool:
+        """Assignment compatibility for by-value parameters.
+
+        STRING without an explicit bound is represented in the builtin table as
+        STRING(255); use capacity semantics for that super-array-like formal,
+        while ordinary assignment to STRING(n) remains exact-length.
+        """
+        if isinstance(param_type, StringType) and param_type.max_len == 255 and isinstance(arg_type, (StringType, LStringType)):
+            return arg_type.max_len <= param_type.max_len
+        return can_assign(arg_type, param_type)
+
     def check_var_decl(self, decl: VarDecl) -> None:
         """Type check a variable declaration."""
         if not decl.names or not decl.type_expr:
@@ -1034,7 +1045,7 @@ class PascalTypeChecker(TypeChecker):
                 if stmt.name.upper() not in ['WRITELN', 'WRITE', 'READLN'] and arg_type:
                     if i < len(sym.type.params):
                         _, param_type = sym.type.params[i]
-                        if not can_assign(arg_type, param_type):
+                        if not self._can_pass_value_argument(arg_type, param_type):
                             self.error(f"Argument {i+1} type mismatch: expected {param_type}, got {arg_type}", stmt)
             return
 
@@ -1757,7 +1768,7 @@ class PascalTypeChecker(TypeChecker):
                     if expr.args:
                         for i, (arg, (param_name, param_type)) in enumerate(zip(expr.args, sym.type.params)):
                             arg_type = self.infer_expression_type(arg)
-                            if arg_type and not can_assign(arg_type, param_type):
+                            if arg_type and not self._can_pass_value_argument(arg_type, param_type):
                                 self.error(f"Argument {i+1} type mismatch: expected {param_type}, got {arg_type}", expr)
                     return sym.type.return_type
                 return None
@@ -1956,7 +1967,7 @@ class PascalTypeChecker(TypeChecker):
                 if expr.args:
                     for i, (arg, (param_name, param_type)) in enumerate(zip(expr.args, sym.type.params)):
                         arg_type = self.infer_expression_type(arg)
-                        if arg_type and not can_assign(arg_type, param_type):
+                        if arg_type and not self._can_pass_value_argument(arg_type, param_type):
                             self.error(f"Argument {i+1} type mismatch: expected {param_type}, got {arg_type}", expr)
                 return sym.type.return_type
             return None
