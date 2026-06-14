@@ -2049,6 +2049,23 @@ class TestWriteRealFormatting(unittest.TestCase):
         self.assertIn("%*.*f", ir)
 
 
+class TestRuntimeAbortFlush(unittest.TestCase):
+    """Generated runtime-check aborts flush stdout before aborting."""
+
+    @requires_exe
+    def test_string_capacity_abort_preserves_prior_stdout(self):
+        src = """PROGRAM P;
+VAR s: LSTRING(2);
+BEGIN
+  WRITELN('BEFORE');
+  CONCAT(s, 'ABC');
+  WRITELN('AFTER')
+END."""
+        rc, out = build_and_run(src)
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(out, "BEFORE\n")
+
+
 class TestAbortRuntime(unittest.TestCase):
     """ABORT's runtime must surface the message, error code, and status, then
     abort (manual: stops like an internal runtime error)."""

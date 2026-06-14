@@ -43,6 +43,20 @@ class RuntimeBuiltinsMixin:
         abort_type = ir.FunctionType(ir.VoidType(), [])
         return ir.Function(self.module, abort_type, name='abort')
 
+    def emit_runtime_abort(self) -> None:
+        """Flush host stdio, then call the runtime error handler.
+
+        Vintage abort-path probes preserve output printed before the trap.  The
+        modern backend uses libc abort() for generated runtime checks, so flush
+        all C streams first to avoid losing buffered stdout on captured runs.
+        """
+        fflush_type = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer()])
+        fflush = self.module.globals.get('fflush')
+        if fflush is None:
+            fflush = ir.Function(self.module, fflush_type, name='fflush')
+        self.builder.call(fflush, [ir.Constant(ir.IntType(8).as_pointer(), None)])
+        self.builder.call(self.runtime_error_func(), [])
+
     def pascal_abort_func(self) -> ir.Function:
         """Declare or fetch the ABORT runtime: void pabort(i8* msg, i32 len, i16 code, i16 status)."""
         for func in self.module.functions:

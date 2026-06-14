@@ -85,7 +85,7 @@ OPEN = re-probe.
 | RM-P5-DUPELSE | D-003 | P5 | RESOLVED | duplicate `$ELSE` now resumes like vintage and prints `A C` | S |
 | RM-P5-SKIPQUOTE | D-004 | P5 | RECORD-ONLY | `{` in skipped-`$IF` string: keep modern fix, document | S |
 | RM-XCUT-IOERR | — | X | RESOLVED | observed program-visible `F.ERRS` codes now use vintage values 10/14 | M |
-| RM-XCUT-FLUSH | — | X | TODO-FIX | flush stdout before modern abort (test fidelity, D-005/15/16) | S |
+| RM-XCUT-FLUSH | — | X | RESOLVED | generated/runtime aborts flush stdout before abort (D-005/15/16/24) | S |
 | RM-XCUT-ENUMBOOL | — | X | HONORED | BOOLEAN-names vs user-enum-ordinal kept separate (D-019 vs D-020) | S |
 | RM-DEC-INTWIDTH | D-014/16/17 | DEC | DECIDED (16-bit fork, implemented) | INTEGER now 16-bit; INTEGER32/64 added behind `-f wide-integers`; D-014/16/17 resolved | done |
 | RM-NOACTION | baselines | — | NO-ACTION | AGREE-ACCEPT baselines only (the D-014/16/17 width trio is now RESOLVED, see RM-DEC-INTWIDTH); don't fix piecemeal | — |
@@ -339,12 +339,12 @@ strict-abort model is kept by design per the campaign plan.
 - CLASS: OUTPUT-DIFF
 - BASIS: INFERRED (both enforce mode restrictions; the code 1110 itself is `[OBSERVED]`)
 - VINTAGE: printed `BEFORE`, then `? Error: Operation error in file T005.DAT Error Code 1110` `[OBSERVED]`.
-- MODERN-NOW: aborts `PUT requires REWRITE/write mode` (exit ≠ 0); `BEFORE` swallowed by host libc buffering on abort (see RM-XCUT-FLUSH) `[OBSERVED]`.
+- MODERN-NOW: aborts `PUT requires REWRITE/write mode` (exit ≠ 0); `BEFORE` is preserved in captured stdout after RM-XCUT-FLUSH `[OBSERVED]`.
 - TOUCH: documentation / `io_error` notes only — the PUT mode guard already exists (`runtime/fileops.c` ≈L286). Modern strict-abort is intentional.
 - ACTION: record code 1110 in the `io_error` table notes as the vintage operation-error for PUT-after-GET. No behavior change.
 - EFFORT: S
 - RISK-IF-SKIPPED: none functional; only diagnostic-text fidelity (modern aborts vs vintage continues-with-code, but the enforcement is identical).
-- VERIFY: n/a (record-only). If RM-XCUT-FLUSH lands, `BEFORE` will appear in modern capture too.
+- VERIFY: n/a (record-only). RM-XCUT-FLUSH now preserves `BEFORE` in modern capture.
 - UPGRADES: checklist file runtime semantics.
 - XREF: D-005; D-024 (distinct code 1104); RM-XCUT-FLUSH.
 
@@ -373,12 +373,12 @@ strict-abort model is kept by design per the campaign plan.
 - CLASS: OUTPUT-DIFF
 - BASIS: INFERRED (both trap the dereference; code 2031 is `[OBSERVED]`)
 - VINTAGE: printed `BEFORE`, then `? Error: NIL Pointer Reference` / `Error Code 2031` `[OBSERVED]`.
-- MODERN-NOW: aborted on the dereference; `BEFORE` not preserved in captured stdout (host buffering artifact); no runtime text on stderr `[OBSERVED]`.
+- MODERN-NOW: aborted on the dereference; `BEFORE` is preserved in captured stdout after RM-XCUT-FLUSH; no runtime text on stderr `[OBSERVED]`.
 - TOUCH: NIL check is `nilck` in `codegen/types_map.py` (≈L390). Modern abort model differs by design (campaign plan: record only).
-- ACTION: record code 2031. Optionally adopt RM-XCUT-FLUSH so `BEFORE` is preserved in modern capture, which also makes t005/t015/t016 byte-comparable.
+- ACTION: record code 2031. RM-XCUT-FLUSH now preserves `BEFORE` in modern capture, improving comparability for t005/t015/t016/t024 abort paths.
 - EFFORT: S
 - RISK-IF-SKIPPED: none functional; diagnostic/abort-model only.
-- VERIFY: n/a (record-only); if RM-XCUT-FLUSH lands, expect `BEFORE` in modern capture.
+- VERIFY: n/a (record-only); RM-XCUT-FLUSH verified `BEFORE` in modern capture.
 - UPGRADES: checklist runtime checks / `$NILCK+`.
 - XREF: D-015; RM-XCUT-FLUSH.
 
@@ -440,14 +440,14 @@ strict-abort model is kept by design per the campaign plan.
 ## ANCHOR: RM-XCUT-FLUSH
 **Flush stdout before modern aborts (test-fidelity, not a semantic fix).**
 - PRIORITY: X (small, improves comparability of several abort-path probes)
-- STATUS: TODO-FIX
+- STATUS: RESOLVED
 - BASIS: OBSERVED (the missing-`BEFORE`-on-abort behavior is a documented host libc buffering artifact, NOT a semantic difference — stated in the campaign plan and D-005/D-015 entries)
-- SCOPE: on modern abort paths (`runtime/pabort.c` and the `runtime_error_func` abort), pre-abort stdout printed before the abort can be discarded by libc buffering, so `BEFORE` markers vanish from captured output (t005, t015, and per the campaign possibly t016).
-- ACTION: flush stdout (and stderr) immediately before the process aborts in the runtime abort handler. This is an output-ergonomics/test-comparability improvement; it does not change semantics.
+- SCOPE: modern abort paths now flush before aborting: C runtime `die()`/`pabort()` paths already flushed, and LLVM-generated runtime checks now use a shared `emit_runtime_abort()` helper that emits `fflush(NULL)` before libc `abort()`.
+- ACTION: done. This is an output-ergonomics/test-comparability improvement; it does not change stop/continue semantics or claim vintage diagnostic text/code fidelity.
 - EFFORT: S
-- RISK-IF-SKIPPED: none semantic. Several abort-path probes remain non-byte-comparable to vintage (judge by exit status + which markers appear, per the campaign), which is fine but noisier.
-- VERIFY: re-run t005 / t015; `BEFORE` should now appear in modern capture before the abort.
-- XREF: D-005; D-015; D-016.
+- RISK-IF-SKIPPED: closed for the probed abort paths; future direct calls to `runtime_error_func()` should go through `emit_runtime_abort()`.
+- VERIFY: re-run t005 / t015 / t016 / t024; `BEFORE` appears in modern capture before the abort.
+- XREF: D-005; D-015; D-016; D-024.
 
 ## ANCHOR: RM-XCUT-ENUMBOOL
 **BOOLEAN prints names; user enums print ordinals — do NOT unify these WRITE paths.**

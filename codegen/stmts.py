@@ -398,12 +398,7 @@ class StmtsMixin:
 
     def _emit_case_no_match_trap(self) -> None:
         """Abort the current path for a checked CASE no-match."""
-        fflush_type = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer()])
-        fflush = self.module.globals.get('fflush')
-        if fflush is None:
-            fflush = ir.Function(self.module, fflush_type, name='fflush')
-        self.builder.call(fflush, [ir.Constant(ir.IntType(8).as_pointer(), None)])
-        self.builder.call(self.runtime_error_func(), [])
+        self.emit_runtime_abort()
         self.builder.unreachable()
 
     def codegen_case_stmt(self, stmt: CaseStmt) -> None:

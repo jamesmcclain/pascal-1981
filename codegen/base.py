@@ -153,12 +153,7 @@ class CodegenBase:
         err_block = parent.append_basic_block(label + '_fail')
         self.builder.cbranch(ok_cond, ok_block, err_block)
         self.builder.position_at_end(err_block)
-        fflush_type = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer()])
-        fflush = self.module.globals.get('fflush')
-        if fflush is None:
-            fflush = ir.Function(self.module, fflush_type, name='fflush')
-        self.builder.call(fflush, [ir.Constant(ir.IntType(8).as_pointer(), None)])
-        self.builder.call(self.runtime_error_func(), [])
+        self.emit_runtime_abort()
         self.builder.unreachable()
         self.builder.position_at_end(ok_block)
 

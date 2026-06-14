@@ -53,7 +53,7 @@ is OUTPUT-DIFF, never ACCEPT/REJECT.
 - **Behavior targeted:** File mode enforcement during PUT after GET
 - **Class:** OUTPUT-DIFF
 - **Vintage (1981):** prints `BEFORE` followed by runtime error `? Error: Operation error in file T005.DAT Error Code 1110` [OBSERVED]
-- **Modern (reimplementation):** aborts with `PUT requires REWRITE/write mode` (exit ≠ 0); `BEFORE` missing from captured stdout — known host libc buffering artifact on abort paths [OBSERVED]
+- **Modern (now):** aborts with `PUT requires REWRITE/write mode` (exit ≠ 0); `BEFORE` is preserved in captured stdout after the abort-flush pass [OBSERVED]
 - **Adjudication:** both runtimes enforce mode restrictions; the vintage error code for this operation error is 1110. [INFERRED] (code value itself [OBSERVED])
 - **Cross-references:** checklist file runtime semantics; campaign plan t005.
 - **Severity:** medium (diagnostic mismatch; same semantic enforcement)
@@ -125,7 +125,7 @@ is OUTPUT-DIFF, never ACCEPT/REJECT.
 - **Behavior targeted:** NIL pointer dereference under default `$NILCK+`
 - **Class:** OUTPUT-DIFF
 - **Vintage (1981):** printed `BEFORE` then runtime error `? Error: NIL Pointer Reference` / `Error Code 2031` [OBSERVED]
-- **Modern (reimplementation):** aborted on the dereference; `BEFORE` not preserved in captured stdout (known buffering artifact on abort paths), no runtime text on stderr [OBSERVED]
+- **Modern (now):** aborted on the dereference; `BEFORE` is preserved in captured stdout after the abort-flush pass; no runtime text on stderr [OBSERVED]
 - **Adjudication:** both trap the dereference; vintage code is 2031 and its runtime writes through unbuffered, consistent with the campaign plan's expectation. [INFERRED] (code value [OBSERVED])
 - **Cross-references:** checklist runtime checks / `$NILCK+`.
 - **Severity:** medium (diagnostic/abort-model mismatch; host abort model differs by design)
@@ -186,7 +186,7 @@ is OUTPUT-DIFF, never ACCEPT/REJECT.
 - **Behavior targeted:** Formatted WRITE while a file is open in inspection/read mode
 - **Class:** OUTPUT-DIFF
 - **Vintage (1981):** printed `BEFORE` then runtime error `? Error: Operation error in file T024.DAT` / `Error Code 1104` [OBSERVED]
-- **Modern (reimplementation):** aborted with `file runtime: WRITE requires REWRITE/write mode` [OBSERVED]
+- **Modern (now):** aborted with `file runtime: WRITE requires REWRITE/write mode`; `BEFORE` is preserved in captured stdout after the abort-flush pass [OBSERVED]
 - **Adjudication:** both sides prevent write-through; vintage uses file-operation error 1104 (distinct from PUT's 1110, D-005), modern uses its own mode-enforcement message. [INFERRED] (code value [OBSERVED])
 - **Cross-references:** checklist file runtime semantics; mode enforcement; D-005.
 - **Severity:** medium (diagnostic mismatch)
