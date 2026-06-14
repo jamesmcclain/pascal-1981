@@ -87,11 +87,12 @@ is OUTPUT-DIFF, never ACCEPT/REJECT.
 - **Behavior targeted:** Vintage `F.ERRS` numeric code for `RESET` on a missing file with trapping enabled
 - **Class:** OUTPUT-DIFF
 - **Vintage (1981):** compiled, linked, printed `10` [OBSERVED]
-- **Modern (reimplementation):** compiled, printed `1` (invented internal code) [OBSERVED]
-- **Adjudication:** the vintage missing-file `RESET` error code is 10; the modern table is internal-only. [INFERRED] (value [OBSERVED])
+- **Modern (at time of probe):** compiled, printed `1` (invented internal code) [OBSERVED]
+- **Modern (now):** compiled, printed `10` [OBSERVED]
+- **Adjudication:** the vintage missing-file `RESET` error code is 10; modern now uses that observed code for trapped `RESET` missing/open failure. Other `F.ERRS` values remain unclaimed unless probed. [INFERRED] (value [OBSERVED])
 - **Cross-references:** checklist 8.6 / file error handling; `io_error` table.
-- **Severity:** medium
-- **Follow-up:** renumber the modern `io_error` table to the vintage values as they are observed (10 = missing file on RESET; 14 = malformed formatted READ, see D-013).
+- **Severity:** resolved (was medium: program-visible `F.ERRS` mismatch)
+- **Resolution:** changed trapped `RESET` open failure to `io_error(f, 10, ...)`; regression `test_trapped_reset_missing_file_records_errs_d012` pins the probe.
 
 ## D-013 — malformed formatted READ trap behavior
 - **Probe:** t013.pas (`REWRITE`+`WRITELN(f,'XYZ')`; `RESET(f); f.TRAP := TRUE; READ(f, i); WRITELN('AFTER'); WRITELN(f.ERRS)`)

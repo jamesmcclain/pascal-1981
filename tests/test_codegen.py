@@ -474,6 +474,35 @@ class TestCodegenBuildRun(unittest.TestCase):
         self.assertEqual(returncode, 0)
         self.assertIn("42", stdout)
 
+    def test_trapped_reset_missing_file_records_errs_d012(self):
+        """D-012: trapped RESET on a missing named file records vintage F.ERRS=10."""
+        src = """PROGRAM P;
+VAR f: TEXT;
+BEGIN
+  ASSIGN(f, 'NOFILE.XYZ');
+  f.TRAP := TRUE;
+  RESET(f);
+  WRITELN(f.ERRS)
+END."""
+        ir = compile_to_ir(src)
+        tmpdir = tempfile.mkdtemp()
+        try:
+            ll_path = os.path.join(tmpdir, "prog.ll")
+            exe_path = os.path.join(tmpdir, "prog")
+            with open(ll_path, "w") as f:
+                f.write(ir)
+            repo = os.path.dirname(os.path.dirname(__file__))
+            runtime_sources = glob.glob(os.path.join(repo, "runtime", "*.c"))
+            clang = subprocess.run(["clang", ll_path, *runtime_sources, "-o", exe_path, "-lm", "-w"],
+                                   capture_output=True, text=True)
+            self.assertEqual(clang.returncode, 0, msg=clang.stderr)
+            run = subprocess.run([exe_path], cwd=tmpdir, capture_output=True, text=True, timeout=15)
+            self.assertEqual(run.returncode, 0, msg=run.stderr)
+            self.assertEqual(run.stdout, "10\n")
+        finally:
+            import shutil
+            shutil.rmtree(tmpdir)
+
     def test_trapped_malformed_file_read_records_errs_d013(self):
         """D-013: malformed formatted READ is trapped through F.TRAP/F.ERRS."""
         src = """PROGRAM P;

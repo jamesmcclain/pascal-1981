@@ -78,13 +78,13 @@ OPEN = re-probe.
 | RM-P2-ENUMREAD | D-030/D-006 | P2 | RESOLVED | enum READ accepts numeric ordinals by default; symbolic names under `-f symbolic-enum-io` | M |
 | RM-P2-SETCTOR | D-026 | P2 | RESOLVED | type-prefixed set ctor `COLORS[..]` accepted; unblocks t022 | M |
 | RM-P3-READTRAP | D-013 | P3 | RESOLVED | malformed formatted READ traps through `F.ERRS=14` when `F.TRAP` is set | M |
-| RM-P3-ERRSCODE | D-012 | P3 | TODO-FIX | `F.ERRS` returns invented code; vintage = 10 on RESET-missing | S |
+| RM-P3-ERRSCODE | D-012 | P3 | RESOLVED | trapped RESET-missing now returns observed vintage `F.ERRS=10` | S |
 | RM-P4-PUTCODE | D-005 | P4 | RECORD-ONLY | PUT-after-GET: record vintage op-error code 1110 | S |
 | RM-P4-WRITECODE | D-024 | P4 | RECORD-ONLY | WRITE-in-inspection-mode: record code 1104 | S |
 | RM-P4-NILCODE | D-015 | P4 | RECORD-ONLY | NIL deref: record code 2031 (+ optional flush) | S |
 | RM-P5-DUPELSE | D-003 | P5 | DECISION-NEEDED | duplicate `$ELSE`: modern `A`, vintage `A C` | S |
 | RM-P5-SKIPQUOTE | D-004 | P5 | RECORD-ONLY | `{` in skipped-`$IF` string: keep modern fix, document | S |
-| RM-XCUT-IOERR | — | X | TODO-FIX | renumber `io_error` table to vintage codes (gates D-005/12/13/24) | M |
+| RM-XCUT-IOERR | — | X | RESOLVED | observed program-visible `F.ERRS` codes now use vintage values 10/14 | M |
 | RM-XCUT-FLUSH | — | X | TODO-FIX | flush stdout before modern abort (test fidelity, D-005/15/16) | S |
 | RM-XCUT-ENUMBOOL | — | X | HONORED | BOOLEAN-names vs user-enum-ordinal kept separate (D-019 vs D-020) | S |
 | RM-DEC-INTWIDTH | D-014/16/17 | DEC | DECIDED (16-bit fork, implemented) | INTEGER now 16-bit; INTEGER32/64 added behind `-f wide-integers`; D-014/16/17 resolved | done |
@@ -309,16 +309,16 @@ modern rejects at typecheck. Items are largely independent.
 ## ANCHOR: RM-P3-ERRSCODE
 **`F.ERRS` returns an invented internal code; vintage RESET-on-missing-file = 10.**
 - PRIORITY: P3
-- STATUS: TODO-FIX
+- STATUS: RESOLVED
 - D-ENTRY: D-012
 - CLASS: OUTPUT-DIFF
 - BASIS: OBSERVED (value 10)
 - VINTAGE: `ASSIGN(f,'NOFILE.XYZ'); f.TRAP := TRUE; RESET(f); WRITELN(f.ERRS)` printed `10` `[OBSERVED]`.
-- MODERN-NOW: printed `1` — `io_error` table is internal-only `[OBSERVED]`.
-- TOUCH: `runtime/fileops.c` — `io_error` codes are currently small internal integers (1=open/create failed, 2=mode, 3=past-eof, 4=read failed, 5=write failed; ≈L122-291). The RESET-missing-file path uses code 1.
-- ACTION: renumber the `io_error` table to the observed vintage values (10 = missing file on RESET; 14 = malformed formatted READ per D-013). This is the same renumber as RM-XCUT-IOERR — do them together so the whole table is coherent rather than patched per-probe.
-- EFFORT: S (constant changes) — but coordinate the whole table (see RM-XCUT-IOERR).
-- RISK-IF-SKIPPED: a program that branches on `F.ERRS` (e.g. `IF f.ERRS = 10`) silently misbehaves on modern. Medium and silent (narrow: only ERRS-inspecting code).
+- MODERN-NOW: printed `10` for `t012.pas`; `RESET` missing/open failure now uses the observed vintage trapped code `[OBSERVED]`.
+- TOUCH: `runtime/fileops.c` — the `pas_file_reset` open-failure path now calls `io_error(f, 10, ...)`. Unprobed `F.ERRS` values remain modern-internal rather than invented as vintage values.
+- ACTION: done; regression `test_trapped_reset_missing_file_records_errs_d012` pins D-012. D-013 already pins malformed formatted READ as `F.ERRS=14`.
+- EFFORT: S.
+- RISK-IF-SKIPPED: closed; code branching on `F.ERRS = 10` for missing-file `RESET` now behaves like the observed vintage probe.
 - VERIFY: re-run `t012.pas`; expect `10`.
 - UPGRADES: checklist 8.6 / file error handling; `io_error` table.
 - XREF: D-012; RM-XCUT-IOERR; RM-P3-READTRAP.
@@ -428,12 +428,12 @@ strict-abort model is kept by design per the campaign plan.
 ## ANCHOR: RM-XCUT-IOERR
 **Renumber the `io_error` table to vintage codes (one coherent pass).**
 - PRIORITY: X (do before/with D-012 and D-013)
-- STATUS: TODO-FIX
+- STATUS: RESOLVED
 - BASIS: OBSERVED (codes 10, 14, 1104, 1110, 1119, 1123 all from probe runs)
-- SCOPE: `runtime/fileops.c` `io_error` currently uses internal codes 1-5 (≈L122-291). Multiple probes pin vintage values: 10 (RESET missing file, D-012), 14 (malformed formatted READ, D-013), 1104 (WRITE inspection mode, D-024), 1110 (PUT after GET, D-005), 1119 (enum READ symbolic input, D-006), 1123 (integer `::N`, D-010). Note vintage uses two ranges: ~10/14 for `F.ERRS` trapped codes vs 11xx/2xxx for the `? Error: ... Error Code` runtime aborts — keep that distinction.
-- ACTION: renumber the table to the observed vintage `F.ERRS` codes (10, 14, ...) where modern surfaces them through `F.ERRS`, and record the 11xx/2xxx abort codes as notes where modern keeps its strict-abort model. Land this as the substrate for RM-P3-ERRSCODE (D-012) and RM-P3-READTRAP (D-013) rather than patching per-probe.
+- SCOPE: `runtime/fileops.c` `io_error` now uses the observed program-visible vintage `F.ERRS` values where modern exposes them: 10 for trapped RESET missing/open failure (D-012) and 14 for trapped malformed formatted READ (D-013). Other operational codes remain modern-internal unless directly observed through `F.ERRS`. Probe-observed abort diagnostics such as 1104 (D-024), 1110 (D-005), 1119 (D-006), and 1123 (D-010) are record-only notes for strict-abort paths, not `F.ERRS` table entries.
+- ACTION: done for the observed `F.ERRS` surface; do not invent unprobed vintage `F.ERRS` values.
 - EFFORT: M
-- RISK-IF-SKIPPED: per-probe patching leaves an inconsistent table — exactly the kind of drift the old D-001 corruption warns against.
+- RISK-IF-SKIPPED: closed for D-012/D-013; remaining risk is unknown-code coverage only, tracked by the explicit `F.ERRS` full-code-table unknown.
 - VERIFY: t012 → `10`; t013 → `14` (trap on). Re-run any file-error fixtures in the modern suite to confirm no regressions from renumbering.
 - XREF: D-012; D-013; D-005; D-024; D-006; D-010.
 

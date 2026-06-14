@@ -52,11 +52,12 @@ static void die(const char *msg) {
  *
  * Error codes are internal [INFERRED] — the vintage runtime's numeric
  * codes are partly observed from the vintage runtime:
- *   1 open/create failed [modern-internal, pending RM-P3-ERRSCODE]
+ *   1 create failed      [modern-internal]
  *   2 mode violation     [modern-internal]
  *   3 GET past EOF       [modern-internal]
  *   4 read failed        [modern-internal]
  *   5 write failed       [modern-internal]
+ *   10 RESET missing/open failed [vintage-observed, D-012]
  *   14 malformed formatted READ [vintage-observed, D-013]
  * Converted sites: RESET/REWRITE open failures, GET/PUT mode violations,
  * GET-past-eof, component read/write failures, and malformed formatted
@@ -242,7 +243,7 @@ void pas_file_reset(struct pas_file_fcb *f) {
     if (!f->handle && f->name) {
         f->handle = fopen(f->name, "r+b");
         if (!f->handle) {
-            if (io_error(f, 1, "file runtime: open failed")) return;
+            if (io_error(f, 10, "file runtime: open failed")) return;
         }
         f->mode |= MODE_OWNS_HANDLE;
     }
