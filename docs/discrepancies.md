@@ -267,11 +267,12 @@ whether the pipeline produced the next stage's artifact. Observed idioms:
 - **Behavior targeted:** `NULL` LSTRING length and textual form
 - **Class:** ACCEPT/REJECT
 - **Vintage (1981):** compiled with 2 warnings (`Assumed OUTPUT`), linked, and ran; output `0` then `<>` [OBSERVED]
-- **Modern (reimplementation):** rejected at typecheck with `Cannot access field on non-record type LSTRING(5)` [OBSERVED]
-- **Adjudication:** vintage treats `NULL` as a zero-length LSTRING constant and prints it as empty between delimiters [OBSERVED]
+- **Modern (at time of probe):** rejected at typecheck with `Cannot access field on non-record type LSTRING(5)` [OBSERVED]
+- **Modern (now):** compiles and prints `0` then `<>` [OBSERVED]
+- **Adjudication:** vintage treats `NULL` as a zero-length LSTRING constant and prints it as empty between delimiters; modern now exposes `LSTRING.LEN` as the length byte and matches the probed behavior [OBSERVED]
 - **Cross-references:** manual ~5731; checklist `NULL` LSTRING note
-- **Severity:** medium (missing NULL/LSTRING semantics)
-- **Follow-up:** implement `NULL` as a zero-length LSTRING constant with the vintage length semantics
+- **Severity:** resolved (was medium: missing NULL/LSTRING semantics)
+- **Resolution:** fixed by accepting/lowering `LSTRING.LEN` and preserving existing `NULL` empty-LSTRING assignment/display behavior; regression `test_null_lstring_len_and_empty_write_runtime` pins the probe.
 
 ## D-034 — F.MODE values after REWRITE and RESET
 - **Probe:** t034.pas (`REWRITE(f); WRITELN(ORD(f.MODE)); ... RESET(f); WRITELN(ORD(f.MODE))`)

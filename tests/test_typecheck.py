@@ -55,6 +55,16 @@ class TestVariableScope(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("Cannot assign", " ".join(str(e) for e in result.errors))
 
+    def test_lstring_len_field_is_ordinal(self):
+        """LSTRING.LEN exposes the length byte for ORD and similar ordinal uses."""
+        result = typecheck_source("PROGRAM P; VAR s: LSTRING(10); BEGIN s := NULL; WRITELN(ORD(s.LEN)) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_lstring_rejects_unknown_field(self):
+        result = typecheck_source("PROGRAM P; VAR s: LSTRING(10); BEGIN WRITELN(s.BAD) END.")
+        self.assertFalse(result.success)
+        self.assertIn("LSTRING has no field", " ".join(str(e) for e in result.errors))
+
     def test_string_literal_assigns_to_exact_string_and_fitting_lstring(self):
         """STRING(n) needs exact literal length; LSTRING(n) uses capacity."""
         result = typecheck_source("PROGRAM P; VAR a: STRING(3); VAR b: LSTRING(10); BEGIN a := 'abc'; b := 'abc' END.")

@@ -364,7 +364,14 @@ class TypesMapMixin:
                     cur_type = elem_type
                 elif selector.kind == 'FIELD':
                     base = self.resolve_type_alias(cur_type) if cur_type is not None else None
-                    if isinstance(base, FileType):
+                    if isinstance(base, (ResolvedLStringType, LStringType)):
+                        field = str(selector.index_or_field).upper()
+                        if field == 'LEN':
+                            ptr = self.builder.gep(ptr, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0)])
+                            cur_type = NamedType('CHAR', None)
+                        else:
+                            raise CodegenError(f"Cannot access LSTRING field '{selector.index_or_field}'")
+                    elif isinstance(base, FileType):
                         field = str(selector.index_or_field).upper()
                         handle = self.builder.load(ptr)
                         fcb = self.builder.bitcast(handle, self.file_fcb_type().as_pointer())

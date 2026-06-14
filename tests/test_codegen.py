@@ -236,6 +236,20 @@ class TestCodegenIR(unittest.TestCase):
         self.assertIn("nullstr", ir)
         self.assertIn("i8*", ir)
 
+    @requires_exe
+    def test_null_lstring_len_and_empty_write_runtime(self):
+        """D-033: NULL assigns an empty LSTRING and LSTRING.LEN reads as zero."""
+        src = """PROGRAM P;
+VAR l: LSTRING(5);
+BEGIN
+  l := NULL;
+  WRITELN(ORD(l.LEN));
+  WRITELN('<', l, '>')
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "0\n<>\n")
+
     def test_pred_lowers_to_subtraction(self):
         """PRED lowers to integer subtraction by one."""
         src = "PROGRAM P; BEGIN WRITELN(PRED(3)) END."

@@ -1714,6 +1714,12 @@ class PascalTypeChecker(TypeChecker):
                             else:
                                 self.error(f"File control block has no field '{selector.index_or_field}'", expr)
                                 return None
+                        elif isinstance(current_type, LStringType):
+                            if field_name == 'LEN':
+                                current_type = CHAR_TYPE
+                            else:
+                                self.error(f"LSTRING has no field '{selector.index_or_field}'", expr)
+                                return None
                         else:
                             if not isinstance(current_type, RecordType):
                                 self.error(f"Cannot access field on non-record type {current_type}", expr)
@@ -2065,6 +2071,12 @@ class PascalTypeChecker(TypeChecker):
                             current_type = INTEGER_TYPE
                         else:
                             self.error(f"File control block has no field '{selector.index_or_field}'", designator)
+                            return None
+                    elif isinstance(current_type, LStringType):
+                        if field_name == 'LEN':
+                            current_type = CHAR_TYPE
+                        else:
+                            self.error(f"LSTRING has no field '{selector.index_or_field}'", designator)
                             return None
                     else:
                         # Record field access

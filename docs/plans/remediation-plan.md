@@ -74,7 +74,7 @@ OPEN = re-probe.
 | RM-DEC-ENUMIO | D-019/D-006/D-030 | DEC | DECIDED | faithful default (ordinal write + numeric read); one `symbolic-enum-io` flag gates name write + name read | — |
 | RM-P2-WORD | D-032 | P2 | RESOLVED | WORD assign/convert (`WRD`,`MAXWORD`) now matches probed vintage edges | M |
 | RM-P2-PACK | D-031 | P2 | RESOLVED | `PACK`/`UNPACK` + packed-char-array WRITE now match probed behavior | M-L |
-| RM-P2-NULL | D-033 | P2 | TODO-FIX | `NULL` LSTRING constant + `.LEN` field rejected | M |
+| RM-P2-NULL | D-033 | P2 | RESOLVED | `NULL` LSTRING constant + `.LEN` field now match probed behavior | M |
 | RM-P2-ENUMREAD | D-030/D-006 | P2 | RESOLVED | enum READ accepts numeric ordinals by default; symbolic names under `-f symbolic-enum-io` | M |
 | RM-P2-SETCTOR | D-026 | P2 | TODO-FIX | type-prefixed set ctor `COLORS[..]` rejected; unblocks t022 | M |
 | RM-P3-READTRAP | D-013 | P3 | TODO-FIX | malformed formatted READ aborts; vintage traps (code 14) | M |
@@ -236,14 +236,14 @@ modern rejects at typecheck. Items are largely independent.
 ## ANCHOR: RM-P2-NULL
 **`NULL` LSTRING constant + `.LEN` field access rejected.**
 - PRIORITY: P2
-- STATUS: TODO-FIX
+- STATUS: RESOLVED
 - D-ENTRY: D-033
 - CLASS: ACCEPT/REJECT
 - BASIS: OBSERVED (vintage output `0` then `<>`)
 - VINTAGE: compiled (2 `Assumed OUTPUT` warnings), linked, ran; `l := NULL; WRITELN(ORD(l.LEN))` → `0`; `WRITELN('<',l,'>')` → `<>` — `NULL` is a zero-length LSTRING constant, printed empty between delimiters `[OBSERVED]`.
-- MODERN-NOW: rejected at typecheck: `Cannot access field on non-record type LSTRING(5)` `[OBSERVED]`.
-- TOUCH: `type_checker.py` — `.LEN` rejection at the non-record field-access sites ≈L1631 / L1962; `NULL` constant handling (search `NULL`). LSTRING already has a length slot in codegen (the WRITE path loads LSTRING length via `gep ..,0,0`, see `io_write_read.py` ≈L108-110), so the runtime shape exists; the gap is typecheck-level `.LEN` field access on LSTRING and the `NULL` zero-length constant.
-- ACTION: implement `NULL` as a zero-length LSTRING constant; allow `.LEN` field access on LSTRING types (map to the length slot). Confirm empty-string display already works once the constant exists.
+- MODERN-NOW: compiles and prints `0` then `<>` for the D-033 probe `[OBSERVED]`.
+- TOUCH: `type_checker.py` now accepts `LSTRING.LEN` as the length byte; `codegen/types_map.py` lowers it to slot 0 of the inline LSTRING aggregate. Existing `NULL` handling already assigns/displays a zero-length LSTRING.
+- ACTION: done; added typecheck coverage for `LSTRING.LEN` and a runtime regression `test_null_lstring_len_and_empty_write_runtime` for `NULL`, `ORD(l.LEN)`, and empty LSTRING display.
 - EFFORT: M
 - RISK-IF-SKIPPED: programs using `NULL` or `LSTRING.LEN` won't compile. Medium (loud); `NULL`/`.LEN` are common LSTRING idioms.
 - VERIFY: re-run `t033.pas`; expect `0` then `<>`.
