@@ -30,7 +30,7 @@ from ast_nodes import (RepeatStmt, ReturnStmt, RetypeExpr, Selector, SetConstruc
 from ast_nodes import SetType as ASTSetType
 from ast_nodes import SizeofExpr, Statement, StringLiteral
 from ast_nodes import SubrangeType as ASTSubrangeType
-from ast_nodes import (TypeDecl, UnaryOp, UpperExpr, UseClause, VarDecl, WhileStmt, WriteArg)
+from ast_nodes import (TypeDecl, UnaryOp, UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WriteArg)
 from builtins_registry import register_builtins
 from symbol_table import SourceLocation, Symbol, SymbolTable
 from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, EnumType, FileType, FunctionType, LStringType, PointerType, ProcedureType,
@@ -522,6 +522,24 @@ class PascalTypeChecker(TypeChecker):
             self.check_func_decl(decl)
         elif isinstance(decl, ProcDecl):
             self.check_proc_decl(decl)
+        elif isinstance(decl, ValueDecl):
+            self.check_value_decl(decl)
+
+    def check_value_decl(self, decl: ValueDecl) -> None:
+        """Type check a VALUE-section initializer."""
+        sym = self.symbol_table.lookup(decl.name)
+        if not sym:
+            self.error(f"Undefined variable in VALUE section: {decl.name}", decl)
+            return
+        if sym.kind != 'var':
+            self.error(f"VALUE target '{decl.name}' is not a variable", decl)
+            return
+        if not self.is_constant_set_element(decl.value):
+            self.error("VALUE initializer must be constant", decl)
+            return
+        value_type = self.infer_expression_type(decl.value)
+        if value_type and not can_assign(value_type, sym.type):
+            self.error(f"Cannot initialize {sym.type} with {value_type} in VALUE section", decl)
 
     def check_var_decl(self, decl: VarDecl) -> None:
         """Type check a variable declaration."""

@@ -1245,3 +1245,36 @@ class TestRecordTypeChecking(unittest.TestCase):
                                   "B = RECORD count, total: INTEGER END; "
                                   "VAR a: A; b: B; BEGIN a := b END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+
+class TestValueInitializers(unittest.TestCase):
+    """VALUE-section semantic checks."""
+
+    def test_value_initializers_accept_supported_scalars_and_strings(self):
+        src = ("PROGRAM P; TYPE NAME = PACKED ARRAY[1..10] OF CHAR; "
+               "VAR i: INTEGER; r: REAL; c: CHAR; s: STRING(10); "
+               "ls: LSTRING(14); name: NAME; "
+               "VALUE i := 10; r := 4.5; c := 'K'; s := 'Mr. Karate'; "
+               "ls := 'Mr. Karate'; name := 'Mr. Karate'; BEGIN END.")
+        result = typecheck_source(src)
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_value_initializer_rejects_unknown_target(self):
+        result = typecheck_source("PROGRAM P; VALUE x := 1; BEGIN END.")
+        self.assertFalse(result.success)
+        self.assertIn("Undefined variable in VALUE", " ".join(str(e) for e in result.errors))
+
+    def test_value_initializer_rejects_const_target(self):
+        result = typecheck_source("PROGRAM P; CONST x = 1; VALUE x := 2; BEGIN END.")
+        self.assertFalse(result.success)
+        self.assertIn("not a variable", " ".join(str(e) for e in result.errors))
+
+    def test_value_initializer_rejects_lstring_overflow(self):
+        result = typecheck_source("PROGRAM P; VAR s: LSTRING(5); VALUE s := 'Mr. Karate'; BEGIN END.")
+        self.assertFalse(result.success)
+        self.assertIn("Cannot initialize", " ".join(str(e) for e in result.errors))
+
+    def test_value_initializer_rejects_packed_char_array_length_mismatch(self):
+        result = typecheck_source("PROGRAM P; TYPE NAME = PACKED ARRAY[1..10] OF CHAR; VAR s: NAME; VALUE s := 'Mr'; BEGIN END.")
+        self.assertFalse(result.success)
+        self.assertIn("Cannot initialize", " ".join(str(e) for e in result.errors))

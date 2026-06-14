@@ -1974,3 +1974,39 @@ class TestRuntimeCheckFlags(unittest.TestCase):
         ir_on = self._ir(self.ADD.replace('BEGIN', 'BEGIN {$MATHCK-}'),
                          force_flags={'MATHCK': True})
         self.assertIn('with.overflow', ir_on)
+
+
+@requires_llvm
+class TestValueInitializerCodegen(unittest.TestCase):
+    """VALUE-section runtime initialization."""
+
+    @requires_exe
+    def test_value_initializes_scalars_runtime(self):
+        src = ("PROGRAM P; VAR i: INTEGER; r: REAL; c: CHAR; "
+               "VALUE i := 123; r := 4.5; c := 'K'; "
+               "BEGIN WRITELN(i:1); WRITELN(r:4:1); WRITELN(c) END.")
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "123\n 4.5\nK\n")
+
+    @requires_exe
+    def test_value_initializes_string_runtime(self):
+        src = "PROGRAM P; VAR s: STRING(10); VALUE s := 'Mr. Karate'; BEGIN WRITELN(s) END."
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "Mr. Karate\n")
+
+    @requires_exe
+    def test_value_initializes_lstring_runtime(self):
+        src = "PROGRAM P; VAR s: LSTRING(14); VALUE s := 'Mr. Karate'; BEGIN WRITELN(s) END."
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "Mr. Karate\n")
+
+    @requires_exe
+    def test_value_initializes_packed_char_array_runtime(self):
+        src = ("PROGRAM P; TYPE NAME = PACKED ARRAY[1..10] OF CHAR; "
+               "VAR s: NAME; VALUE s := 'Mr. Karate'; BEGIN WRITELN(s) END.")
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "Mr. Karate\n")
