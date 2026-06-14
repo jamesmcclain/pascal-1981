@@ -986,6 +986,40 @@ END."""
         self.assertEqual(returncode, 0)
         self.assertEqual(stdout.strip(), "15")
 
+    def test_packed_char_array_string_assignment_and_write_runtime(self):
+        """PACKED ARRAY[..] OF CHAR accepts string literal assignment and WRITE."""
+        src = """
+        PROGRAM P;
+        TYPE NAME = PACKED ARRAY[1..10] OF CHAR;
+        VAR s: NAME;
+        BEGIN
+            s := 'Mr. Karate';
+            WRITELN(s)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip(), "Mr. Karate")
+
+    def test_lesson1b_packed_char_array_runtime(self):
+        """Lesson1b-style packed char array string storage matches vintage output."""
+        src = """
+        PROGRAM Lesson1b;
+        TYPE NAME = PACKED ARRAY[1..10] OF CHAR;
+        VAR TrainerName : NAME; FighterSymbol : CHAR; TrainingRounds : INTEGER;
+        BEGIN
+            TrainerName := 'Mr. Karate';
+            FighterSymbol := 'K';
+            TrainingRounds := 10;
+            WRITELN('Coach: Welcome to the dojo, ', TrainerName);
+            WRITELN('Symbol: ', FighterSymbol);
+            WRITELN('Rounds Scheduled: ', TrainingRounds:2)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout, "Coach: Welcome to the dojo, Mr. Karate\nSymbol: K\nRounds Scheduled: 10\n")
+
     def test_string_concat_runtime(self):
         """CONCAT appends a string to an LSTRING."""
         src = """

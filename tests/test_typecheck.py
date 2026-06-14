@@ -1102,6 +1102,54 @@ END."""
         self.assertTrue(r.success, r.errors)
 
 
+class TestPackedCharArrayStringCompatibility(unittest.TestCase):
+    """Vintage-compatible PACKED ARRAY[..] OF CHAR string operations."""
+
+    def test_string_literal_assigns_to_packed_char_array_and_writes(self):
+        src = """PROGRAM P;
+TYPE NAME = PACKED ARRAY[1..10] OF CHAR;
+VAR s: NAME;
+BEGIN
+    s := 'Mr. Karate';
+    WRITELN(s)
+END."""
+        r = typecheck_source(src)
+        self.assertTrue(r.success, r.errors)
+
+    def test_short_string_literal_rejected_for_packed_char_array(self):
+        src = """PROGRAM P;
+TYPE NAME = PACKED ARRAY[1..10] OF CHAR;
+VAR s: NAME;
+BEGIN
+    s := 'Mr'
+END."""
+        r = typecheck_source(src)
+        self.assertFalse(r.success)
+        self.assertIn("Cannot assign", " ".join(str(e) for e in r.errors))
+
+    def test_long_string_literal_rejected_for_packed_char_array(self):
+        src = """PROGRAM P;
+TYPE NAME = PACKED ARRAY[1..3] OF CHAR;
+VAR s: NAME;
+BEGIN
+    s := 'toolong'
+END."""
+        r = typecheck_source(src)
+        self.assertFalse(r.success)
+        self.assertIn("Cannot assign", " ".join(str(e) for e in r.errors))
+
+    def test_nonpacked_char_array_string_literal_rejected(self):
+        src = """PROGRAM P;
+TYPE NAME = ARRAY[1..10] OF CHAR;
+VAR s: NAME;
+BEGIN
+    s := 'Mr. Karate'
+END."""
+        r = typecheck_source(src)
+        self.assertFalse(r.success)
+        self.assertIn("Cannot assign", " ".join(str(e) for e in r.errors))
+
+
 class TestPackUnpackValidation(unittest.TestCase):
     """Validation tests for the PACK and UNPACK intrinsics."""
 

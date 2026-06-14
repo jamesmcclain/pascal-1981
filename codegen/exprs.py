@@ -131,6 +131,8 @@ class ExprsMixin:
                 return symbol.llvm_value  # Return pointer to aggregate
             elif isinstance(symbol.type_expr, NamedType) and symbol.type_expr.name.upper() in {'STRING', 'LSTRING'}:
                 return symbol.llvm_value  # Return pointer to aggregate
+            elif isinstance(symbol.type_expr, NamedType) and isinstance(self.resolve_type_alias(symbol.type_expr), ArrayType):
+                return symbol.llvm_value  # Return pointer to aggregate alias
             return self.builder.load(symbol.llvm_value)
         elif isinstance(expr, SetConstructor):
             return self.codegen_set_constructor(expr)

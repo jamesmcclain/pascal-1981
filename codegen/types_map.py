@@ -16,6 +16,8 @@ import llvmlite.ir as ir
 
 from ast_nodes import *
 from codegen.base import CodegenError
+from type_system import ArrayType as ResolvedArrayType
+from type_system import CHAR_TYPE
 from type_system import LStringType as ResolvedLStringType
 from type_system import StringType as ResolvedStringType
 
@@ -259,6 +261,8 @@ class TypesMapMixin:
 
         if isinstance(t, (ResolvedLStringType, ResolvedStringType)):
             return True, t.max_len, isinstance(t, ResolvedLStringType)
+        if isinstance(t, ResolvedArrayType) and t.packed and t.element_type.equivalent_to(CHAR_TYPE):
+            return True, t.upper_bound - t.lower_bound + 1, False
 
         # Check AST LStringType
         if isinstance(t, LStringType):
@@ -273,6 +277,17 @@ class TypesMapMixin:
                 return True, (int(t.param) if t.param is not None else 256), False
             elif name_up in self.type_aliases:
                 return self.get_string_type_info(self.type_aliases[name_up])
+
+        resolved = self.resolve_type_alias(t)
+        if resolved is not t:
+            return self.get_string_type_info(resolved)
+        if isinstance(t, ArrayType) and getattr(t, 'packed', False):
+            elem = self.resolve_type_alias(t.element_type)
+            elem_name = getattr(elem, 'name', '').upper()
+            if elem_name == 'CHAR' or elem is CHAR_TYPE:
+                low = self.eval_const_expr(t.index_range.low)
+                high = self.eval_const_expr(t.index_range.high)
+                return True, high - low + 1, False
 
         return False, 256, False
 

@@ -321,6 +321,22 @@ WORD_TYPE = WordType()
 CHAR_TYPE = CharType()
 
 
+def fixed_char_array_len(t: Type) -> Optional[int]:
+    """Return length for PACKED ARRAY[..] OF CHAR, else None.
+
+    Differential evidence currently covers PACKED fixed character arrays as
+    vintage string-compatible storage; keep the predicate narrow.
+    """
+    if (isinstance(t, ArrayType) and t.packed and t.element_type.equivalent_to(CHAR_TYPE)
+            and isinstance(t.lower_bound, int) and isinstance(t.upper_bound, int)):
+        return t.upper_bound - t.lower_bound + 1
+    return None
+
+
+def is_fixed_char_array(t: Type) -> bool:
+    return fixed_char_array_len(t) is not None
+
+
 # Type coercion rules
 def can_assign(from_type: Type, to_type: Type) -> bool:
     """
@@ -348,6 +364,9 @@ def can_assign(from_type: Type, to_type: Type) -> bool:
         return from_type.element_type.equivalent_to(to_type.element_type)
     if isinstance(from_type, (StringType, LStringType)) and isinstance(to_type, (StringType, LStringType)):
         return from_type.max_len <= to_type.max_len
+    char_array_len = fixed_char_array_len(to_type)
+    if isinstance(from_type, (StringType, LStringType)) and char_array_len is not None:
+        return from_type.max_len == char_array_len
     return False
 
 
