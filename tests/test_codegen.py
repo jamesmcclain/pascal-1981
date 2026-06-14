@@ -111,6 +111,17 @@ class TestCodegenIR(unittest.TestCase):
         # No per-file heap allocation.
         self.assertNotIn('@"pas_file_create"', ir)
 
+    def test_codegen_error_imported_for_expr_failures(self):
+        """Codegen expression errors should raise CodegenError, not NameError."""
+        from codegen import CodegenError
+        from codegen_llvm import compile_to_llvm
+
+        src = ("PROGRAM P; VAR i: INTEGER; "
+               "BEGIN FOR i := 1 TO 1 DO IF MissingName = 1 THEN WRITELN(i) END.")
+        ast = parse_source(src)
+        with self.assertRaisesRegex(CodegenError, "Undefined variable: MissingName"):
+            compile_to_llvm(ast)
+
     def test_simple_writeln(self):
         """Simple WRITELN generates valid IR."""
         src = "PROGRAM P; BEGIN WRITELN(42) END."

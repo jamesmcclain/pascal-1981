@@ -15,6 +15,8 @@ from llvmlite.ir import IRBuilder
 
 from ast_nodes import *
 
+from .base import CodegenError
+
 
 class SetsMixin:
     """Mixin for sets functionality."""

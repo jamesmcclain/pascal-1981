@@ -15,7 +15,7 @@ from llvmlite.ir import IRBuilder
 
 from ast_nodes import *
 
-from .base import LoopContext
+from .base import CodegenError, LoopContext
 
 
 class StmtsMixin:
