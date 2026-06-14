@@ -396,6 +396,16 @@ class StmtsMixin:
         self.loop_stack.pop()
         self.builder.position_at_end(end_block)
 
+    def _emit_case_no_match_trap(self) -> None:
+        """Abort the current path for a checked CASE no-match."""
+        fflush_type = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer()])
+        fflush = self.module.globals.get('fflush')
+        if fflush is None:
+            fflush = ir.Function(self.module, fflush_type, name='fflush')
+        self.builder.call(fflush, [ir.Constant(ir.IntType(8).as_pointer(), None)])
+        self.builder.call(self.runtime_error_func(), [])
+        self.builder.unreachable()
+
     def codegen_case_stmt(self, stmt: CaseStmt) -> None:
         """Codegen for CASE statement."""
         expr = self.codegen_expr(stmt.expr)
@@ -427,11 +437,18 @@ class StmtsMixin:
             # Continue to next case
             self.builder.position_at_end(next_check)
 
-        # Otherwise branch
+        # Otherwise / no-match branch.  IBM Pascal traps on a no-match CASE
+        # with no OTHERWISE when RANGECK is enabled; with RANGECK disabled the
+        # historical behavior is unchecked, so preserve silent fall-through.
         if stmt.otherwise:
             self.codegen_stmt(stmt.otherwise)
+            if not self.builder.block.is_terminated:
+                self.builder.branch(end_block)
+        elif self.effective_rangeck(stmt):
+            self._emit_case_no_match_trap()
+        else:
+            self.builder.branch(end_block)
 
-        self.builder.branch(end_block)
         self.builder.position_at_end(end_block)
 
     def codegen_return_stmt(self, stmt: ReturnStmt) -> None:

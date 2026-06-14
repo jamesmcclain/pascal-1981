@@ -204,11 +204,12 @@ is OUTPUT-DIFF, never ACCEPT/REJECT.
 - **Behavior targeted:** Default CASE no-match behavior with no `OTHERWISE`
 - **Class:** OUTPUT-DIFF
 - **Vintage (1981):** printed `BEFORE` then runtime error `? Error: No CASE Value Matches Selector` / `Error Code 2050` [OBSERVED]
-- **Modern (reimplementation):** printed `BEFORE` and `AFTER` (silent fall-through) [OBSERVED]
+- **Modern (at time of probe):** printed `BEFORE` and `AFTER` (silent fall-through) [OBSERVED]
+- **Modern (now):** under default `$RANGECK`, prints `BEFORE` then aborts before `AFTER`; explicit `OTHERWISE` still prints `OTHER` then `AFTER` [OBSERVED]
 - **Adjudication:** manual (src ~9953) documents a runtime error when `$RANGECK` is on and no OTHERWISE matches; this run confirms `$RANGECK` is on by default and the error code is 2050 [READ] (code value [OBSERVED]).
 - **Cross-references:** checklist runtime CASE semantics; `$RANGECK`.
-- **Severity:** medium (observable control-flow divergence)
-- **Follow-up:** emit the no-match CASE trap under default checking in modern codegen.
+- **Severity:** resolved (was medium: observable control-flow divergence)
+- **Resolution:** fixed by emitting a no-match CASE abort when `$RANGECK` is enabled and no `OTHERWISE` arm exists. The modern abort does not claim vintage diagnostic text/code fidelity.
 
 ## Open items and probe-redesign notes
 
@@ -374,7 +375,7 @@ whether the pipeline produced the next stage's artifact. Observed idioms:
   ```
 
 ## D-038 — VALUE section with field-by-field record initialization
-- **Probe:** `docs/probes/D-038-Lesson6.pas`
+- **Probe:** `~/Lesson6.pas` (source inline below)
 - **Behavior targeted:** `VALUE` section assignment to record fields using dotted selectors
 - **Class:** ACCEPT/REJECT
 - **Vintage (1981):** pas1 accepted with 5 warnings (`Assumed OUTPUT`), pas2 produced `l6.obj`, link produced `l6.exe`, and run output was:

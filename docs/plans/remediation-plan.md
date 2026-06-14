@@ -68,7 +68,7 @@ OPEN = re-probe.
 | Anchor | D | Prio | Status | One-line | Effort |
 |---|---|---|---|---|---|
 | RM-P0-BOOL | D-020 | P0 | RESOLVED | BOOLEAN WRITE now prints `TRUE`/`FALSE` in all modes | S |
-| RM-P0-CASE | D-028 | P0 | TODO-FIX | CASE no-match silently falls through; vintage traps | S |
+| RM-P0-CASE | D-028 | P0 | RESOLVED | CASE no-match now aborts under `$RANGECK` when no `OTHERWISE` matches | S |
 | RM-P1-INTPN | D-010 | P1 | DECISION-NEEDED | integer `::N` silently accepted; vintage runtime-rejects | S |
 | RM-P1-ENUMWRITE | D-019 | P1 | RESOLVED | enum WRITE is ordinal by default; symbolic names require `-f symbolic-enum-io` | S |
 | RM-DEC-ENUMIO | D-019/D-006/D-030 | DEC | DECIDED | faithful default (ordinal write + numeric read); one `symbolic-enum-io` flag gates name write + name read | — |
@@ -136,14 +136,14 @@ extension items should reuse it rather than inventing a parallel mechanism.
 ## ANCHOR: RM-P0-CASE
 **CASE with no matching arm and no `OTHERWISE` silently falls through; vintage traps.**
 - PRIORITY: P0 (silent control-flow corruption — more dangerous than a loud error because nothing signals it)
-- STATUS: TODO-FIX
+- STATUS: RESOLVED
 - D-ENTRY: D-028
 - CLASS: OUTPUT-DIFF
 - BASIS: OBSERVED (code value 2050) + READ (manual src ≈9953 documents the trap under `$RANGECK`)
 - VINTAGE: prints `BEFORE`, then runtime error `? Error: No CASE Value Matches Selector` / `Error Code 2050`; confirms `$RANGECK` is ON by default `[OBSERVED]`.
-- MODERN-NOW: prints `BEFORE` and `AFTER` — silent fall-through `[OBSERVED]`.
-- TOUCH: `codegen/stmts.py` → `codegen_case_stmt` (≈L394-430). With `stmt.otherwise is None` and no match, control branches straight to `end_block` (≈L425-429). The flag accessor `effective_rangeck(stmt)` already exists (≈L52-54).
-- ACTION: when `stmt.otherwise is None` **and** `effective_rangeck(stmt)` is true, replace the fall-through-to-`end_block` with a trap: emit a call to the existing runtime abort and mark `unreachable`. Model: `_emit_runtime_check` in `codegen/base.py` (≈L136-148), which calls `runtime_error_func()` then `self.builder.unreachable()`; or `pascal_abort_func`/`pabort(msg,len,code,status)` in `codegen/runtime_builtins.py` (≈L46-52) if a distinct code/message is wanted to mirror vintage 2050. When `$RANGECK-`, keep current silent fall-through (matches the switch-disables-checking model used elsewhere, cf. D-017).
+- MODERN-NOW: under default `$RANGECK`, prints `BEFORE` then aborts before `AFTER`; explicit `OTHERWISE` and matching-arm CASE paths still run normally `[OBSERVED]`.
+- TOUCH: `codegen/stmts.py` → `codegen_case_stmt` and `_emit_case_no_match_trap`. With `stmt.otherwise is None`, no match, and `effective_rangeck(stmt)` true, the final no-match path now flushes stdout, calls the existing runtime abort, and marks the block `unreachable`. When `$RANGECK-`, it preserves silent fall-through.
+- ACTION: done. Exact vintage diagnostic text/code 2050 is not emitted; this item resolves the P0 silent-control-flow corruption only.
 - EFFORT: S
 - RISK-IF-SKIPPED: a ported program that relies on the no-match trap (or that has an unhandled selector value) silently continues past the CASE with whatever state it had — wrong results, no diagnostic. High because invisible.
 - VERIFY: recompile + run `t028.pas`; expect `BEFORE` then a non-zero abort (no `AFTER`). Confirm `t035.pas` (explicit `OTHERWISE`) and any matching-arm CASE still pass — the trap must fire ONLY on the no-match-and-no-OTHERWISE path under default checking.

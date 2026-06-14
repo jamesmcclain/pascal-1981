@@ -515,6 +515,75 @@ END."""
         self.assertEqual(returncode, 0)
         self.assertEqual(stdout, "Mr. Karate\n100\nS\n0\n")
 
+    def test_case_no_match_default_rangeck_aborts(self):
+        """A checked CASE no-match with no OTHERWISE aborts before fall-through."""
+        src = """PROGRAM P;
+VAR n: INTEGER;
+BEGIN
+  n := 5;
+  WRITELN('BEFORE');
+  CASE n OF
+    1: WRITELN('ONE');
+    2: WRITELN('TWO')
+  END;
+  WRITELN('AFTER')
+END."""
+        returncode, stdout = build_and_run(src)
+        self.assertNotEqual(returncode, 0)
+        self.assertIn("BEFORE\n", stdout)
+        self.assertNotIn("AFTER", stdout)
+
+    def test_case_no_match_rangeck_off_falls_through(self):
+        """$RANGECK- preserves unchecked CASE no-match fall-through."""
+        src = """PROGRAM P;
+VAR n: INTEGER;
+BEGIN
+  {$RANGECK-}
+  n := 5;
+  WRITELN('BEFORE');
+  CASE n OF
+    1: WRITELN('ONE');
+    2: WRITELN('TWO')
+  END;
+  WRITELN('AFTER')
+END."""
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout, "BEFORE\nAFTER\n")
+
+    def test_case_otherwise_still_runs(self):
+        """An explicit OTHERWISE handles CASE no-match normally."""
+        src = """PROGRAM P;
+VAR n: INTEGER;
+BEGIN
+  n := 5;
+  CASE n OF
+    1: WRITELN('ONE');
+    2: WRITELN('TWO')
+    OTHERWISE WRITELN('OTHER')
+  END;
+  WRITELN('AFTER')
+END."""
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout, "OTHER\nAFTER\n")
+
+    def test_case_matching_arm_still_runs(self):
+        """A matching CASE arm must not trigger the no-match trap."""
+        src = """PROGRAM P;
+VAR n: INTEGER;
+BEGIN
+  n := 2;
+  CASE n OF
+    1: WRITELN('ONE');
+    2: WRITELN('TWO')
+  END;
+  WRITELN('AFTER')
+END."""
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout, "TWO\nAFTER\n")
+
     def test_wide_integer_codegen_runtime(self):
         """INTEGER32/INTEGER64 codegen and WRITE work when wide-integers is enabled."""
         src = """PROGRAM P;
