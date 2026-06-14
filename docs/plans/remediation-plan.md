@@ -97,8 +97,8 @@ P2 the items are largely independent and may be resequenced by team preference;
 the recommended order is most-fundamental-type-first (WORD, PACK, NULL/LSTRING)
 ahead of the narrower input/grammar gaps (enum READ, set ctor), **except** that
 `RM-P2-SETCTOR` (D-026) is the prerequisite for closing `RM-OPEN-T022` and may
-be pulled forward if that open item matters. `RM-XCUT-IOERR` should land before
-or with D-012/D-013 since all three touch the same table.
+be pulled forward if that open item matters. `RM-XCUT-IOERR` landed with
+D-012/D-013 for the observed program-visible `F.ERRS` values.
 
 Two standing design decisions (section D) gate other work. `RM-DEC-ENUMIO` must
 be settled *before* `RM-P1-ENUMWRITE` and `RM-P2-ENUMREAD` are implemented —
