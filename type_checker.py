@@ -534,12 +534,19 @@ class PascalTypeChecker(TypeChecker):
         if sym.kind != 'var':
             self.error(f"VALUE target '{decl.name}' is not a variable", decl)
             return
+        for selector in decl.target.selectors:
+            if selector.kind != 'FIELD':
+                self.error("VALUE section supports only variables and record-field selectors", decl)
+                return
         if not self.is_constant_set_element(decl.value):
             self.error("VALUE initializer must be constant", decl)
             return
-        value_type = self.infer_expression_type(decl.value, sym.type)
-        if value_type and not can_assign(value_type, sym.type):
-            self.error(f"Cannot initialize {sym.type} with {value_type} in VALUE section", decl)
+        target_type = self.infer_designator_type(decl.target)
+        if target_type is None:
+            return
+        value_type = self.infer_expression_type(decl.value, target_type)
+        if value_type and not can_assign(value_type, target_type):
+            self.error(f"Cannot initialize {target_type} with {value_type} in VALUE section", decl)
 
     def _can_pass_value_argument(self, arg_type: Type, param_type: Type) -> bool:
         """Assignment compatibility for by-value parameters.

@@ -485,6 +485,36 @@ END."""
         self.assertEqual(returncode, 0)
         self.assertEqual(stdout, "--- Dojo Status Set Training ---\nAlert: Fighter is taking damage over time!\nSuccess: Poison cleared.\nStatus Clear: No active impairments detected.\n")
 
+    def test_value_record_field_initializers_runtime(self):
+        """VALUE dotted record-field initializers compile and run."""
+        src = """PROGRAM Lesson6;
+TYPE
+  FighterStance = (Natural, Crane, Tiger, Dragon);
+  StatusEffect = (Poisoned, Shielded, Stunned, Enraged, Hasted);
+  StatusSet = SET OF StatusEffect;
+  CombatantRecord = RECORD
+    Name: STRING(10);
+    Stance: FighterStance;
+    CurrentHP: INTEGER;
+    Conditions: StatusSet;
+  END;
+VAR
+  Player1: CombatantRecord;
+VALUE
+  Player1.Name := 'Mr. Karate';
+  Player1.Stance := Natural;
+  Player1.CurrentHP := 100;
+  Player1.Conditions := [Shielded];
+BEGIN
+  WRITELN(Player1.Name);
+  WRITELN(Player1.CurrentHP:1);
+  IF Shielded IN Player1.Conditions THEN WRITELN('S');
+  WRITELN(ORD(Player1.Stance):1)
+END."""
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout, "Mr. Karate\n100\nS\n0\n")
+
     def test_wide_integer_codegen_runtime(self):
         """INTEGER32/INTEGER64 codegen and WRITE work when wide-integers is enabled."""
         src = """PROGRAM P;

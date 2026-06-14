@@ -150,6 +150,11 @@ class ExprsMixin:
             # If the designator is a constant, return its value directly (not a pointer)
             if not isinstance(ptr.type, ir.PointerType):
                 return ptr
+            # Sets are represented as an aggregate too, but participate in
+            # value operations (+, -, *, IN), so load them. Strings/arrays and
+            # records still travel as pointers for inline aggregate handling.
+            if self.is_set_value(ir.Constant(ptr.type.pointee, None)):
+                return self.builder.load(ptr)
             # For aggregate designators, return pointer without loading (inline aggregates)
             if isinstance(ptr.type.pointee, (ir.ArrayType, ir.LiteralStructType, ir.IdentifiedStructType)):
                 return ptr  # Return pointer to aggregate

@@ -208,17 +208,67 @@ class DeclsMixin:
             return ir.Constant(llvm_type, float(value))
         raise CodegenError(f'Unsupported VALUE initializer for {type(type_expr).__name__}')
 
+    def _explicit_zero_initializer(self, type_expr: Type) -> ir.Constant:
+        """Produce an inspectable zero initializer for aggregate patching."""
+        resolved = self.resolve_type_alias(type_expr)
+        llvm_type = self.llvm_type(resolved)
+        if isinstance(resolved, RecordType):
+            parts: List[ir.Constant] = []
+            for names, ftype in resolved.fields:
+                for _ in names:
+                    parts.append(self._explicit_zero_initializer(ftype))
+            return ir.Constant(llvm_type, parts)
+        if isinstance(resolved, ArrayType):
+            elem = self._explicit_zero_initializer(resolved.element_type)
+            return ir.Constant(llvm_type, [elem for _ in range(llvm_type.count)])
+        return self.zero_initializer(llvm_type)
+
+    def _replace_record_initializer_field(self, aggregate: ir.Constant, type_expr: Type, selectors: List[Selector], value: ir.Constant) -> ir.Constant:
+        """Return ``aggregate`` with a record FIELD selector path replaced."""
+        if not selectors:
+            return value
+        selector = selectors[0]
+        if selector.kind != 'FIELD':
+            raise CodegenError('VALUE section supports only variables and record-field selectors')
+        fidx, ftype = self.record_field_index(type_expr, str(selector.index_or_field))
+        if fidx is None or ftype is None:
+            raise CodegenError(f"Record has no field '{selector.index_or_field}'")
+        llvm_type = self.llvm_type(self.resolve_type_alias(type_expr))
+        parts = list(getattr(aggregate, 'constant', []) or [])
+        if not parts:
+            parts = list(self._explicit_zero_initializer(type_expr).constant)
+        if fidx >= len(parts):
+            raise CodegenError(f"Record field '{selector.index_or_field}' has invalid initializer index")
+        if len(selectors) == 1:
+            parts[fidx] = value
+        else:
+            parts[fidx] = self._replace_record_initializer_field(parts[fidx], ftype, selectors[1:], value)
+        return ir.Constant(llvm_type, parts)
+
     def codegen_value_decl(self, decl: ValueDecl) -> None:
         """Apply a VALUE-section initializer to static/global storage."""
         sym = self.scope.lookup(decl.name)
         if not sym:
             raise CodegenError(f'Undefined variable in VALUE section: {decl.name}')
         slot = sym.llvm_value
-        init = self._value_initializer_constant(decl.value, sym.type_expr)
-        if isinstance(slot, ir.GlobalVariable):
+        if not isinstance(slot, ir.GlobalVariable):
+            raise CodegenError(f'VALUE initializer for non-static variable not supported: {decl.name}')
+
+        target_type_expr = sym.type_expr
+        for selector in decl.target.selectors:
+            if selector.kind != 'FIELD':
+                raise CodegenError('VALUE section supports only variables and record-field selectors')
+            _fidx, target_type_expr = self.record_field_index(target_type_expr, str(selector.index_or_field))
+            if target_type_expr is None:
+                raise CodegenError(f"Record has no field '{selector.index_or_field}'")
+
+        init = self._value_initializer_constant(decl.value, target_type_expr)
+        if not decl.target.selectors:
             slot.initializer = init
             return
-        raise CodegenError(f'VALUE initializer for non-static variable not supported: {decl.name}')
+
+        current = slot.initializer if slot.initializer is not None else self._explicit_zero_initializer(sym.type_expr)
+        slot.initializer = self._replace_record_initializer_field(current, sym.type_expr, decl.target.selectors, init)
 
     def _initck_sentinel(self, decl: VarDecl, llvm_type) -> Optional[ir.Constant]:
         """$INITCK sentinel constant for a scalar variable, or None.

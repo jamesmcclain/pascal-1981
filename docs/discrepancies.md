@@ -372,3 +372,68 @@ whether the pipeline produced the next stage's artifact. Observed idioms:
       END;
   END.
   ```
+
+## D-038 — VALUE section with field-by-field record initialization
+- **Probe:** `docs/probes/D-038-Lesson6.pas`
+- **Behavior targeted:** `VALUE` section assignment to record fields using dotted selectors
+- **Class:** ACCEPT/REJECT
+- **Vintage (1981):** pas1 accepted with 5 warnings (`Assumed OUTPUT`), pas2 produced `l6.obj`, link produced `l6.exe`, and run output was:
+  ```text
+  --- Combatant Record Training ---
+  Fighter Profile loaded: Mr. Karate
+  Health Pool: 100
+  Post-combat HP: 85
+  Fighter state: Enraged counter-attack imminent!
+  ``` [OBSERVED]
+- **Modern (at time of probe):** parser rejected at line 21, column 11 with `expected = or := in value declaration at line 21, column 11 (token DOT '.')` [OBSERVED]
+- **Modern (now):** accepts, compiles, and runs with matching output [OBSERVED]
+- **Adjudication:** vintage accepts field-by-field record initialization in VALUE sections; modern now matches the observed dotted-selector behavior [OBSERVED]
+- **Cross-references:** VALUE section syntax; record initialization notes
+- **Severity:** resolved (was medium: grammar gap; vintage-accepted program rejected by modern)
+- **Resolution:** fixed by parsing VALUE targets as designators, type-checking record-field selector targets, and patching static record initializers field-by-field in codegen.
+- **Source:**
+  ```pascal
+  PROGRAM Lesson6;
+
+  TYPE
+     FighterStance = (Natural, Crane, Tiger, Dragon);
+     StatusEffect  = (Poisoned, Shielded, Stunned, Enraged, Hasted);
+     StatusSet     = SET OF StatusEffect;
+
+     { The Record structure groups our domains together }
+     CombatantRecord = RECORD
+			Name         : STRING(10);
+			Stance       : FighterStance;
+			CurrentHP    : INTEGER;
+			Conditions   : StatusSet;
+		     END;
+
+  VAR
+     Player1 : CombatantRecord;
+
+  VALUE
+     { IBM Pascal allows field-by-field structural initialization }
+     Player1.Name       := 'Mr. Karate';
+     Player1.Stance     := Natural;
+     Player1.CurrentHP  := 100;
+     Player1.Conditions := [Shielded];
+
+  BEGIN
+     WRITELN('--- Combatant Record Training ---');
+
+     { Step 1: Accessing components using dot notation }
+     WRITELN('Fighter Profile loaded: ', Player1.Name);
+     WRITELN('Health Pool: ', Player1.CurrentHP:1);
+
+     { Step 2: Modifying states deep within the record structural layout }
+     Player1.CurrentHP := Player1.CurrentHP - 15;
+     Player1.Conditions := Player1.Conditions + [Enraged];
+
+     WRITELN('Post-combat HP: ', Player1.CurrentHP:1);
+     
+     IF Enraged IN Player1.Conditions THEN
+     BEGIN
+        WRITELN('Fighter state: Enraged counter-attack imminent!');
+     END;
+  END.
+  ```
