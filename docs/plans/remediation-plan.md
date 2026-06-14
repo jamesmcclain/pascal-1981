@@ -82,7 +82,7 @@ OPEN = re-probe.
 | RM-P4-PUTCODE | D-005 | P4 | RECORD-ONLY | PUT-after-GET: record vintage op-error code 1110 | S |
 | RM-P4-WRITECODE | D-024 | P4 | RECORD-ONLY | WRITE-in-inspection-mode: record code 1104 | S |
 | RM-P4-NILCODE | D-015 | P4 | RECORD-ONLY | NIL deref: record code 2031 (+ optional flush) | S |
-| RM-P5-DUPELSE | D-003 | P5 | DECISION-NEEDED | duplicate `$ELSE`: modern `A`, vintage `A C` | S |
+| RM-P5-DUPELSE | D-003 | P5 | RESOLVED | duplicate `$ELSE` now resumes like vintage and prints `A C` | S |
 | RM-P5-SKIPQUOTE | D-004 | P5 | RECORD-ONLY | `{` in skipped-`$IF` string: keep modern fix, document | S |
 | RM-XCUT-IOERR | — | X | RESOLVED | observed program-visible `F.ERRS` codes now use vintage values 10/14 | M |
 | RM-XCUT-FLUSH | — | X | TODO-FIX | flush stdout before modern abort (test fidelity, D-005/15/16) | S |
@@ -389,18 +389,18 @@ strict-abort model is kept by design per the campaign plan.
 ## ANCHOR: RM-P5-DUPELSE
 **Duplicate `$ELSE`: modern prints `A`, vintage prints `A C`.**
 - PRIORITY: P5
-- STATUS: DECISION-NEEDED
+- STATUS: RESOLVED
 - D-ENTRY: D-003
 - CLASS: OUTPUT-DIFF
 - BASIS: INFERRED (mechanism deduced from output; the manual does not document duplicate `$ELSE`) — both outputs are `[OBSERVED]`
 - VINTAGE: `{$IF 1 $THEN} A {$ELSE} B {$ELSE} C {$END}` compiled, linked, ran; prints `A` and `C` — the skipper resumes emission at the *second* `$ELSE` despite the true first branch `[OBSERVED, INFERRED mechanism]`.
-- MODERN-NOW: prints `A` only — the `stop_at_else` fix skips a completed true-branch forward to `$END`, ignoring a depth-1 `$ELSE` `[OBSERVED]`.
-- TOUCH: `lexer.py` — `_skip_source_block` (≈L309) and its `stop_at_else` handling (≈L364; depth-1 `$ELSE` is ignored when skipping a completed true-branch forward). The `ELSE` metacommand tag is `0x0011` (≈L29).
-- DECISION: match the vintage multi-`$ELSE` resume behavior, or keep modern's "ignore stray/duplicate `$ELSE`" as a deliberate divergence. The vintage behavior on malformed/duplicate directives is itself `[INFERRED]` from one probe; matching it is low-value and the modern behavior is arguably more sensible. Recommend documenting as a deliberate divergence unless duplicate-`$ELSE` fidelity is specifically required.
-- ACTION (if 'match'): change `_skip_source_block` so a depth-1 second `$ELSE` resumes emission (rather than being ignored) when skipping a completed true-branch.
+- MODERN-NOW: prints `A` and `C`, matching the observed vintage output `[OBSERVED]`.
+- TOUCH: `lexer.py` — `_skip_source_block` now treats any depth-1 `$ELSE` as a skip terminator, including while skipping a completed true-branch else-body. The `ELSE` metacommand tag is `0x0011` (≈L29).
+- DECISION: match the vintage multi-`$ELSE` resume behavior. The vintage behavior on malformed/duplicate directives is still `[INFERRED]` from one probe; the output match is `[OBSERVED]`.
+- ACTION: done; parser regression pins the token leak after the second `$ELSE`, and codegen runtime regression pins `A` / `C` output.
 - EFFORT: S
-- RISK-IF-SKIPPED: only affects sources with malformed/duplicate `$ELSE` directives. Low (niche).
-- VERIFY: re-run `t003.pas`. If 'match': expect `A C`. If 'document': leave as recorded OUTPUT-DIFF.
+- RISK-IF-SKIPPED: closed for D-003; remaining risk is only broader malformed-directive behavior not covered by the probe.
+- VERIFY: re-run `t003.pas`; expect `A` then `C`.
 - UPGRADES: checklist metacommand semantics (≈L948/1093).
 - XREF: D-003; D-004 (related skipper item).
 

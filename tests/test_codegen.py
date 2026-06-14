@@ -474,6 +474,22 @@ class TestCodegenBuildRun(unittest.TestCase):
         self.assertEqual(returncode, 0)
         self.assertIn("42", stdout)
 
+    def test_duplicate_else_runtime_matches_vintage_d003(self):
+        """D-003: duplicate $ELSE in a true branch resumes at the second else."""
+        src = """PROGRAM P;
+BEGIN
+  {$IF 1 $THEN}
+  WRITELN('A')
+  {$ELSE}
+  ;WRITELN('B')
+  {$ELSE}
+  ;WRITELN('C')
+  {$END}
+END."""
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout, "A\nC\n")
+
     def test_trapped_reset_missing_file_records_errs_d012(self):
         """D-012: trapped RESET on a missing named file records vintage F.ERRS=10."""
         src = """PROGRAM P;

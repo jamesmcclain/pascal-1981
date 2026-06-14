@@ -30,11 +30,12 @@ is OUTPUT-DIFF, never ACCEPT/REJECT.
 - **Behavior targeted:** Metacommand skipper handling of duplicate `$ELSE`
 - **Class:** OUTPUT-DIFF (both compile and run; outputs differ)
 - **Vintage (1981):** compiled, linked, ran; prints `A` and `C` [OBSERVED]
-- **Modern (reimplementation):** compiled, ran; prints `A` only [OBSERVED]
-- **Adjudication:** the vintage skipper resumes emission at the second `$ELSE` despite the true first branch; the modern `stop_at_else` fix skips to `$END`. Mechanism is inferred from output; the manual does not document duplicate `$ELSE`. [INFERRED]
+- **Modern (at time of probe):** compiled, ran; prints `A` only [OBSERVED]
+- **Modern (now):** compiled, ran; prints `A` and `C`, matching the vintage output [OBSERVED]
+- **Adjudication:** the vintage skipper resumes emission at the second `$ELSE` despite the true first branch; modern now intentionally matches this malformed-directive behavior. Mechanism is inferred from output; the manual does not document duplicate `$ELSE`. [INFERRED]
 - **Cross-references:** checklist metacommand semantics (~line 948/1093); lexer `_skip_source_block`.
-- **Severity:** medium (conditional-compilation divergence)
-- **Follow-up:** revisit the `stop_at_else` fix to match vintage multi-`$ELSE` processing, or document as a deliberate divergence.
+- **Severity:** resolved (was medium: conditional-compilation divergence)
+- **Resolution:** changed `_skip_source_block` so a depth-1 `$ELSE` terminates skipping even when skipping a completed true-branch else-body; regressions pin token leakage and runtime `A`/`C` output.
 
 ## D-004 — { inside string literal in skipped $IF block
 - **Probe:** t004.pas (`{$IF 0 $THEN} writeln('{'); {$END} writeln('OK');`)

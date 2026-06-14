@@ -465,16 +465,17 @@ class TestMetacommandSkipRegressions(unittest.TestCase):
         from lexer import Lexer
         return [t.value for t in Lexer(src).tokenize() if t.kind == 'IDENTIFIER']
 
-    def test_duplicate_else_does_not_leak_tokens(self):
-        """A stray second $ELSE while skipping the else-branch of a true $IF
-        must not terminate the skip and leak text into the parser."""
+    def test_duplicate_else_resumes_at_second_else_like_vintage_d003(self):
+        """D-003: a second depth-1 $ELSE while skipping a true branch's
+        else-body terminates the skip; source after that second $ELSE leaks
+        back into tokenization, matching the observed vintage behavior."""
         names = self._identifiers(
             'PROGRAM P; BEGIN {$IF 1 $THEN} GOOD '
-            '{$ELSE} BAD1 {$ELSE} BAD2 {$END} END.'
+            '{$ELSE} BAD1 {$ELSE} GOOD2 {$END} END.'
         )
         self.assertIn('GOOD', names)
         self.assertNotIn('BAD1', names)
-        self.assertNotIn('BAD2', names)
+        self.assertIn('GOOD2', names)
 
     def test_string_literal_with_brace_in_skipped_block(self):
         """A '{' inside a quoted string in a skipped block must not be

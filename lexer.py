@@ -317,9 +317,10 @@ class Lexer:
         Nested $IF/$END pairs increment/decrement depth so inner blocks are
         skipped atomically.
 
-        When stop_at_else is False (skipping a completed true-branch forward
-        to $END), a depth-1 $ELSE is ignored rather than terminating the skip,
-        so stray or duplicate $ELSE markers cannot leak text into the parser.
+        Vintage duplicate-$ELSE behavior (D-003): even when stop_at_else is
+        False because a completed true-branch is being skipped, a second
+        depth-1 $ELSE terminates the skip and tokenization resumes after it.
+        This leaks the later branch text, matching the observed 1981 output.
 
         String literals ('...') in the skipped text are honored: a comment
         opener inside a quoted string does not start a comment, so e.g.
@@ -361,7 +362,7 @@ class Lexer:
                     elif tag == 'END' and depth == 1:
                         self._consume_to(inner_closer)
                         return 'END'
-                    elif tag == 'ELSE' and depth == 1 and stop_at_else:
+                    elif tag == 'ELSE' and depth == 1:
                         self._consume_to(inner_closer)
                         return 'ELSE'
                     elif tag == 'END':
