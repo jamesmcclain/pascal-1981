@@ -301,3 +301,74 @@ whether the pipeline produced the next stage's artifact. Observed idioms:
 - **Cross-references:** checklist TEXT line-marker semantics; manual EOLN/F^ notes
 - **Severity:** baseline
 - **Follow-up:** none
+
+## D-037 — set literal operations in Lesson5
+- **Probe:** `~/Lesson5.pas`
+- **Behavior targeted:** set construction and set arithmetic using `[]`, `+`, `-`, `*`, and `IN`
+- **Class:** ACCEPT/REJECT (RESOLVED in the reimplementation)
+- **Vintage (1981):** pas1 accepted with 4 warnings (`Assumed OUTPUT`), pas2 produced `t001.obj`, link produced `t001.exe`, and run output was:
+  ```text
+  --- Dojo Status Set Training ---
+  Alert: Fighter is taking damage over time!
+  Success: Poison cleared.
+  Status Clear: No active impairments detected.
+  ``` [OBSERVED]
+- **Modern (at time of probe):** parser rejected at line 15, column 22 with `expected constant at line 15, column 22 (token LBRACKET '[')` [OBSERVED]
+- **Modern (now):** accepts, compiles, and runs with matching output [OBSERVED]
+- **Adjudication:** vintage accepted set constants in VALUE and set arithmetic in this probe; modern now matches the observed behavior [OBSERVED]
+- **Cross-references:** set constructor and set-operator support; parser/typechecker/codegen VALUE set initializer support
+- **Severity:** resolved (was high: modern rejected a program the vintage compiler accepts)
+- **Resolution:** fixed by allowing constant set constructors in VALUE declarations, context-typing empty sets from the target/peer set type, and emitting constant set VALUE initializers.
+- **Source:**
+  ```pascal
+  PROGRAM Lesson5;
+
+  TYPE
+      StatusEffect = (Poisoned, Shielded, Stunned, Enraged, Hasted);
+      { Define a set type restricted to our status enum elements }
+      StatusSet    = SET OF StatusEffect;
+
+  VAR
+      ActiveEffects : StatusSet;
+      CombatFilter  : StatusSet;
+      ResultEffects : StatusSet;
+
+  VALUE
+      { We initialize our set to be completely empty using square brackets }
+      ActiveEffects := [];
+
+  BEGIN
+      WRITELN('--- Dojo Status Set Training ---');
+
+      { Step 1: Add elements using Set Union (+) }
+      { This flips the bits for Poisoned and Enraged to 1 }
+      ActiveEffects := ActiveEffects + [Poisoned, Enraged];
+
+      { Step 2: Check membership using the IN operator }
+      IF Poisoned IN ActiveEffects THEN
+      BEGIN
+          WRITELN('Alert: Fighter is taking damage over time!');
+      END;
+
+      { Step 3: Set Difference (-) removes elements }
+      { Let's cure the poison }
+      ActiveEffects := ActiveEffects - [Poisoned];
+
+      IF NOT (Poisoned IN ActiveEffects) THEN
+      BEGIN
+          WRITELN('Success: Poison cleared.');
+      END;
+
+      { Step 4: Set Intersection (*) checks for overlapping attributes }
+      { Let's establish a filter for negative impairments }
+      CombatFilter := [Poisoned, Stunned];
+      
+      { ResultEffects will only retain elements present in BOTH sets }
+      ResultEffects := ActiveEffects * CombatFilter;
+
+      IF ResultEffects = [] THEN
+      BEGIN
+          WRITELN('Status Clear: No active impairments detected.');
+      END;
+  END.
+  ```

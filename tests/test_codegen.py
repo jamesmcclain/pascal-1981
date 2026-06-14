@@ -459,6 +459,32 @@ class TestCodegenBuildRun(unittest.TestCase):
         self.assertEqual(returncode, 0)
         self.assertIn("42", stdout)
 
+    def test_value_empty_set_and_set_arithmetic_runtime(self):
+        """Lesson5-shaped VALUE [] plus set arithmetic compiles and runs."""
+        src = """PROGRAM Lesson5;
+TYPE
+  StatusEffect = (Poisoned, Shielded, Stunned, Enraged, Hasted);
+  StatusSet = SET OF StatusEffect;
+VAR
+  ActiveEffects: StatusSet;
+  CombatFilter: StatusSet;
+  ResultEffects: StatusSet;
+VALUE
+  ActiveEffects := [];
+BEGIN
+  WRITELN('--- Dojo Status Set Training ---');
+  ActiveEffects := ActiveEffects + [Poisoned, Enraged];
+  IF Poisoned IN ActiveEffects THEN WRITELN('Alert: Fighter is taking damage over time!');
+  ActiveEffects := ActiveEffects - [Poisoned];
+  IF NOT (Poisoned IN ActiveEffects) THEN WRITELN('Success: Poison cleared.');
+  CombatFilter := [Poisoned, Stunned];
+  ResultEffects := ActiveEffects * CombatFilter;
+  IF ResultEffects = [] THEN WRITELN('Status Clear: No active impairments detected.')
+END."""
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout, "--- Dojo Status Set Training ---\nAlert: Fighter is taking damage over time!\nSuccess: Poison cleared.\nStatus Clear: No active impairments detected.\n")
+
     def test_wide_integer_codegen_runtime(self):
         """INTEGER32/INTEGER64 codegen and WRITE work when wide-integers is enabled."""
         src = """PROGRAM P;

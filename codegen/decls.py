@@ -184,6 +184,11 @@ class DeclsMixin:
         """Build an LLVM constant for a VALUE-section initializer."""
         llvm_type = self.llvm_type(type_expr)
         is_str, max_len, is_lstring = self.get_string_type_info(type_expr)
+        if isinstance(self.resolve_type_alias(type_expr), SetType) and isinstance(expr, SetConstructor):
+            init = self.codegen_set_constructor(expr)
+            if isinstance(init, ir.Constant):
+                return init
+            raise CodegenError('VALUE set initializer must be constant')
         if is_str and isinstance(expr, StringLiteral):
             data = self._decode_string_literal(expr).encode('latin1')
             if is_lstring:

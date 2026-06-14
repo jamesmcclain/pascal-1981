@@ -537,7 +537,7 @@ class PascalTypeChecker(TypeChecker):
         if not self.is_constant_set_element(decl.value):
             self.error("VALUE initializer must be constant", decl)
             return
-        value_type = self.infer_expression_type(decl.value)
+        value_type = self.infer_expression_type(decl.value, sym.type)
         if value_type and not can_assign(value_type, sym.type):
             self.error(f"Cannot initialize {sym.type} with {value_type} in VALUE section", decl)
 
@@ -1603,7 +1603,11 @@ class PascalTypeChecker(TypeChecker):
                     self.error("Typed set constructors require constant elements", expr)
                     return None
             if not expr.elements:
-                return declared_set_type or SetType(INTEGER_TYPE)
+                if declared_set_type:
+                    return declared_set_type
+                if isinstance(context_type, SetType):
+                    return context_type
+                return SetType(INTEGER_TYPE)
             element_type: Optional[Type] = None
             for el in expr.elements:
                 if isinstance(el, RangeExpr):
@@ -1727,8 +1731,21 @@ class PascalTypeChecker(TypeChecker):
             return sym.type
         elif isinstance(expr, BinOp):
             literal_context = context_type if context_type in (INTEGER_TYPE, WORD_TYPE, INTEGER32_TYPE, INTEGER64_TYPE) else None
-            left_type = self.infer_expression_type(expr.left, literal_context if isinstance(expr.left, (IntLiteral, UnaryOp)) else None)
-            right_type = self.infer_expression_type(expr.right, literal_context if isinstance(expr.right, (IntLiteral, UnaryOp)) else None)
+            left_context = literal_context if isinstance(expr.left, (IntLiteral, UnaryOp)) else None
+            right_context = literal_context if isinstance(expr.right, (IntLiteral, UnaryOp)) else None
+
+            # Empty set constructors are context-dependent. For binary set
+            # operators/comparisons, infer the non-empty side first and use it
+            # as the contextual type for the empty side.
+            if isinstance(expr.left, SetConstructor) and not expr.left.elements:
+                right_type = self.infer_expression_type(expr.right, right_context)
+                left_type = self.infer_expression_type(expr.left, right_type if isinstance(right_type, SetType) else left_context)
+            elif isinstance(expr.right, SetConstructor) and not expr.right.elements:
+                left_type = self.infer_expression_type(expr.left, left_context)
+                right_type = self.infer_expression_type(expr.right, left_type if isinstance(left_type, SetType) else right_context)
+            else:
+                left_type = self.infer_expression_type(expr.left, left_context)
+                right_type = self.infer_expression_type(expr.right, right_context)
             if left_type and right_type:
                 result = binary_op_result_type(left_type, expr.op, right_type)
                 if result is None:
@@ -1981,6 +1998,8 @@ class PascalTypeChecker(TypeChecker):
         """Return True when a set element/range endpoint is compile-time constant."""
         if isinstance(expr, RangeExpr):
             return self.is_constant_set_element(expr.low) and self.is_constant_set_element(expr.high)
+        if isinstance(expr, SetConstructor):
+            return all(self.is_constant_set_element(el) for el in expr.elements)
         if isinstance(expr, (IntLiteral, RealLiteral, BoolLiteral, CharLiteral, StringLiteral)):
             return True
         if isinstance(expr, Identifier):
