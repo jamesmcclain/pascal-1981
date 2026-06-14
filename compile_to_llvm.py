@@ -29,12 +29,12 @@ def main() -> int:
         default=None,
         help='Output LLVM IR file to write to.')
     parser.add_argument('-v', '--verbose', action='store_true', help='Log each declaration/statement and print a full traceback on failure.')
-    parser.add_argument('-f', '--feature', action='append', default=[], metavar='NAME',
-                        help='Enable extension feature NAME; use no-NAME to disable. Repeatable.')
-    parser.add_argument('--dialect', choices=['vintage', 'extended'], default='vintage',
+    parser.add_argument('-f', '--feature', action='append', default=[], metavar='NAME', help='Enable extension feature NAME; use no-NAME to disable. Repeatable.')
+    parser.add_argument('--dialect',
+                        choices=['vintage', 'extended'],
+                        default='vintage',
                         help='Feature umbrella: vintage enables no extensions; extended enables all registered features.')
-    parser.add_argument('--list-features', action='store_true',
-                        help='List registered extension features and exit.')
+    parser.add_argument('--list-features', action='store_true', help='List registered extension features and exit.')
     # ----------------------------------------------------------------
     # Runtime-check flag overrides
     # Each flag follows the same tri-state convention:
@@ -46,31 +46,20 @@ def main() -> int:
     # (ENTRY INDEXCK INITCK MATHCK NILCK RANGECK STACKCK) to the same
     # value, but individual flags still override the master.
     # ----------------------------------------------------------------
-    _flag_help = (
-        'Force {name} check on/off, or use source metacommands (default).'
-    )
+    _flag_help = ('Force {name} check on/off, or use source metacommands (default).')
     # NOTE: STACKCK is accepted as a documented no-op: on this target the
     # OS guard page already faults on stack overflow, and clang owns frame
     # layout, so explicit entry probes would add cost without adding
     # detection.  All other check flags are implemented in codegen.
-    _flag_help_noop = (
-        'Force {name} on/off (accepted for source compatibility; no-op on '
-        'this target — the OS guard page already detects stack overflow).'
-    )
-    parser.add_argument('--debug',   choices=['on', 'off', 'source'], default='source',
-                        help=_flag_help.format(name='DEBUG (master: sets all sub-flags)'))
-    parser.add_argument('--rangeck', choices=['on', 'off', 'source'], default='source',
-                        help=_flag_help.format(name='RANGECK (subrange validity)'))
-    parser.add_argument('--indexck', choices=['on', 'off', 'source'], default='source',
-                        help=_flag_help.format(name='INDEXCK (array index bounds)'))
-    parser.add_argument('--mathck',  choices=['on', 'off', 'source'], default='source',
-                        help=_flag_help.format(name='MATHCK (integer overflow / div-by-zero)'))
-    parser.add_argument('--nilck',   choices=['on', 'off', 'source'], default='source',
-                        help=_flag_help.format(name='NILCK (nil pointer dereference)'))
-    parser.add_argument('--stackck', choices=['on', 'off', 'source'], default='source',
-                        help=_flag_help_noop.format(name='STACKCK (stack overflow)'))
-    parser.add_argument('--initck',  choices=['on', 'off', 'source'], default='source',
-                        help=_flag_help.format(name='INITCK (uninitialised variable detection)'))
+    _flag_help_noop = ('Force {name} on/off (accepted for source compatibility; no-op on '
+                       'this target — the OS guard page already detects stack overflow).')
+    parser.add_argument('--debug', choices=['on', 'off', 'source'], default='source', help=_flag_help.format(name='DEBUG (master: sets all sub-flags)'))
+    parser.add_argument('--rangeck', choices=['on', 'off', 'source'], default='source', help=_flag_help.format(name='RANGECK (subrange validity)'))
+    parser.add_argument('--indexck', choices=['on', 'off', 'source'], default='source', help=_flag_help.format(name='INDEXCK (array index bounds)'))
+    parser.add_argument('--mathck', choices=['on', 'off', 'source'], default='source', help=_flag_help.format(name='MATHCK (integer overflow / div-by-zero)'))
+    parser.add_argument('--nilck', choices=['on', 'off', 'source'], default='source', help=_flag_help.format(name='NILCK (nil pointer dereference)'))
+    parser.add_argument('--stackck', choices=['on', 'off', 'source'], default='source', help=_flag_help_noop.format(name='STACKCK (stack overflow)'))
+    parser.add_argument('--initck', choices=['on', 'off', 'source'], default='source', help=_flag_help.format(name='INITCK (uninitialised variable detection)'))
     args = parser.parse_args()
 
     if args.list_features:
@@ -132,18 +121,16 @@ def main() -> int:
         for flag_name, attr in (
             ('RANGECK', 'rangeck'),
             ('INDEXCK', 'indexck'),
-            ('MATHCK',  'mathck'),
-            ('NILCK',   'nilck'),
+            ('MATHCK', 'mathck'),
+            ('NILCK', 'nilck'),
             ('STACKCK', 'stackck'),
-            ('INITCK',  'initck'),
+            ('INITCK', 'initck'),
         ):
             val = getattr(args, attr)
             if val != 'source':
                 force_flags[flag_name] = (val == 'on')
 
-        ir = compile_to_llvm(ast, verbose=verbose, source_file=source_file,
-                             force_flags=force_flags or None,
-                             features=features)
+        ir = compile_to_llvm(ast, verbose=verbose, source_file=source_file, force_flags=force_flags or None, features=features)
 
         # Output
         if output_file:

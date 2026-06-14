@@ -14,7 +14,7 @@ from ast_nodes import EnumType as ASTEnumType
 from ast_nodes import LStringType as ASTLStringType
 from ast_nodes import *
 from codegen.base import CodegenError
-from type_system import BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, REAL_TYPE, WORD_TYPE
+from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE)
 from type_system import EnumType as ResolvedEnumType
 from type_system import FileType as ResolvedFileType
 from type_system import LStringType, StringType
@@ -109,8 +109,7 @@ class IoWriteReadMixin:
                 table = self.enum_name_table(enum_names)
                 zero = ir.Constant(ir.IntType(32), 0)
                 names_ptr = self.builder.gep(table, [zero, zero])
-                fn = self._runtime_func('pas_enum_write_token', ir.IntType(8).as_pointer(),
-                                        [ir.IntType(32), ir.IntType(8).as_pointer().as_pointer(), ir.IntType(32)])
+                fn = self._runtime_func('pas_enum_write_token', ir.IntType(8).as_pointer(), [ir.IntType(32), ir.IntType(8).as_pointer().as_pointer(), ir.IntType(32)])
                 val = self.builder.call(fn, [self.coerce_printf_int(val), names_ptr, ir.Constant(ir.IntType(32), len(enum_names))])
                 pas_ty = None
 
@@ -135,7 +134,23 @@ class IoWriteReadMixin:
                 elif width is not None and precision is None:
                     fmt_parts.append('%*.*s')
                     printf_args.extend([self.coerce_printf_int(self.codegen_expr(width)), length, val])
+                elif precision is not None and not self.feature_enabled('string-precision'):
+                    # Faithful 1981 default: ::N precision is IGNORED on
+                    # STRING/LSTRING values (D-011 — vintage prints the whole
+                    # string; `s::3` on 'ABCDE' -> 'ABCDE', not 'ABC'). Fall
+                    # back to the same lowering as if no precision were given:
+                    # P:M:N pads to width M and ignores N; P::N prints the
+                    # whole value at the default width. Opt in to the
+                    # truncating behavior with -f string-precision.
+                    if width is not None:
+                        fmt_parts.append('%*.*s')
+                        printf_args.extend([self.coerce_printf_int(self.codegen_expr(width)), length, val])
+                    else:
+                        fmt_parts.append('%.*s')
+                        printf_args.extend([length, val])
                 else:
+                    # -f string-precision: honor ::N by truncating to N chars
+                    # (extension; not 1981 behavior).
                     fmt_parts.append('%*.*s')
                     printf_args.extend([
                         self.coerce_printf_int(self.codegen_expr(width)) if width is not None else ir.Constant(ir.IntType(32), 0),
@@ -259,12 +274,14 @@ class IoWriteReadMixin:
                 names_ptr = self.builder.gep(table, [zero, zero]) if names else ir.Constant(ir.IntType(8).as_pointer().as_pointer(), None)
                 tmp = self.builder.alloca(ir.IntType(32), name='read_enum_tmp')
                 if file_fcb is not None:
-                    fn = self._runtime_func('pas_fread_enum_name', ir.IntType(32),
-                                            [self.file_fcb_type().as_pointer(), ir.IntType(32).as_pointer(), ir.IntType(8).as_pointer().as_pointer(), ir.IntType(32)])
+                    fn = self._runtime_func(
+                        'pas_fread_enum_name', ir.IntType(32),
+                        [self.file_fcb_type().as_pointer(), ir.IntType(32).as_pointer(),
+                         ir.IntType(8).as_pointer().as_pointer(),
+                         ir.IntType(32)])
                     call_args = [file_fcb, tmp, names_ptr, ir.Constant(ir.IntType(32), len(names or []))]
                 else:
-                    fn = self._runtime_func('pas_read_enum_name', ir.IntType(32),
-                                            [ir.IntType(32).as_pointer(), ir.IntType(8).as_pointer().as_pointer(), ir.IntType(32)])
+                    fn = self._runtime_func('pas_read_enum_name', ir.IntType(32), [ir.IntType(32).as_pointer(), ir.IntType(8).as_pointer().as_pointer(), ir.IntType(32)])
                     call_args = [tmp, names_ptr, ir.Constant(ir.IntType(32), len(names or []))]
                 self.builder.call(fn, call_args)
                 loaded = self.builder.load(tmp)
@@ -323,7 +340,11 @@ class IoWriteReadMixin:
         set_val = self.codegen_expr(set_expr)
         set_slot = self.builder.alloca(self.set_llvm_type(), name='readset_set')
         self.builder.store(set_val, set_slot)
-        self.builder.call(self.scope.lookup('pas_freadset').llvm_value, [file_fcb, self.builder.bitcast(dest_ptr, ir.IntType(8).as_pointer()), ir.Constant(ir.IntType(32), max_len), set_slot])
+        self.builder.call(
+            self.scope.lookup('pas_freadset').llvm_value,
+            [file_fcb, self.builder.bitcast(dest_ptr,
+                                            ir.IntType(8).as_pointer()),
+             ir.Constant(ir.IntType(32), max_len), set_slot])
 
     def builtin_readfn(self, args):
         file_fcb = self._default_input_fcb()
@@ -365,6 +386,7 @@ class IoWriteReadMixin:
         return getattr(pas_ty, 'name', '').upper() == 'BOOLEAN'
 
     def _boolean_name_constants(self) -> tuple[ir.Value, ir.Value]:
+
         def const_ptr(text: str) -> ir.Value:
             data = bytearray(text.encode('utf-8') + b'\0')
             const = ir.Constant(ir.ArrayType(ir.IntType(8), len(data)), data)
@@ -372,6 +394,7 @@ class IoWriteReadMixin:
             g.initializer = const
             g.global_constant = True
             return self.builder.gep(g, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0)])
+
         return const_ptr('FALSE'), const_ptr('TRUE')
 
     def enum_value_list(self, type_expr) -> Optional[List[str]]:

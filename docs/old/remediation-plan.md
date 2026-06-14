@@ -68,37 +68,39 @@ OPEN = re-probe.
 | Anchor | D | Prio | Status | One-line | Effort |
 |---|---|---|---|---|---|
 | RM-P0-BOOL | D-020 | P0 | RESOLVED | BOOLEAN WRITE now prints `TRUE`/`FALSE` in all modes | S |
-| RM-P0-CASE | D-028 | P0 | TODO-FIX | CASE no-match silently falls through; vintage traps | S |
-| RM-P1-INTPN | D-010 | P1 | DECISION-NEEDED | integer `::N` silently accepted; vintage runtime-rejects | S |
+| RM-P0-CASE | D-028 | P0 | RESOLVED | CASE no-match now aborts under `$RANGECK` when no `OTHERWISE` matches | S |
+| RM-P1-INTPN | D-010 | P1 | RESOLVED | integer `::N` is rejected at typecheck; vintage runtime-rejects | S |
 | RM-P1-ENUMWRITE | D-019 | P1 | RESOLVED | enum WRITE is ordinal by default; symbolic names require `-f symbolic-enum-io` | S |
 | RM-DEC-ENUMIO | D-019/D-006/D-030 | DEC | DECIDED | faithful default (ordinal write + numeric read); one `symbolic-enum-io` flag gates name write + name read | — |
-| RM-P2-WORD | D-032 | P2 | TODO-FIX | WORD assign/convert (`WRD`,`MAXWORD`) rejected | M |
-| RM-P2-PACK | D-031 | P2 | TODO-FIX | `PACK`/`UNPACK` + packed-char-array WRITE rejected | M-L |
-| RM-P2-NULL | D-033 | P2 | TODO-FIX | `NULL` LSTRING constant + `.LEN` field rejected | M |
+| RM-P2-WORD | D-032 | P2 | RESOLVED | WORD assign/convert (`WRD`,`MAXWORD`) now matches probed vintage edges | M |
+| RM-P2-PACK | D-031 | P2 | RESOLVED | `PACK`/`UNPACK` + packed-char-array WRITE now match probed behavior | M-L |
+| RM-P2-NULL | D-033 | P2 | RESOLVED | `NULL` LSTRING constant + `.LEN` field now match probed behavior | M |
 | RM-P2-ENUMREAD | D-030/D-006 | P2 | RESOLVED | enum READ accepts numeric ordinals by default; symbolic names under `-f symbolic-enum-io` | M |
-| RM-P2-SETCTOR | D-026 | P2 | TODO-FIX | type-prefixed set ctor `COLORS[..]` rejected; unblocks t022 | M |
-| RM-P3-READTRAP | D-013 | P3 | TODO-FIX | malformed formatted READ aborts; vintage traps (code 14) | M |
-| RM-P3-ERRSCODE | D-012 | P3 | TODO-FIX | `F.ERRS` returns invented code; vintage = 10 on RESET-missing | S |
+| RM-P2-SETCTOR | D-026 | P2 | RESOLVED | type-prefixed set ctor `COLORS[..]` accepted; t022 modern side now also accepts bare `['A'..'Z']` | M |
+| RM-P3-READTRAP | D-013 | P3 | RESOLVED | malformed formatted READ traps through `F.ERRS=14` when `F.TRAP` is set | M |
+| RM-P3-ERRSCODE | D-012 | P3 | RESOLVED | trapped RESET-missing now returns observed vintage `F.ERRS=10` | S |
 | RM-P4-PUTCODE | D-005 | P4 | RECORD-ONLY | PUT-after-GET: record vintage op-error code 1110 | S |
 | RM-P4-WRITECODE | D-024 | P4 | RECORD-ONLY | WRITE-in-inspection-mode: record code 1104 | S |
 | RM-P4-NILCODE | D-015 | P4 | RECORD-ONLY | NIL deref: record code 2031 (+ optional flush) | S |
-| RM-P5-DUPELSE | D-003 | P5 | DECISION-NEEDED | duplicate `$ELSE`: modern `A`, vintage `A C` | S |
+| RM-P5-DUPELSE | D-003 | P5 | RESOLVED | duplicate `$ELSE` now resumes like vintage and prints `A C` | S |
 | RM-P5-SKIPQUOTE | D-004 | P5 | RECORD-ONLY | `{` in skipped-`$IF` string: keep modern fix, document | S |
-| RM-XCUT-IOERR | — | X | TODO-FIX | renumber `io_error` table to vintage codes (gates D-005/12/13/24) | M |
-| RM-XCUT-FLUSH | — | X | TODO-FIX | flush stdout before modern abort (test fidelity, D-005/15/16) | S |
+| RM-XCUT-IOERR | — | X | RESOLVED | observed program-visible `F.ERRS` codes now use vintage values 10/14 | M |
+| RM-XCUT-FLUSH | — | X | RESOLVED | generated/runtime aborts flush stdout before abort (D-005/15/16/24) | S |
 | RM-XCUT-ENUMBOOL | — | X | HONORED | BOOLEAN-names vs user-enum-ordinal kept separate (D-019 vs D-020) | S |
 | RM-DEC-INTWIDTH | D-014/16/17 | DEC | DECIDED (16-bit fork, implemented) | INTEGER now 16-bit; INTEGER32/64 added behind `-f wide-integers`; D-014/16/17 resolved | done |
 | RM-NOACTION | baselines | — | NO-ACTION | AGREE-ACCEPT baselines only (the D-014/16/17 width trio is now RESOLVED, see RM-DEC-INTWIDTH); don't fix piecemeal | — |
-| RM-OPEN-T021 | t021 | OPEN | INVESTIGATE | `ORD(EOL)` verdict `[UNVERIFIED]`; rerun | S |
-| RM-OPEN-T022 | t022 | OPEN | INVESTIGATE | `READSET` delimiter retention; redesign (needs RM-P2-SETCTOR) | M |
+| RM-OPEN-T021 | t021 | — | RESOLVED | `ORD(EOL)` AGREE-REJECT (both reject; `EOL` not a valid identifier) — closed, no action | S |
+| RM-OPEN-T022 | D-022 | P2 | RESOLVED | READSET inline set-literal rejected by default (vintage); `-f readset-set-literal` accepts | S |
+| RM-OPEN-T011 | D-011 | P1 | RESOLVED | STRING `::N` ignored by default (vintage `ABCDE`); `-f string-precision` truncates (`ABC`) | S |
 
 Sequencing note: P0 → P1 are cheap, high-value, and should land first. Within
 P2 the items are largely independent and may be resequenced by team preference;
 the recommended order is most-fundamental-type-first (WORD, PACK, NULL/LSTRING)
-ahead of the narrower input/grammar gaps (enum READ, set ctor), **except** that
-`RM-P2-SETCTOR` (D-026) is the prerequisite for closing `RM-OPEN-T022` and may
-be pulled forward if that open item matters. `RM-XCUT-IOERR` should land before
-or with D-012/D-013 since all three touch the same table.
+ahead of the narrower input/grammar gaps (enum READ, set ctor). `RM-P2-SETCTOR`
+(D-026) has landed; it incidentally settled the modern side of `RM-OPEN-T022`
+(modern now accepts the bare `['A'..'Z']` READSET literal), leaving only a
+vintage rerun there. `RM-XCUT-IOERR` landed with
+D-012/D-013 for the observed program-visible `F.ERRS` values.
 
 Two standing design decisions (section D) gate other work. `RM-DEC-ENUMIO` must
 be settled *before* `RM-P1-ENUMWRITE` and `RM-P2-ENUMREAD` are implemented —
@@ -110,7 +112,9 @@ independently; whichever fork is chosen sets both. `RM-DEC-INTWIDTH` has been
 NO-ACTION). The feature-flag mechanism introduced for that work (`features.py`,
 exposed via `-f`/`--feature`, `--dialect`, and `--list-features`) is the
 established pattern for gating any future "extends beyond vintage" behavior; new
-extension items should reuse it rather than inventing a parallel mechanism.
+extension items should reuse it rather than inventing a parallel mechanism. As of
+this revision four features are registered: `wide-integers`, `symbolic-enum-io`,
+`string-precision` (D-011), and `readset-set-literal` (D-022).
 
 ---
 
@@ -136,14 +140,14 @@ extension items should reuse it rather than inventing a parallel mechanism.
 ## ANCHOR: RM-P0-CASE
 **CASE with no matching arm and no `OTHERWISE` silently falls through; vintage traps.**
 - PRIORITY: P0 (silent control-flow corruption — more dangerous than a loud error because nothing signals it)
-- STATUS: TODO-FIX
+- STATUS: RESOLVED
 - D-ENTRY: D-028
 - CLASS: OUTPUT-DIFF
 - BASIS: OBSERVED (code value 2050) + READ (manual src ≈9953 documents the trap under `$RANGECK`)
 - VINTAGE: prints `BEFORE`, then runtime error `? Error: No CASE Value Matches Selector` / `Error Code 2050`; confirms `$RANGECK` is ON by default `[OBSERVED]`.
-- MODERN-NOW: prints `BEFORE` and `AFTER` — silent fall-through `[OBSERVED]`.
-- TOUCH: `codegen/stmts.py` → `codegen_case_stmt` (≈L394-430). With `stmt.otherwise is None` and no match, control branches straight to `end_block` (≈L425-429). The flag accessor `effective_rangeck(stmt)` already exists (≈L52-54).
-- ACTION: when `stmt.otherwise is None` **and** `effective_rangeck(stmt)` is true, replace the fall-through-to-`end_block` with a trap: emit a call to the existing runtime abort and mark `unreachable`. Model: `_emit_runtime_check` in `codegen/base.py` (≈L136-148), which calls `runtime_error_func()` then `self.builder.unreachable()`; or `pascal_abort_func`/`pabort(msg,len,code,status)` in `codegen/runtime_builtins.py` (≈L46-52) if a distinct code/message is wanted to mirror vintage 2050. When `$RANGECK-`, keep current silent fall-through (matches the switch-disables-checking model used elsewhere, cf. D-017).
+- MODERN-NOW: under default `$RANGECK`, prints `BEFORE` then aborts before `AFTER`; explicit `OTHERWISE` and matching-arm CASE paths still run normally `[OBSERVED]`.
+- TOUCH: `codegen/stmts.py` → `codegen_case_stmt` and `_emit_case_no_match_trap`. With `stmt.otherwise is None`, no match, and `effective_rangeck(stmt)` true, the final no-match path now flushes stdout, calls the existing runtime abort, and marks the block `unreachable`. When `$RANGECK-`, it preserves silent fall-through.
+- ACTION: done. Exact vintage diagnostic text/code 2050 is not emitted; this item resolves the P0 silent-control-flow corruption only.
 - EFFORT: S
 - RISK-IF-SKIPPED: a ported program that relies on the no-match trap (or that has an unhandled selector value) silently continues past the CASE with whatever state it had — wrong results, no diagnostic. High because invisible.
 - VERIFY: recompile + run `t028.pas`; expect `BEFORE` then a non-zero abort (no `AFTER`). Confirm `t035.pas` (explicit `OTHERWISE`) and any matching-arm CASE still pass — the trap must fire ONLY on the no-match-and-no-OTHERWISE path under default checking.
@@ -157,20 +161,20 @@ extension items should reuse it rather than inventing a parallel mechanism.
 ## ANCHOR: RM-P1-INTPN
 **Integer `::N` (precision) is silently accepted and ignored; vintage rejects it at runtime.**
 - PRIORITY: P1
-- STATUS: DECISION-NEEDED
+- STATUS: RESOLVED
 - D-ENTRY: D-010
 - CLASS: OUTPUT-DIFF (both compile; vintage errors at runtime, modern runs)
 - BASIS: OBSERVED (vintage data-format error code 1123)
 - VINTAGE: compiled and linked, then failed at runtime: `? Error: Data format error in file USER` / `Error Code 1123` `[OBSERVED]`.
-- MODERN-NOW: accepted `WRITELN(x::4)` and printed `42`, precision operand silently dropped `[OBSERVED]`.
-- TOUCH: `codegen/io_write_read.py` → integer branch of `build_write_format_and_args` (≈L146-164). Contrast: REAL `::N` IS honored (≈L128-144, the D-002 fixed-point path); STRING `::N` is accepted-and-ignored on BOTH sides (t011, AGREE-ACCEPT) so string is intentionally lenient.
-- DECISION: choose fidelity vs leniency. (a) **Match vintage** — make integer `::N` an error. Vintage makes it a *runtime* data-format error (1123); a compile-time rejection is simpler and arguably better but is a stricter divergence — pick one and document it. (b) **Keep leniency** — document modern integer `::N` as a deliberate accepted extension. Note the asymmetry to preserve: REAL `::N` is meaningful, STRING `::N` is ignored-by-agreement, INTEGER `::N` is the only contested case.
-- ACTION (if 'match'): reject integer `::N` — preferred at typecheck via the `io_data_param` path; if matching vintage's runtime-error timing is required, emit the data-format error at the write site instead.
+- MODERN-NOW: rejects `WRITELN(x::4)` at typecheck with `WRITE precision (::N) is not valid for INTEGER-compatible values` `[OBSERVED]`.
+- TOUCH: `type_checker.py` → `_check_write_args` rejects precision on INTEGER-compatible WRITE values. Contrast: REAL `::N` IS still honored by `codegen/io_write_read.py`. STRING `::N` is accepted but **ignored by default** (faithful — vintage prints the whole string; `s::3` on `'ABCDE'` → `ABCDE`), with truncation available under `-f string-precision`; see D-011 / RM-OPEN-T011. So each type's `::N` is now settled: REAL honored (D-002), INTEGER rejected (D-010), STRING ignored (D-011).
+- DECISION: decided — match vintage by rejecting integer `::N`. The vintage compiler reports a runtime data-format error (1123); modern deliberately rejects at compile time as the remediation plan allowed, so no exact runtime-code fidelity is claimed.
+- ACTION: done.
 - EFFORT: S
 - RISK-IF-SKIPPED: a ported program using integer `::N` that the vintage runtime would have rejected instead runs silently on modern — masks a real defect in the ported source. Medium (labeled high in the log for the accept-vs-reject fidelity gap).
 - VERIFY: re-run `t010.pas`. If 'match' chosen: modern must error (runtime 1123-equivalent, or a documented compile error). If 'keep': record the extension and leave t010 as a documented OUTPUT-DIFF.
 - UPGRADES: checklist 8.3 / I/O formatting; EBNF `io_data_param`.
-- XREF: D-010; D-002 (REAL `::N`); t011 (STRING `::N`, AGREE-ACCEPT).
+- XREF: D-010; D-002 (REAL `::N`); D-011 / RM-OPEN-T011 (STRING `::N` — ignored by default, truncation behind `-f string-precision`).
 
 ## ANCHOR: RM-P1-ENUMWRITE
 **Enum WRITE prints the symbolic name; vintage prints the ordinal.**
@@ -202,14 +206,14 @@ modern rejects at typecheck. Items are largely independent.
 ## ANCHOR: RM-P2-WORD
 **WORD assignment / conversion (`WRD`, `MAXWORD`) rejected at typecheck.**
 - PRIORITY: P2
-- STATUS: TODO-FIX
+- STATUS: RESOLVED
 - D-ENTRY: D-032
 - CLASS: ACCEPT/REJECT
 - BASIS: OBSERVED (vintage output `65535`, `40000`, `65535`)
 - VINTAGE: compiled (3 `Assumed OUTPUT` warnings), linked, ran; `MAXWORD` = `65535`, `w := 40000` prints `40000`, `WRD(-1)` = `65535` — 16-bit unsigned, `WRD(-1)` wraps to max `[OBSERVED]`.
-- MODERN-NOW: rejected at typecheck: `Cannot assign INTEGER to WORD` `[OBSERVED]`.
-- TOUCH: `type_checker.py` — `WRD` handling at ≈L1824-1839 (currently errors on unsupported arg types); the INTEGER→WORD assignment-compatibility rule (search `Cannot assign` / WORD coercion). WORD already maps to `ir.IntType(16)` in `codegen/types_map.py` (≈L33/L65), so the storage exists; the gap is the typecheck assignment/conversion path and `WRD`/`MAXWORD` lowering.
-- ACTION: allow INTEGER→WORD assignment/conversion with 16-bit unsigned semantics; implement `WRD(x)` as conversion-to-WORD with wraparound (`WRD(-1) = 65535`); ensure `MAXWORD` = 65535. WORD is already displayed via the `i16 → %u` branch in the WRITE builder, so display should follow once assignment lands.
+- MODERN-NOW: compiles and prints `65535`, `40000`, `65535` for the D-032 probe `[OBSERVED]`.
+- TOUCH: already resolved by prior 16-bit INTEGER/WORD work: `type_system.py` permits INTEGER→WORD assignment, `codegen/exprs.py` lowers `WRD` with 16-bit wrap semantics, `codegen/base.py` defines `MAXWORD = 65535`, and WRITE displays WORD through the unsigned `i16 → %u` path.
+- ACTION: done; added regression `test_word_probe_d032_edges` to pin `MAXWORD`, `w := 40000`, and `WRD(-1)`.
 - EFFORT: M
 - RISK-IF-SKIPPED: any program using WORD arithmetic/assignment won't compile. Medium (loud).
 - VERIFY: re-run `t032.pas`; expect `65535`, `40000`, `65535`.
@@ -219,14 +223,14 @@ modern rejects at typecheck. Items are largely independent.
 ## ANCHOR: RM-P2-PACK
 **`PACK`/`UNPACK` and packed-char-array WRITE rejected.**
 - PRIORITY: P2
-- STATUS: TODO-FIX
+- STATUS: RESOLVED
 - D-ENTRY: D-031
 - CLASS: ACCEPT/REJECT
 - BASIS: OBSERVED (vintage output `BCD` then `..BCD.`)
 - VINTAGE: compiled (3 `Assumed OUTPUT` warnings), linked, ran; `PACK(a,2,z)` then `WRITELN(z)` → `BCD`; `UNPACK(z,b,3)` round-trip → `..BCD.`; uses the expected index convention `[OBSERVED]`.
-- MODERN-NOW: rejected at typecheck: `WRITE argument 1 has unwritable type PACKED ARRAY[1..3] OF CHAR` `[OBSERVED]`.
-- TOUCH: `type_checker.py` — `PACK`/`UNPACK` arg checks at ≈L929-933 and `_check_pack_args` at ≈L1208+; the packed-array WRITE rejection at ≈L1080 (`unwritable type`). Two sub-gaps: (1) `PACK`/`UNPACK` semantics + index base, (2) writing a packed char array as a string.
-- ACTION: implement `PACK`/`UNPACK` lowering with the vintage index convention (confirmed by `BCD` / `..BCD.`), and allow a `PACKED ARRAY[..] OF CHAR` as a writable string in the WRITE path.
+- MODERN-NOW: compiles and prints `BCD` then `..BCD.` for the D-031 probe `[OBSERVED]`.
+- TOUCH: already resolved by existing support: `type_checker.py` validates `PACK`/`UNPACK` arguments, `codegen/stmts.py` lowers calls through runtime helpers, and the WRITE path treats `PACKED ARRAY[..] OF CHAR` as writable string data.
+- ACTION: done; added regression `test_pack_unpack_probe_d031_char_round_trip` to pin PACK start index, UNPACK start index, and packed-char-array WRITE.
 - EFFORT: M-L (two distinct pieces; biggest P2 item)
 - RISK-IF-SKIPPED: programs using `PACK`/`UNPACK` or printing packed char arrays won't compile. Medium (loud).
 - VERIFY: re-run `t031.pas`; expect `BCD` then `..BCD.`.
@@ -236,14 +240,14 @@ modern rejects at typecheck. Items are largely independent.
 ## ANCHOR: RM-P2-NULL
 **`NULL` LSTRING constant + `.LEN` field access rejected.**
 - PRIORITY: P2
-- STATUS: TODO-FIX
+- STATUS: RESOLVED
 - D-ENTRY: D-033
 - CLASS: ACCEPT/REJECT
 - BASIS: OBSERVED (vintage output `0` then `<>`)
 - VINTAGE: compiled (2 `Assumed OUTPUT` warnings), linked, ran; `l := NULL; WRITELN(ORD(l.LEN))` → `0`; `WRITELN('<',l,'>')` → `<>` — `NULL` is a zero-length LSTRING constant, printed empty between delimiters `[OBSERVED]`.
-- MODERN-NOW: rejected at typecheck: `Cannot access field on non-record type LSTRING(5)` `[OBSERVED]`.
-- TOUCH: `type_checker.py` — `.LEN` rejection at the non-record field-access sites ≈L1631 / L1962; `NULL` constant handling (search `NULL`). LSTRING already has a length slot in codegen (the WRITE path loads LSTRING length via `gep ..,0,0`, see `io_write_read.py` ≈L108-110), so the runtime shape exists; the gap is typecheck-level `.LEN` field access on LSTRING and the `NULL` zero-length constant.
-- ACTION: implement `NULL` as a zero-length LSTRING constant; allow `.LEN` field access on LSTRING types (map to the length slot). Confirm empty-string display already works once the constant exists.
+- MODERN-NOW: compiles and prints `0` then `<>` for the D-033 probe `[OBSERVED]`.
+- TOUCH: `type_checker.py` now accepts `LSTRING.LEN` as the length byte; `codegen/types_map.py` lowers it to slot 0 of the inline LSTRING aggregate. Existing `NULL` handling already assigns/displays a zero-length LSTRING.
+- ACTION: done; added typecheck coverage for `LSTRING.LEN` and a runtime regression `test_null_lstring_len_and_empty_write_runtime` for `NULL`, `ORD(l.LEN)`, and empty LSTRING display.
 - EFFORT: M
 - RISK-IF-SKIPPED: programs using `NULL` or `LSTRING.LEN` won't compile. Medium (loud); `NULL`/`.LEN` are common LSTRING idioms.
 - VERIFY: re-run `t033.pas`; expect `0` then `<>`.
@@ -270,18 +274,18 @@ modern rejects at typecheck. Items are largely independent.
 
 ## ANCHOR: RM-P2-SETCTOR
 **Type-prefixed set constructor `COLORS[RED, BLUE]` rejected (parsed as indexing).**
-- PRIORITY: P2 (consider pulling forward — unblocks RM-OPEN-T022)
-- STATUS: TODO-FIX
+- PRIORITY: P2 (now landed; historically considered for pull-forward as it settled the t022 modern side)
+- STATUS: RESOLVED
 - D-ENTRY: D-026
 - CLASS: ACCEPT/REJECT (settled on rerun; an earlier run misread vintage `Assumed OUTPUT` warnings as rejection)
 - BASIS: INFERRED (vintage implements the constructor; modern parses it as indexing) — vintage acceptance + output `R` is `[OBSERVED]`
 - VINTAGE: pas1 accepted (2 `Assumed OUTPUT` warnings), linked, ran; `s := COLORS[RED,BLUE]; IF RED IN s ...` printed `R` (and not `G`) `[OBSERVED]`.
-- MODERN-NOW: rejected at typecheck: `Cannot index non-array type SET OF COLOR` `[OBSERVED]`.
-- TOUCH: `parser.py` / `type_checker.py` — the `Cannot index non-array type` rejection at ≈L1605 / L1936. The modern front end reads `TypeName[...]` as array indexing; it needs to recognize the type-prefixed *set constructor* form when the prefix names a set/base type.
-- ACTION: parse/typecheck `<SetType>[ elements ]` as a set constructor (value of the named set type) rather than an index, when the prefix is a set or its base type.
+- MODERN-NOW: compiles and runs `t026.pas`, printing `R` only `[OBSERVED]`.
+- TOUCH: `type_checker.py` / `codegen/exprs.py` — bracket-only `Designator` nodes whose prefix names a declared `SET OF ...` type are reinterpreted semantically as typed set constructors; ordinary array indexing remains unchanged.
+- ACTION: done; typecheck regression covers comma-element constructors and runtime regression `test_typed_set_constructor_comma_elements_runtime_d026` pins the observed probe.
 - EFFORT: M
-- RISK-IF-SKIPPED: programs using type-prefixed set constructors won't compile; **and** RM-OPEN-T022 (READSET delimiter retention) stays blocked, since its redesign feeds a declared `SET OF CHAR` via exactly this construct (`CHARSET['A'..'Z']`). Medium.
-- VERIFY: re-run `t026.pas`; expect `R` only. Then unblock RM-OPEN-T022.
+- RISK-IF-SKIPPED: programs using type-prefixed set constructors won't compile. (Historically this also gated RM-OPEN-T022, but that is now moot: with the typed-set work landed, modern accepts the bare `['A'..'Z']` READSET literal directly, so the t022 modern side is settled and only a vintage rerun remains.) Medium.
+- VERIFY: re-run `t026.pas`; expect `R` only. (t022's modern side is already confirmed accepting bare `['A'..'Z']`; see RM-OPEN-T022 for the remaining vintage rerun.)
 - UPGRADES: checklist 2.9 (currently `[INFERRED]` → vintage-confirmed real syntax).
 - XREF: D-026; RM-OPEN-T022.
 
@@ -292,14 +296,14 @@ modern rejects at typecheck. Items are largely independent.
 ## ANCHOR: RM-P3-READTRAP
 **Malformed formatted READ aborts on modern; vintage routes it to the trapped-I/O path.**
 - PRIORITY: P3
-- STATUS: TODO-FIX
+- STATUS: RESOLVED
 - D-ENTRY: D-013
 - CLASS: OUTPUT-DIFF
 - BASIS: INFERRED (vintage routes reader format failures into the trapped file-error path; code 14 is `[OBSERVED]`)
 - VINTAGE: with `f.TRAP := TRUE`, a malformed `READ(f,i)` printed `AFTER` then `14` — the error is trappable and execution continues `[OBSERVED]`.
-- MODERN-NOW: aborted with `runtime error: malformed integer input` — readers are abort-only `[OBSERVED]`.
-- TOUCH: the formatted-reader runtime path (`runtime/fileops.c` readers and `codegen/io_write_read.py` read lowering). Today reader format failures abort; they must instead consult `F.TRAP` and, when set, record code 14 into `F.ERRS` and return without aborting — the same `io_error(f, code, msg)` mechanism the file ops already use (`runtime/fileops.c` ≈L61: sets `f->errs`, abandons op instead of aborting when trapping).
-- ACTION: extend the `io_error`/trap path to cover the formatted readers; on a malformed read with `F.TRAP` set, record 14 in `F.ERRS` and continue; with trapping off, keep the abort. Coordinate the code value with RM-XCUT-IOERR.
+- MODERN-NOW: with `f.TRAP := TRUE`, compiles/runs `t013.pas` and prints `AFTER` then `14`; with trapping off, malformed integer file READ remains fatal `[OBSERVED]`.
+- TOUCH: `runtime/fileops.c` formatted file readers now call `io_error(f, 14, ...)` for malformed integer/real/enum input, recording `F.ERRS` and returning when trapping is enabled. No codegen change was needed.
+- ACTION: done; regression `test_trapped_malformed_file_read_records_errs_d013` pins the D-013 probe and `test_untrapped_malformed_file_read_still_aborts` pins the trap-off path.
 - EFFORT: M
 - RISK-IF-SKIPPED: a program that enables trapping and handles reader errors instead dies on the first malformed field — behavioral divergence, not just a different message. Medium.
 - VERIFY: re-run `t013.pas`; expect `AFTER` then `14` (with trapping on).
@@ -309,16 +313,16 @@ modern rejects at typecheck. Items are largely independent.
 ## ANCHOR: RM-P3-ERRSCODE
 **`F.ERRS` returns an invented internal code; vintage RESET-on-missing-file = 10.**
 - PRIORITY: P3
-- STATUS: TODO-FIX
+- STATUS: RESOLVED
 - D-ENTRY: D-012
 - CLASS: OUTPUT-DIFF
 - BASIS: OBSERVED (value 10)
 - VINTAGE: `ASSIGN(f,'NOFILE.XYZ'); f.TRAP := TRUE; RESET(f); WRITELN(f.ERRS)` printed `10` `[OBSERVED]`.
-- MODERN-NOW: printed `1` — `io_error` table is internal-only `[OBSERVED]`.
-- TOUCH: `runtime/fileops.c` — `io_error` codes are currently small internal integers (1=open/create failed, 2=mode, 3=past-eof, 4=read failed, 5=write failed; ≈L122-291). The RESET-missing-file path uses code 1.
-- ACTION: renumber the `io_error` table to the observed vintage values (10 = missing file on RESET; 14 = malformed formatted READ per D-013). This is the same renumber as RM-XCUT-IOERR — do them together so the whole table is coherent rather than patched per-probe.
-- EFFORT: S (constant changes) — but coordinate the whole table (see RM-XCUT-IOERR).
-- RISK-IF-SKIPPED: a program that branches on `F.ERRS` (e.g. `IF f.ERRS = 10`) silently misbehaves on modern. Medium and silent (narrow: only ERRS-inspecting code).
+- MODERN-NOW: printed `10` for `t012.pas`; `RESET` missing/open failure now uses the observed vintage trapped code `[OBSERVED]`.
+- TOUCH: `runtime/fileops.c` — the `pas_file_reset` open-failure path now calls `io_error(f, 10, ...)`. Unprobed `F.ERRS` values remain modern-internal rather than invented as vintage values.
+- ACTION: done; regression `test_trapped_reset_missing_file_records_errs_d012` pins D-012. D-013 already pins malformed formatted READ as `F.ERRS=14`.
+- EFFORT: S.
+- RISK-IF-SKIPPED: closed; code branching on `F.ERRS = 10` for missing-file `RESET` now behaves like the observed vintage probe.
 - VERIFY: re-run `t012.pas`; expect `10`.
 - UPGRADES: checklist 8.6 / file error handling; `io_error` table.
 - XREF: D-012; RM-XCUT-IOERR; RM-P3-READTRAP.
@@ -339,12 +343,12 @@ strict-abort model is kept by design per the campaign plan.
 - CLASS: OUTPUT-DIFF
 - BASIS: INFERRED (both enforce mode restrictions; the code 1110 itself is `[OBSERVED]`)
 - VINTAGE: printed `BEFORE`, then `? Error: Operation error in file T005.DAT Error Code 1110` `[OBSERVED]`.
-- MODERN-NOW: aborts `PUT requires REWRITE/write mode` (exit ≠ 0); `BEFORE` swallowed by host libc buffering on abort (see RM-XCUT-FLUSH) `[OBSERVED]`.
+- MODERN-NOW: aborts `PUT requires REWRITE/write mode` (exit ≠ 0); `BEFORE` is preserved in captured stdout after RM-XCUT-FLUSH `[OBSERVED]`.
 - TOUCH: documentation / `io_error` notes only — the PUT mode guard already exists (`runtime/fileops.c` ≈L286). Modern strict-abort is intentional.
 - ACTION: record code 1110 in the `io_error` table notes as the vintage operation-error for PUT-after-GET. No behavior change.
 - EFFORT: S
 - RISK-IF-SKIPPED: none functional; only diagnostic-text fidelity (modern aborts vs vintage continues-with-code, but the enforcement is identical).
-- VERIFY: n/a (record-only). If RM-XCUT-FLUSH lands, `BEFORE` will appear in modern capture too.
+- VERIFY: n/a (record-only). RM-XCUT-FLUSH now preserves `BEFORE` in modern capture.
 - UPGRADES: checklist file runtime semantics.
 - XREF: D-005; D-024 (distinct code 1104); RM-XCUT-FLUSH.
 
@@ -373,12 +377,12 @@ strict-abort model is kept by design per the campaign plan.
 - CLASS: OUTPUT-DIFF
 - BASIS: INFERRED (both trap the dereference; code 2031 is `[OBSERVED]`)
 - VINTAGE: printed `BEFORE`, then `? Error: NIL Pointer Reference` / `Error Code 2031` `[OBSERVED]`.
-- MODERN-NOW: aborted on the dereference; `BEFORE` not preserved in captured stdout (host buffering artifact); no runtime text on stderr `[OBSERVED]`.
+- MODERN-NOW: aborted on the dereference; `BEFORE` is preserved in captured stdout after RM-XCUT-FLUSH; no runtime text on stderr `[OBSERVED]`.
 - TOUCH: NIL check is `nilck` in `codegen/types_map.py` (≈L390). Modern abort model differs by design (campaign plan: record only).
-- ACTION: record code 2031. Optionally adopt RM-XCUT-FLUSH so `BEFORE` is preserved in modern capture, which also makes t005/t015/t016 byte-comparable.
+- ACTION: record code 2031. RM-XCUT-FLUSH now preserves `BEFORE` in modern capture, improving comparability for t005/t015/t016/t024 abort paths.
 - EFFORT: S
 - RISK-IF-SKIPPED: none functional; diagnostic/abort-model only.
-- VERIFY: n/a (record-only); if RM-XCUT-FLUSH lands, expect `BEFORE` in modern capture.
+- VERIFY: n/a (record-only); RM-XCUT-FLUSH verified `BEFORE` in modern capture.
 - UPGRADES: checklist runtime checks / `$NILCK+`.
 - XREF: D-015; RM-XCUT-FLUSH.
 
@@ -389,18 +393,18 @@ strict-abort model is kept by design per the campaign plan.
 ## ANCHOR: RM-P5-DUPELSE
 **Duplicate `$ELSE`: modern prints `A`, vintage prints `A C`.**
 - PRIORITY: P5
-- STATUS: DECISION-NEEDED
+- STATUS: RESOLVED
 - D-ENTRY: D-003
 - CLASS: OUTPUT-DIFF
 - BASIS: INFERRED (mechanism deduced from output; the manual does not document duplicate `$ELSE`) — both outputs are `[OBSERVED]`
 - VINTAGE: `{$IF 1 $THEN} A {$ELSE} B {$ELSE} C {$END}` compiled, linked, ran; prints `A` and `C` — the skipper resumes emission at the *second* `$ELSE` despite the true first branch `[OBSERVED, INFERRED mechanism]`.
-- MODERN-NOW: prints `A` only — the `stop_at_else` fix skips a completed true-branch forward to `$END`, ignoring a depth-1 `$ELSE` `[OBSERVED]`.
-- TOUCH: `lexer.py` — `_skip_source_block` (≈L309) and its `stop_at_else` handling (≈L364; depth-1 `$ELSE` is ignored when skipping a completed true-branch forward). The `ELSE` metacommand tag is `0x0011` (≈L29).
-- DECISION: match the vintage multi-`$ELSE` resume behavior, or keep modern's "ignore stray/duplicate `$ELSE`" as a deliberate divergence. The vintage behavior on malformed/duplicate directives is itself `[INFERRED]` from one probe; matching it is low-value and the modern behavior is arguably more sensible. Recommend documenting as a deliberate divergence unless duplicate-`$ELSE` fidelity is specifically required.
-- ACTION (if 'match'): change `_skip_source_block` so a depth-1 second `$ELSE` resumes emission (rather than being ignored) when skipping a completed true-branch.
+- MODERN-NOW: prints `A` and `C`, matching the observed vintage output `[OBSERVED]`.
+- TOUCH: `lexer.py` — `_skip_source_block` now treats any depth-1 `$ELSE` as a skip terminator, including while skipping a completed true-branch else-body. The `ELSE` metacommand tag is `0x0011` (≈L29).
+- DECISION: match the vintage multi-`$ELSE` resume behavior. The vintage behavior on malformed/duplicate directives is still `[INFERRED]` from one probe; the output match is `[OBSERVED]`.
+- ACTION: done; parser regression pins the token leak after the second `$ELSE`, and codegen runtime regression pins `A` / `C` output.
 - EFFORT: S
-- RISK-IF-SKIPPED: only affects sources with malformed/duplicate `$ELSE` directives. Low (niche).
-- VERIFY: re-run `t003.pas`. If 'match': expect `A C`. If 'document': leave as recorded OUTPUT-DIFF.
+- RISK-IF-SKIPPED: closed for D-003; remaining risk is only broader malformed-directive behavior not covered by the probe.
+- VERIFY: re-run `t003.pas`; expect `A` then `C`.
 - UPGRADES: checklist metacommand semantics (≈L948/1093).
 - XREF: D-003; D-004 (related skipper item).
 
@@ -428,26 +432,26 @@ strict-abort model is kept by design per the campaign plan.
 ## ANCHOR: RM-XCUT-IOERR
 **Renumber the `io_error` table to vintage codes (one coherent pass).**
 - PRIORITY: X (do before/with D-012 and D-013)
-- STATUS: TODO-FIX
+- STATUS: RESOLVED
 - BASIS: OBSERVED (codes 10, 14, 1104, 1110, 1119, 1123 all from probe runs)
-- SCOPE: `runtime/fileops.c` `io_error` currently uses internal codes 1-5 (≈L122-291). Multiple probes pin vintage values: 10 (RESET missing file, D-012), 14 (malformed formatted READ, D-013), 1104 (WRITE inspection mode, D-024), 1110 (PUT after GET, D-005), 1119 (enum READ symbolic input, D-006), 1123 (integer `::N`, D-010). Note vintage uses two ranges: ~10/14 for `F.ERRS` trapped codes vs 11xx/2xxx for the `? Error: ... Error Code` runtime aborts — keep that distinction.
-- ACTION: renumber the table to the observed vintage `F.ERRS` codes (10, 14, ...) where modern surfaces them through `F.ERRS`, and record the 11xx/2xxx abort codes as notes where modern keeps its strict-abort model. Land this as the substrate for RM-P3-ERRSCODE (D-012) and RM-P3-READTRAP (D-013) rather than patching per-probe.
+- SCOPE: `runtime/fileops.c` `io_error` now uses the observed program-visible vintage `F.ERRS` values where modern exposes them: 10 for trapped RESET missing/open failure (D-012) and 14 for trapped malformed formatted READ (D-013). Other operational codes remain modern-internal unless directly observed through `F.ERRS`. Probe-observed abort diagnostics such as 1104 (D-024), 1110 (D-005), 1119 (D-006), and 1123 (D-010) are record-only notes for strict-abort paths, not `F.ERRS` table entries.
+- ACTION: done for the observed `F.ERRS` surface; do not invent unprobed vintage `F.ERRS` values.
 - EFFORT: M
-- RISK-IF-SKIPPED: per-probe patching leaves an inconsistent table — exactly the kind of drift the old D-001 corruption warns against.
+- RISK-IF-SKIPPED: closed for D-012/D-013; remaining risk is unknown-code coverage only, tracked by the explicit `F.ERRS` full-code-table unknown.
 - VERIFY: t012 → `10`; t013 → `14` (trap on). Re-run any file-error fixtures in the modern suite to confirm no regressions from renumbering.
 - XREF: D-012; D-013; D-005; D-024; D-006; D-010.
 
 ## ANCHOR: RM-XCUT-FLUSH
 **Flush stdout before modern aborts (test-fidelity, not a semantic fix).**
 - PRIORITY: X (small, improves comparability of several abort-path probes)
-- STATUS: TODO-FIX
+- STATUS: RESOLVED
 - BASIS: OBSERVED (the missing-`BEFORE`-on-abort behavior is a documented host libc buffering artifact, NOT a semantic difference — stated in the campaign plan and D-005/D-015 entries)
-- SCOPE: on modern abort paths (`runtime/pabort.c` and the `runtime_error_func` abort), pre-abort stdout printed before the abort can be discarded by libc buffering, so `BEFORE` markers vanish from captured output (t005, t015, and per the campaign possibly t016).
-- ACTION: flush stdout (and stderr) immediately before the process aborts in the runtime abort handler. This is an output-ergonomics/test-comparability improvement; it does not change semantics.
+- SCOPE: modern abort paths now flush before aborting: C runtime `die()`/`pabort()` paths already flushed, and LLVM-generated runtime checks now use a shared `emit_runtime_abort()` helper that emits `fflush(NULL)` before libc `abort()`.
+- ACTION: done. This is an output-ergonomics/test-comparability improvement; it does not change stop/continue semantics or claim vintage diagnostic text/code fidelity.
 - EFFORT: S
-- RISK-IF-SKIPPED: none semantic. Several abort-path probes remain non-byte-comparable to vintage (judge by exit status + which markers appear, per the campaign), which is fine but noisier.
-- VERIFY: re-run t005 / t015; `BEFORE` should now appear in modern capture before the abort.
-- XREF: D-005; D-015; D-016.
+- RISK-IF-SKIPPED: closed for the probed abort paths; future direct calls to `runtime_error_func()` should go through `emit_runtime_abort()`.
+- VERIFY: re-run t005 / t015 / t016 / t024; `BEFORE` appears in modern capture before the abort.
+- XREF: D-005; D-015; D-016; D-024.
 
 ## ANCHOR: RM-XCUT-ENUMBOOL
 **BOOLEAN prints names; user enums print ordinals — do NOT unify these WRITE paths.**
@@ -516,31 +520,63 @@ implementing the items they govern.
 ## ANCHOR: RM-NOACTION
 - STATUS: NO-ACTION
 - **D-014 / D-016 / D-017 — INTEGER width trio: RESOLVED, no longer NO-ACTION.** These were formerly listed here as expected 32-bit width adaptations. `RM-DEC-INTWIDTH` has since taken the 16-bit fork: `INTEGER` is now signed 16-bit, so the sentinel (`-32768`), the `$MATHCK+` overflow trap at `32767+1`, and the `$MATHCK-` wrap to `-32768` all agree with vintage. See the resolved entries in `docs/discrepancies.md` and `RM-DEC-INTWIDTH`. They are kept out of the NO-ACTION list deliberately — do not re-add them as "expected differences."
-- **Baselines (AGREE-ACCEPT, no divergence):** t001 (REAL default format ` 1.2345600E+02`), t007 (STRING(3) READ stop-at-fill), t008 (STRING(5) blank-pad + marker), t009 (LSTRING(3) whole-line consume + truncate), t011 (STRING `::N` ignored on both sides), t018 (RESET implicit GET / lazy-fill), t023 (temp-file round-trip), t025 (CLOSE-marker), t027 (RETYPE round-trip), **D-034** (`F.MODE` = 0/0 after REWRITE/RESET), **D-035** (bare `OTHERWISE stmt` grammar accepted), **D-036** (`F^` is blank ORD 32 at EOLN). These are evidence-upgrade confirmations only — no code change.
+- **Baselines (AGREE-ACCEPT, no divergence):** t001 (REAL default format ` 1.2345600E+02`), t007 (STRING(3) READ stop-at-fill), t008 (STRING(5) blank-pad + marker), t009 (LSTRING(3) whole-line consume + truncate), t018 (RESET implicit GET / lazy-fill), t023 (temp-file round-trip), t025 (CLOSE-marker), t027 (RETYPE round-trip), **D-034** (`F.MODE` = 0/0 after REWRITE/RESET), **D-035** (bare `OTHERWISE stmt` grammar accepted), **D-036** (`F^` is blank ORD 32 at EOLN). These are evidence-upgrade confirmations only — no code change. **(t011 STRING `::N` is NOT a baseline — vintage ignores the precision but modern had been truncating; resolved as D-011 / RM-OPEN-T011, default now ignores `::N`, truncation behind `-f string-precision`.)**
 - WHY LISTED: so a future agent does not mistake a confirmed agreement for an open bug. (The INTEGER width is no longer an open question; it was settled in `RM-DEC-INTWIDTH` and the deviation now lives only behind the explicit `INTEGER32`/`INTEGER64` extension types under `-f wide-integers`.)
 
 ---
 
 # OPEN — re-probe / redesign (investigation, not remediation)
 
+> Note: all three items in this section — RM-OPEN-T011 (D-011), RM-OPEN-T022 (D-022),
+> and RM-OPEN-T021 — have since been **RESOLVED** (fresh vintage ground truth obtained
+> for each). T011 and T022 became real divergences now matched by default with the
+> prior extended behavior behind a feature flag; T021 came back AGREE-REJECT (both
+> compilers reject `EOL`) and is closed as a no-action exploration. Their full entries
+> are retained below under their original anchors with `STATUS: RESOLVED`. There are no
+> longer any open investigations.
+
 ## ANCHOR: RM-OPEN-T021
-**`WRITELN(ORD(EOL))` — vintage verdict `[UNVERIFIED]`; rerun required.**
-- STATUS: INVESTIGATE
-- BASIS: UNVERIFIED — vintage pas1 emitted `Unknown Identifier In Expression Assumed Zero` (a warning-with-recovery idiom, *not* a clean hard stop), logged as AGREE-REJECT before the warnings-are-not-rejections rule. Whether pas2 produced an `.obj` and what the exe printed was never verified.
-- MODERN-NOW: rejects at typecheck (`Undefined variable: EOL`) `[OBSERVED]`.
-- ACTION: rerun `t021.pas` under the differential-testing skill; determine whether pas2 emits an `.obj` and what the exe prints, then re-grade. This is a re-probe, not a code change. The EOL checklist item (≈L1032) stays open until rerun.
-- EFFORT: S (one probe rerun)
-- VERIFY: a clean run with a definite verdict (REJECT vs an actual printed value).
-- XREF: t021 open item; checklist EOL (≈L1032).
+**`WRITELN(ORD(EOL))` — RESOLVED: AGREE-REJECT (both compilers reject; no code change).**
+- STATUS: RESOLVED (NO-ACTION — AGREE-REJECT exploration, closed)
+- BASIS: OBSERVED — reran differentially. Vintage pas1 emitted `^260 Unknown Identifier In Expression Assumed Zero` + warning 238 and reported `1 error detected`; no `pasibf.bin`/`.sym` produced, and pas2 then failed with `File Access Error In PASIBF.SYM`. The nonzero error count is the verdict (the "Assumed Zero" recovery text does not override it), and the missing artifact confirms it: pas1 **rejected**.
+- MODERN-NOW: rejects at typecheck (`Undefined variable: EOL`), no `.ll` produced `[OBSERVED]`.
+- ACTION: none. Both sides reject — `EOL` is not a valid predeclared identifier on either compiler. Per the AGREE-REJECT convention this is a closed exploration, not a discrepancy: no entry in `docs/discrepancies.md` beyond the closing note, and no modern code change.
+- EFFORT: S (was one probe rerun; now done)
+- VERIFY: PASSED — definite REJECT/REJECT verdict pair; no artifact on either side.
+- UPGRADES: checklist EOL item (≈L1032) reclassified from `[UNVERIFIED]` to AGREE-REJECT (closed); `EOL` is a documentation/reserved token with no usable expression semantics.
+- XREF: t021 open item (now closed); checklist EOL (≈L1032).
 
 ## ANCHOR: RM-OPEN-T022
-**`READSET` delimiter retention — `[UNVERIFIED]`; redesign (blocked on RM-P2-SETCTOR).**
-- STATUS: INVESTIGATE (blocked: needs D-026 implemented)
-- BASIS: UNVERIFIED — original `READSET(f, l, ['A'..'Z'])` probe: vintage pas1 `Character Set Expected` `[OBSERVED]`; modern also rejected at typecheck but the recorded diagnostic was a copy-paste from t026 and was discarded. The delimiter-retention question itself is unanswered.
-- ACTION: redesign the probe to pass a declared `SET OF CHAR` value — via the type-prefixed constructor (`CHARSET['A'..'Z']`, which becomes valid once RM-P2-SETCTOR / D-026 lands) or a set variable — then run it differentially to settle delimiter retention. Note t029 already settled READSET delimiter retention *with a declared set variable* (`ABC` / `,`, AGREE-ACCEPT); this redesign extends that to the constructor form.
-- EFFORT: M (redesign + run; gated on D-026)
-- VERIFY: a clean differential run answering the delimiter-retention question.
-- XREF: t022 open item; D-026 / RM-P2-SETCTOR; t029 (READSET with set variable, AGREE-ACCEPT).
+**`READSET` inline set-literal — RESOLVED: default rejects (vintage), extension flag accepts.**
+- STATUS: RESOLVED
+- D-ENTRY: D-022
+- CLASS: ACCEPT/REJECT
+- BASIS: OBSERVED — vintage pas1 rejects `READSET(f, l, ['A'..'Z'])` at line 18 with `^243 Character Set Expected` (no `.obj`, pas2/link not run); modern previously accepted and ran (`ABC` / `,`).
+- VINTAGE: rejects the inline set-constructor literal as the READSET set argument; requires a declared `SET OF CHAR` value `[OBSERVED]`. (t029 confirms the set-variable form is AGREE-ACCEPT with the comma retained.)
+- MODERN-NOW: default faithful mode rejects the inline literal at typecheck (`Character Set Expected: READSET set argument must be a declared SET OF CHAR value ...`), matching vintage. The accept-and-run behavior is the opt-in `-f readset-set-literal` extension (output `ABC` / `,`). `[OBSERVED]`
+- TOUCH: `type_checker.py` → `_check_readset_args` rejects an untyped `SetConstructor` (`type_name is None`) by default; accepts it only under `readset-set-literal`. Set variables and type-prefixed constructors (`CHARSET['A'..'Z']`, D-026) are unaffected.
+- ACTION: done. Feature `readset-set-literal` registered in `features.py` (fourth extension after `wide-integers`, `symbolic-enum-io`, `string-precision`).
+- EFFORT: S
+- RISK-IF-SKIPPED: closed — modern no longer accepts a READSET form vintage rejects; the extension is explicit and documented.
+- VERIFY: PASSED — t022 default → typecheck reject (`Character Set Expected`); `-f readset-set-literal` → `ABC` / `,`. Regressions `test_readset_typechecks_lstring_and_setofchar` and `test_readset_inline_literal_delimiter_retention_d022`; the three pre-existing inline-literal READSET runtime tests were moved onto the flag.
+- UPGRADES: manual 12-31 READSET signature; checklist READSET notes.
+- XREF: D-022; D-026 / RM-P2-SETCTOR; t029 (READSET with set variable, AGREE-ACCEPT).
+
+## ANCHOR: RM-OPEN-T011
+**STRING `::N` — RESOLVED: default ignores precision (vintage), extension flag truncates.**
+- STATUS: RESOLVED
+- D-ENTRY: D-011
+- CLASS: AGREE in default mode (was OUTPUT-DIFF)
+- BASIS: OBSERVED — vintage prints `ABCDE` (precision ignored); modern had been printing `ABC` (truncating).
+- VINTAGE: `s := 'ABCDE'; WRITELN(s::3)` → `ABCDE`; the `::N` precision is ignored on strings `[OBSERVED]`.
+- MODERN-NOW: default faithful mode ignores `::N` on STRING/LSTRING and prints `ABCDE`, matching vintage; `-f string-precision` honors `::N` and prints `ABC`. `[OBSERVED]`
+- TOUCH: `codegen/io_write_read.py` STRING/LSTRING WRITE branch drops the `::N` precision by default (`P::N` → whole value at default width; `P:M:N` → pad to M, ignore N); the truncating lowering is gated behind `string-precision`.
+- ACTION: done. Feature `string-precision` registered in `features.py`.
+- EFFORT: S
+- RISK-IF-SKIPPED: closed — the silent truncation that diverged from vintage (and matched none of the documented `::N` semantics) is removed from the default; truncation is now explicit opt-in.
+- VERIFY: PASSED — t011 default → `ABCDE`; `-f string-precision` → `ABC`; `s:7:3` default → `  ABCDE` (width still pads, N ignored). Regressions `test_string_precision_ignored_by_default_d011`, `test_string_precision_honored_with_feature_d011`, `test_string_width_still_pads_and_ignores_precision_by_default_d011`.
+- UPGRADES: checklist 8.3 / I/O formatting; EBNF `io_data_param` (STRING `::N` leg now OBSERVED).
+- XREF: D-011; D-002 (REAL `::N`); D-010 (INTEGER `::N`); RM-P1-INTPN.
 
 ---
 
@@ -555,7 +591,7 @@ Modern side (per item):
 2. `compile_to_llvm.py` on the item's probe → `clang` + `runtime/*.c` → run under `timeout 15s`. The driver exit code IS meaningful on the modern side.
 3. Run the full modern suite (the campaign baseline was 448 tests OK at the probed commit) to catch regressions — especially after RM-XCUT-IOERR (table renumber), RM-P0-CASE (CASE codegen), and RM-P1-ENUMWRITE / RM-P0-BOOL (shared WRITE builder).
 
-Vintage side (only when a fix needs fresh vintage ground truth, e.g. a follow-on probe or RM-OPEN-T021/T022):
+Vintage side (only when a fix needs fresh vintage ground truth, e.g. a follow-on probe or RM-OPEN-T021):
 1. Fresh single-use unpack of the vintage zip per probe.
 2. `unix2dos` the source before compiling.
 3. `pas1 tNNN.pas;` → `pas2` → `link tNNN.obj,tNNN.exe;` → run with DOS-side `>` redirection (`< in0NN.txt` for input probes); check both `tNNN.exe` and `TNNN.EXE`.
@@ -583,6 +619,6 @@ anti-confabulation discipline):
 - **Integer `::N` — vintage error timing** (D-010): vintage makes it a *runtime* data-format error (1123). Whether a *compile-time* rejection is an acceptable match, or fidelity demands the runtime timing, is a maintainer decision, not a fact.
 - **Duplicate `$ELSE` and non-quote-aware skipper** (D-003, D-004): vintage behavior on malformed directives is `[INFERRED]` from single probes and is not in the manual. Treat the deduced mechanisms as hypotheses, not ground truth.
 - **`F.ERRS` full code table**: only codes 10 (RESET-missing) and 14 (malformed READ) are `[OBSERVED]` via `F.ERRS`; the rest of the vintage `F.ERRS` numbering is unprobed. Do not invent values to fill the table — probe or leave noted.
-- **t021 EOL verdict** and **t022 READSET-via-constructor delimiter retention**: both `[UNVERIFIED]`; see RM-OPEN-T021 / RM-OPEN-T022. Do not record a verdict until rerun.
+- **t021 EOL verdict**: RESOLVED as AGREE-REJECT — both compilers reject `EOL` (vintage pas1 `1 error detected`, no artifact; modern typecheck `Undefined variable: EOL`). `EOL` is not a usable predeclared identifier; see RM-OPEN-T021. (t011 STRING `::N` and t022 READSET inline-literal are likewise RESOLVED with fresh vintage ground truth — vintage ignores STRING `::N` and rejects the inline READSET literal; both defaults match, with the extended behavior behind `string-precision` / `readset-set-literal` respectively.)
 - **Vintage symbolic enum READ** (D-006): `GREEN` gave runtime error 1119; this establishes that symbolic *names* are not accepted as input, but the full accepted-input grammar beyond a single numeric ordinal (`1`, t030) is not exhaustively probed.
 - **Line numbers in every `TOUCH:` field are `≈`** and read from the `probes-branch` snapshot; they will drift as code changes. The function/string anchors in each `TOUCH:` are the durable locators — grep those, not the line numbers.

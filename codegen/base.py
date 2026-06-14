@@ -153,12 +153,7 @@ class CodegenBase:
         err_block = parent.append_basic_block(label + '_fail')
         self.builder.cbranch(ok_cond, ok_block, err_block)
         self.builder.position_at_end(err_block)
-        fflush_type = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer()])
-        fflush = self.module.globals.get('fflush')
-        if fflush is None:
-            fflush = ir.Function(self.module, fflush_type, name='fflush')
-        self.builder.call(fflush, [ir.Constant(ir.IntType(8).as_pointer(), None)])
-        self.builder.call(self.runtime_error_func(), [])
+        self.emit_runtime_abort()
         self.builder.unreachable()
         self.builder.position_at_end(ok_block)
 
@@ -260,14 +255,22 @@ class CodegenBase:
         file_touch.linkage = 'external'
         self.scope.define('pas_file_touch_buffer', file_touch, None)
         set_ptr = self.set_llvm_type().as_pointer()
-        for name, ty in [('pas_file_reset', ir.FunctionType(ir.VoidType(), [fcb_ptr])), ('pas_file_rewrite', ir.FunctionType(ir.VoidType(), [fcb_ptr])), ('pas_file_get', ir.FunctionType(ir.VoidType(), [fcb_ptr])), ('pas_file_put', ir.FunctionType(ir.VoidType(), [fcb_ptr])), ('pas_file_close', ir.FunctionType(ir.VoidType(), [fcb_ptr])), ('pas_file_discard', ir.FunctionType(ir.VoidType(), [fcb_ptr])), ('pas_file_assign', ir.FunctionType(ir.VoidType(), [fcb_ptr, ir.IntType(8).as_pointer(), ir.IntType(32)])), ('pas_fread_filename', ir.FunctionType(ir.VoidType(), [fcb_ptr, fcb_ptr])), ('pas_freadset', ir.FunctionType(ir.VoidType(), [fcb_ptr, ir.IntType(8).as_pointer(), ir.IntType(32), set_ptr])), ('pas_file_attach_std', ir.FunctionType(ir.VoidType(), [fcb_ptr, fcb_ptr])), ('pas_file_eof', ir.FunctionType(ir.IntType(32), [fcb_ptr])), ('pas_file_eoln', ir.FunctionType(ir.IntType(32), [fcb_ptr]))]:
+        for name, ty in [('pas_file_reset', ir.FunctionType(ir.VoidType(), [fcb_ptr])), ('pas_file_rewrite', ir.FunctionType(ir.VoidType(), [fcb_ptr])),
+                         ('pas_file_get', ir.FunctionType(ir.VoidType(), [fcb_ptr])), ('pas_file_put', ir.FunctionType(ir.VoidType(), [fcb_ptr])),
+                         ('pas_file_close', ir.FunctionType(ir.VoidType(), [fcb_ptr])), ('pas_file_discard', ir.FunctionType(ir.VoidType(), [fcb_ptr])),
+                         ('pas_file_assign', ir.FunctionType(ir.VoidType(), [fcb_ptr, ir.IntType(8).as_pointer(), ir.IntType(32)])),
+                         ('pas_fread_filename', ir.FunctionType(ir.VoidType(), [fcb_ptr, fcb_ptr])),
+                         ('pas_freadset', ir.FunctionType(ir.VoidType(), [fcb_ptr, ir.IntType(8).as_pointer(), ir.IntType(32), set_ptr])),
+                         ('pas_file_attach_std', ir.FunctionType(ir.VoidType(), [fcb_ptr, fcb_ptr])), ('pas_file_eof', ir.FunctionType(ir.IntType(32), [fcb_ptr])),
+                         ('pas_file_eoln', ir.FunctionType(ir.IntType(32), [fcb_ptr]))]:
             fn = ir.Function(self.module, ty, name=name)
             fn.linkage = 'external'
             self.scope.define(name, fn, None)
         write_fmt = ir.Function(self.module, ir.FunctionType(ir.IntType(32), [fcb_ptr, ir.IntType(8).as_pointer()], var_arg=True), name='pas_write_fmt')
         write_fmt.linkage = 'external'
         self.scope.define('pas_write_fmt', write_fmt, None)
-        for name, ptr_ty in [('pas_fread_int', ir.IntType(32).as_pointer()), ('pas_fread_word', ir.IntType(16).as_pointer()), ('pas_fread_real', ir.DoubleType().as_pointer()), ('pas_fread_char', ir.IntType(8).as_pointer())]:
+        for name, ptr_ty in [('pas_fread_int', ir.IntType(32).as_pointer()), ('pas_fread_word', ir.IntType(16).as_pointer()), ('pas_fread_real', ir.DoubleType().as_pointer()),
+                             ('pas_fread_char', ir.IntType(8).as_pointer())]:
             fn = ir.Function(self.module, ir.FunctionType(ir.IntType(32), [fcb_ptr, ptr_ty]), name=name)
             fn.linkage = 'external'
             self.scope.define(name, fn, None)

@@ -1,7 +1,7 @@
 import unittest
 
 from tests.support import requires_exe
-from tests.test_codegen import build_and_run, _build_pascal_with_runtime
+from tests.test_codegen import _build_pascal_with_runtime, build_and_run
 
 
 @requires_exe

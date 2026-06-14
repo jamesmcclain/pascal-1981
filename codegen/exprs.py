@@ -15,10 +15,10 @@ from llvmlite.ir import IRBuilder
 
 from ast_nodes import *
 from type_system import INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, WORD_TYPE
-
-from .base import CodegenError
 from type_system import LStringType as ResolvedLStringType
 from type_system import StringType as ResolvedStringType
+
+from .base import CodegenError
 
 
 class ExprsMixin:
@@ -139,6 +139,11 @@ class ExprsMixin:
         elif isinstance(expr, SetConstructor):
             return self.codegen_set_constructor(expr)
         elif isinstance(expr, Designator):
+            if expr.selectors and all(sel.kind == 'INDEX' for sel in expr.selectors):
+                alias = self.type_aliases.get(expr.name.upper())
+                if isinstance(self.resolve_type_alias(alias), SetType):
+                    return self.codegen_set_constructor(SetConstructor([sel.index_or_field for sel in expr.selectors], expr.name))
+
             symbol = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
             if not symbol:
                 raise CodegenError(f'Undefined variable: {expr.name}')
@@ -150,6 +155,11 @@ class ExprsMixin:
             # If the designator is a constant, return its value directly (not a pointer)
             if not isinstance(ptr.type, ir.PointerType):
                 return ptr
+            # Sets are represented as an aggregate too, but participate in
+            # value operations (+, -, *, IN), so load them. Strings/arrays and
+            # records still travel as pointers for inline aggregate handling.
+            if self.is_set_value(ir.Constant(ptr.type.pointee, None)):
+                return self.builder.load(ptr)
             # For aggregate designators, return pointer without loading (inline aggregates)
             if isinstance(ptr.type.pointee, (ir.ArrayType, ir.LiteralStructType, ir.IdentifiedStructType)):
                 return ptr  # Return pointer to aggregate
@@ -319,8 +329,7 @@ class ExprsMixin:
         plain = getattr(self.builder, op)
         if not self.check_enabled('MATHCK'):
             return plain(left, right)
-        if not (isinstance(left.type, ir.IntType) and left.type == right.type
-                and left.type.width in (16, 32, 64)):
+        if not (isinstance(left.type, ir.IntType) and left.type == right.type and left.type.width in (16, 32, 64)):
             return plain(left, right)
         meth = getattr(self.builder, ('s' if signed else 'u') + op + '_with_overflow')
         res = meth(left, right)

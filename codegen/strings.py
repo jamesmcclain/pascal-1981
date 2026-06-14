@@ -102,7 +102,7 @@ class StringsMixin:
         end_block = parent.append_basic_block(label + '_end')
         self.builder.cbranch(cond, ok_block, err_block)
         self.builder.position_at_end(err_block)
-        self.builder.call(self.runtime_error_func(), [])
+        self.emit_runtime_abort()
         self.builder.unreachable()
         self.builder.position_at_end(ok_block)
         return end_block

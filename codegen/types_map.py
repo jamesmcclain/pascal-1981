@@ -16,8 +16,8 @@ import llvmlite.ir as ir
 
 from ast_nodes import *
 from codegen.base import CodegenError
-from type_system import ArrayType as ResolvedArrayType
 from type_system import CHAR_TYPE
+from type_system import ArrayType as ResolvedArrayType
 from type_system import LStringType as ResolvedLStringType
 from type_system import StringType as ResolvedStringType
 
@@ -336,9 +336,7 @@ class TypesMapMixin:
                     # Constant indices provably in range skip the check;
                     # checks are emitted only when both bounds are known.
                     low_b, high_b = self._array_bounds_or_none(cur_type)
-                    if (low_b is not None and high_b is not None
-                            and isinstance(index.type, ir.IntType)
-                            and self.check_enabled('INDEXCK')):
+                    if (low_b is not None and high_b is not None and isinstance(index.type, ir.IntType) and self.check_enabled('INDEXCK')):
                         const_idx = None
                         try:
                             const_idx = self.eval_const_expr(selector.index_or_field)
@@ -364,7 +362,14 @@ class TypesMapMixin:
                     cur_type = elem_type
                 elif selector.kind == 'FIELD':
                     base = self.resolve_type_alias(cur_type) if cur_type is not None else None
-                    if isinstance(base, FileType):
+                    if isinstance(base, (ResolvedLStringType, LStringType)):
+                        field = str(selector.index_or_field).upper()
+                        if field == 'LEN':
+                            ptr = self.builder.gep(ptr, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0)])
+                            cur_type = NamedType('CHAR', None)
+                        else:
+                            raise CodegenError(f"Cannot access LSTRING field '{selector.index_or_field}'")
+                    elif isinstance(base, FileType):
                         field = str(selector.index_or_field).upper()
                         handle = self.builder.load(ptr)
                         fcb = self.builder.bitcast(handle, self.file_fcb_type().as_pointer())

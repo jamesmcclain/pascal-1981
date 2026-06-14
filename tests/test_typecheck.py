@@ -55,6 +55,16 @@ class TestVariableScope(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("Cannot assign", " ".join(str(e) for e in result.errors))
 
+    def test_lstring_len_field_is_ordinal(self):
+        """LSTRING.LEN exposes the length byte for ORD and similar ordinal uses."""
+        result = typecheck_source("PROGRAM P; VAR s: LSTRING(10); BEGIN s := NULL; WRITELN(ORD(s.LEN)) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_lstring_rejects_unknown_field(self):
+        result = typecheck_source("PROGRAM P; VAR s: LSTRING(10); BEGIN WRITELN(s.BAD) END.")
+        self.assertFalse(result.success)
+        self.assertIn("LSTRING has no field", " ".join(str(e) for e in result.errors))
+
     def test_string_literal_assigns_to_exact_string_and_fitting_lstring(self):
         """STRING(n) needs exact literal length; LSTRING(n) uses capacity."""
         result = typecheck_source("PROGRAM P; VAR a: STRING(3); VAR b: LSTRING(10); BEGIN a := 'abc'; b := 'abc' END.")
@@ -193,6 +203,19 @@ class TestReadWriteTypecheck(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("INTEGER-compatible", " ".join(str(e) for e in result.errors))
 
+    def test_write_double_colon_rejected_for_integer(self):
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN WRITE(x::4) END.")
+        self.assertFalse(result.success)
+        self.assertIn("::N", " ".join(str(e) for e in result.errors))
+
+    def test_write_double_colon_allowed_for_real(self):
+        result = typecheck_source("PROGRAM P; VAR x: REAL; BEGIN WRITE(x::4) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_write_double_colon_allowed_for_string(self):
+        result = typecheck_source("PROGRAM P; VAR s: STRING(5); BEGIN WRITE(s::3) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
     def test_read_boolean_rejected(self):
         result = typecheck_source("PROGRAM P; VAR b: BOOLEAN; BEGIN READLN(b) END.")
         self.assertFalse(result.success)
@@ -252,12 +275,27 @@ class TestReadWriteTypecheck(unittest.TestCase):
         self.assertIn("expects 1", errors)
 
     def test_readset_typechecks_lstring_and_setofchar(self):
-        ok = typecheck_source("PROGRAM P; VAR s: LSTRING(8); BEGIN READSET(s, ['A'..'Z']) END.")
-        self.assertTrue(ok.success, msg=" ".join(str(e) for e in ok.errors))
-        bad_dest = typecheck_source("PROGRAM P; VAR s: STRING(8); BEGIN READSET(s, ['A'..'Z']) END.")
+        # Faithful 1981 default (D-022): an inline set-constructor literal is
+        # rejected as the READSET set argument (vintage: "Character Set
+        # Expected"); a declared SET OF CHAR value is required.
+        rej = typecheck_source("PROGRAM P; VAR s: LSTRING(8); BEGIN READSET(s, ['A'..'Z']) END.")
+        self.assertFalse(rej.success)
+        self.assertIn("Character Set Expected", " ".join(str(e) for e in rej.errors))
+        # A declared SET OF CHAR variable is the faithful accepted form.
+        ok_var = typecheck_source("PROGRAM P; TYPE cs = SET OF CHAR; VAR s: LSTRING(8); cset: cs; "
+                                  "BEGIN cset := ['A'..'Z']; READSET(s, cset) END.")
+        self.assertTrue(ok_var.success, msg=" ".join(str(e) for e in ok_var.errors))
+        # The inline literal is accepted only under -f readset-set-literal.
+        ok_ext = typecheck_source("PROGRAM P; VAR s: LSTRING(8); BEGIN READSET(s, ['A'..'Z']) END.", features={"readset-set-literal": True})
+        self.assertTrue(ok_ext.success, msg=" ".join(str(e) for e in ok_ext.errors))
+        # Destination must be LSTRING (use a set variable to isolate the error).
+        bad_dest = typecheck_source("PROGRAM P; TYPE cs = SET OF CHAR; VAR s: STRING(8); cset: cs; "
+                                    "BEGIN cset := ['A'..'Z']; READSET(s, cset) END.")
         self.assertFalse(bad_dest.success)
         self.assertIn("LSTRING", " ".join(str(e) for e in bad_dest.errors))
-        bad_set = typecheck_source("PROGRAM P; VAR s: LSTRING(8); BEGIN READSET(s, [1..3]) END.")
+        # A non-CHAR declared set is rejected as not SET OF CHAR.
+        bad_set = typecheck_source("PROGRAM P; TYPE ns = SET OF 0..7; VAR s: LSTRING(8); nset: ns; "
+                                   "BEGIN nset := [1..3]; READSET(s, nset) END.")
         self.assertFalse(bad_set.success)
         self.assertIn("SET OF CHAR", " ".join(str(e) for e in bad_set.errors))
 
@@ -339,6 +377,11 @@ class TestTypeCompatibility(unittest.TestCase):
     def test_typed_set_constructor_constant_range(self):
         """Type-prefixed set constructors are valid when all elements are constant."""
         result = typecheck_source("PROGRAM P; TYPE S = SET OF 1..10; VAR x: S; BEGIN x := S[1..3] END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_typed_set_constructor_comma_elements(self):
+        """D-026: TypeName[a, b] is a typed set constructor, not array indexing."""
+        result = typecheck_source("PROGRAM P; TYPE C = (Red, Blue, Green); S = SET OF C; VAR x: S; BEGIN x := S[Red, Blue] END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_typed_set_constructor_rejects_variable_range(self):

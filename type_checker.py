@@ -33,8 +33,8 @@ from ast_nodes import SubrangeType as ASTSubrangeType
 from ast_nodes import (TypeDecl, UnaryOp, UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WriteArg)
 from builtins_registry import register_builtins
 from symbol_table import SourceLocation, Symbol, SymbolTable
-from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, EnumType, FileType, FunctionType, LStringType, PointerType, ProcedureType,
-                         RecordType, SetType, StringType, Type, binary_op_result_type, can_assign, is_fixed_char_array, unary_op_result_type)
+from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, EnumType, FileType, FunctionType, LStringType,
+                         PointerType, ProcedureType, RecordType, SetType, StringType, Type, binary_op_result_type, can_assign, is_fixed_char_array, unary_op_result_type)
 
 
 @dataclass
@@ -534,12 +534,19 @@ class PascalTypeChecker(TypeChecker):
         if sym.kind != 'var':
             self.error(f"VALUE target '{decl.name}' is not a variable", decl)
             return
+        for selector in decl.target.selectors:
+            if selector.kind != 'FIELD':
+                self.error("VALUE section supports only variables and record-field selectors", decl)
+                return
         if not self.is_constant_set_element(decl.value):
             self.error("VALUE initializer must be constant", decl)
             return
-        value_type = self.infer_expression_type(decl.value, sym.type)
-        if value_type and not can_assign(value_type, sym.type):
-            self.error(f"Cannot initialize {sym.type} with {value_type} in VALUE section", decl)
+        target_type = self.infer_designator_type(decl.target)
+        if target_type is None:
+            return
+        value_type = self.infer_expression_type(decl.value, target_type)
+        if value_type and not can_assign(value_type, target_type):
+            self.error(f"Cannot initialize {target_type} with {value_type} in VALUE section", decl)
 
     def _can_pass_value_argument(self, arg_type: Type, param_type: Type) -> bool:
         """Assignment compatibility for by-value parameters.
@@ -1105,6 +1112,8 @@ class PascalTypeChecker(TypeChecker):
                     precision_type = self.infer_expression_type(arg.precision)
                     if precision_type and not can_assign(precision_type, INTEGER_TYPE):
                         self.error(f"WRITE precision {i+1} must be INTEGER-compatible, got {precision_type}", stmt)
+                    if value_type in (INTEGER_TYPE, WORD_TYPE, INTEGER32_TYPE, INTEGER64_TYPE):
+                        self.error("WRITE precision (::N) is not valid for INTEGER-compatible values", stmt)
             if value_type is None:
                 continue
             if isinstance(value_type, FileType):
@@ -1163,7 +1172,20 @@ class PascalTypeChecker(TypeChecker):
                 self.error("READSET destination must be mutable", stmt)
             if not isinstance(dest_type, LStringType):
                 self.error(f"READSET destination must be LSTRING, got {dest_type}", stmt)
-        set_type = self.infer_expression_type(stmt.args[start + 1])
+        set_arg = stmt.args[start + 1]
+        # Faithful 1981 default (D-022): the READSET set argument must be a
+        # declared SET OF CHAR value (a set variable, or a type-prefixed
+        # constructor such as CHARSET['A'..'Z']). The vintage pas1 rejects an
+        # inline, untyped set-constructor literal here with "Character Set
+        # Expected". Allow it only under -f readset-set-literal.
+        if (isinstance(set_arg, SetConstructor) and set_arg.type_name is None and not self.feature_enabled('readset-set-literal')):
+            self.error(
+                "Character Set Expected: READSET set argument must be a declared "
+                "SET OF CHAR value (a set variable or a type-prefixed constructor "
+                "like CHARSET['A'..'Z']), not an inline set literal "
+                "(enable -f readset-set-literal to accept inline set constructors)", stmt)
+            return
+        set_type = self.infer_expression_type(set_arg)
         if not isinstance(set_type, SetType) or not set_type.element_type.equivalent_to(CHAR_TYPE):
             self.error(f"READSET set argument must be SET OF CHAR, got {set_type}", stmt)
 
@@ -1197,7 +1219,8 @@ class PascalTypeChecker(TypeChecker):
         # ordinal by default and symbolic under -f symbolic-enum-io; BOOLEAN is
         # always name-based on output.
         wide = (type(INTEGER32_TYPE), type(INTEGER64_TYPE)) if self.feature_enabled('wide-integers') else ()
-        return isinstance(t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), EnumType, StringType, LStringType) + wide) or is_fixed_char_array(t)
+        return isinstance(
+            t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), EnumType, StringType, LStringType) + wide) or is_fixed_char_array(t)
 
     def _is_readable_type(self, t: Type) -> bool:
         # READ remains narrower than WRITE: BOOLEAN input is unsupported, but
@@ -1705,6 +1728,12 @@ class PascalTypeChecker(TypeChecker):
                             else:
                                 self.error(f"File control block has no field '{selector.index_or_field}'", expr)
                                 return None
+                        elif isinstance(current_type, LStringType):
+                            if field_name == 'LEN':
+                                current_type = CHAR_TYPE
+                            else:
+                                self.error(f"LSTRING has no field '{selector.index_or_field}'", expr)
+                                return None
                         else:
                             if not isinstance(current_type, RecordType):
                                 self.error(f"Cannot access field on non-record type {current_type}", expr)
@@ -2011,8 +2040,27 @@ class PascalTypeChecker(TypeChecker):
             return self.is_constant_set_element(expr.left) and self.is_constant_set_element(expr.right)
         return False
 
+    def _designator_as_typed_set_constructor(self, designator: Designator) -> Optional[SetConstructor]:
+        """Return a typed set constructor for TypeName[...] designators.
+
+        The parser cannot reliably distinguish array indexing from IBM
+        Pascal's type-prefixed set constructor without symbol information.
+        At semantic time, reinterpret only bracket-only designators whose base
+        name is a declared set type.
+        """
+        if not designator.selectors or not all(sel.kind == 'INDEX' for sel in designator.selectors):
+            return None
+        sym = self.symbol_table.lookup(designator.name)
+        if not sym or sym.kind != 'type' or not isinstance(sym.type, SetType):
+            return None
+        return SetConstructor([sel.index_or_field for sel in designator.selectors], designator.name)
+
     def infer_designator_type(self, designator: Designator) -> Optional[Type]:
         """Infer the type of a designator (with selectors for array/record access)."""
+        typed_set = self._designator_as_typed_set_constructor(designator)
+        if typed_set is not None:
+            return self.infer_expression_type(typed_set)
+
         # Special case: inside a function, referencing the function name gets the return type
         if self.current_function and designator.name == self.current_function.name:
             current_type = self.current_function_return_type
@@ -2056,6 +2104,12 @@ class PascalTypeChecker(TypeChecker):
                             current_type = INTEGER_TYPE
                         else:
                             self.error(f"File control block has no field '{selector.index_or_field}'", designator)
+                            return None
+                    elif isinstance(current_type, LStringType):
+                        if field_name == 'LEN':
+                            current_type = CHAR_TYPE
+                        else:
+                            self.error(f"LSTRING has no field '{selector.index_or_field}'", designator)
                             return None
                     else:
                         # Record field access

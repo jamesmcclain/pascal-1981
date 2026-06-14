@@ -9,7 +9,7 @@ is OUTPUT-DIFF, never ACCEPT/REJECT.
 - t007.pas — STRING(3) READ stops at fill (`ABC` / `D` / `E`) — AGREE-ACCEPT
 - t008.pas — STRING(5) READ blank-pads and leaves marker (`eol` / `AB   |`) — AGREE-ACCEPT
 - t009.pas — LSTRING(3) READ consumes whole line and truncates (`ABC` / `X`) — AGREE-ACCEPT
-- t011.pas — STRING `WRITELN(s::3)`: both accept, both print `ABCDE` (precision ignored on both sides) — AGREE-ACCEPT
+- ~~t011.pas — STRING `WRITELN(s::3)`: both accept, both print `ABCDE` (precision ignored on both sides) — AGREE-ACCEPT~~ **RESOLVED as D-011: vintage prints `ABCDE` (precision ignored) [OBSERVED]; modern had been truncating to `ABC` and now ignores `::N` on strings by default to match (truncation moved behind `-f string-precision`). See D-011.**
 - t018.pas — RESET implicit GET / lazy-fill (`eof` then `A`) — AGREE-ACCEPT; upgrades the lazy-fill equivalence claim to vintage-[OBSERVED]
 - t023.pas — ASSIGN(f, CHR(0)) temp file round-trip (`42`); manual 12-30 documents temp files [READ] — AGREE-ACCEPT
 - t025.pas — final line marker appended at CLOSE (`X` / `L` / `E`); confirms the manual's CLOSE-marker claim [READ] — AGREE-ACCEPT
@@ -30,11 +30,12 @@ is OUTPUT-DIFF, never ACCEPT/REJECT.
 - **Behavior targeted:** Metacommand skipper handling of duplicate `$ELSE`
 - **Class:** OUTPUT-DIFF (both compile and run; outputs differ)
 - **Vintage (1981):** compiled, linked, ran; prints `A` and `C` [OBSERVED]
-- **Modern (reimplementation):** compiled, ran; prints `A` only [OBSERVED]
-- **Adjudication:** the vintage skipper resumes emission at the second `$ELSE` despite the true first branch; the modern `stop_at_else` fix skips to `$END`. Mechanism is inferred from output; the manual does not document duplicate `$ELSE`. [INFERRED]
+- **Modern (at time of probe):** compiled, ran; prints `A` only [OBSERVED]
+- **Modern (now):** compiled, ran; prints `A` and `C`, matching the vintage output [OBSERVED]
+- **Adjudication:** the vintage skipper resumes emission at the second `$ELSE` despite the true first branch; modern now intentionally matches this malformed-directive behavior. Mechanism is inferred from output; the manual does not document duplicate `$ELSE`. [INFERRED]
 - **Cross-references:** checklist metacommand semantics (~line 948/1093); lexer `_skip_source_block`.
-- **Severity:** medium (conditional-compilation divergence)
-- **Follow-up:** revisit the `stop_at_else` fix to match vintage multi-`$ELSE` processing, or document as a deliberate divergence.
+- **Severity:** resolved (was medium: conditional-compilation divergence)
+- **Resolution:** changed `_skip_source_block` so a depth-1 `$ELSE` terminates skipping even when skipping a completed true-branch else-body; regressions pin token leakage and runtime `A`/`C` output.
 
 ## D-004 — { inside string literal in skipped $IF block
 - **Probe:** t004.pas (`{$IF 0 $THEN} writeln('{'); {$END} writeln('OK');`)
@@ -52,7 +53,7 @@ is OUTPUT-DIFF, never ACCEPT/REJECT.
 - **Behavior targeted:** File mode enforcement during PUT after GET
 - **Class:** OUTPUT-DIFF
 - **Vintage (1981):** prints `BEFORE` followed by runtime error `? Error: Operation error in file T005.DAT Error Code 1110` [OBSERVED]
-- **Modern (reimplementation):** aborts with `PUT requires REWRITE/write mode` (exit ≠ 0); `BEFORE` missing from captured stdout — known host libc buffering artifact on abort paths [OBSERVED]
+- **Modern (now):** aborts with `PUT requires REWRITE/write mode` (exit ≠ 0); `BEFORE` is preserved in captured stdout after the abort-flush pass [OBSERVED]
 - **Adjudication:** both runtimes enforce mode restrictions; the vintage error code for this operation error is 1110. [INFERRED] (code value itself [OBSERVED])
 - **Cross-references:** checklist file runtime semantics; campaign plan t005.
 - **Severity:** medium (diagnostic mismatch; same semantic enforcement)
@@ -75,33 +76,49 @@ is OUTPUT-DIFF, never ACCEPT/REJECT.
 - **Behavior targeted:** Data-parameter `::N` meaning on INTEGER write values
 - **Class:** OUTPUT-DIFF (both compile; vintage errors at runtime, modern runs)
 - **Vintage (1981):** compiled and linked; failed at runtime with `? Error: Data format error in file USER` / `Error Code 1123` [OBSERVED]
-- **Modern (reimplementation):** accepted and printed `42` [OBSERVED]
-- **Adjudication:** the vintage runtime treats `::N` on an INTEGER as a data-format error; the modern build silently ignores the precision operand. [INFERRED]
+- **Modern (at time of probe):** accepted and printed `42` [OBSERVED]
+- **Modern (now):** rejects at typecheck with `WRITE precision (::N) is not valid for INTEGER-compatible values` [OBSERVED]
+- **Adjudication:** the vintage runtime treats `::N` on an INTEGER as a data-format error; modern now rejects the invalid form at compile time rather than silently ignoring the precision operand. [INFERRED]
 - **Cross-references:** checklist 8.3 / I/O formatting; EBNF `io_data_param`.
-- **Severity:** high (modern accepts and runs a form the vintage runtime rejects)
-- **Follow-up:** make modern integer `::N` a runtime (or compile-time) error to match, or document the leniency as an extension.
+- **Severity:** resolved (was high: modern accepted and ran a form the vintage runtime rejects)
+- **Resolution:** fixed by rejecting `::N` precision on INTEGER-compatible WRITE values during type checking; REAL `::N` and STRING `::N` behavior is preserved.
+
+## D-011 — STRING P::N (precision) truncation
+- **Probe:** t011.pas (`s := 'ABCDE'; WRITELN(s::3)`)
+- **Behavior targeted:** Meaning of the `::N` precision operand on a STRING WRITE value
+- **Class:** AGREE in default mode (was OUTPUT-DIFF; RESOLVED in the reimplementation)
+- **Vintage (1981):** pas1 accepted (1 warning, `Assumed OUTPUT`), pas2 + link succeeded; runtime output `ABCDE` — the `::3` precision is **ignored** and the whole string prints [OBSERVED].
+- **Modern (at time of probe):** printed `ABC` — STRING `::N` lowered to `printf("%*.*s", 0, N, ...)` in `codegen/io_write_read.py`, so `::3` truncated to the first three characters [OBSERVED].
+- **Modern (now):** default faithful mode ignores `::N` on STRING/LSTRING values and prints `ABCDE`, matching vintage byte-for-byte. The truncating behavior is available as the opt-in `-f string-precision` extension, which prints `ABC`. [OBSERVED]
+- **Adjudication:** vintage ignores the precision operand on strings; ordinal-style truncation is not 1981 behavior. The earlier baseline grading (AGREE-ACCEPT, "both print ABCDE") had the right vintage value but mis-stated the modern side, which actually truncated — now corrected and resolved. Note D-002 settled REAL `::N` (honored, default 14-char field) and D-010 settled INTEGER `::N` (rejected); STRING `::N` is ignored, completing the three legs.
+- **Resolution:** in WRITE lowering, STRING/LSTRING values drop the `::N` precision by default (`P::N` prints the whole value at default width; `P:M:N` pads to width M and ignores N). The truncating lowering is gated behind the `string-precision` feature (third extension on the generic `features.py` mechanism after `wide-integers` and `symbolic-enum-io`).
+- **Cross-references:** checklist 8.3 / I/O formatting; EBNF `io_data_param`; D-002 (REAL `::N`); D-010 (INTEGER `::N`); RM-OPEN-T011 / RM-P1-INTPN.
+- **Severity:** resolved (was medium: unguarded silent truncation diverging from vintage).
+- **Follow-up:** none for the default contract; `string-precision` is documented extension behavior. Regressions `test_string_precision_ignored_by_default_d011`, `test_string_precision_honored_with_feature_d011`, and `test_string_width_still_pads_and_ignores_precision_by_default_d011` pin both modes.
 
 ## D-012 — RESET missing-file F.ERRS code
 - **Probe:** t012.pas (`ASSIGN(f, 'NOFILE.XYZ'); f.TRAP := TRUE; RESET(f); WRITELN(f.ERRS)`)
 - **Behavior targeted:** Vintage `F.ERRS` numeric code for `RESET` on a missing file with trapping enabled
 - **Class:** OUTPUT-DIFF
 - **Vintage (1981):** compiled, linked, printed `10` [OBSERVED]
-- **Modern (reimplementation):** compiled, printed `1` (invented internal code) [OBSERVED]
-- **Adjudication:** the vintage missing-file `RESET` error code is 10; the modern table is internal-only. [INFERRED] (value [OBSERVED])
+- **Modern (at time of probe):** compiled, printed `1` (invented internal code) [OBSERVED]
+- **Modern (now):** compiled, printed `10` [OBSERVED]
+- **Adjudication:** the vintage missing-file `RESET` error code is 10; modern now uses that observed code for trapped `RESET` missing/open failure. Other `F.ERRS` values remain unclaimed unless probed. [INFERRED] (value [OBSERVED])
 - **Cross-references:** checklist 8.6 / file error handling; `io_error` table.
-- **Severity:** medium
-- **Follow-up:** renumber the modern `io_error` table to the vintage values as they are observed (10 = missing file on RESET; 14 = malformed formatted READ, see D-013).
+- **Severity:** resolved (was medium: program-visible `F.ERRS` mismatch)
+- **Resolution:** changed trapped `RESET` open failure to `io_error(f, 10, ...)`; regression `test_trapped_reset_missing_file_records_errs_d012` pins the probe.
 
 ## D-013 — malformed formatted READ trap behavior
 - **Probe:** t013.pas (`REWRITE`+`WRITELN(f,'XYZ')`; `RESET(f); f.TRAP := TRUE; READ(f, i); WRITELN('AFTER'); WRITELN(f.ERRS)`)
 - **Behavior targeted:** Whether a malformed formatted READ is trappable through `f.TRAP` / `f.ERRS`
 - **Class:** OUTPUT-DIFF
 - **Vintage (1981):** printed `AFTER` then `14` [OBSERVED]
-- **Modern (reimplementation):** aborted with `runtime error: malformed integer input` [OBSERVED]
-- **Adjudication:** vintage routes reader format failures into the trapped file-error path; modern readers are abort-only. [INFERRED]
+- **Modern (at time of probe):** aborted with `runtime error: malformed integer input` [OBSERVED]
+- **Modern (now):** with `f.TRAP := TRUE`, prints `AFTER` then `14`; with trapping off, malformed integer file READ remains fatal [OBSERVED]
+- **Adjudication:** vintage routes reader format failures into the trapped file-error path; modern now does the same for formatted file readers using the observed trapped error code 14. [INFERRED]
 - **Cross-references:** checklist 8.6 / readers and file trapping; `io_error` coverage.
-- **Severity:** medium (trap-model gap for formatted readers)
-- **Follow-up:** extend `io_error` coverage to the formatted readers (code 14 observed).
+- **Severity:** resolved (was medium: trap-model gap for formatted readers)
+- **Resolution:** extended formatted file READ parse failures through `io_error(f, 14, ...)`; regression `test_trapped_malformed_file_read_records_errs_d013` pins the probe.
 
 ## D-014 — $INITCK+ sentinel
 - **Probe:** t014.pas (`{$INITCK+} VAR x: INTEGER; BEGIN WRITELN(x) END.`)
@@ -121,7 +138,7 @@ is OUTPUT-DIFF, never ACCEPT/REJECT.
 - **Behavior targeted:** NIL pointer dereference under default `$NILCK+`
 - **Class:** OUTPUT-DIFF
 - **Vintage (1981):** printed `BEFORE` then runtime error `? Error: NIL Pointer Reference` / `Error Code 2031` [OBSERVED]
-- **Modern (reimplementation):** aborted on the dereference; `BEFORE` not preserved in captured stdout (known buffering artifact on abort paths), no runtime text on stderr [OBSERVED]
+- **Modern (now):** aborted on the dereference; `BEFORE` is preserved in captured stdout after the abort-flush pass; no runtime text on stderr [OBSERVED]
 - **Adjudication:** both trap the dereference; vintage code is 2031 and its runtime writes through unbuffered, consistent with the campaign plan's expectation. [INFERRED] (code value [OBSERVED])
 - **Cross-references:** checklist runtime checks / `$NILCK+`.
 - **Severity:** medium (diagnostic/abort-model mismatch; host abort model differs by design)
@@ -177,12 +194,25 @@ is OUTPUT-DIFF, never ACCEPT/REJECT.
 - **Severity:** resolved.
 - **Follow-up:** add a field-width probe if BOOLEAN padding details matter later.
 
+## D-022 — inline set-constructor literal as READSET set argument
+- **Probe:** t022.pas (`READSET(f, l, ['A'..'Z'])`)
+- **Behavior targeted:** Whether an inline, untyped set-constructor literal is accepted as the READSET delimiter-set argument, and READSET delimiter retention
+- **Class:** ACCEPT/REJECT (RESOLVED in default mode)
+- **Vintage (1981):** pas1 rejected at line 18 with `^243 Character Set Expected`; no `.obj` produced, pas2/link not run, no runtime output [OBSERVED]. Vintage requires a declared `SET OF CHAR` value here, not an inline bracket literal (t029 confirms READSET with a declared set variable is AGREE-ACCEPT, retaining the comma delimiter).
+- **Modern (at time of probe):** accepted, compiled, linked, and ran; output `ABC` then `,` (READSET consumed `ABC` and left the comma unconsumed) [OBSERVED].
+- **Modern (now):** default faithful mode rejects the inline literal at typecheck with `Character Set Expected: READSET set argument must be a declared SET OF CHAR value ...`, matching the vintage rejection. The accept-and-run behavior is available as the opt-in `-f readset-set-literal` extension, which prints `ABC` / `,`. [OBSERVED]
+- **Adjudication:** vintage rejects an inline set-constructor literal as the READSET set argument (`Character Set Expected`); the faithful default now matches that rejection while a declared `SET OF CHAR` value (set variable, or a type-prefixed constructor such as `CHARSET['A'..'Z']`, D-026) is accepted. The delimiter-retention answer (comma retained) is observed on modern under the extension and agrees with t029's set-variable result; the *vintage* constructor-form retention remains a possible follow-on but t029 already settles the set-variable form.
+- **Resolution:** in `type_checker.py` `_check_readset_args`, an untyped `SetConstructor` argument (`type_name is None`) is rejected by default with a `Character Set Expected` diagnostic; the inline-literal form is accepted only under the `readset-set-literal` feature (fourth extension on `features.py`). Declared set variables and type-prefixed constructors are unaffected.
+- **Cross-references:** manual 12-31 (READSET signature); D-026 (type-prefixed set constructor); t029 (READSET with set variable, AGREE-ACCEPT); RM-OPEN-T022.
+- **Severity:** resolved (was an undocumented ACCEPT/REJECT split — modern accepted a program vintage rejects).
+- **Follow-up:** none for the default contract. Regressions: `test_readset_typechecks_lstring_and_setofchar` (default reject + flag accept + set-variable accept) and `test_readset_inline_literal_delimiter_retention_d022` (runtime under the flag).
+
 ## D-024 — formatted WRITE on file in inspection mode
 - **Probe:** t024.pas (`RESET(f); WRITELN('BEFORE'); WRITELN(f, 'BBB'); WRITELN('AFTER'); ...` then read-back)
 - **Behavior targeted:** Formatted WRITE while a file is open in inspection/read mode
 - **Class:** OUTPUT-DIFF
 - **Vintage (1981):** printed `BEFORE` then runtime error `? Error: Operation error in file T024.DAT` / `Error Code 1104` [OBSERVED]
-- **Modern (reimplementation):** aborted with `file runtime: WRITE requires REWRITE/write mode` [OBSERVED]
+- **Modern (now):** aborted with `file runtime: WRITE requires REWRITE/write mode`; `BEFORE` is preserved in captured stdout after the abort-flush pass [OBSERVED]
 - **Adjudication:** both sides prevent write-through; vintage uses file-operation error 1104 (distinct from PUT's 1110, D-005), modern uses its own mode-enforcement message. [INFERRED] (code value [OBSERVED])
 - **Cross-references:** checklist file runtime semantics; mode enforcement; D-005.
 - **Severity:** medium (diagnostic mismatch)
@@ -193,27 +223,29 @@ is OUTPUT-DIFF, never ACCEPT/REJECT.
 - **Behavior targeted:** Type-prefixed set constructor acceptance
 - **Class:** ACCEPT/REJECT (settled on rerun; an earlier run misread vintage warnings as rejection)
 - **Vintage (1981):** pas1 accepted with 2 warnings (`Assumed OUTPUT`), linked, ran; output `R` [OBSERVED]
-- **Modern (reimplementation):** rejected at typecheck with `Cannot index non-array type SET OF COLOR` [OBSERVED]
-- **Adjudication:** vintage implements the type-prefixed set constructor; modern parses it as indexing and rejects. [INFERRED]
+- **Modern (at time of probe):** rejected at typecheck with `Cannot index non-array type SET OF COLOR` [OBSERVED]
+- **Modern (now):** compiles, links, and runs; output `R` [OBSERVED]
+- **Adjudication:** vintage implements the type-prefixed set constructor; modern now reinterprets `TypeName[...]` as a typed set constructor when `TypeName` denotes a set type, while preserving ordinary array indexing otherwise. [INFERRED]
 - **Cross-references:** checklist 2.9 (built [INFERRED] — now vintage-confirmed as real syntax).
-- **Severity:** medium (grammar/semantics gap)
-- **Follow-up:** implement the type-prefixed set constructor.
+- **Severity:** resolved (was medium: grammar/semantics gap)
+- **Resolution:** fixed by semantic/codegen recognition of set-type-prefixed bracket expressions; regression `test_typed_set_constructor_comma_elements_runtime_d026` pins the probe.
 
 ## D-028 — CASE no-match under default $RANGECK
 - **Probe:** t028.pas (`n := 5; CASE n OF 1: WRITELN('ONE'); 2: WRITELN('TWO') END; WRITELN('AFTER')`)
 - **Behavior targeted:** Default CASE no-match behavior with no `OTHERWISE`
 - **Class:** OUTPUT-DIFF
 - **Vintage (1981):** printed `BEFORE` then runtime error `? Error: No CASE Value Matches Selector` / `Error Code 2050` [OBSERVED]
-- **Modern (reimplementation):** printed `BEFORE` and `AFTER` (silent fall-through) [OBSERVED]
+- **Modern (at time of probe):** printed `BEFORE` and `AFTER` (silent fall-through) [OBSERVED]
+- **Modern (now):** under default `$RANGECK`, prints `BEFORE` then aborts before `AFTER`; explicit `OTHERWISE` still prints `OTHER` then `AFTER` [OBSERVED]
 - **Adjudication:** manual (src ~9953) documents a runtime error when `$RANGECK` is on and no OTHERWISE matches; this run confirms `$RANGECK` is on by default and the error code is 2050 [READ] (code value [OBSERVED]).
 - **Cross-references:** checklist runtime CASE semantics; `$RANGECK`.
-- **Severity:** medium (observable control-flow divergence)
-- **Follow-up:** emit the no-match CASE trap under default checking in modern codegen.
+- **Severity:** resolved (was medium: observable control-flow divergence)
+- **Resolution:** fixed by emitting a no-match CASE abort when `$RANGECK` is enabled and no `OTHERWISE` arm exists. The modern abort does not claim vintage diagnostic text/code fidelity.
 
 ## Open items and probe-redesign notes
 
-- **t021 (`WRITELN(ORD(EOL))`) — verdict suspect; rerun required.** Vintage pas1 emitted `Unknown Identifier In Expression Assumed Zero`, which is pas1's warning-with-recovery idiom, not a clean hard stop; the run was logged as AGREE-REJECT before the warnings-are-not-rejections rule was adopted (cf. the t026 misread). Whether pas2 produced an `.obj` and what the exe printed was not verified. Modern rejects at typecheck (`Undefined variable: EOL`) [OBSERVED]. Until rerun, the vintage verdict is [UNVERIFIED]; the EOL checklist item (~line 1032) stays open.
-- **t022 (`READSET(f, l, ['A'..'Z'])`) — AGREE-REJECT; redesign.** Vintage pas1: `Character Set Expected` [OBSERVED]. Modern also rejected at typecheck (exact diagnostic not reliably captured — the originally recorded text appears to have been copy-pasted from t026 and is discarded). The delimiter-retention question remains [UNVERIFIED]. Redesign: pass a declared `SET OF CHAR` value, e.g. via a type-prefixed constructor (`CHARSET ['A'..'Z']`, now known-good per D-026) or a set variable.
+- **t021 (`WRITELN(ORD(EOL))`) — RESOLVED: AGREE-REJECT.** Reran differentially. Vintage pas1 emitted `^260 Unknown Identifier In Expression Assumed Zero` plus warning 238 and reported `1 error detected`; no `pasibf.bin`/`.sym` was produced and pas2 then failed with `File Access Error In PASIBF.SYM` — so despite the "Assumed Zero" recovery idiom in the message text, the nonzero error count means pas1 **rejected** and the pipeline never produced an artifact [OBSERVED]. Modern rejects at typecheck (`Undefined variable: EOL`), no `.ll` produced [OBSERVED]. Both compilers reject: `EOL` is not a valid predeclared identifier on either side. Per the AGREE-REJECT convention no discrepancy entry is warranted; the EOL checklist item (~line 1032) is reclassified from [UNVERIFIED] to AGREE-REJECT (closed). See RM-OPEN-T021.
+- **t022 (`READSET(f, l, ['A'..'Z'])`) — RESOLVED as D-022.** Vintage pas1 rejects the inline set-constructor literal with `^243 Character Set Expected` [OBSERVED]. The modern default now matches that rejection; the accept-and-run behavior (output `ABC` / `,`, comma retained) is gated behind `-f readset-set-literal`. See D-022. (The earlier "modern also rejected at typecheck" note was a stale copy-paste from t026 and is withdrawn; the residual vintage-constructor-form delimiter-retention question is covered for the set-variable form by t029.)
 
 ## Notes — vintage warning idioms observed (not rejections)
 
@@ -241,33 +273,36 @@ whether the pipeline produced the next stage's artifact. Observed idioms:
 - **Behavior targeted:** PACK/UNPACK semantics and index base
 - **Class:** ACCEPT/REJECT
 - **Vintage (1981):** compiled with 3 warnings (`Assumed OUTPUT`), linked, and ran; output `BCD` then `..BCD.` [OBSERVED]
-- **Modern (reimplementation):** rejected at typecheck with `WRITE argument 1 has unwritable type PACKED ARRAY[1..3] OF CHAR` [OBSERVED]
-- **Adjudication:** vintage accepts PACK/UNPACK and uses the expected index convention; modern rejects the packed-string write path here [OBSERVED]
+- **Modern (at time of probe):** rejected at typecheck with `WRITE argument 1 has unwritable type PACKED ARRAY[1..3] OF CHAR` [OBSERVED]
+- **Modern (now):** compiles and prints `BCD` then `..BCD.` [OBSERVED]
+- **Adjudication:** vintage accepts PACK/UNPACK and uses the expected index convention; modern now matches this packed-char-array WRITE and PACK/UNPACK round trip [OBSERVED]
 - **Cross-references:** checklist 4.9; manual PACK/UNPACK index notes
-- **Severity:** medium (missing PACK/UNPACK support / packed-array write gap)
-- **Follow-up:** implement PACK/UNPACK and packed-char-array write support
+- **Severity:** resolved (was medium: missing PACK/UNPACK support / packed-array write gap)
+- **Resolution:** fixed by existing PACK/UNPACK lowering and packed-char-array WRITE support; regression `test_pack_unpack_probe_d031_char_round_trip` pins the probed behavior.
 
 ## D-032 — WORD / MAXWORD / WRD edges
 - **Probe:** t032.pas (`WRITELN(MAXWORD); w := 40000; WRITELN(w); w := WRD(-1); WRITELN(w)`)
 - **Behavior targeted:** WORD range, display, and negative-to-WORD conversion
 - **Class:** ACCEPT/REJECT
 - **Vintage (1981):** compiled with 3 warnings (`Assumed OUTPUT`), linked, and ran; output `65535`, `40000`, `65535` [OBSERVED]
-- **Modern (reimplementation):** rejected at typecheck with `Cannot assign INTEGER to WORD` [OBSERVED]
-- **Adjudication:** vintage treats WORD as a 16-bit unsigned range with `WRD(-1) = 65535`; modern lacks the conversion/assignment path here [OBSERVED]
+- **Modern (at time of probe):** rejected at typecheck with `Cannot assign INTEGER to WORD` [OBSERVED]
+- **Modern (now):** compiles and prints `65535`, `40000`, `65535` [OBSERVED]
+- **Adjudication:** vintage treats WORD as a 16-bit unsigned range with `WRD(-1) = 65535`; modern now matches these probed edges [OBSERVED]
 - **Cross-references:** checklist 4.9 / WORD, MAXWORD, WRD; manual edges around WORD range
-- **Severity:** medium (missing WORD conversion support)
-- **Follow-up:** implement WORD assignment/conversion semantics, including WRD and MAXWORD
+- **Severity:** resolved (was medium: missing WORD conversion support)
+- **Resolution:** fixed by the 16-bit INTEGER/WORD work; regression `test_word_probe_d032_edges` pins `MAXWORD`, unsigned WORD assignment, and `WRD(-1)`.
 
 ## D-033 — NULL LSTRING constant length and display
 - **Probe:** t033.pas (`l := NULL; WRITELN(ORD(l.LEN)); WRITELN('<', l, '>')`)
 - **Behavior targeted:** `NULL` LSTRING length and textual form
 - **Class:** ACCEPT/REJECT
 - **Vintage (1981):** compiled with 2 warnings (`Assumed OUTPUT`), linked, and ran; output `0` then `<>` [OBSERVED]
-- **Modern (reimplementation):** rejected at typecheck with `Cannot access field on non-record type LSTRING(5)` [OBSERVED]
-- **Adjudication:** vintage treats `NULL` as a zero-length LSTRING constant and prints it as empty between delimiters [OBSERVED]
+- **Modern (at time of probe):** rejected at typecheck with `Cannot access field on non-record type LSTRING(5)` [OBSERVED]
+- **Modern (now):** compiles and prints `0` then `<>` [OBSERVED]
+- **Adjudication:** vintage treats `NULL` as a zero-length LSTRING constant and prints it as empty between delimiters; modern now exposes `LSTRING.LEN` as the length byte and matches the probed behavior [OBSERVED]
 - **Cross-references:** manual ~5731; checklist `NULL` LSTRING note
-- **Severity:** medium (missing NULL/LSTRING semantics)
-- **Follow-up:** implement `NULL` as a zero-length LSTRING constant with the vintage length semantics
+- **Severity:** resolved (was medium: missing NULL/LSTRING semantics)
+- **Resolution:** fixed by accepting/lowering `LSTRING.LEN` and preserving existing `NULL` empty-LSTRING assignment/display behavior; regression `test_null_lstring_len_and_empty_write_runtime` pins the probe.
 
 ## D-034 — F.MODE values after REWRITE and RESET
 - **Probe:** t034.pas (`REWRITE(f); WRITELN(ORD(f.MODE)); ... RESET(f); WRITELN(ORD(f.MODE))`)
@@ -370,5 +405,70 @@ whether the pipeline produced the next stage's artifact. Observed idioms:
       BEGIN
           WRITELN('Status Clear: No active impairments detected.');
       END;
+  END.
+  ```
+
+## D-038 — VALUE section with field-by-field record initialization
+- **Probe:** `~/Lesson6.pas` (source inline below)
+- **Behavior targeted:** `VALUE` section assignment to record fields using dotted selectors
+- **Class:** ACCEPT/REJECT
+- **Vintage (1981):** pas1 accepted with 5 warnings (`Assumed OUTPUT`), pas2 produced `l6.obj`, link produced `l6.exe`, and run output was:
+  ```text
+  --- Combatant Record Training ---
+  Fighter Profile loaded: Mr. Karate
+  Health Pool: 100
+  Post-combat HP: 85
+  Fighter state: Enraged counter-attack imminent!
+  ``` [OBSERVED]
+- **Modern (at time of probe):** parser rejected at line 21, column 11 with `expected = or := in value declaration at line 21, column 11 (token DOT '.')` [OBSERVED]
+- **Modern (now):** accepts, compiles, and runs with matching output [OBSERVED]
+- **Adjudication:** vintage accepts field-by-field record initialization in VALUE sections; modern now matches the observed dotted-selector behavior [OBSERVED]
+- **Cross-references:** VALUE section syntax; record initialization notes
+- **Severity:** resolved (was medium: grammar gap; vintage-accepted program rejected by modern)
+- **Resolution:** fixed by parsing VALUE targets as designators, type-checking record-field selector targets, and patching static record initializers field-by-field in codegen.
+- **Source:**
+  ```pascal
+  PROGRAM Lesson6;
+
+  TYPE
+     FighterStance = (Natural, Crane, Tiger, Dragon);
+     StatusEffect  = (Poisoned, Shielded, Stunned, Enraged, Hasted);
+     StatusSet     = SET OF StatusEffect;
+
+     { The Record structure groups our domains together }
+     CombatantRecord = RECORD
+			Name         : STRING(10);
+			Stance       : FighterStance;
+			CurrentHP    : INTEGER;
+			Conditions   : StatusSet;
+		     END;
+
+  VAR
+     Player1 : CombatantRecord;
+
+  VALUE
+     { IBM Pascal allows field-by-field structural initialization }
+     Player1.Name       := 'Mr. Karate';
+     Player1.Stance     := Natural;
+     Player1.CurrentHP  := 100;
+     Player1.Conditions := [Shielded];
+
+  BEGIN
+     WRITELN('--- Combatant Record Training ---');
+
+     { Step 1: Accessing components using dot notation }
+     WRITELN('Fighter Profile loaded: ', Player1.Name);
+     WRITELN('Health Pool: ', Player1.CurrentHP:1);
+
+     { Step 2: Modifying states deep within the record structural layout }
+     Player1.CurrentHP := Player1.CurrentHP - 15;
+     Player1.Conditions := Player1.Conditions + [Enraged];
+
+     WRITELN('Post-combat HP: ', Player1.CurrentHP:1);
+     
+     IF Enraged IN Player1.Conditions THEN
+     BEGIN
+        WRITELN('Fighter state: Enraged counter-attack imminent!');
+     END;
   END.
   ```

@@ -266,14 +266,14 @@ class Parser:
         self.expect('VALUE')
         decls: List[ValueDecl] = []
         while self.current().kind == 'IDENTIFIER':
-            name = self.expect('IDENTIFIER').lexeme
+            target = self.parse_designator()
             if self.current().kind in {'EQ', 'ASSIGN'}:
                 self.pos += 1
             else:
                 self.error('expected = or := in value declaration')
             value = self.parse_value_initializer()
             self.expect('SEMICOLON')
-            decls.append(ValueDecl(name, value))
+            decls.append(ValueDecl(target, value))
         return decls
 
     def parse_value_initializer(self) -> Expression:

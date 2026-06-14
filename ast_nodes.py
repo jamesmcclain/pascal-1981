@@ -93,8 +93,13 @@ class VarDecl(ASTNode):
 
 @dataclass
 class ValueDecl(ASTNode):
-    name: str
+    target: Designator
     value: Expression
+
+    @property
+    def name(self) -> str:
+        """Compatibility accessor for simple VALUE-section users."""
+        return self.target.name
 
 
 @dataclass

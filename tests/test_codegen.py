@@ -8,6 +8,7 @@ This module is the only place llvmlite and codegen_llvm are imported,
 keeping the dependency isolated and optional.
 """
 
+import glob
 import os
 import subprocess
 import sys
@@ -25,7 +26,6 @@ def compile_to_ir(src: str, features=None) -> str:
     Requires llvmlite.
     """
     from codegen_llvm import compile_to_llvm
-
     from type_checker import PascalTypeChecker
 
     ast = parse_source(src)
@@ -45,7 +45,6 @@ def build_and_run(src: str, stdin: str = "", features=None) -> tuple:
     Requires llvmlite + clang.
     """
     from codegen_llvm import compile_to_llvm
-
     from type_checker import PascalTypeChecker
 
     ast = parse_source(src)
@@ -235,6 +234,20 @@ class TestCodegenIR(unittest.TestCase):
         ir = compile_to_ir(src)
         self.assertIn("nullstr", ir)
         self.assertIn("i8*", ir)
+
+    @requires_exe
+    def test_null_lstring_len_and_empty_write_runtime(self):
+        """D-033: NULL assigns an empty LSTRING and LSTRING.LEN reads as zero."""
+        src = """PROGRAM P;
+VAR l: LSTRING(5);
+BEGIN
+  l := NULL;
+  WRITELN(ORD(l.LEN));
+  WRITELN('<', l, '>')
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "0\n<>\n")
 
     def test_pred_lowers_to_subtraction(self):
         """PRED lowers to integer subtraction by one."""
@@ -459,6 +472,108 @@ class TestCodegenBuildRun(unittest.TestCase):
         self.assertEqual(returncode, 0)
         self.assertIn("42", stdout)
 
+    def test_duplicate_else_runtime_matches_vintage_d003(self):
+        """D-003: duplicate $ELSE in a true branch resumes at the second else."""
+        src = """PROGRAM P;
+BEGIN
+  {$IF 1 $THEN}
+  WRITELN('A')
+  {$ELSE}
+  ;WRITELN('B')
+  {$ELSE}
+  ;WRITELN('C')
+  {$END}
+END."""
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout, "A\nC\n")
+
+    def test_trapped_reset_missing_file_records_errs_d012(self):
+        """D-012: trapped RESET on a missing named file records vintage F.ERRS=10."""
+        src = """PROGRAM P;
+VAR f: TEXT;
+BEGIN
+  ASSIGN(f, 'NOFILE.XYZ');
+  f.TRAP := TRUE;
+  RESET(f);
+  WRITELN(f.ERRS)
+END."""
+        ir = compile_to_ir(src)
+        tmpdir = tempfile.mkdtemp()
+        try:
+            ll_path = os.path.join(tmpdir, "prog.ll")
+            exe_path = os.path.join(tmpdir, "prog")
+            with open(ll_path, "w") as f:
+                f.write(ir)
+            repo = os.path.dirname(os.path.dirname(__file__))
+            runtime_sources = glob.glob(os.path.join(repo, "runtime", "*.c"))
+            clang = subprocess.run(["clang", ll_path, *runtime_sources, "-o", exe_path, "-lm", "-w"], capture_output=True, text=True)
+            self.assertEqual(clang.returncode, 0, msg=clang.stderr)
+            run = subprocess.run([exe_path], cwd=tmpdir, capture_output=True, text=True, timeout=15)
+            self.assertEqual(run.returncode, 0, msg=run.stderr)
+            self.assertEqual(run.stdout, "10\n")
+        finally:
+            import shutil
+            shutil.rmtree(tmpdir)
+
+    def test_trapped_malformed_file_read_records_errs_d013(self):
+        """D-013: malformed formatted READ is trapped through F.TRAP/F.ERRS."""
+        src = """PROGRAM P;
+VAR f: TEXT; i: INTEGER;
+BEGIN
+  ASSIGN(f, 'T013.DAT'); REWRITE(f); WRITELN(f, 'XYZ'); CLOSE(f);
+  RESET(f); f.TRAP := TRUE;
+  READ(f, i);
+  WRITELN('AFTER');
+  WRITELN(f.ERRS)
+END."""
+        ir = compile_to_ir(src)
+        tmpdir = tempfile.mkdtemp()
+        try:
+            ll_path = os.path.join(tmpdir, "prog.ll")
+            exe_path = os.path.join(tmpdir, "prog")
+            with open(ll_path, "w") as f:
+                f.write(ir)
+            repo = os.path.dirname(os.path.dirname(__file__))
+            runtime_sources = glob.glob(os.path.join(repo, "runtime", "*.c"))
+            clang = subprocess.run(["clang", ll_path, *runtime_sources, "-o", exe_path, "-lm", "-w"], capture_output=True, text=True)
+            self.assertEqual(clang.returncode, 0, msg=clang.stderr)
+            run = subprocess.run([exe_path], cwd=tmpdir, capture_output=True, text=True, timeout=15)
+            self.assertEqual(run.returncode, 0, msg=run.stderr)
+            self.assertEqual(run.stdout, "AFTER\n14\n")
+        finally:
+            import shutil
+            shutil.rmtree(tmpdir)
+
+    def test_untrapped_malformed_file_read_still_aborts(self):
+        """Malformed formatted READ remains fatal when F.TRAP is not set."""
+        src = """PROGRAM P;
+VAR f: TEXT; i: INTEGER;
+BEGIN
+  ASSIGN(f, 'T013B.DAT'); REWRITE(f); WRITELN(f, 'XYZ'); CLOSE(f);
+  RESET(f);
+  READ(f, i);
+  WRITELN('AFTER')
+END."""
+        ir = compile_to_ir(src)
+        tmpdir = tempfile.mkdtemp()
+        try:
+            ll_path = os.path.join(tmpdir, "prog.ll")
+            exe_path = os.path.join(tmpdir, "prog")
+            with open(ll_path, "w") as f:
+                f.write(ir)
+            repo = os.path.dirname(os.path.dirname(__file__))
+            runtime_sources = glob.glob(os.path.join(repo, "runtime", "*.c"))
+            clang = subprocess.run(["clang", ll_path, *runtime_sources, "-o", exe_path, "-lm", "-w"], capture_output=True, text=True)
+            self.assertEqual(clang.returncode, 0, msg=clang.stderr)
+            run = subprocess.run([exe_path], cwd=tmpdir, capture_output=True, text=True, timeout=15)
+            self.assertNotEqual(run.returncode, 0)
+            self.assertNotIn("AFTER", run.stdout)
+            self.assertIn("malformed integer input", run.stderr)
+        finally:
+            import shutil
+            shutil.rmtree(tmpdir)
+
     def test_value_empty_set_and_set_arithmetic_runtime(self):
         """Lesson5-shaped VALUE [] plus set arithmetic compiles and runs."""
         src = """PROGRAM Lesson5;
@@ -483,7 +598,107 @@ BEGIN
 END."""
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
-        self.assertEqual(stdout, "--- Dojo Status Set Training ---\nAlert: Fighter is taking damage over time!\nSuccess: Poison cleared.\nStatus Clear: No active impairments detected.\n")
+        self.assertEqual(stdout,
+                         "--- Dojo Status Set Training ---\nAlert: Fighter is taking damage over time!\nSuccess: Poison cleared.\nStatus Clear: No active impairments detected.\n")
+
+    def test_value_record_field_initializers_runtime(self):
+        """VALUE dotted record-field initializers compile and run."""
+        src = """PROGRAM Lesson6;
+TYPE
+  FighterStance = (Natural, Crane, Tiger, Dragon);
+  StatusEffect = (Poisoned, Shielded, Stunned, Enraged, Hasted);
+  StatusSet = SET OF StatusEffect;
+  CombatantRecord = RECORD
+    Name: STRING(10);
+    Stance: FighterStance;
+    CurrentHP: INTEGER;
+    Conditions: StatusSet;
+  END;
+VAR
+  Player1: CombatantRecord;
+VALUE
+  Player1.Name := 'Mr. Karate';
+  Player1.Stance := Natural;
+  Player1.CurrentHP := 100;
+  Player1.Conditions := [Shielded];
+BEGIN
+  WRITELN(Player1.Name);
+  WRITELN(Player1.CurrentHP:1);
+  IF Shielded IN Player1.Conditions THEN WRITELN('S');
+  WRITELN(ORD(Player1.Stance):1)
+END."""
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout, "Mr. Karate\n100\nS\n0\n")
+
+    def test_case_no_match_default_rangeck_aborts(self):
+        """A checked CASE no-match with no OTHERWISE aborts before fall-through."""
+        src = """PROGRAM P;
+VAR n: INTEGER;
+BEGIN
+  n := 5;
+  WRITELN('BEFORE');
+  CASE n OF
+    1: WRITELN('ONE');
+    2: WRITELN('TWO')
+  END;
+  WRITELN('AFTER')
+END."""
+        returncode, stdout = build_and_run(src)
+        self.assertNotEqual(returncode, 0)
+        self.assertIn("BEFORE\n", stdout)
+        self.assertNotIn("AFTER", stdout)
+
+    def test_case_no_match_rangeck_off_falls_through(self):
+        """$RANGECK- preserves unchecked CASE no-match fall-through."""
+        src = """PROGRAM P;
+VAR n: INTEGER;
+BEGIN
+  {$RANGECK-}
+  n := 5;
+  WRITELN('BEFORE');
+  CASE n OF
+    1: WRITELN('ONE');
+    2: WRITELN('TWO')
+  END;
+  WRITELN('AFTER')
+END."""
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout, "BEFORE\nAFTER\n")
+
+    def test_case_otherwise_still_runs(self):
+        """An explicit OTHERWISE handles CASE no-match normally."""
+        src = """PROGRAM P;
+VAR n: INTEGER;
+BEGIN
+  n := 5;
+  CASE n OF
+    1: WRITELN('ONE');
+    2: WRITELN('TWO')
+    OTHERWISE WRITELN('OTHER')
+  END;
+  WRITELN('AFTER')
+END."""
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout, "OTHER\nAFTER\n")
+
+    def test_case_matching_arm_still_runs(self):
+        """A matching CASE arm must not trigger the no-match trap."""
+        src = """PROGRAM P;
+VAR n: INTEGER;
+BEGIN
+  n := 2;
+  CASE n OF
+    1: WRITELN('ONE');
+    2: WRITELN('TWO')
+  END;
+  WRITELN('AFTER')
+END."""
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout, "TWO\nAFTER\n")
 
     def test_wide_integer_codegen_runtime(self):
         """INTEGER32/INTEGER64 codegen and WRITE work when wide-integers is enabled."""
@@ -684,6 +899,23 @@ END."""
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         self.assertEqual(stdout.strip(), "2\n4")
+
+    def test_typed_set_constructor_comma_elements_runtime_d026(self):
+        """D-026: COLORS[RED, BLUE] executes as a typed set constructor."""
+        src = """
+        PROGRAM P;
+        TYPE COLOR = (RED, BLUE, GREEN);
+             COLORS = SET OF COLOR;
+        VAR s: COLORS;
+        BEGIN
+          s := COLORS [RED, BLUE];
+          IF RED IN s THEN WRITELN('R');
+          IF GREEN IN s THEN WRITELN('G')
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout, "R\n")
 
     def test_set_dynamic_element_runtime(self):
         """Set constructors with runtime element values build the right set."""
@@ -1153,6 +1385,22 @@ END."""
         self.assertIn("65535", out)
 
     @requires_exe
+    def test_word_probe_d032_edges(self):
+        """D-032: MAXWORD, unsigned WORD assignment, and WRD(-1) match vintage."""
+        src = """PROGRAM P;
+VAR w: WORD;
+BEGIN
+  WRITELN(MAXWORD);
+  w := 40000;
+  WRITELN(w);
+  w := WRD(-1);
+  WRITELN(w)
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip().splitlines(), ["65535", "40000", "65535"])
+
+    @requires_exe
     def test_wrd_char_gives_ascii_value(self):
         """WRD('A') equals 65 (ASCII code of A)."""
         src = """PROGRAM P;
@@ -1445,6 +1693,27 @@ END."""
         lines = [l.strip() for l in out.splitlines() if l.strip()]
         self.assertEqual(lines[0], "40")
         self.assertEqual(lines[1], "999")
+
+    @requires_exe
+    def test_pack_unpack_probe_d031_char_round_trip(self):
+        """D-031: PACK/UNPACK index convention and packed-char-array WRITE."""
+        src = """PROGRAM P;
+VAR a: ARRAY [1..6] OF CHAR;
+    z: PACKED ARRAY [1..3] OF CHAR;
+    b: ARRAY [1..6] OF CHAR;
+    i: INTEGER;
+BEGIN
+  FOR i := 1 TO 6 DO a[i] := CHR(ORD('A') + i - 1);
+  PACK(a, 2, z);
+  WRITELN(z);
+  FOR i := 1 TO 6 DO b[i] := '.';
+  UNPACK(z, b, 3);
+  FOR i := 1 TO 6 DO WRITE(b[i]);
+  WRITELN
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "BCD\n..BCD.\n")
 
 
 class TestArrayLowerBoundIndexing(unittest.TestCase):
@@ -1776,6 +2045,23 @@ class TestWriteRealFormatting(unittest.TestCase):
         self.assertIn("%*.*f", ir)
 
 
+class TestRuntimeAbortFlush(unittest.TestCase):
+    """Generated runtime-check aborts flush stdout before aborting."""
+
+    @requires_exe
+    def test_string_capacity_abort_preserves_prior_stdout(self):
+        src = """PROGRAM P;
+VAR s: LSTRING(2);
+BEGIN
+  WRITELN('BEFORE');
+  CONCAT(s, 'ABC');
+  WRITELN('AFTER')
+END."""
+        rc, out = build_and_run(src)
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(out, "BEFORE\n")
+
+
 class TestAbortRuntime(unittest.TestCase):
     """ABORT's runtime must surface the message, error code, and status, then
     abort (manual: stops like an internal runtime error)."""
@@ -1827,8 +2113,8 @@ class TestStringCapacityGatesRespectRangeck(unittest.TestCase):
     """
 
     def _guards(self, src: str, **kw) -> int:
-        from tests.support import parse_source
         from codegen_llvm import compile_to_llvm
+        from tests.support import parse_source
         ir = compile_to_llvm(parse_source(src), **kw)
         return ir.count('_overflow') // 2
 
@@ -1876,8 +2162,8 @@ class TestRuntimeCheckFlags(unittest.TestCase):
     -32768 (INT16_MIN) for this implementation's INTEGER."""
 
     def _ir(self, src: str, **kw) -> str:
-        from tests.support import parse_source
         from codegen_llvm import compile_to_llvm
+        from tests.support import parse_source
         return compile_to_llvm(parse_source(src), **kw)
 
     # ---------------- INDEXCK ----------------
@@ -2008,8 +2294,7 @@ class TestRuntimeCheckFlags(unittest.TestCase):
     def test_force_flags_override_for_new_checks(self):
         ir_off = self._ir(self.IDX, force_flags={'INDEXCK': False})
         self.assertNotIn('indexck_fail', ir_off)
-        ir_on = self._ir(self.ADD.replace('BEGIN', 'BEGIN {$MATHCK-}'),
-                         force_flags={'MATHCK': True})
+        ir_on = self._ir(self.ADD.replace('BEGIN', 'BEGIN {$MATHCK-}'), force_flags={'MATHCK': True})
         self.assertIn('with.overflow', ir_on)
 
 
@@ -2047,3 +2332,29 @@ class TestValueInitializerCodegen(unittest.TestCase):
         rc, out = build_and_run(src)
         self.assertEqual(rc, 0)
         self.assertEqual(out, "Mr. Karate\n")
+
+    # ---- D-011: STRING ::N precision ----
+    # Faithful 1981 default ignores ::N on strings (prints the whole value);
+    # the truncating behavior is the opt-in -f string-precision extension.
+
+    @requires_exe
+    def test_string_precision_ignored_by_default_d011(self):
+        src = "PROGRAM P; VAR s: STRING(5); BEGIN s := 'ABCDE'; WRITELN(s::3) END."
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "ABCDE\n")
+
+    @requires_exe
+    def test_string_precision_honored_with_feature_d011(self):
+        src = "PROGRAM P; VAR s: STRING(5); BEGIN s := 'ABCDE'; WRITELN(s::3) END."
+        rc, out = build_and_run(src, features={"string-precision": True})
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "ABC\n")
+
+    @requires_exe
+    def test_string_width_still_pads_and_ignores_precision_by_default_d011(self):
+        # P:M:N — width M still pads; N is ignored by default.
+        src = "PROGRAM P; VAR s: STRING(5); BEGIN s := 'ABCDE'; WRITELN(s:7:3) END."
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "  ABCDE\n")
