@@ -254,11 +254,12 @@ whether the pipeline produced the next stage's artifact. Observed idioms:
 - **Behavior targeted:** WORD range, display, and negative-to-WORD conversion
 - **Class:** ACCEPT/REJECT
 - **Vintage (1981):** compiled with 3 warnings (`Assumed OUTPUT`), linked, and ran; output `65535`, `40000`, `65535` [OBSERVED]
-- **Modern (reimplementation):** rejected at typecheck with `Cannot assign INTEGER to WORD` [OBSERVED]
-- **Adjudication:** vintage treats WORD as a 16-bit unsigned range with `WRD(-1) = 65535`; modern lacks the conversion/assignment path here [OBSERVED]
+- **Modern (at time of probe):** rejected at typecheck with `Cannot assign INTEGER to WORD` [OBSERVED]
+- **Modern (now):** compiles and prints `65535`, `40000`, `65535` [OBSERVED]
+- **Adjudication:** vintage treats WORD as a 16-bit unsigned range with `WRD(-1) = 65535`; modern now matches these probed edges [OBSERVED]
 - **Cross-references:** checklist 4.9 / WORD, MAXWORD, WRD; manual edges around WORD range
-- **Severity:** medium (missing WORD conversion support)
-- **Follow-up:** implement WORD assignment/conversion semantics, including WRD and MAXWORD
+- **Severity:** resolved (was medium: missing WORD conversion support)
+- **Resolution:** fixed by the 16-bit INTEGER/WORD work; regression `test_word_probe_d032_edges` pins `MAXWORD`, unsigned WORD assignment, and `WRD(-1)`.
 
 ## D-033 — NULL LSTRING constant length and display
 - **Probe:** t033.pas (`l := NULL; WRITELN(ORD(l.LEN)); WRITELN('<', l, '>')`)

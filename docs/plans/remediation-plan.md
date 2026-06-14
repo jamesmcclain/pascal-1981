@@ -72,7 +72,7 @@ OPEN = re-probe.
 | RM-P1-INTPN | D-010 | P1 | RESOLVED | integer `::N` is rejected at typecheck; vintage runtime-rejects | S |
 | RM-P1-ENUMWRITE | D-019 | P1 | RESOLVED | enum WRITE is ordinal by default; symbolic names require `-f symbolic-enum-io` | S |
 | RM-DEC-ENUMIO | D-019/D-006/D-030 | DEC | DECIDED | faithful default (ordinal write + numeric read); one `symbolic-enum-io` flag gates name write + name read | — |
-| RM-P2-WORD | D-032 | P2 | TODO-FIX | WORD assign/convert (`WRD`,`MAXWORD`) rejected | M |
+| RM-P2-WORD | D-032 | P2 | RESOLVED | WORD assign/convert (`WRD`,`MAXWORD`) now matches probed vintage edges | M |
 | RM-P2-PACK | D-031 | P2 | TODO-FIX | `PACK`/`UNPACK` + packed-char-array WRITE rejected | M-L |
 | RM-P2-NULL | D-033 | P2 | TODO-FIX | `NULL` LSTRING constant + `.LEN` field rejected | M |
 | RM-P2-ENUMREAD | D-030/D-006 | P2 | RESOLVED | enum READ accepts numeric ordinals by default; symbolic names under `-f symbolic-enum-io` | M |
@@ -202,14 +202,14 @@ modern rejects at typecheck. Items are largely independent.
 ## ANCHOR: RM-P2-WORD
 **WORD assignment / conversion (`WRD`, `MAXWORD`) rejected at typecheck.**
 - PRIORITY: P2
-- STATUS: TODO-FIX
+- STATUS: RESOLVED
 - D-ENTRY: D-032
 - CLASS: ACCEPT/REJECT
 - BASIS: OBSERVED (vintage output `65535`, `40000`, `65535`)
 - VINTAGE: compiled (3 `Assumed OUTPUT` warnings), linked, ran; `MAXWORD` = `65535`, `w := 40000` prints `40000`, `WRD(-1)` = `65535` — 16-bit unsigned, `WRD(-1)` wraps to max `[OBSERVED]`.
-- MODERN-NOW: rejected at typecheck: `Cannot assign INTEGER to WORD` `[OBSERVED]`.
-- TOUCH: `type_checker.py` — `WRD` handling at ≈L1824-1839 (currently errors on unsupported arg types); the INTEGER→WORD assignment-compatibility rule (search `Cannot assign` / WORD coercion). WORD already maps to `ir.IntType(16)` in `codegen/types_map.py` (≈L33/L65), so the storage exists; the gap is the typecheck assignment/conversion path and `WRD`/`MAXWORD` lowering.
-- ACTION: allow INTEGER→WORD assignment/conversion with 16-bit unsigned semantics; implement `WRD(x)` as conversion-to-WORD with wraparound (`WRD(-1) = 65535`); ensure `MAXWORD` = 65535. WORD is already displayed via the `i16 → %u` branch in the WRITE builder, so display should follow once assignment lands.
+- MODERN-NOW: compiles and prints `65535`, `40000`, `65535` for the D-032 probe `[OBSERVED]`.
+- TOUCH: already resolved by prior 16-bit INTEGER/WORD work: `type_system.py` permits INTEGER→WORD assignment, `codegen/exprs.py` lowers `WRD` with 16-bit wrap semantics, `codegen/base.py` defines `MAXWORD = 65535`, and WRITE displays WORD through the unsigned `i16 → %u` path.
+- ACTION: done; added regression `test_word_probe_d032_edges` to pin `MAXWORD`, `w := 40000`, and `WRD(-1)`.
 - EFFORT: M
 - RISK-IF-SKIPPED: any program using WORD arithmetic/assignment won't compile. Medium (loud).
 - VERIFY: re-run `t032.pas`; expect `65535`, `40000`, `65535`.

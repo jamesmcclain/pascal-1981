@@ -1252,6 +1252,22 @@ END."""
         self.assertIn("65535", out)
 
     @requires_exe
+    def test_word_probe_d032_edges(self):
+        """D-032: MAXWORD, unsigned WORD assignment, and WRD(-1) match vintage."""
+        src = """PROGRAM P;
+VAR w: WORD;
+BEGIN
+  WRITELN(MAXWORD);
+  w := 40000;
+  WRITELN(w);
+  w := WRD(-1);
+  WRITELN(w)
+END."""
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip().splitlines(), ["65535", "40000", "65535"])
+
+    @requires_exe
     def test_wrd_char_gives_ascii_value(self):
         """WRD('A') equals 65 (ASCII code of A)."""
         src = """PROGRAM P;
