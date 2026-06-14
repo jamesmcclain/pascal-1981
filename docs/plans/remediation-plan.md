@@ -77,7 +77,7 @@ OPEN = re-probe.
 | RM-P2-NULL | D-033 | P2 | RESOLVED | `NULL` LSTRING constant + `.LEN` field now match probed behavior | M |
 | RM-P2-ENUMREAD | D-030/D-006 | P2 | RESOLVED | enum READ accepts numeric ordinals by default; symbolic names under `-f symbolic-enum-io` | M |
 | RM-P2-SETCTOR | D-026 | P2 | RESOLVED | type-prefixed set ctor `COLORS[..]` accepted; unblocks t022 | M |
-| RM-P3-READTRAP | D-013 | P3 | TODO-FIX | malformed formatted READ aborts; vintage traps (code 14) | M |
+| RM-P3-READTRAP | D-013 | P3 | RESOLVED | malformed formatted READ traps through `F.ERRS=14` when `F.TRAP` is set | M |
 | RM-P3-ERRSCODE | D-012 | P3 | TODO-FIX | `F.ERRS` returns invented code; vintage = 10 on RESET-missing | S |
 | RM-P4-PUTCODE | D-005 | P4 | RECORD-ONLY | PUT-after-GET: record vintage op-error code 1110 | S |
 | RM-P4-WRITECODE | D-024 | P4 | RECORD-ONLY | WRITE-in-inspection-mode: record code 1104 | S |
@@ -292,14 +292,14 @@ modern rejects at typecheck. Items are largely independent.
 ## ANCHOR: RM-P3-READTRAP
 **Malformed formatted READ aborts on modern; vintage routes it to the trapped-I/O path.**
 - PRIORITY: P3
-- STATUS: TODO-FIX
+- STATUS: RESOLVED
 - D-ENTRY: D-013
 - CLASS: OUTPUT-DIFF
 - BASIS: INFERRED (vintage routes reader format failures into the trapped file-error path; code 14 is `[OBSERVED]`)
 - VINTAGE: with `f.TRAP := TRUE`, a malformed `READ(f,i)` printed `AFTER` then `14` — the error is trappable and execution continues `[OBSERVED]`.
-- MODERN-NOW: aborted with `runtime error: malformed integer input` — readers are abort-only `[OBSERVED]`.
-- TOUCH: the formatted-reader runtime path (`runtime/fileops.c` readers and `codegen/io_write_read.py` read lowering). Today reader format failures abort; they must instead consult `F.TRAP` and, when set, record code 14 into `F.ERRS` and return without aborting — the same `io_error(f, code, msg)` mechanism the file ops already use (`runtime/fileops.c` ≈L61: sets `f->errs`, abandons op instead of aborting when trapping).
-- ACTION: extend the `io_error`/trap path to cover the formatted readers; on a malformed read with `F.TRAP` set, record 14 in `F.ERRS` and continue; with trapping off, keep the abort. Coordinate the code value with RM-XCUT-IOERR.
+- MODERN-NOW: with `f.TRAP := TRUE`, compiles/runs `t013.pas` and prints `AFTER` then `14`; with trapping off, malformed integer file READ remains fatal `[OBSERVED]`.
+- TOUCH: `runtime/fileops.c` formatted file readers now call `io_error(f, 14, ...)` for malformed integer/real/enum input, recording `F.ERRS` and returning when trapping is enabled. No codegen change was needed.
+- ACTION: done; regression `test_trapped_malformed_file_read_records_errs_d013` pins the D-013 probe and `test_untrapped_malformed_file_read_still_aborts` pins the trap-off path.
 - EFFORT: M
 - RISK-IF-SKIPPED: a program that enables trapping and handles reader errors instead dies on the first malformed field — behavioral divergence, not just a different message. Medium.
 - VERIFY: re-run `t013.pas`; expect `AFTER` then `14` (with trapping on).

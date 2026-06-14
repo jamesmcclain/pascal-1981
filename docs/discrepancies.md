@@ -98,11 +98,12 @@ is OUTPUT-DIFF, never ACCEPT/REJECT.
 - **Behavior targeted:** Whether a malformed formatted READ is trappable through `f.TRAP` / `f.ERRS`
 - **Class:** OUTPUT-DIFF
 - **Vintage (1981):** printed `AFTER` then `14` [OBSERVED]
-- **Modern (reimplementation):** aborted with `runtime error: malformed integer input` [OBSERVED]
-- **Adjudication:** vintage routes reader format failures into the trapped file-error path; modern readers are abort-only. [INFERRED]
+- **Modern (at time of probe):** aborted with `runtime error: malformed integer input` [OBSERVED]
+- **Modern (now):** with `f.TRAP := TRUE`, prints `AFTER` then `14`; with trapping off, malformed integer file READ remains fatal [OBSERVED]
+- **Adjudication:** vintage routes reader format failures into the trapped file-error path; modern now does the same for formatted file readers using the observed trapped error code 14. [INFERRED]
 - **Cross-references:** checklist 8.6 / readers and file trapping; `io_error` coverage.
-- **Severity:** medium (trap-model gap for formatted readers)
-- **Follow-up:** extend `io_error` coverage to the formatted readers (code 14 observed).
+- **Severity:** resolved (was medium: trap-model gap for formatted readers)
+- **Resolution:** extended formatted file READ parse failures through `io_error(f, 14, ...)`; regression `test_trapped_malformed_file_read_records_errs_d013` pins the probe.
 
 ## D-014 — $INITCK+ sentinel
 - **Probe:** t014.pas (`{$INITCK+} VAR x: INTEGER; BEGIN WRITELN(x) END.`)

@@ -8,6 +8,7 @@ This module is the only place llvmlite and codegen_llvm are imported,
 keeping the dependency isolated and optional.
 """
 
+import glob
 import os
 import subprocess
 import sys
@@ -472,6 +473,66 @@ class TestCodegenBuildRun(unittest.TestCase):
         returncode, stdout = build_and_run(src)
         self.assertEqual(returncode, 0)
         self.assertIn("42", stdout)
+
+    def test_trapped_malformed_file_read_records_errs_d013(self):
+        """D-013: malformed formatted READ is trapped through F.TRAP/F.ERRS."""
+        src = """PROGRAM P;
+VAR f: TEXT; i: INTEGER;
+BEGIN
+  ASSIGN(f, 'T013.DAT'); REWRITE(f); WRITELN(f, 'XYZ'); CLOSE(f);
+  RESET(f); f.TRAP := TRUE;
+  READ(f, i);
+  WRITELN('AFTER');
+  WRITELN(f.ERRS)
+END."""
+        ir = compile_to_ir(src)
+        tmpdir = tempfile.mkdtemp()
+        try:
+            ll_path = os.path.join(tmpdir, "prog.ll")
+            exe_path = os.path.join(tmpdir, "prog")
+            with open(ll_path, "w") as f:
+                f.write(ir)
+            repo = os.path.dirname(os.path.dirname(__file__))
+            runtime_sources = glob.glob(os.path.join(repo, "runtime", "*.c"))
+            clang = subprocess.run(["clang", ll_path, *runtime_sources, "-o", exe_path, "-lm", "-w"],
+                                   capture_output=True, text=True)
+            self.assertEqual(clang.returncode, 0, msg=clang.stderr)
+            run = subprocess.run([exe_path], cwd=tmpdir, capture_output=True, text=True, timeout=15)
+            self.assertEqual(run.returncode, 0, msg=run.stderr)
+            self.assertEqual(run.stdout, "AFTER\n14\n")
+        finally:
+            import shutil
+            shutil.rmtree(tmpdir)
+
+    def test_untrapped_malformed_file_read_still_aborts(self):
+        """Malformed formatted READ remains fatal when F.TRAP is not set."""
+        src = """PROGRAM P;
+VAR f: TEXT; i: INTEGER;
+BEGIN
+  ASSIGN(f, 'T013B.DAT'); REWRITE(f); WRITELN(f, 'XYZ'); CLOSE(f);
+  RESET(f);
+  READ(f, i);
+  WRITELN('AFTER')
+END."""
+        ir = compile_to_ir(src)
+        tmpdir = tempfile.mkdtemp()
+        try:
+            ll_path = os.path.join(tmpdir, "prog.ll")
+            exe_path = os.path.join(tmpdir, "prog")
+            with open(ll_path, "w") as f:
+                f.write(ir)
+            repo = os.path.dirname(os.path.dirname(__file__))
+            runtime_sources = glob.glob(os.path.join(repo, "runtime", "*.c"))
+            clang = subprocess.run(["clang", ll_path, *runtime_sources, "-o", exe_path, "-lm", "-w"],
+                                   capture_output=True, text=True)
+            self.assertEqual(clang.returncode, 0, msg=clang.stderr)
+            run = subprocess.run([exe_path], cwd=tmpdir, capture_output=True, text=True, timeout=15)
+            self.assertNotEqual(run.returncode, 0)
+            self.assertNotIn("AFTER", run.stdout)
+            self.assertIn("malformed integer input", run.stderr)
+        finally:
+            import shutil
+            shutil.rmtree(tmpdir)
 
     def test_value_empty_set_and_set_arithmetic_runtime(self):
         """Lesson5-shaped VALUE [] plus set arithmetic compiles and runs."""

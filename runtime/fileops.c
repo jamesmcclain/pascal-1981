@@ -51,15 +51,17 @@ static void die(const char *msg) {
  * Returns 1 when trapped (caller must bail out), aborts otherwise.
  *
  * Error codes are internal [INFERRED] — the vintage runtime's numeric
- * codes are unknown (differential-probe candidate):
- *   1 open/create failed   2 mode violation   3 GET past EOF
- *   4 read failed          5 write failed
+ * codes are partly observed from the vintage runtime:
+ *   1 open/create failed [modern-internal, pending RM-P3-ERRSCODE]
+ *   2 mode violation     [modern-internal]
+ *   3 GET past EOF       [modern-internal]
+ *   4 read failed        [modern-internal]
+ *   5 write failed       [modern-internal]
+ *   14 malformed formatted READ [vintage-observed, D-013]
  * Converted sites: RESET/REWRITE open failures, GET/PUT mode violations,
- * GET-past-eof, and component read/write failures.  Structural errors
- * (null FCB/buffer, bad ASSIGN arguments, stream_for mode aborts, the
- * formatted-reader EOF/parse errors) still abort unconditionally; those
- * remain future trap dispatch points if probes show the vintage runtime
- * traps them too. */
+ * GET-past-eof, component read/write failures, and malformed formatted
+ * file READ.  Structural errors (null FCB/buffer, bad ASSIGN arguments,
+ * stream_for mode aborts) still abort unconditionally. */
 static int io_error(struct pas_file_fcb *f, int code, const char *msg) {
     if (f && f->trap) {
         f->errs = code;
@@ -483,14 +485,16 @@ int pas_fread_int(struct pas_file_fcb *f, int32_t *out) {
     if (ch == EOF) die("runtime error: unexpected EOF while reading integer");
     ungetc(ch, h); /* hand the token's first char back to stdio for fscanf */
     long v;
-    if (fscanf(h, "%ld", &v) != 1) die("runtime error: malformed integer input");
+    if (fscanf(h, "%ld", &v) != 1) {
+        if (io_error(f, 14, "runtime error: malformed integer input")) return -1;
+    }
     *out = (int32_t)v;
     return 0;
 }
 
 int pas_fread_word(struct pas_file_fcb *f, uint16_t *out) {
     int32_t v = 0;
-    pas_fread_int(f, &v);
+    if (pas_fread_int(f, &v) != 0) return -1;
     if (v < 0 || v > 65535) die("runtime error: word out of range");
     *out = (uint16_t)v;
     return 0;
@@ -503,13 +507,15 @@ int pas_fread_enum_name(struct pas_file_fcb *f, int32_t *out, const char **names
     if (isdigit((unsigned char)ch) || ch == '-' || ch == '+') {
         ungetc(ch, h);
         long v;
-        if (fscanf(h, "%ld", &v) != 1) die("runtime error: malformed enum input");
+        if (fscanf(h, "%ld", &v) != 1) {
+            if (io_error(f, 14, "runtime error: malformed enum input")) return -1;
+        }
         *out = (int32_t)v;
         return 0;
     }
     if (!isalpha((unsigned char)ch)) {
         fcb_unget_char(f, h, ch);
-        die("runtime error: malformed enum input");
+        if (io_error(f, 14, "runtime error: malformed enum input")) return -1;
     }
     char tok[256];
     int n = 0;
@@ -525,7 +531,7 @@ int pas_fread_enum_name(struct pas_file_fcb *f, int32_t *out, const char **names
             return 0;
         }
     }
-    die("runtime error: malformed enum input");
+    if (io_error(f, 14, "runtime error: malformed enum input")) return -1;
     return -1;
 }
 
@@ -534,7 +540,9 @@ int pas_fread_real(struct pas_file_fcb *f, double *out) {
     int ch = fcb_skip_ws_except_nl(f, h);
     if (ch == EOF) die("runtime error: unexpected EOF while reading real");
     ungetc(ch, h);
-    if (fscanf(h, "%lf", out) != 1) die("runtime error: malformed real input");
+    if (fscanf(h, "%lf", out) != 1) {
+        if (io_error(f, 14, "runtime error: malformed real input")) return -1;
+    }
     return 0;
 }
 
