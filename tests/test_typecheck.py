@@ -193,6 +193,19 @@ class TestReadWriteTypecheck(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("INTEGER-compatible", " ".join(str(e) for e in result.errors))
 
+    def test_write_double_colon_rejected_for_integer(self):
+        result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN WRITE(x::4) END.")
+        self.assertFalse(result.success)
+        self.assertIn("::N", " ".join(str(e) for e in result.errors))
+
+    def test_write_double_colon_allowed_for_real(self):
+        result = typecheck_source("PROGRAM P; VAR x: REAL; BEGIN WRITE(x::4) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_write_double_colon_allowed_for_string(self):
+        result = typecheck_source("PROGRAM P; VAR s: STRING(5); BEGIN WRITE(s::3) END.")
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
     def test_read_boolean_rejected(self):
         result = typecheck_source("PROGRAM P; VAR b: BOOLEAN; BEGIN READLN(b) END.")
         self.assertFalse(result.success)

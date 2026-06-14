@@ -1112,6 +1112,8 @@ class PascalTypeChecker(TypeChecker):
                     precision_type = self.infer_expression_type(arg.precision)
                     if precision_type and not can_assign(precision_type, INTEGER_TYPE):
                         self.error(f"WRITE precision {i+1} must be INTEGER-compatible, got {precision_type}", stmt)
+                    if value_type in (INTEGER_TYPE, WORD_TYPE, INTEGER32_TYPE, INTEGER64_TYPE):
+                        self.error("WRITE precision (::N) is not valid for INTEGER-compatible values", stmt)
             if value_type is None:
                 continue
             if isinstance(value_type, FileType):

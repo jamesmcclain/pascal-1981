@@ -75,11 +75,12 @@ is OUTPUT-DIFF, never ACCEPT/REJECT.
 - **Behavior targeted:** Data-parameter `::N` meaning on INTEGER write values
 - **Class:** OUTPUT-DIFF (both compile; vintage errors at runtime, modern runs)
 - **Vintage (1981):** compiled and linked; failed at runtime with `? Error: Data format error in file USER` / `Error Code 1123` [OBSERVED]
-- **Modern (reimplementation):** accepted and printed `42` [OBSERVED]
-- **Adjudication:** the vintage runtime treats `::N` on an INTEGER as a data-format error; the modern build silently ignores the precision operand. [INFERRED]
+- **Modern (at time of probe):** accepted and printed `42` [OBSERVED]
+- **Modern (now):** rejects at typecheck with `WRITE precision (::N) is not valid for INTEGER-compatible values` [OBSERVED]
+- **Adjudication:** the vintage runtime treats `::N` on an INTEGER as a data-format error; modern now rejects the invalid form at compile time rather than silently ignoring the precision operand. [INFERRED]
 - **Cross-references:** checklist 8.3 / I/O formatting; EBNF `io_data_param`.
-- **Severity:** high (modern accepts and runs a form the vintage runtime rejects)
-- **Follow-up:** make modern integer `::N` a runtime (or compile-time) error to match, or document the leniency as an extension.
+- **Severity:** resolved (was high: modern accepted and ran a form the vintage runtime rejects)
+- **Resolution:** fixed by rejecting `::N` precision on INTEGER-compatible WRITE values during type checking; REAL `::N` and STRING `::N` behavior is preserved.
 
 ## D-012 — RESET missing-file F.ERRS code
 - **Probe:** t012.pas (`ASSIGN(f, 'NOFILE.XYZ'); f.TRAP := TRUE; RESET(f); WRITELN(f.ERRS)`)

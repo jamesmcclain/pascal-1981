@@ -69,7 +69,7 @@ OPEN = re-probe.
 |---|---|---|---|---|---|
 | RM-P0-BOOL | D-020 | P0 | RESOLVED | BOOLEAN WRITE now prints `TRUE`/`FALSE` in all modes | S |
 | RM-P0-CASE | D-028 | P0 | RESOLVED | CASE no-match now aborts under `$RANGECK` when no `OTHERWISE` matches | S |
-| RM-P1-INTPN | D-010 | P1 | DECISION-NEEDED | integer `::N` silently accepted; vintage runtime-rejects | S |
+| RM-P1-INTPN | D-010 | P1 | RESOLVED | integer `::N` is rejected at typecheck; vintage runtime-rejects | S |
 | RM-P1-ENUMWRITE | D-019 | P1 | RESOLVED | enum WRITE is ordinal by default; symbolic names require `-f symbolic-enum-io` | S |
 | RM-DEC-ENUMIO | D-019/D-006/D-030 | DEC | DECIDED | faithful default (ordinal write + numeric read); one `symbolic-enum-io` flag gates name write + name read | — |
 | RM-P2-WORD | D-032 | P2 | TODO-FIX | WORD assign/convert (`WRD`,`MAXWORD`) rejected | M |
@@ -157,15 +157,15 @@ extension items should reuse it rather than inventing a parallel mechanism.
 ## ANCHOR: RM-P1-INTPN
 **Integer `::N` (precision) is silently accepted and ignored; vintage rejects it at runtime.**
 - PRIORITY: P1
-- STATUS: DECISION-NEEDED
+- STATUS: RESOLVED
 - D-ENTRY: D-010
 - CLASS: OUTPUT-DIFF (both compile; vintage errors at runtime, modern runs)
 - BASIS: OBSERVED (vintage data-format error code 1123)
 - VINTAGE: compiled and linked, then failed at runtime: `? Error: Data format error in file USER` / `Error Code 1123` `[OBSERVED]`.
-- MODERN-NOW: accepted `WRITELN(x::4)` and printed `42`, precision operand silently dropped `[OBSERVED]`.
-- TOUCH: `codegen/io_write_read.py` → integer branch of `build_write_format_and_args` (≈L146-164). Contrast: REAL `::N` IS honored (≈L128-144, the D-002 fixed-point path); STRING `::N` is accepted-and-ignored on BOTH sides (t011, AGREE-ACCEPT) so string is intentionally lenient.
-- DECISION: choose fidelity vs leniency. (a) **Match vintage** — make integer `::N` an error. Vintage makes it a *runtime* data-format error (1123); a compile-time rejection is simpler and arguably better but is a stricter divergence — pick one and document it. (b) **Keep leniency** — document modern integer `::N` as a deliberate accepted extension. Note the asymmetry to preserve: REAL `::N` is meaningful, STRING `::N` is ignored-by-agreement, INTEGER `::N` is the only contested case.
-- ACTION (if 'match'): reject integer `::N` — preferred at typecheck via the `io_data_param` path; if matching vintage's runtime-error timing is required, emit the data-format error at the write site instead.
+- MODERN-NOW: rejects `WRITELN(x::4)` at typecheck with `WRITE precision (::N) is not valid for INTEGER-compatible values` `[OBSERVED]`.
+- TOUCH: `type_checker.py` → `_check_write_args` rejects precision on INTEGER-compatible WRITE values. Contrast: REAL `::N` IS still honored by `codegen/io_write_read.py`; STRING `::N` remains accepted-and-ignored on BOTH sides (t011, AGREE-ACCEPT) so string stays intentionally lenient.
+- DECISION: decided — match vintage by rejecting integer `::N`. The vintage compiler reports a runtime data-format error (1123); modern deliberately rejects at compile time as the remediation plan allowed, so no exact runtime-code fidelity is claimed.
+- ACTION: done.
 - EFFORT: S
 - RISK-IF-SKIPPED: a ported program using integer `::N` that the vintage runtime would have rejected instead runs silently on modern — masks a real defect in the ported source. Medium (labeled high in the log for the accept-vs-reject fidelity gap).
 - VERIFY: re-run `t010.pas`. If 'match' chosen: modern must error (runtime 1123-equivalent, or a documented compile error). If 'keep': record the extension and leave t010 as a documented OUTPUT-DIFF.
