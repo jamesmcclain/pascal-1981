@@ -28,8 +28,8 @@ _RUNTIME = os.path.join(_REPO_ROOT, "runtime")
 
 
 def compile_to_ir(src: str) -> str:
-    from codegen_llvm import compile_to_llvm
-    from type_checker import PascalTypeChecker
+    from pascal1981.codegen_llvm import compile_to_llvm
+    from pascal1981.type_checker import PascalTypeChecker
     ast = parse_source(src)
     result = PascalTypeChecker().check(ast)
     if not result.success:
@@ -40,8 +40,8 @@ def compile_to_ir(src: str) -> str:
 def build_run_linked(src: str, runtime_files, stdin: str = "", features=None) -> tuple:
     """Like the codegen harness, but also links the named runtime C files so
     that ENCODE/DECODE/SCANEQ/SCANNE resolve at link time."""
-    from codegen_llvm import compile_to_llvm
-    from type_checker import PascalTypeChecker
+    from pascal1981.codegen_llvm import compile_to_llvm
+    from pascal1981.type_checker import PascalTypeChecker
     ast = parse_source(src)
     result = PascalTypeChecker(features=features).check(ast)
     if not result.success:

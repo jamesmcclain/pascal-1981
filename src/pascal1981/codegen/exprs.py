@@ -13,10 +13,10 @@ from typing import Any, List, Optional, Tuple, Union
 import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
-from ast_nodes import *
-from type_system import INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, WORD_TYPE
-from type_system import LStringType as ResolvedLStringType
-from type_system import StringType as ResolvedStringType
+from ..ast_nodes import *
+from ..type_system import INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, WORD_TYPE
+from ..type_system import LStringType as ResolvedLStringType
+from ..type_system import StringType as ResolvedStringType
 
 from .base import CodegenError
 
@@ -128,7 +128,7 @@ class ExprsMixin:
                 return symbol.llvm_value
             # For string/array variables, return pointer without loading (inline aggregates)
             # For scalar variables, load the value
-            from ast_nodes import LStringType as ASTLStringType
+            from ..ast_nodes import LStringType as ASTLStringType
             if isinstance(symbol.type_expr, (ResolvedLStringType, ResolvedStringType, ASTLStringType, ArrayType)):
                 return symbol.llvm_value  # Return pointer to aggregate
             elif isinstance(symbol.type_expr, NamedType) and symbol.type_expr.name.upper() in {'STRING', 'LSTRING'}:

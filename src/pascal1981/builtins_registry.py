@@ -5,8 +5,8 @@ This is shared between the type checker and code generator to prevent
 "registered but no codegen" traps.
 """
 
-from symbol_table import Symbol
-from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, EnumType, FileType, FunctionType, LStringType, PointerType,
+from .symbol_table import Symbol
+from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, EnumType, FileType, FunctionType, LStringType, PointerType,
                          ProcedureType, RecordType, StringType)
 
 # Lists of all built-in function and procedure names

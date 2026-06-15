@@ -13,7 +13,7 @@ from typing import Any, List, Optional, Tuple, Union
 import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
-from ast_nodes import *
+from ..ast_nodes import *
 
 from .base import CodegenError, LoopContext
 
@@ -46,7 +46,7 @@ class StmtsMixin:
         attr = getattr(stmt, flag.lower(), None)
         if attr is not None:
             return attr
-        from lexer import _ON_OFF_FLAGS
+        from ..lexer import _ON_OFF_FLAGS
         return _ON_OFF_FLAGS.get(flag, True)
 
     def effective_rangeck(self, stmt: Statement) -> bool:

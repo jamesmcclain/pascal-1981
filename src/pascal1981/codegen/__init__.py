@@ -12,16 +12,15 @@ Walks the AST and emits LLVM IR. Supports:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from parser import parse_file
 from typing import Any, Dict, List, Optional, Union
 
 import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
-from ast_nodes import *
-from builtins_registry import register_builtins
-from type_system import LStringType as ResolvedLStringType
-from type_system import StringType as ResolvedStringType
+from ..ast_nodes import *
+from ..builtins_registry import register_builtins
+from ..type_system import LStringType as ResolvedLStringType
+from ..type_system import StringType as ResolvedStringType
 
 # Import base classes and support classes
 from .base import (_SCALAR_SIZES, CodegenBase, CodegenError, LoopContext, Scope, Symbol)

@@ -13,11 +13,11 @@ prints a full traceback if compilation fails.
 import argparse
 import sys
 import traceback
-from parser import parse_file
+from .parser import parse_file
 
-from codegen_llvm import compile_to_llvm
-from features import all_features, resolve_features
-from type_checker import PascalTypeChecker
+from .codegen_llvm import compile_to_llvm
+from .features import all_features, resolve_features
+from .type_checker import PascalTypeChecker
 
 
 def main() -> int:

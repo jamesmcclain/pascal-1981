@@ -25,8 +25,8 @@ def compile_to_ir(src: str, features=None) -> str:
     Returns the IR text as a string.
     Requires llvmlite.
     """
-    from codegen_llvm import compile_to_llvm
-    from type_checker import PascalTypeChecker
+    from pascal1981.codegen_llvm import compile_to_llvm
+    from pascal1981.type_checker import PascalTypeChecker
 
     ast = parse_source(src)
     checker = PascalTypeChecker(features=features)
@@ -44,8 +44,8 @@ def build_and_run(src: str, stdin: str = "", features=None) -> tuple:
     Returns: (returncode: int, stdout: str)
     Requires llvmlite + clang.
     """
-    from codegen_llvm import compile_to_llvm
-    from type_checker import PascalTypeChecker
+    from pascal1981.codegen_llvm import compile_to_llvm
+    from pascal1981.type_checker import PascalTypeChecker
 
     ast = parse_source(src)
     checker = PascalTypeChecker(features=features)
@@ -112,8 +112,8 @@ class TestCodegenIR(unittest.TestCase):
 
     def test_codegen_error_imported_for_expr_failures(self):
         """Codegen expression errors should raise CodegenError, not NameError."""
-        from codegen import CodegenError
-        from codegen_llvm import compile_to_llvm
+        from pascal1981.codegen import CodegenError
+        from pascal1981.codegen_llvm import compile_to_llvm
 
         src = ("PROGRAM P; VAR i: INTEGER; "
                "BEGIN FOR i := 1 TO 1 DO IF MissingName = 1 THEN WRITELN(i) END.")
@@ -1923,7 +1923,7 @@ def _build_pascal_with_runtime(src: str, runtime_files: list, stdin: str = "", f
     real runtime, so it exercises the Pascal -> IR -> native ABI end to end
     (notably the segmented {i8*, i16} address pair against the C `adsmem`
     struct)."""
-    from codegen_llvm import compile_to_llvm
+    from pascal1981.codegen_llvm import compile_to_llvm
 
     ast = parse_source(src)
     result = typecheck_source(src, features=features)
@@ -2113,7 +2113,7 @@ class TestStringCapacityGatesRespectRangeck(unittest.TestCase):
     """
 
     def _guards(self, src: str, **kw) -> int:
-        from codegen_llvm import compile_to_llvm
+        from pascal1981.codegen_llvm import compile_to_llvm
         from tests.support import parse_source
         ir = compile_to_llvm(parse_source(src), **kw)
         return ir.count('_overflow') // 2
@@ -2162,7 +2162,7 @@ class TestRuntimeCheckFlags(unittest.TestCase):
     -32768 (INT16_MIN) for this implementation's INTEGER."""
 
     def _ir(self, src: str, **kw) -> str:
-        from codegen_llvm import compile_to_llvm
+        from pascal1981.codegen_llvm import compile_to_llvm
         from tests.support import parse_source
         return compile_to_llvm(parse_source(src), **kw)
 
