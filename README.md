@@ -1,6 +1,6 @@
 # Pascal-1981 Compiler
 
-<img width="1402" height="1122" alt="ChatGPT Image Jun 3, 2026, 08_20_36 PM" src="https://github.com/user-attachments/assets/55ba0872-c8fa-4fc3-ab82-db076194d4f3" />
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/42f81123-5db6-4bb0-8661-84339ec218f9" />
 
 A full reimplementation of IBM Pascal 2.0, a compiler targeting LLVM IR with semantic analysis in a dedicated type-checking phase. Built to handle the vintage Pascal-1981 dialect with all its systems-programming extensions (`adr`, `sizeof`, `adrmem`, `word`, `extern`) — the features that made Pascal suitable for low-level operating system and firmware work in the early 1980s.
 
