@@ -253,18 +253,18 @@ class TestMetacommands(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def _lex(self, src: str):
-        from lexer import Lexer
+        from pascal1981.lexer import Lexer
         return Lexer(src)
 
     def _flags_after(self, src: str) -> dict:
         """Return the meta_flags dict on the lexer after tokenizing `src`."""
-        from lexer import Lexer
+        from pascal1981.lexer import Lexer
         lex = Lexer(src)
         lex.tokenize()
         return dict(lex.meta_flags)
 
     def _tokens(self, src: str):
-        from lexer import Lexer
+        from pascal1981.lexer import Lexer
         return Lexer(src).tokenize()
 
     # ------------------------------------------------------------------
@@ -423,7 +423,7 @@ class TestMetacommands(unittest.TestCase):
 
     def test_inconst_sets_meta_const_to_zero(self):
         """$INCONST defines an identifier with value 0 (non-interactive build)."""
-        from lexer import Lexer
+        from pascal1981.lexer import Lexer
         lex = Lexer('{$INCONST: MYCONST}')
         lex.tokenize()
         self.assertIn('MYCONST', lex._meta_consts)
@@ -431,7 +431,7 @@ class TestMetacommands(unittest.TestCase):
 
     def test_if_with_inconst_identifier(self):
         """$IF referencing a $INCONST-defined name: 0 means false."""
-        from lexer import Lexer
+        from pascal1981.lexer import Lexer
         lex = Lexer('{$INCONST: FLAG} {$IF FLAG $THEN} BAD {$END}')
         toks = lex.tokenize()
         names = [t.value for t in toks if t.kind == 'IDENTIFIER']
@@ -446,7 +446,7 @@ class TestMetacommandSkipRegressions(unittest.TestCase):
     """Regressions for $IF skip-mode bugs found in review."""
 
     def _identifiers(self, src: str) -> list:
-        from lexer import Lexer
+        from pascal1981.lexer import Lexer
         return [t.value for t in Lexer(src).tokenize() if t.kind == 'IDENTIFIER']
 
     def test_duplicate_else_resumes_at_second_else_like_vintage_d003(self):
@@ -477,8 +477,8 @@ class TestForceFlagDefaults(unittest.TestCase):
     """effective_flag must use manual defaults, not blanket True."""
 
     def test_default_for_off_flag_is_false(self):
-        from ast_nodes import EmptyStmt
-        from codegen import Codegen
+        from pascal1981.ast_nodes import EmptyStmt
+        from pascal1981.codegen import Codegen
         cg = Codegen()
         stmt = EmptyStmt()
         # ENTRY and INITCK default off per the manual.
@@ -488,16 +488,16 @@ class TestForceFlagDefaults(unittest.TestCase):
         self.assertTrue(cg.effective_flag('RANGECK', stmt))
 
     def test_meta_flags_on_stmt_take_effect(self):
-        from ast_nodes import EmptyStmt
-        from codegen import Codegen
+        from pascal1981.ast_nodes import EmptyStmt
+        from pascal1981.codegen import Codegen
         cg = Codegen()
         stmt = EmptyStmt()
         stmt.meta_flags = {'MATHCK': False}
         self.assertFalse(cg.effective_flag('MATHCK', stmt))
 
     def test_force_flags_override_stmt(self):
-        from ast_nodes import EmptyStmt
-        from codegen import Codegen
+        from pascal1981.ast_nodes import EmptyStmt
+        from pascal1981.codegen import Codegen
         cg = Codegen(force_flags={'MATHCK': True})
         stmt = EmptyStmt()
         stmt.meta_flags = {'MATHCK': False}
@@ -513,7 +513,7 @@ class TestWriteDoubleColon(unittest.TestCase):
         self.assertIsNotNone(ast)
 
     def test_double_colon_width_none_precision_set(self):
-        from ast_nodes import WriteArg
+        from pascal1981.ast_nodes import WriteArg
         from tests.support import parse_source
         ast = parse_source('PROGRAM P; VAR x: REAL; BEGIN WRITELN(x::2) END.')
         stmt = ast.block.body[0]
@@ -524,7 +524,7 @@ class TestWriteDoubleColon(unittest.TestCase):
 
     def test_full_form_still_parses(self):
         """P:M:N must be unaffected."""
-        from ast_nodes import WriteArg
+        from pascal1981.ast_nodes import WriteArg
         from tests.support import parse_source
         ast = parse_source('PROGRAM P; VAR x: REAL; BEGIN WRITELN(x:8:3) END.')
         arg = ast.block.body[0].args[0]

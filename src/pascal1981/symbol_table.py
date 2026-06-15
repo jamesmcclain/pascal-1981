@@ -8,7 +8,7 @@ Used by both the type checker and code generator.
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-from type_system import Type
+from .type_system import Type
 
 
 @dataclass

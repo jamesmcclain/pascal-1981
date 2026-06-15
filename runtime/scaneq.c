@@ -1,5 +1,7 @@
 #include <stdint.h>
 
+#include "pascalrt.h"
+
 /*
  * SCANEQ / SCANNE: scan up to |L| characters of a string starting at the
  * 1-based position I, returning the signed count of characters scanned.

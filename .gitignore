@@ -3,3 +3,8 @@ pascal-code/
 __pycache__/
 tests/*.pyc
 *.ll
+runtime/build/
+
+build/
+src/pascal1981/libpascalrt.a
+src/*.egg-info/

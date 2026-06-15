@@ -7,6 +7,8 @@
  * memmove. There is no bounds checking.
  */
 
+#include "pascalrt.h"
+
 int mover(char *src, char *dst, unsigned short len)
 {
     unsigned short i;

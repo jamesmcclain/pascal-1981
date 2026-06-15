@@ -3,6 +3,8 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "pascalrt.h"
+
 /*
  * ENCODE(dest: LSTRING; value): format `value` into the LSTRING `dest`.
  *

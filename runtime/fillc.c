@@ -16,6 +16,8 @@
  */
 #include <stddef.h>
 
+#include "pascalrt.h"
+
 int fillc(char *loc, unsigned short len, char val)
 {
     for (unsigned short i = 0; i < len; i++) {

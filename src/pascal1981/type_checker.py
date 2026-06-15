@@ -10,31 +10,31 @@ Performs semantic analysis on the AST:
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from parser import parse_file
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ast_nodes import AdrExpr, AdsExpr
-from ast_nodes import ArrayType as ASTArrayType
-from ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, CharLiteral, ConstDecl, Designator)
-from ast_nodes import EnumType as ASTEnumType
-from ast_nodes import Expression
-from ast_nodes import FileType as ASTFileType
-from ast_nodes import (ForStmt, FuncCall, FuncDecl, Identifier, IfStmt, ImplementationUnit, InterfaceUnit, IntLiteral, LabelStmt, LowerExpr)
-from ast_nodes import LStringType as ASTLStringType
-from ast_nodes import ModuleUnit, NamedType, NilLiteral
-from ast_nodes import PointerType as ASTPointerType
-from ast_nodes import (ProcCallStmt, ProcDecl, ProgramUnit, RangeExpr, RealLiteral)
-from ast_nodes import RecordType as ASTRecordType
-from ast_nodes import (RepeatStmt, ReturnStmt, RetypeExpr, Selector, SetConstructor)
-from ast_nodes import SetType as ASTSetType
-from ast_nodes import SizeofExpr, Statement, StringLiteral
-from ast_nodes import SubrangeType as ASTSubrangeType
-from ast_nodes import (TypeDecl, UnaryOp, UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WriteArg)
-from builtins_registry import register_builtins
-from symbol_table import SourceLocation, Symbol, SymbolTable
-from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, EnumType, FileType, FunctionType, LStringType,
-                         PointerType, ProcedureType, RecordType, SetType, StringType, Type, binary_op_result_type, can_assign, is_fixed_char_array, unary_op_result_type)
+from .ast_nodes import AdrExpr, AdsExpr
+from .ast_nodes import ArrayType as ASTArrayType
+from .ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, CharLiteral, ConstDecl, Designator)
+from .ast_nodes import EnumType as ASTEnumType
+from .ast_nodes import Expression
+from .ast_nodes import FileType as ASTFileType
+from .ast_nodes import (ForStmt, FuncCall, FuncDecl, Identifier, IfStmt, ImplementationUnit, InterfaceUnit, IntLiteral, LabelStmt, LowerExpr)
+from .ast_nodes import LStringType as ASTLStringType
+from .ast_nodes import ModuleUnit, NamedType, NilLiteral
+from .ast_nodes import PointerType as ASTPointerType
+from .ast_nodes import (ProcCallStmt, ProcDecl, ProgramUnit, RangeExpr, RealLiteral)
+from .ast_nodes import RecordType as ASTRecordType
+from .ast_nodes import (RepeatStmt, ReturnStmt, RetypeExpr, Selector, SetConstructor)
+from .ast_nodes import SetType as ASTSetType
+from .ast_nodes import SizeofExpr, Statement, StringLiteral
+from .ast_nodes import SubrangeType as ASTSubrangeType
+from .ast_nodes import (TypeDecl, UnaryOp, UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WriteArg)
+from .builtins_registry import register_builtins
+from .parser import parse_file
+from .symbol_table import SourceLocation, Symbol, SymbolTable
+from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, EnumType, FileType, FunctionType, LStringType,
+                          PointerType, ProcedureType, RecordType, SetType, StringType, Type, binary_op_result_type, can_assign, is_fixed_char_array, unary_op_result_type)
 
 
 @dataclass
@@ -2293,7 +2293,7 @@ class PascalTypeChecker(TypeChecker):
 
     def get_resolved_type_size(self, t: Type) -> int:
         """Estimate the size of a resolved Type in bytes."""
-        from type_system import (ArrayType, BooleanType, CharType, EnumType, IntegerType, LStringType, PointerType, RealType, RecordType, SetType, StringType, WordType)
+        from .type_system import (ArrayType, BooleanType, CharType, EnumType, IntegerType, LStringType, PointerType, RealType, RecordType, SetType, StringType, WordType)
         if isinstance(t, IntegerType):
             return 4
         elif isinstance(t, RealType):

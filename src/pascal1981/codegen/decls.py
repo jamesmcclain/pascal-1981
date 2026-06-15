@@ -13,8 +13,7 @@ from typing import Any, List, Optional, Tuple, Union
 import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
-from ast_nodes import *
-
+from ..ast_nodes import *
 from .base import CodegenError, Scope
 
 
@@ -288,7 +287,7 @@ class DeclsMixin:
             meta = getattr(decl, 'meta_flags', None)
             if meta is not None and name in meta:
                 return meta[name]
-            from lexer import _ON_OFF_FLAGS
+            from ..lexer import _ON_OFF_FLAGS
             return _ON_OFF_FLAGS.get(name, True)
 
         if not flag('INITCK'):

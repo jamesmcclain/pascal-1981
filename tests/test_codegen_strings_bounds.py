@@ -186,7 +186,7 @@ class TestWriteFieldWidthOrdering(unittest.TestCase):
 class TestStringIntrinsicCapacityIR(unittest.TestCase):
 
     def _compile_to_ir_force(self, src: str, force_rangeck):
-        from codegen_llvm import compile_to_llvm
+        from pascal1981.codegen_llvm import compile_to_llvm
         ast = parse_source(src)
         result = typecheck_source(src)
         if not result.success:

@@ -10,14 +10,14 @@ from typing import List, Optional, Union
 
 import llvmlite.ir as ir
 
-from ast_nodes import EnumType as ASTEnumType
-from ast_nodes import LStringType as ASTLStringType
-from ast_nodes import *
-from codegen.base import CodegenError
-from type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE)
-from type_system import EnumType as ResolvedEnumType
-from type_system import FileType as ResolvedFileType
-from type_system import LStringType, StringType
+from ..ast_nodes import EnumType as ASTEnumType
+from ..ast_nodes import LStringType as ASTLStringType
+from ..ast_nodes import *
+from ..type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE)
+from ..type_system import EnumType as ResolvedEnumType
+from ..type_system import FileType as ResolvedFileType
+from ..type_system import LStringType, StringType
+from .base import CodegenError
 
 
 class IoWriteReadMixin:

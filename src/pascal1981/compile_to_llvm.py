@@ -3,7 +3,8 @@
 Pascal to LLVM IR compiler driver.
 
 Usage:
-    python3 compile_to_llvm.py [-v|--verbose] <source.pas> [output.ll]
+    pascal1981 [-v|--verbose] <source.pas> [output.ll]
+    pascal1981 --print-runtime-path
 
 If output.ll is not specified, IR is written to stdout.
 With -v/--verbose, codegen logs each declaration/statement it processes and
@@ -13,11 +14,12 @@ prints a full traceback if compilation fails.
 import argparse
 import sys
 import traceback
-from parser import parse_file
 
-from codegen_llvm import compile_to_llvm
-from features import all_features, resolve_features
-from type_checker import PascalTypeChecker
+from . import runtime_lib_path
+from .codegen_llvm import compile_to_llvm
+from .features import all_features, resolve_features
+from .parser import parse_file
+from .type_checker import PascalTypeChecker
 
 
 def main() -> int:
@@ -35,6 +37,7 @@ def main() -> int:
                         default='vintage',
                         help='Feature umbrella: vintage enables no extensions; extended enables all registered features.')
     parser.add_argument('--list-features', action='store_true', help='List registered extension features and exit.')
+    parser.add_argument('--print-runtime-path', action='store_true', help='Print the bundled libpascalrt.a path and exit.')
     # ----------------------------------------------------------------
     # Runtime-check flag overrides
     # Each flag follows the same tri-state convention:
@@ -61,6 +64,10 @@ def main() -> int:
     parser.add_argument('--stackck', choices=['on', 'off', 'source'], default='source', help=_flag_help_noop.format(name='STACKCK (stack overflow)'))
     parser.add_argument('--initck', choices=['on', 'off', 'source'], default='source', help=_flag_help.format(name='INITCK (uninitialised variable detection)'))
     args = parser.parse_args()
+
+    if args.print_runtime_path:
+        print(runtime_lib_path())
+        return 0
 
     if args.list_features:
         for feature in all_features():

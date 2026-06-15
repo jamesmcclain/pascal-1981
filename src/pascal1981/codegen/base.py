@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Union
 import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
-from ast_nodes import *
+from ..ast_nodes import *
 
 
 class CodegenError(Exception):
@@ -140,7 +140,7 @@ class CodegenBase:
             return self.force_flags[flag]
         if self._stmt_meta is not None and flag in self._stmt_meta:
             return self._stmt_meta[flag]
-        from lexer import _ON_OFF_FLAGS
+        from ..lexer import _ON_OFF_FLAGS
         return _ON_OFF_FLAGS.get(flag, True)
 
     def _emit_runtime_check(self, ok_cond: 'ir.Value', label: str) -> None:

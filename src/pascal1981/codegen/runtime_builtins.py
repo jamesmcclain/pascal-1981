@@ -13,8 +13,8 @@ from typing import Any, List, Optional, Tuple, Union
 import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
-from ast_nodes import *
-from codegen.base import CodegenError
+from ..ast_nodes import *
+from .base import CodegenError
 
 
 class RuntimeBuiltinsMixin:

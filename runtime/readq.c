@@ -4,28 +4,34 @@
 #include <stdlib.h>
 #include <string.h>
 
-struct pas_file_fcb {
-    int elem_size;
-    int structure;
-    int touched;
-    int mode;
-    void *buffer;
-    FILE *handle;
-    char *name;
-    int filemode;
-};
+#include "pascalrt.h"
 
+/* Weak fallbacks provided when fileops.o is not linked (e.g. stdin-only
+ * test drivers).  The strong definitions live in fileops.c. */
 __attribute__((weak))
 void pas_file_attach_std(struct pas_file_fcb *in, struct pas_file_fcb *out)
 {
-    if (in && !(in->mode & 8)) {
+    if (in && !(in->mode & MODE_STD)) {
         in->handle = stdin;
-        in->mode = 1 | 8 | 16;
+        in->mode = MODE_READ | MODE_STD | MODE_PENDING;
     }
-    if (out && !(out->mode & 8)) {
+    if (out && !(out->mode & MODE_STD)) {
         out->handle = stdout;
-        out->mode = 2 | 4 | 8;
+        out->mode = MODE_WRITE | MODE_EOF | MODE_STD;
     }
+}
+
+__attribute__((weak))
+const char *pas_enum_write_token(int32_t value, const char **names, int count)
+{
+    enum { RING = 16, WIDTH = 32 };
+    static char bufs[RING][WIDTH];
+    static int slot = 0;
+    if (value >= 0 && value < count && names)
+        return names[value];
+    slot = (slot + 1) % RING;
+    snprintf(bufs[slot], WIDTH, "%d", value);
+    return bufs[slot];
 }
 
 static int skip_ws_except_nl(void)
@@ -52,20 +58,7 @@ static void die(const char *msg)
     abort();
 }
 
-__attribute__((weak))
-const char *pas_enum_write_token(int32_t value, const char **names, int count)
-{
-    enum { RING = 16, WIDTH = 32 };
-    static char bufs[RING][WIDTH];
-    static int slot = 0;
-    if (value >= 0 && value < count && names)
-        return names[value];
-    slot = (slot + 1) % RING;
-    snprintf(bufs[slot], WIDTH, "%d", value);
-    return bufs[slot];
-}
-
-static int read_identifier_token(int (*next)(void), void(*push)(int), char *buf, int cap)
+static int read_identifier_token(int (*next)(void), void (*push)(int), char *buf, int cap)
 {
     int ch = skip_ws_except_nl();
     (void) next;

@@ -12,10 +12,7 @@
  * no bounds checking.
  */
 
-typedef struct {
-    char *ptr;
-    unsigned short seg;
-} adsmem;
+#include "pascalrt.h"
 
 int fillsc(adsmem dst, unsigned short len, char val)
 {

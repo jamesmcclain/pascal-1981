@@ -14,12 +14,12 @@ from typing import Any, List, Optional, Union
 
 import llvmlite.ir as ir
 
-from ast_nodes import *
-from codegen.base import CodegenError
-from type_system import CHAR_TYPE
-from type_system import ArrayType as ResolvedArrayType
-from type_system import LStringType as ResolvedLStringType
-from type_system import StringType as ResolvedStringType
+from ..ast_nodes import *
+from ..type_system import CHAR_TYPE
+from ..type_system import ArrayType as ResolvedArrayType
+from ..type_system import LStringType as ResolvedLStringType
+from ..type_system import StringType as ResolvedStringType
+from .base import CodegenError
 
 
 class TypesMapMixin:
@@ -256,8 +256,8 @@ class TypesMapMixin:
 
     def get_string_type_info(self, t: Type) -> tuple[bool, int, bool]:
         """Returns (is_str, max_len, is_lstring) for any AST Type or Resolved Type."""
-        from type_system import LStringType as ResolvedLStringType
-        from type_system import StringType as ResolvedStringType
+        from ..type_system import LStringType as ResolvedLStringType
+        from ..type_system import StringType as ResolvedStringType
 
         if isinstance(t, (ResolvedLStringType, ResolvedStringType)):
             return True, t.max_len, isinstance(t, ResolvedLStringType)
