@@ -5,38 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Must match codegen/base.py and codegen/files.py:
- * { i32 elem_size, i32 structure, i32 touched, i32 mode, i8* buffer, i8* handle, i8* name, i32 filemode }
- * mode low bits: 0 = closed/unopened, 1 = inspection/read, 2 = generation/write
- * mode flags: EOF=0x4, STD=0x8, PENDING=0x10, EOLN=0x20, OWNS_HANDLE=0x40, TEMP=0x80.
- * TEXT line-marker host mapping: '\n' in the stream; EOLN presents F^ as blank.
- */
-#define MODE_CLOSED 0
-#define MODE_READ   1
-#define MODE_WRITE  2
-#define MODE_BITS   3
-#define MODE_EOF    4
-#define MODE_STD    8
-#define MODE_PENDING 16
-#define MODE_EOLN   32
-#define MODE_OWNS_HANDLE 64
-#define MODE_TEMP 128
-
-#define STRUCT_BINARY 0
-#define STRUCT_TEXT   1
-
-struct pas_file_fcb {
-    int elem_size;
-    int structure;
-    int touched;
-    int mode;
-    void *buffer;
-    FILE *handle;
-    char *name;
-    int filemode;
-    unsigned char trap;         /* F.TRAP — trapped-I/O switch (manual ch.12)  */
-    int errs;                   /* F.ERRS — last trapped error code            */
-};
+#include "pascalrt.h"
 
 static void die(const char *msg)
 {

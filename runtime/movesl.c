@@ -11,10 +11,7 @@
  * overlapping regions it propagates left-to-right. There is no bounds checking.
  */
 
-typedef struct {
-    char *ptr;
-    unsigned short seg;
-} adsmem;
+#include "pascalrt.h"
 
 int movesl(adsmem src, adsmem dst, unsigned short len)
 {

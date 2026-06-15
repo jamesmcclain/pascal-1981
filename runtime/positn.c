@@ -1,6 +1,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "pascalrt.h"
+
 /* Return 1-based position of needle in haystack, or 0 if not found. */
 int32_t positn(const char *haystack, int32_t haylen, const char *needle, int32_t needlelen)
 {

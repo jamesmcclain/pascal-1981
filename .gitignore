@@ -3,3 +3,4 @@ pascal-code/
 __pycache__/
 tests/*.pyc
 *.ll
+runtime/build/
