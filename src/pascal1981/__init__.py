@@ -33,17 +33,27 @@ def __getattr__(name: str):
 # ---------------------------------------------------------------------------
 
 def runtime_lib_path() -> str:
-    """Return the absolute filesystem path to the bundled libpascalrt.a.
+    """Return the absolute filesystem path to ``libpascalrt.a``.
 
-    The static library is compiled from ``runtime/*.c`` at package installation
-    time and placed inside the package directory so that it travels with the
-    wheel.
+    In an installed wheel this points to the bundled package-data archive.  In a
+    source checkout before installation, it falls back to
+    ``runtime/build/libpascalrt.a`` when that archive has been built with
+    ``make -C runtime``.
     """
+    from pathlib import Path
     import importlib.resources
 
     try:
         ref = importlib.resources.files(__package__) / 'libpascalrt.a'
-        return str(ref)
+        if ref.is_file():
+            return str(ref)
     except Exception:
-        with importlib.resources.path(__package__, 'libpascalrt.a') as p:
-            return str(p)
+        try:
+            with importlib.resources.path(__package__, 'libpascalrt.a') as p:
+                if p.is_file():
+                    return str(p)
+        except Exception:
+            pass
+
+    checkout_archive = Path(__file__).resolve().parents[2] / 'runtime' / 'build' / 'libpascalrt.a'
+    return str(checkout_archive)

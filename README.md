@@ -6,49 +6,132 @@ A full reimplementation of IBM Pascal 2.0, a compiler targeting LLVM IR with sem
 
 ## Quick Start
 
-Compile a Pascal program to a native executable:
+There are two supported ways to run the compiler:
+
+1. **Install it with pip** and use the `pascal1981` console script.
+2. **Run it directly from a source checkout** with `PYTHONPATH=src`.
+
+Both routes produce LLVM IR. Native executable generation is then handled by
+`clang`, linked with the Pascal runtime archive or runtime C sources.
+
+### Install with pip
+
+From a checkout of this repository:
+
+```bash
+python3 -m pip install .
+```
+
+The pip build invokes:
+
+```bash
+make -C runtime
+```
+
+That Makefile uses `clang` to compile the C runtime and bundles the resulting
+static archive, `libpascalrt.a`, inside the installed Python package.
+
+Compile and link a program after installation:
 
 ```bash
 # Pascal source -> LLVM IR  (parse + type-check + codegen)
-python3 compile_to_llvm.py myprogram.pas myprogram.ll
+pascal1981 myprogram.pas myprogram.ll
 
-# LLVM IR -> native executable (requires clang).
-# Link the C runtime: file I/O, READ/READLN, string intrinsics,
-# ENCODE/DECODE, and friends resolve against runtime/*.c.
-clang myprogram.ll runtime/*.c -o myprogram
+# Locate the bundled runtime archive
+pascal1981 --print-runtime-path
+
+# LLVM IR -> native executable
+clang myprogram.ll "$(pascal1981 --print-runtime-path)" -o myprogram
 
 # Run it
 ./myprogram
 ```
 
-Programs whose output lowers to bare `printf` (e.g. `WRITELN` of integers)
-link without the runtime, but anything touching files, READ, or the string
-intrinsics will fail with `undefined reference to pas_...` unless
-`runtime/*.c` is on the link line.
+You can also locate the runtime archive from Python:
+
+```bash
+python3 -c 'from pascal1981 import runtime_lib_path; print(runtime_lib_path())'
+```
+
+### Run from a source checkout without pip installing
+
+If you do not want to install the package, run the compiler from the checkout by
+putting `src/` on `PYTHONPATH`:
+
+```bash
+PYTHONPATH=src python3 -m pascal1981 myprogram.pas myprogram.ll
+```
+
+Build the runtime static library manually:
+
+```bash
+make -C runtime
+```
+
+This produces:
+
+```text
+runtime/build/libpascalrt.a
+```
+
+Then link against that archive:
+
+```bash
+clang myprogram.ll runtime/build/libpascalrt.a -o myprogram
+./myprogram
+```
+
+After `make -C runtime`, the source-tree CLI can also print that archive path:
+
+```bash
+PYTHONPATH=src python3 -m pascal1981 --print-runtime-path
+```
+
+For quick source-tree experiments, you may also link the runtime C files
+directly instead of building the archive:
+
+```bash
+PYTHONPATH=src python3 -m pascal1981 myprogram.pas myprogram.ll
+clang myprogram.ll runtime/*.c -o myprogram
+```
+
+Programs whose output lowers to bare `printf` may link without the runtime, but
+anything touching files, `READ`/`READLN`, string intrinsics, `ENCODE`/`DECODE`,
+scan/fill/move intrinsics, or other `pas_...` helpers needs the runtime archive
+or equivalent runtime objects on the link line. Otherwise the linker will tell
+you the truth with `undefined reference to pas_...`. Cold, but fair.
 
 Add `-v` / `--verbose` for detailed output and full Python tracebacks if compilation fails:
 
 ```bash
-python3 compile_to_llvm.py -v myprogram.pas myprogram.ll
+pascal1981 -v myprogram.pas myprogram.ll
+# or, from a source checkout:
+PYTHONPATH=src python3 -m pascal1981 -v myprogram.pas myprogram.ll
 ```
 
 Optional dialect extensions are controlled with feature flags. The default dialect is vintage IBM Pascal behavior; wider integer types and symbolic enum I/O are off unless explicitly enabled:
 
 ```bash
 # Show available feature flags
-python3 compile_to_llvm.py --list-features
+pascal1981 --list-features
 
 # Enable INTEGER32 / INTEGER64 and MAXINT32 / MAXINT64
-python3 compile_to_llvm.py -f wide-integers myprogram.pas myprogram.ll
+pascal1981 -f wide-integers myprogram.pas myprogram.ll
 
 # Enable name-based user enum WRITE and READ as an extension
-python3 compile_to_llvm.py -f symbolic-enum-io myprogram.pas myprogram.ll
+pascal1981 -f symbolic-enum-io myprogram.pas myprogram.ll
 ```
 
 If no output file is specified, LLVM IR is written to stdout:
 
 ```bash
-python3 compile_to_llvm.py myprogram.pas | clang -x ir - runtime/*.c -o myprogram
+pascal1981 myprogram.pas | clang -x ir - "$(pascal1981 --print-runtime-path)" -o myprogram
+```
+
+Source-tree equivalent:
+
+```bash
+PYTHONPATH=src python3 -m pascal1981 myprogram.pas | clang -x ir - runtime/build/libpascalrt.a -o myprogram
 ```
 
 ## Architecture
@@ -68,14 +151,14 @@ Each phase is independent and focused:
 
 ### Components
 
-- **Lexer (`lexer.py`)** — tokenizes Pascal source: keywords, identifiers, numbers, operators, strings.
-- **Parser (`parser.py`)** — builds an Abstract Syntax Tree (AST) from tokens. Implements the full IBM Pascal 2.0 grammar. Entry point: `parse_file(path)`.
-- **Type Checker (`type_system.py`, `symbol_table.py`, `type_checker.py`)** — semantic analysis: validates types, scopes, control flow, and module semantics before code generation. All type violations stop the pipeline with clear error messages.
-- **Feature flags (`features.py`)** — generic feature-gating machinery for opt-in dialect extensions such as `wide-integers` and `symbolic-enum-io`.
-- **Type Checker support (`builtins_registry.py`)** — centralized registration of predeclared identifiers (types, constants, intrinsics); user declarations may shadow builtins.
-- **Codegen (`codegen/` package)** — walks the AST and emits LLVM IR using `llvmlite`. Split by concern: `base`, `decls`, `exprs`, `stmts`, `types_map`, `constfold`, plus feature modules `files` (file-control blocks), `io_write_read`, `strings`, `sets`, and `runtime_builtins`. `codegen_llvm.py` remains as a compatibility shim re-exporting the package.
-- **C Runtime (`runtime/`)** — the file I/O subsystem (`fileops.c`: FCB model, RESET/REWRITE/GET/PUT, ASSIGN/CLOSE/DISCARD, READSET/READFN, EOF/EOLN, mode enforcement), stdin readers (`readq.c`), ENCODE/DECODE (`encode_decode.c`), and the move/scan/fill/position intrinsics.
-- **Linking** — `clang` lowers LLVM IR to native code and links `runtime/*.c`.
+- **Lexer (`src/pascal1981/lexer.py`)** — tokenizes Pascal source: keywords, identifiers, numbers, operators, strings.
+- **Parser (`src/pascal1981/parser.py`)** — builds an Abstract Syntax Tree (AST) from tokens. Implements the full IBM Pascal 2.0 grammar. Entry point: `parse_file(path)`.
+- **Type Checker (`src/pascal1981/type_system.py`, `src/pascal1981/symbol_table.py`, `src/pascal1981/type_checker.py`)** — semantic analysis: validates types, scopes, control flow, and module semantics before code generation. All type violations stop the pipeline with clear error messages.
+- **Feature flags (`src/pascal1981/features.py`)** — generic feature-gating machinery for opt-in dialect extensions such as `wide-integers` and `symbolic-enum-io`.
+- **Type Checker support (`src/pascal1981/builtins_registry.py`)** — centralized registration of predeclared identifiers (types, constants, intrinsics); user declarations may shadow builtins.
+- **Codegen (`src/pascal1981/codegen/` package)** — walks the AST and emits LLVM IR using `llvmlite`. Split by concern: `base`, `decls`, `exprs`, `stmts`, `types_map`, `constfold`, plus feature modules `files` (file-control blocks), `io_write_read`, `strings`, `sets`, and `runtime_builtins`. `codegen_llvm.py` remains as a compatibility shim re-exporting the package.
+- **C Runtime (`runtime/`)** — the file I/O subsystem (`fileops.c`: FCB model, RESET/REWRITE/GET/PUT, ASSIGN/CLOSE/DISCARD, READSET/READFN, EOF/EOLN, mode enforcement), stdin readers (`readq.c`), ENCODE/DECODE (`encode_decode.c`), and the move/scan/fill/position intrinsics. `make -C runtime` builds `runtime/build/libpascalrt.a` with `clang`.
+- **Linking** — `clang` lowers LLVM IR to native code and links either the installed `libpascalrt.a`, the source-tree `runtime/build/libpascalrt.a`, or `runtime/*.c` during checkout-only development.
 
 ### Grammar Reference
 
@@ -160,61 +243,60 @@ The test suite is organized to run independently at each layer, so development c
 
 ```
 pascal-1981/
-├─ Core Compiler
-│  ├── lexer.py                  # Tokenizer (keywords, identifiers, numbers, strings, operators)
-│  ├── parser.py                 # Syntax analysis; builds AST via recursive descent
-│  ├── ast_nodes.py              # AST node definitions (typed dataclasses)
-│  ├── type_system.py            # Type hierarchy and compatibility rules
-│  ├── symbol_table.py           # Scope management and symbol lookup
-│  ├── type_checker.py           # Semantic analysis (types, scopes, control flow)
-│  ├── builtins_registry.py      # Centralized predeclared-identifier registration
-│  ├── features.py               # Generic opt-in dialect feature flags
-│  ├── codegen/                  # LLVM IR generation package
-│  │  ├── base.py, decls.py, exprs.py, stmts.py, types_map.py, constfold.py
-│  │  ├── files.py               # File-control blocks (FCB layout, F^, file ops)
-│  │  ├── io_write_read.py       # WRITE/READ lowering, field widths, file selectors
-│  │  ├── strings.py, sets.py    # STRING/LSTRING and SET lowering
-│  │  └── runtime_builtins.py    # Extern seams to the C runtime
-│  ├── codegen_llvm.py           # Compatibility shim re-exporting codegen/
-│  └── compile_to_llvm.py        # Driver (parse → type-check → codegen)
+├─ Python package
+│  └── src/pascal1981/
+│      ├── __init__.py             # public package API; runtime_lib_path()
+│      ├── __main__.py             # python -m pascal1981 entry point
+│      ├── compile_to_llvm.py      # Driver (parse → type-check → codegen)
+│      ├── lexer.py                # Tokenizer
+│      ├── parser.py               # Syntax analysis; builds AST via recursive descent
+│      ├── ast_nodes.py            # AST node definitions
+│      ├── type_system.py          # Type hierarchy and compatibility rules
+│      ├── symbol_table.py         # Scope management and symbol lookup
+│      ├── type_checker.py         # Semantic analysis
+│      ├── builtins_registry.py    # Predeclared identifiers
+│      ├── features.py             # Opt-in dialect feature flags
+│      ├── codegen_llvm.py         # Compatibility shim re-exporting codegen/
+│      └── codegen/                # LLVM IR generation package
+│          ├── base.py, decls.py, exprs.py, stmts.py, types_map.py, constfold.py
+│          ├── files.py            # File-control blocks (FCB layout, F^, file ops)
+│          ├── io_write_read.py    # WRITE/READ lowering, field widths, file selectors
+│          ├── strings.py, sets.py # STRING/LSTRING and SET lowering
+│          └── runtime_builtins.py # Extern seams to the C runtime
 │
-├─ Tests (organized by pipeline layer)
-│  ├── tests/
-│  │  ├── __init__.py
-│  │  ├── support.py             # Test helpers and dependency probes
-│  │  ├── test_parser.py         # Parser accept/reject corpus (pure Python)
-│  │  ├── test_typecheck.py      # Type rules and semantics (pure Python)
-│  │  ├── test_codegen.py        # IR generation and build/run (requires llvmlite + clang)
-│  │  ├── test_codegen_strings_bounds.py  # String intrinsics, capacities, READ dispatch
-│  │  ├── test_read_end_to_end.py         # Piped-stdin READ/READLN run tests
-│  │  ├── test_runtime_fixes.py           # Hostile run tests for runtime behaviors (file subsystem, intrinsics)
-│  │  ├── test_integration.py    # Legacy integration corpus (removed)
-│  │  └── fixtures/parser/
-│  │      ├── should_pass/       # Programs that MUST parse
-│  │      ├── should_fail/       # Programs that MUST be rejected
-│  │      └── judgment_calls/    # Edge cases per dialect spec
+├─ Runtime
+│  └── runtime/
+│      ├── Makefile                # clang build of build/libpascalrt.a
+│      ├── pascalrt.h              # shared runtime declarations/layout
+│      ├── fileops.c               # FCB model, files, ASSIGN/CLOSE/DISCARD, predicates
+│      ├── readq.c                 # stdin READ/READLN readers
+│      ├── encode_decode.c         # ENCODE/DECODE intrinsics
+│      ├── mover.c, movel.c, movesl.c, movesr.c
+│      ├── scaneq.c, positn.c
+│      ├── fillc.c, fillsc.c
+│      └── pabort.c
 │
-├─ Documentation
-│  ├── docs/
-│  │  ├── ebnf_grammar.md        # Formal grammar specification (reference document)
-│  │  ├── discrepancies.md       # Differential findings vs. the 1981 compiler (graded, with resolutions)
-│  │  └── plans/                 # Remediation and completion plans (executed plans kept for the record)
+├─ Packaging
+│  ├── pyproject.toml              # setuptools metadata and console script
+│  ├── setup.py                    # custom build_py hook for libpascalrt.a
+│  └── MANIFEST.in                 # sdist inputs for runtime/docs/tests
 │
-├─ Runtime & Build
-│  ├── runtime/
-│  │  ├── fileops.c              # File subsystem: FCB model, RESET/REWRITE/GET/PUT,
-│  │  │                          #   ASSIGN/CLOSE/DISCARD, READSET/READFN, EOF/EOLN, mode enforcement
-│  │  ├── readq.c                # stdin READ/READLN readers
-│  │  ├── encode_decode.c        # ENCODE/DECODE intrinsics
-│  │  ├── mover.c, movel.c, movesl.c, movesr.c   # Block-move intrinsics
-│  │  ├── scaneq.c, positn.c     # Scan/position intrinsics
-│  │  ├── fillc.c, fillsc.c      # Fill intrinsics
-│  │  └── pabort.c               # Runtime abort reporting
-│  ├── scripts/
-│  │  └── beautify.sh            # Code formatter (isort + yapf)
-│  ├── .gitignore
-│  ├── .style.yapf               # Code style config
-│  └── README.md                 # This file
+├─ Tests
+│  └── tests/
+│      ├── support.py              # Test helpers and dependency probes
+│      ├── test_parser.py          # Parser accept/reject corpus
+│      ├── test_typecheck.py       # Type rules and semantics
+│      ├── test_codegen.py         # IR generation and build/run
+│      ├── test_codegen_strings_bounds.py
+│      ├── test_read_end_to_end.py
+│      ├── test_runtime_fixes.py
+│      └── fixtures/parser/
+│
+└─ Documentation
+   └── docs/
+       ├── ebnf_grammar.md
+       ├── discrepancies.md
+       └── plans/
 ```
 
 ## Testing
@@ -224,18 +306,21 @@ One unified test suite built on Python's stdlib `unittest`, with automatic detec
 ### Run the entire test suite
 
 ```bash
-# All tests; codegen tests auto-skip if llvmlite/clang are unavailable
-python3 -m unittest discover -s tests -v
+# All tests from a source checkout; codegen tests auto-skip if llvmlite/clang are unavailable
+PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
+
+If you installed the package into the active environment, `PYTHONPATH=src` is not
+needed.
 
 ### Run by layer
 
 ```bash
 # Parser accept/reject corpus + type rules (no llvmlite needed)
-python3 -m unittest tests.test_parser tests.test_typecheck
+PYTHONPATH=src python3 -m unittest tests.test_parser tests.test_typecheck
 
 # Codegen only (requires llvmlite + clang)
-python3 -m unittest tests.test_codegen
+PYTHONPATH=src python3 -m unittest tests.test_codegen
 ```
 
 ### Test Organization
@@ -288,10 +373,18 @@ The front end (lexer, parser, type checker) is pure Python with **no `llvmlite` 
 - Python 3.8+
 - No external dependencies (pure Python implementation)
 
-**For code generation (LLVM IR → native executable):**
+**For code generation (Pascal → LLVM IR):**
 - Python 3.8+
 - `llvmlite` (for LLVM IR generation via Python)
-- `clang` (recent versions; needed for native compilation and linking)
-  - A harmless target-triple override warning from LLVM is expected and safe to ignore
 
-**Note:** If `llvmlite` or `clang` are unavailable, the parser and type checker still work fully; only codegen tests are skipped.
+**For native executables and runtime builds:**
+- `clang` (required to lower/link LLVM IR and to build the C runtime)
+  - A harmless target-triple override warning from LLVM is expected and safe to ignore
+- `make` and `ar` (used by `runtime/Makefile` to build `libpascalrt.a`)
+
+**For pip installation from this repository:**
+- Python 3.8+
+- `pip`
+- `clang`, `make`, and `ar` available on `PATH`, because installation builds and bundles the C runtime archive
+
+**Note:** If `llvmlite` or `clang` are unavailable, the parser and type checker still work fully; only codegen/native tests are skipped.
