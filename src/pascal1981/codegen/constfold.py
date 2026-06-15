@@ -15,7 +15,6 @@ from typing import Optional
 import llvmlite.ir as ir
 
 from ..ast_nodes import *
-
 from .base import CodegenError
 
 

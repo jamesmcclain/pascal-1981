@@ -25,11 +25,10 @@ CAN_BUILD_EXE = HAS_LLVMLITE and HAS_CLANG
 requires_llvm = unittest.skipUnless(HAS_LLVM, "requires llvmlite (IR generation)")
 requires_exe = unittest.skipUnless(CAN_BUILD_EXE, "requires llvmlite + clang (native build/run)")
 
-from pascal1981.parser import ParserError, parse_file
-
 # In-process helpers
 from pascal1981.lexer import LexerError, lex_file
-from pascal1981.type_checker import PascalTypeChecker, TypeCheckError, TypeCheckResult
+from pascal1981.parser import ParserError, parse_file
+from pascal1981.type_checker import (PascalTypeChecker, TypeCheckError, TypeCheckResult)
 
 
 def _write_temp(src: str) -> str:

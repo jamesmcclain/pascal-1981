@@ -10,7 +10,6 @@ Performs semantic analysis on the AST:
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from .parser import parse_file
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -32,9 +31,10 @@ from .ast_nodes import SizeofExpr, Statement, StringLiteral
 from .ast_nodes import SubrangeType as ASTSubrangeType
 from .ast_nodes import (TypeDecl, UnaryOp, UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WriteArg)
 from .builtins_registry import register_builtins
+from .parser import parse_file
 from .symbol_table import SourceLocation, Symbol, SymbolTable
 from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, EnumType, FileType, FunctionType, LStringType,
-                         PointerType, ProcedureType, RecordType, SetType, StringType, Type, binary_op_result_type, can_assign, is_fixed_char_array, unary_op_result_type)
+                          PointerType, ProcedureType, RecordType, SetType, StringType, Type, binary_op_result_type, can_assign, is_fixed_char_array, unary_op_result_type)
 
 
 @dataclass

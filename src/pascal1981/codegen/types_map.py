@@ -15,11 +15,11 @@ from typing import Any, List, Optional, Union
 import llvmlite.ir as ir
 
 from ..ast_nodes import *
-from .base import CodegenError
 from ..type_system import CHAR_TYPE
 from ..type_system import ArrayType as ResolvedArrayType
 from ..type_system import LStringType as ResolvedLStringType
 from ..type_system import StringType as ResolvedStringType
+from .base import CodegenError
 
 
 class TypesMapMixin:

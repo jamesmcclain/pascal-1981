@@ -16,7 +16,6 @@ from llvmlite.ir import IRBuilder
 from ..ast_nodes import *
 from ..type_system import LStringType as ResolvedLStringType
 from ..type_system import StringType as ResolvedStringType
-
 from .base import CodegenError
 
 

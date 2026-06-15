@@ -19,7 +19,6 @@ import sys
 from setuptools import setup
 from setuptools.command.build_py import build_py as _build_py
 
-
 HERE = os.path.dirname(os.path.abspath(__file__))
 RUNTIME_DIR = os.path.join(HERE, "runtime")
 PACKAGE_DIR = os.path.join(HERE, "src", "pascal1981")
@@ -33,8 +32,7 @@ class BuildPyWithRuntime(_build_py):
         make_cmd = ["make", "-C", RUNTIME_DIR]
         print(f"* building C runtime: {' '.join(make_cmd)}", file=sys.stderr)
         try:
-            subprocess.run(make_cmd, check=True,
-                           stdout=sys.stderr, stderr=sys.stderr)
+            subprocess.run(make_cmd, check=True, stdout=sys.stderr, stderr=sys.stderr)
         except subprocess.CalledProcessError:
             print(
                 "error: failed to compile the C runtime.  Is clang installed?",

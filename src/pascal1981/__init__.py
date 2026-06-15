@@ -15,10 +15,10 @@ __all__ = [
     'runtime_lib_path',
 ]
 
-
 # ---------------------------------------------------------------------------
 # Lazy public exports
 # ---------------------------------------------------------------------------
+
 
 def __getattr__(name: str):
     """Lazily expose codegen symbols without importing llvmlite on package import."""
@@ -32,6 +32,7 @@ def __getattr__(name: str):
 # Runtime-library discovery
 # ---------------------------------------------------------------------------
 
+
 def runtime_lib_path() -> str:
     """Return the absolute filesystem path to ``libpascalrt.a``.
 
@@ -40,8 +41,8 @@ def runtime_lib_path() -> str:
     ``runtime/build/libpascalrt.a`` when that archive has been built with
     ``make -C runtime``.
     """
-    from pathlib import Path
     import importlib.resources
+    from pathlib import Path
 
     try:
         ref = importlib.resources.files(__package__) / 'libpascalrt.a'

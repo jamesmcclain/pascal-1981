@@ -21,7 +21,6 @@ from ..ast_nodes import *
 from ..builtins_registry import register_builtins
 from ..type_system import LStringType as ResolvedLStringType
 from ..type_system import StringType as ResolvedStringType
-
 # Import base classes and support classes
 from .base import (_SCALAR_SIZES, CodegenBase, CodegenError, LoopContext, Scope, Symbol)
 from .constfold import ConstFoldMixin
