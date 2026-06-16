@@ -29,7 +29,7 @@ from .ast_nodes import (RepeatStmt, ReturnStmt, RetypeExpr, Selector, SetConstru
 from .ast_nodes import SetType as ASTSetType
 from .ast_nodes import SizeofExpr, Statement, StringLiteral
 from .ast_nodes import SubrangeType as ASTSubrangeType
-from .ast_nodes import (TypeDecl, UnaryOp, UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WriteArg)
+from .ast_nodes import (TypeDecl, UnaryOp, UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt, WriteArg)
 from .builtins_registry import register_builtins
 from .parser import parse_file
 from .symbol_table import SourceLocation, Symbol, SymbolTable
@@ -83,6 +83,10 @@ class PascalTypeChecker(TypeChecker):
         self.current_interface_decls: Dict[str, Any] = {}
         self.source_file = source_file  # Path to the source file being compiled
         self.features: Dict[str, bool] = features if features is not None else {}
+        # Names of record types pre-declared in the current declaration block so
+        # that forward and self pointer references (linked lists) resolve to a
+        # stable object instead of falling back to ^CHAR.
+        self._predeclared_types: set = set()
         self._setup_builtins()
 
     def feature_enabled(self, name: str) -> bool:
@@ -97,6 +101,7 @@ class PascalTypeChecker(TypeChecker):
         """Main entry point for type checking."""
         self.errors = []
         self.warnings = []
+        self._predeclared_types = set()
         # Reset symbol table but keep builtins
         self.symbol_table = SymbolTable()
         self._setup_builtins()
@@ -502,6 +507,7 @@ class PascalTypeChecker(TypeChecker):
 
         # Process declarations first
         if block.decls:
+            self._predeclare_record_types(block.decls)
             for decl in block.decls:
                 self.check_declaration(decl)
 
@@ -604,12 +610,53 @@ class PascalTypeChecker(TypeChecker):
         symbol = Symbol(name=decl.name, type=value_type, kind='const', location=self.make_location(decl), is_mutable=False)
         self.symbol_table.define(decl.name, symbol)
 
+    def _predeclare_record_types(self, decls) -> None:
+        """Register an empty placeholder for every named RECORD type in a
+        declaration block before any bodies are resolved.
+
+        Pascal lets a pointer type forward-reference a record declared later in
+        the same TYPE section (``np = ^node; node = RECORD ... next: np END``),
+        and a record reference itself through a pointer field. Resolving bases
+        eagerly turned both into ^CHAR. Pre-creating a stable (initially empty)
+        RecordType per name and filling it in place when its body is reached
+        means such references resolve to the real record object.
+        """
+        for decl in decls:
+            if not isinstance(decl, TypeDecl) or not decl.name:
+                continue
+            if not isinstance(decl.type_expr, ASTRecordType):
+                continue
+            if self.symbol_table.lookup_local(decl.name):
+                continue
+            placeholder = RecordType(decl.name, {})
+            self.symbol_table.define(
+                decl.name,
+                Symbol(name=decl.name, type=placeholder, kind='type',
+                       location=self.get_node_location(decl), is_mutable=False),
+            )
+            self._predeclared_types.add(decl.name.upper())
+
     def check_type_decl(self, decl: TypeDecl) -> None:
         """Type check a type declaration."""
         if not decl.name or not decl.type_expr:
             return
 
         existing = self.symbol_table.lookup_local(decl.name)
+
+        # A record name pre-declared by _predeclare_record_types: fill the
+        # existing placeholder in place so any forward/self pointer references
+        # that already captured it now see the real fields.
+        if decl.name.upper() in self._predeclared_types and existing is not None \
+                and isinstance(existing.type, RecordType) and isinstance(decl.type_expr, ASTRecordType):
+            placeholder = existing.type
+            for names, field_type_expr in (decl.type_expr.fields or []):
+                field_type = self.resolve_type(field_type_expr)
+                if field_type:
+                    for field_name in names:
+                        placeholder.fields[field_name] = field_type
+            self._predeclared_types.discard(decl.name.upper())
+            return
+
         if existing and not getattr(existing, 'is_builtin', False):
             self.error(f"Type '{decl.name}' already declared at {existing.location}", decl)
             return
@@ -773,6 +820,40 @@ class PascalTypeChecker(TypeChecker):
             self.check_return_stmt(stmt)
         elif isinstance(stmt, LabelStmt):
             self.check_statement(stmt.stmt)
+        elif isinstance(stmt, WithStmt):
+            self.check_with_stmt(stmt)
+
+    def check_with_stmt(self, stmt: WithStmt) -> None:
+        """Type check a WITH statement.
+
+        Each target must designate a record. Inside the body the record's
+        field names become directly visible as bare identifiers, shadowing
+        any outer symbol of the same name. With several comma-separated
+        targets the rightmost wins on a field-name clash, matching the
+        nested-WITH equivalence in the grammar (``WITH a, b DO s`` ==
+        ``WITH a DO WITH b DO s``); the later targets are therefore resolved
+        with the earlier targets' fields already in scope. One scope is
+        pushed per target so the aliases vanish when the WITH ends.
+        """
+        pushed = 0
+        for target in stmt.targets:
+            rec_type = self.infer_designator_type(target)
+            if not isinstance(rec_type, RecordType):
+                if rec_type is not None:
+                    self.error(f"WITH target must be a record, got {rec_type}", stmt)
+                continue
+            base_sym = self.symbol_table.lookup(target.name)
+            target_mutable = base_sym.is_mutable if base_sym else True
+            self.symbol_table.enter_scope()
+            pushed += 1
+            for fname, ftype in rec_type.fields.items():
+                self.symbol_table.define(
+                    fname,
+                    Symbol(name=fname, type=ftype, kind='var', is_mutable=target_mutable),
+                )
+        self.check_statement(stmt.body)
+        for _ in range(pushed):
+            self.symbol_table.exit_scope()
 
     def check_if_stmt(self, stmt: IfStmt) -> None:
         """Type check an IF statement."""

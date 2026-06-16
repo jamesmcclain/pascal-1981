@@ -210,7 +210,11 @@ class DeclsMixin:
     def _explicit_zero_initializer(self, type_expr: Type) -> ir.Constant:
         """Produce an inspectable zero initializer for aggregate patching."""
         resolved = self.resolve_type_alias(type_expr)
-        llvm_type = self.llvm_type(resolved)
+        # Use the original type expression's LLVM type, not the alias-unwrapped
+        # one: a named record lowers to an identified struct, and its
+        # initializer constant must carry that identified type, not the literal
+        # struct that the unwrapped AST record would produce.
+        llvm_type = self.llvm_type(type_expr)
         if isinstance(resolved, RecordType):
             parts: List[ir.Constant] = []
             for names, ftype in resolved.fields:
@@ -232,7 +236,7 @@ class DeclsMixin:
         fidx, ftype = self.record_field_index(type_expr, str(selector.index_or_field))
         if fidx is None or ftype is None:
             raise CodegenError(f"Record has no field '{selector.index_or_field}'")
-        llvm_type = self.llvm_type(self.resolve_type_alias(type_expr))
+        llvm_type = self.llvm_type(type_expr)
         parts = list(getattr(aggregate, 'constant', []) or [])
         if not parts:
             parts = list(self._explicit_zero_initializer(type_expr).constant)

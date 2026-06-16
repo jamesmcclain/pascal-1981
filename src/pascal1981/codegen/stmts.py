@@ -14,7 +14,7 @@ import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
 from ..ast_nodes import *
-from .base import CodegenError, LoopContext
+from .base import CodegenError, LoopContext, Scope
 
 
 class StmtsMixin:
@@ -88,8 +88,7 @@ class StmtsMixin:
         elif isinstance(stmt, CycleStmt):
             self.codegen_cycle_stmt(stmt)
         elif isinstance(stmt, WithStmt):
-            # TODO: handle WITH
-            pass
+            self.codegen_with_stmt(stmt)
         elif isinstance(stmt, LabelStmt):
             self.codegen_label_stmt(stmt)
         elif isinstance(stmt, EmptyStmt):
@@ -186,6 +185,15 @@ class StmtsMixin:
                     self.builder.branch(end_block)
                     self.builder.position_at_end(end_block)
         else:
+            pointee = getattr(ptr.type, 'pointee', None)
+            if pointee is not None and value.type != pointee \
+                    and isinstance(value.type, ir.BaseStructType):
+                # Whole-record copy where the source and destination structs are
+                # the same layout but not the same LLVM type identity -- e.g. two
+                # distinct named records that are structurally equivalent, now
+                # lowered as separate identified structs. Copy by layout via a
+                # destination-pointer bitcast rather than by nominal type.
+                ptr = self.builder.bitcast(ptr, value.type.as_pointer())
             self.builder.store(value, ptr)
 
     def codegen_proc_call_stmt(self, stmt: ProcCallStmt) -> None:
@@ -469,6 +477,38 @@ class StmtsMixin:
         if isinstance(label, str):
             return label.lower()
         return label
+
+    def codegen_with_stmt(self, stmt: WithStmt) -> None:
+        """Lower a WITH statement.
+
+        Each target record is evaluated to a pointer exactly once, then its
+        fields are bound as bare names (one GEP per field) in a freshly pushed
+        scope so the body can reference them without qualification. Multiple
+        comma-separated targets nest left-to-right, so on a field-name clash
+        the rightmost target shadows -- matching the nested-WITH equivalence
+        in the grammar. Scopes are restored on exit (including on error).
+        """
+        prev_scope = self.scope
+        try:
+            for target in stmt.targets:
+                base_ptr, base_type = self.resolve_designator_ptr_typed(target)
+                rec = self.resolve_type_alias(base_type) if base_type is not None else None
+                if not isinstance(rec, RecordType):
+                    raise CodegenError(f"WITH target is not a record: {target.name}")
+                self.scope = Scope(parent=self.scope)
+                for names, _ftype in rec.fields:
+                    for nm in names:
+                        fidx, fast = self.record_field_index(base_type, nm)
+                        if fidx is None:
+                            continue
+                        fptr = self.builder.gep(
+                            base_ptr,
+                            [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), fidx)],
+                        )
+                        self.scope.define(nm, fptr, fast)
+            self.codegen_stmt(stmt.body)
+        finally:
+            self.scope = prev_scope
 
     def resolve_loop_context(self, label: Optional[Union[int, str]]) -> LoopContext:
         if not self.loop_stack:
