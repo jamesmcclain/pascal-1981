@@ -473,6 +473,14 @@ def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optiona
         if can_assign(left_type, right_type.element_type) or can_assign(right_type.element_type, left_type):
             return BOOLEAN_TYPE
 
+    # Pointer identity: two pointers (including NIL, which carries a pointer
+    # type) may be compared for equality. PointerType.equivalent_to already
+    # treats the generic POINTER flavor as compatible with any pointer, so
+    # `p = NIL`, `p <> NIL`, and `p = q` all type-check to BOOLEAN.
+    if isinstance(left_type, PointerType) and isinstance(right_type, PointerType):
+        if op in ('EQ', 'NEQ') and left_type.equivalent_to(right_type):
+            return BOOLEAN_TYPE
+
     return None
 
 

@@ -87,9 +87,12 @@ class RuntimeBuiltinsMixin:
             target = Designator(target.name, [])
         ptr_addr = self.resolve_designator_ptr(target)
         sym = self.scope.lookup(target.name) if isinstance(target, (Identifier, Designator)) else None
-        if not sym or not isinstance(sym.type_expr, PointerType):
+        # Unwrap named aliases (VAR p: np; TYPE np = ^node) so a pointer
+        # declared via a type alias is accepted, not just an inline ^T.
+        ptr_type = self.resolve_type_alias(sym.type_expr) if sym else None
+        if not sym or not isinstance(ptr_type, PointerType):
             raise CodegenError('NEW requires a pointer variable')
-        pointee = getattr(sym.type_expr, 'target_type', None) or getattr(sym.type_expr, 'base', None)
+        pointee = getattr(ptr_type, 'target_type', None) or getattr(ptr_type, 'base', None)
         alloc_ty = self.llvm_type(pointee)
         # Size the heap block from the pointee's real byte size. The module
         # carries an empty target datalayout, so DataLayout.get_type_alloc_size()
@@ -121,7 +124,8 @@ class RuntimeBuiltinsMixin:
             target = Designator(target.name, [])
         ptr_addr = self.resolve_designator_ptr(target)
         sym = self.scope.lookup(target.name) if isinstance(target, (Identifier, Designator)) else None
-        if not sym or not isinstance(sym.type_expr, PointerType):
+        ptr_type = self.resolve_type_alias(sym.type_expr) if sym else None
+        if not sym or not isinstance(ptr_type, PointerType):
             raise CodegenError('DISPOSE requires a pointer variable')
         ptr_val = self.builder.load(ptr_addr)
         raw = self.builder.bitcast(ptr_val, ir.IntType(8).as_pointer())

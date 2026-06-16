@@ -83,6 +83,10 @@ class PascalTypeChecker(TypeChecker):
         self.current_interface_decls: Dict[str, Any] = {}
         self.source_file = source_file  # Path to the source file being compiled
         self.features: Dict[str, bool] = features if features is not None else {}
+        # Names of record types pre-declared in the current declaration block so
+        # that forward and self pointer references (linked lists) resolve to a
+        # stable object instead of falling back to ^CHAR.
+        self._predeclared_types: set = set()
         self._setup_builtins()
 
     def feature_enabled(self, name: str) -> bool:
@@ -97,6 +101,7 @@ class PascalTypeChecker(TypeChecker):
         """Main entry point for type checking."""
         self.errors = []
         self.warnings = []
+        self._predeclared_types = set()
         # Reset symbol table but keep builtins
         self.symbol_table = SymbolTable()
         self._setup_builtins()
@@ -502,6 +507,7 @@ class PascalTypeChecker(TypeChecker):
 
         # Process declarations first
         if block.decls:
+            self._predeclare_record_types(block.decls)
             for decl in block.decls:
                 self.check_declaration(decl)
 
@@ -604,12 +610,53 @@ class PascalTypeChecker(TypeChecker):
         symbol = Symbol(name=decl.name, type=value_type, kind='const', location=self.make_location(decl), is_mutable=False)
         self.symbol_table.define(decl.name, symbol)
 
+    def _predeclare_record_types(self, decls) -> None:
+        """Register an empty placeholder for every named RECORD type in a
+        declaration block before any bodies are resolved.
+
+        Pascal lets a pointer type forward-reference a record declared later in
+        the same TYPE section (``np = ^node; node = RECORD ... next: np END``),
+        and a record reference itself through a pointer field. Resolving bases
+        eagerly turned both into ^CHAR. Pre-creating a stable (initially empty)
+        RecordType per name and filling it in place when its body is reached
+        means such references resolve to the real record object.
+        """
+        for decl in decls:
+            if not isinstance(decl, TypeDecl) or not decl.name:
+                continue
+            if not isinstance(decl.type_expr, ASTRecordType):
+                continue
+            if self.symbol_table.lookup_local(decl.name):
+                continue
+            placeholder = RecordType(decl.name, {})
+            self.symbol_table.define(
+                decl.name,
+                Symbol(name=decl.name, type=placeholder, kind='type',
+                       location=self.get_node_location(decl), is_mutable=False),
+            )
+            self._predeclared_types.add(decl.name.upper())
+
     def check_type_decl(self, decl: TypeDecl) -> None:
         """Type check a type declaration."""
         if not decl.name or not decl.type_expr:
             return
 
         existing = self.symbol_table.lookup_local(decl.name)
+
+        # A record name pre-declared by _predeclare_record_types: fill the
+        # existing placeholder in place so any forward/self pointer references
+        # that already captured it now see the real fields.
+        if decl.name.upper() in self._predeclared_types and existing is not None \
+                and isinstance(existing.type, RecordType) and isinstance(decl.type_expr, ASTRecordType):
+            placeholder = existing.type
+            for names, field_type_expr in (decl.type_expr.fields or []):
+                field_type = self.resolve_type(field_type_expr)
+                if field_type:
+                    for field_name in names:
+                        placeholder.fields[field_name] = field_type
+            self._predeclared_types.discard(decl.name.upper())
+            return
+
         if existing and not getattr(existing, 'is_builtin', False):
             self.error(f"Type '{decl.name}' already declared at {existing.location}", decl)
             return

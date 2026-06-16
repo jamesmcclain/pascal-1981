@@ -185,6 +185,15 @@ class StmtsMixin:
                     self.builder.branch(end_block)
                     self.builder.position_at_end(end_block)
         else:
+            pointee = getattr(ptr.type, 'pointee', None)
+            if pointee is not None and value.type != pointee \
+                    and isinstance(value.type, ir.BaseStructType):
+                # Whole-record copy where the source and destination structs are
+                # the same layout but not the same LLVM type identity -- e.g. two
+                # distinct named records that are structurally equivalent, now
+                # lowered as separate identified structs. Copy by layout via a
+                # destination-pointer bitcast rather than by nominal type.
+                ptr = self.builder.bitcast(ptr, value.type.as_pointer())
             self.builder.store(value, ptr)
 
     def codegen_proc_call_stmt(self, stmt: ProcCallStmt) -> None:

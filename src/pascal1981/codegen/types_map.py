@@ -85,7 +85,10 @@ class TypesMapMixin:
             elif name_up == 'FCBFQQ':
                 return self.llvm_type(self.resolve_type_alias(type_expr))
             if name_up in self.type_aliases:
-                return self.llvm_type(self.type_aliases[name_up])
+                aliased = self.type_aliases[name_up]
+                if isinstance(aliased, RecordType):
+                    return self.named_record_struct(name_up, aliased)
+                return self.llvm_type(aliased)
             raise CodegenError(f'Unknown named type: {type_expr.name}')
         elif isinstance(type_expr, EnumType):
             return ir.IntType(32)
@@ -314,6 +317,31 @@ class TypesMapMixin:
             if isinstance(lo, int) and isinstance(hi, int):
                 return lo, hi
         return None, None
+
+    def named_record_struct(self, name: str, ast_record) -> ir.Type:
+        """Build (once) an LLVM identified struct for a named record type.
+
+        Named records lower to an identified struct keyed by the type name
+        rather than an anonymous literal struct, so a field that points back at
+        the same record (``next: ^node`` in a linked list) can reference the
+        struct by identity instead of recursively rebuilding it forever. The
+        handle is cached *before* its body is set, so self-references reached
+        while laying out the fields resolve to the in-progress (opaque) handle
+        and the recursion terminates.
+        """
+        existing = self._identified_records.get(name)
+        if existing is not None:
+            return existing
+        st = self.module.context.get_identified_type(name)
+        self._identified_records[name] = st
+        elem_types: List[ir.Type] = []
+        for names, ftype in ast_record.fields:
+            lt = self.llvm_type(ftype)
+            for _ in names:
+                elem_types.append(lt)
+        if st.is_opaque:
+            st.set_body(*elem_types)
+        return st
 
     def resolve_designator_ptr(self, designator: Designator) -> ir.Value:
         """Resolve a designator to its LLVM pointer (handles arrays/selectors)."""

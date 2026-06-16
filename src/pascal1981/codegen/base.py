@@ -79,11 +79,21 @@ class CodegenBase:
     """
 
     def __init__(self, verbose: bool = False, source_file: Optional[str] = None, force_flags: Optional[Dict[str, bool]] = None, features: Optional[Dict[str, bool]] = None):
-        self.module = ir.Module(name="pascal_program")
+        # Each compilation gets its own LLVM context. Identified struct types
+        # (used for named records, so self-referential linked-list nodes can
+        # build) are interned by name *within a context*; the default global
+        # context would leak a record named e.g. `node` across separate
+        # compilations in one process, so distinct programs that reuse a type
+        # name would collide. A fresh context per module keeps them isolated.
+        self.module = ir.Module(name="pascal_program", context=ir.Context())
         self.source_file = source_file
         self.module.triple = "x86_64-pc-linux-gnu"  # Standard Linux target
         self.builder: Optional[IRBuilder] = None
         self.scope = Scope()  # global scope
+        # Cache of LLVM identified struct types for named records, keyed by type
+        # name. Lets self-referential records (linked-list nodes) build without
+        # infinite recursion: the handle is cached before its body is set.
+        self._identified_records: Dict[str, ir.Type] = {}
         self.current_function: Optional[ir.Function] = None
         self.current_return_block: Optional[ir.BasicBlock] = None
         self.features: Dict[str, bool] = features if features is not None else {}
