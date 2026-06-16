@@ -29,7 +29,7 @@ from .ast_nodes import (RepeatStmt, ReturnStmt, RetypeExpr, Selector, SetConstru
 from .ast_nodes import SetType as ASTSetType
 from .ast_nodes import SizeofExpr, Statement, StringLiteral
 from .ast_nodes import SubrangeType as ASTSubrangeType
-from .ast_nodes import (TypeDecl, UnaryOp, UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WriteArg)
+from .ast_nodes import (TypeDecl, UnaryOp, UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt, WriteArg)
 from .builtins_registry import register_builtins
 from .parser import parse_file
 from .symbol_table import SourceLocation, Symbol, SymbolTable
@@ -773,6 +773,40 @@ class PascalTypeChecker(TypeChecker):
             self.check_return_stmt(stmt)
         elif isinstance(stmt, LabelStmt):
             self.check_statement(stmt.stmt)
+        elif isinstance(stmt, WithStmt):
+            self.check_with_stmt(stmt)
+
+    def check_with_stmt(self, stmt: WithStmt) -> None:
+        """Type check a WITH statement.
+
+        Each target must designate a record. Inside the body the record's
+        field names become directly visible as bare identifiers, shadowing
+        any outer symbol of the same name. With several comma-separated
+        targets the rightmost wins on a field-name clash, matching the
+        nested-WITH equivalence in the grammar (``WITH a, b DO s`` ==
+        ``WITH a DO WITH b DO s``); the later targets are therefore resolved
+        with the earlier targets' fields already in scope. One scope is
+        pushed per target so the aliases vanish when the WITH ends.
+        """
+        pushed = 0
+        for target in stmt.targets:
+            rec_type = self.infer_designator_type(target)
+            if not isinstance(rec_type, RecordType):
+                if rec_type is not None:
+                    self.error(f"WITH target must be a record, got {rec_type}", stmt)
+                continue
+            base_sym = self.symbol_table.lookup(target.name)
+            target_mutable = base_sym.is_mutable if base_sym else True
+            self.symbol_table.enter_scope()
+            pushed += 1
+            for fname, ftype in rec_type.fields.items():
+                self.symbol_table.define(
+                    fname,
+                    Symbol(name=fname, type=ftype, kind='var', is_mutable=target_mutable),
+                )
+        self.check_statement(stmt.body)
+        for _ in range(pushed):
+            self.symbol_table.exit_scope()
 
     def check_if_stmt(self, stmt: IfStmt) -> None:
         """Type check an IF statement."""

@@ -317,6 +317,17 @@ class TypesMapMixin:
 
     def resolve_designator_ptr(self, designator: Designator) -> ir.Value:
         """Resolve a designator to its LLVM pointer (handles arrays/selectors)."""
+        ptr, _ = self.resolve_designator_ptr_typed(designator)
+        return ptr
+
+    def resolve_designator_ptr_typed(self, designator: Designator):
+        """Resolve a designator to ``(llvm_pointer, resolved_ast_type)``.
+
+        Same walk as :meth:`resolve_designator_ptr`, but also returns the AST
+        type the pointer ultimately designates. WITH needs the type so it can
+        enumerate a record target's fields; the public single-value method is
+        kept as a thin wrapper for all existing call sites.
+        """
         symbol = self.scope.lookup(designator.name)
         if not symbol:
             symbol = self.scope.lookup(designator.name.upper())
@@ -417,7 +428,7 @@ class TypesMapMixin:
                                 ok = self.builder.and_(ok, not_sentinel)
                             self._emit_runtime_check(ok, 'nilck')
                         cur_type = getattr(base, 'base', None) or getattr(base, 'target_type', None)
-        return ptr
+        return ptr, cur_type
 
     # ========================================================================
     # Type-size, argument coercion, and boolean helpers
