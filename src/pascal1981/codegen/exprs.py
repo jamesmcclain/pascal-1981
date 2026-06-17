@@ -3,7 +3,6 @@ EXPRS mixin for Codegen.
 
 Expression code generation
 
-Part of Plan 1 refactoring (mixin-based architecture).
 """
 
 from __future__ import annotations

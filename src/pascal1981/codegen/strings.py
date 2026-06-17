@@ -3,7 +3,6 @@ STRINGS mixin for Codegen.
 
 String operations
 
-Part of Plan 1 refactoring (mixin-based architecture).
 """
 
 from __future__ import annotations

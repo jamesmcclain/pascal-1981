@@ -3,7 +3,6 @@ DECLS mixin for Codegen.
 
 Declaration code generation
 
-Part of Plan 1 refactoring (mixin-based architecture).
 """
 
 from __future__ import annotations
@@ -59,7 +58,9 @@ class DeclsMixin:
                 if isinstance(self.resolve_type_alias(sym.type_expr), FileType):
                     self._init_file_storage(sym.llvm_value, sym.type_expr)
             # Execute the program body
+            prev_labels = self.setup_function_labels(unit.block.body)
             self.codegen_stmt_list(unit.block.body)
+            self.label_blocks = prev_labels
 
             # Default return 0
             if not self.builder.block.is_terminated:
@@ -98,7 +99,9 @@ class DeclsMixin:
             self.builder = IRBuilder(entry_block)
             self.current_function = init_func
 
+            prev_labels = self.setup_function_labels(unit.init_body)
             self.codegen_stmt_list(unit.init_body)
+            self.label_blocks = prev_labels
 
             if not self.builder.block.is_terminated:
                 self.builder.ret(ir.Constant(ir.IntType(32), 0))
@@ -410,11 +413,13 @@ class DeclsMixin:
         for inner_decl in decl.body.decls:
             self.codegen_decl(inner_decl)
 
-        for stmt in decl.body.body:
-            self.codegen_stmt(stmt)
+        prev_labels = self.setup_function_labels(decl.body.body)
+        self.codegen_stmt_list(decl.body.body)
+        self.label_blocks = prev_labels
 
         # Default return
-        self.builder.ret(ir.Constant(ir.IntType(32), 0))
+        if not self.builder.block.is_terminated:
+            self.builder.ret(ir.Constant(ir.IntType(32), 0))
 
         # Restore context
         self.builder = prev_builder
@@ -478,7 +483,9 @@ class DeclsMixin:
         for inner_decl in decl.body.decls:
             self.codegen_decl(inner_decl)
 
+        prev_labels = self.setup_function_labels(decl.body.body)
         self.codegen_stmt_list(decl.body.body)
+        self.label_blocks = prev_labels
 
         # Default return / function result
         if not self.builder.block.is_terminated:

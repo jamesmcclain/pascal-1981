@@ -4,7 +4,6 @@ Const Fold mixin for Codegen.
 Compile-time constant folding and evaluation.
 Evaluates constant expressions at compile time for array bounds, sizeof, etc.
 
-Part of Plan 1 refactoring (mixin-based architecture).
 Checklist: 4.2 (constant folding)
 """
 

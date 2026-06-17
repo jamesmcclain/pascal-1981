@@ -4,7 +4,6 @@ Types Map mixin for Codegen.
 Type system operations: conversion, coercion, sizing.
 Handles llvm_type conversion, parameter handling, type size computation.
 
-Part of Plan 1 refactoring (mixin-based architecture).
 Checklist: 4.1 (type system), 4.4 (RETYPE intrinsic)
 """
 

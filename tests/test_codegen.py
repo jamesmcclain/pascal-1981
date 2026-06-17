@@ -2358,3 +2358,187 @@ class TestValueInitializerCodegen(unittest.TestCase):
         rc, out = build_and_run(src)
         self.assertEqual(rc, 0)
         self.assertEqual(out, "  ABCDE\n")
+
+
+@requires_exe
+class TestGotoCodegen(unittest.TestCase):
+    """GOTO / labeled-statement lowering.
+
+    Labels are pre-created as LLVM blocks for the whole routine body before
+    its statements are lowered, so a GOTO resolves to a block whether the
+    target label appears earlier (backward) or later (forward) in the source.
+    """
+
+    def test_backward_goto_forms_a_loop(self):
+        src = (
+            "PROGRAM P; LABEL 1; VAR i: INTEGER; BEGIN "
+            "i := 0; 1: i := i + 1; IF i < 5 THEN GOTO 1; WRITELN('i=', i) END."
+        )
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "i=5\n")
+
+    def test_forward_goto_skips_dead_code(self):
+        # The WRITELN between the GOTO and its forward target must not run.
+        src = (
+            "PROGRAM P; LABEL skip; VAR i: INTEGER; BEGIN "
+            "i := 1; IF i = 1 THEN GOTO skip; "
+            "WRITELN('NOPE'); skip: WRITELN('ok') END."
+        )
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "ok\n")
+
+    def test_goto_escapes_nested_loops(self):
+        # The canonical use: jump clear out of doubly-nested FOR loops.
+        src = (
+            "PROGRAM P; LABEL 99; VAR i, j: INTEGER; BEGIN "
+            "FOR i := 1 TO 5 DO FOR j := 1 TO 5 DO "
+            "IF (i * j) = 6 THEN BEGIN WRITELN(i, ' ', j); GOTO 99 END; "
+            "99: WRITELN('done') END."
+        )
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "2 3\ndone\n")
+
+    def test_goto_is_routine_local(self):
+        # A label inside a procedure is reachable by a GOTO within that
+        # procedure; the program body has its own independent label scope.
+        src = (
+            "PROGRAM P; "
+            "PROCEDURE Count(n: INTEGER); LABEL 10; VAR k: INTEGER; BEGIN "
+            "k := 0; 10: k := k + 1; IF k < n THEN GOTO 10; WRITELN('k=', k) END; "
+            "BEGIN Count(3) END."
+        )
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "k=3\n")
+
+    def test_labeled_loop_serves_as_both_goto_and_cycle_target(self):
+        # A numeric label on a WHILE is simultaneously a GOTO target and the
+        # loop label used by CYCLE; both must resolve correctly.
+        src = (
+            "PROGRAM P; LABEL 1, 2; VAR i: INTEGER; BEGIN i := 0; "
+            "1: WHILE i < 10 DO BEGIN i := i + 1; "
+            "IF i = 3 THEN CYCLE 1; IF i = 7 THEN GOTO 2; WRITELN(i) END; "
+            "2: WRITELN('end=', i) END."
+        )
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "1\n2\n4\n5\n6\nend=7\n")
+
+
+@requires_llvm
+class TestGotoIR(unittest.TestCase):
+    """IR-shape checks for GOTO that don't need a native toolchain."""
+
+    def test_goto_emits_branch_to_label_block(self):
+        src = (
+            "PROGRAM P; LABEL 1; VAR i: INTEGER; BEGIN "
+            "i := 0; 1: i := i + 1; IF i < 5 THEN GOTO 1 END."
+        )
+        ir = compile_to_ir(src)
+        # A dedicated block exists for label 1 and is branched to by the GOTO.
+        self.assertIn('label_1', ir)
+        self.assertIn('br label %"label_1', ir)
+
+    def test_goto_to_undefined_label_is_rejected(self):
+        src = "PROGRAM P; BEGIN GOTO 7 END."
+        with self.assertRaises(Exception) as ctx:
+            compile_to_ir(src)
+        self.assertIn('label', str(ctx.exception).lower())
+
+
+@requires_exe
+class TestGotoCodegen(unittest.TestCase):
+    """GOTO / labeled-statement lowering.
+
+    Labels are pre-created as LLVM blocks for the whole routine before its body
+    is lowered, so both backward and forward GOTOs resolve, including jumps out
+    of nested loops.  Labels may be integers or identifiers, are routine-local,
+    and a labeled loop remains a valid BREAK/CYCLE target as well.
+    """
+
+    def test_backward_goto_loop(self):
+        src = (
+            "PROGRAM P; LABEL 1; VAR i: INTEGER; "
+            "BEGIN i := 0; 1: i := i + 1; IF i < 5 THEN GOTO 1; "
+            "WRITELN('i=', i) END."
+        )
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "i=5\n")
+
+    def test_forward_goto_skips_dead_code(self):
+        src = (
+            "PROGRAM P; LABEL skip; VAR i: INTEGER; "
+            "BEGIN i := 1; IF i = 1 THEN GOTO skip; "
+            "WRITELN('NOPE'); skip: WRITELN('ok') END."
+        )
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "ok\n")
+
+    def test_goto_escapes_nested_loops(self):
+        src = (
+            "PROGRAM P; LABEL 99; VAR i, j: INTEGER; "
+            "BEGIN "
+            "  FOR i := 1 TO 5 DO "
+            "    FOR j := 1 TO 5 DO "
+            "      IF (i * j) = 6 THEN BEGIN WRITELN(i, ' ', j); GOTO 99 END; "
+            "  99: WRITELN('out') "
+            "END."
+        )
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "2 3\nout\n")
+
+    def test_goto_is_routine_local(self):
+        # A procedure-local label and a program-level label of the same numeric
+        # id are independent: each GOTO targets its own routine's label.
+        src = (
+            "PROGRAM P; LABEL 10; VAR i: INTEGER; "
+            "PROCEDURE Q; LABEL 10; VAR k: INTEGER; "
+            "BEGIN k := 0; 10: k := k + 1; IF k < 3 THEN GOTO 10; "
+            "WRITELN('q=', k) END; "
+            "BEGIN i := 0; 10: i := i + 1; IF i < 2 THEN GOTO 10; "
+            "Q; WRITELN('p=', i) END."
+        )
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "q=3\np=2\n")
+
+    def test_labeled_loop_is_still_break_cycle_target(self):
+        # The same label drives a CYCLE (continue) and coexists with a GOTO that
+        # exits to a second label.
+        src = (
+            "PROGRAM P; LABEL 1, 2; VAR i: INTEGER; "
+            "BEGIN i := 0; "
+            "  1: WHILE i < 10 DO BEGIN "
+            "       i := i + 1; "
+            "       IF i = 3 THEN CYCLE 1; "
+            "       IF i = 7 THEN GOTO 2; "
+            "       WRITE(i, ' ') END; "
+            "  2: WRITELN('end=', i) "
+            "END."
+        )
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "1 2 4 5 6 end=7\n")
+
+    def test_undefined_goto_label_is_rejected(self):
+        from pascal1981.codegen.base import CodegenError
+        src = "PROGRAM P; BEGIN GOTO 7 END."
+        with self.assertRaises(CodegenError):
+            compile_to_ir(src)
+
+    @requires_llvm
+    def test_goto_lowers_to_branch_into_label_block(self):
+        # IR sanity: a label block is materialized and the GOTO branches to it.
+        src = (
+            "PROGRAM P; LABEL 1; VAR i: INTEGER; "
+            "BEGIN i := 0; 1: i := i + 1; IF i < 5 THEN GOTO 1 END."
+        )
+        ir = compile_to_ir(src)
+        self.assertIn("label_1", ir)
+        self.assertIn("br label %\"label_1", ir)

@@ -3,7 +3,6 @@ STMTS mixin for Codegen.
 
 Statement code generation
 
-Part of Plan 1 refactoring (mixin-based architecture).
 """
 
 from __future__ import annotations
@@ -23,7 +22,17 @@ class StmtsMixin:
     def codegen_stmt_list(self, stmts: List[Statement]) -> None:
         for stmt in stmts:
             if self.builder.block.is_terminated:
-                break
+                # The previous statement ended the block (RETURN/BREAK/CYCLE/
+                # GOTO).  With no labels in scope nothing downstream can be a
+                # jump target, so the rest of the list is unreachable and we
+                # stop -- preserving the original fast path.  When labels do
+                # exist, a following labeled statement may still be reached by
+                # a GOTO, so we open a fresh (possibly dead) block for it to
+                # land in; LLVM discards it if nothing branches there.
+                if not self.label_blocks:
+                    break
+                cont = self.current_function.append_basic_block(self.unique_name('cont'))
+                self.builder.position_at_end(cont)
             self.codegen_stmt(stmt)
 
     def effective_flag(self, flag: str, stmt: Statement) -> bool:
@@ -79,8 +88,7 @@ class StmtsMixin:
         elif isinstance(stmt, CaseStmt):
             self.codegen_case_stmt(stmt)
         elif isinstance(stmt, GotoStmt):
-            # TODO: handle GOTO
-            pass
+            self.codegen_goto_stmt(stmt)
         elif isinstance(stmt, ReturnStmt):
             self.codegen_return_stmt(stmt)
         elif isinstance(stmt, BreakStmt):
@@ -467,11 +475,84 @@ class StmtsMixin:
         ctx = self.resolve_loop_context(stmt.label)
         self.builder.branch(ctx.cycle_block)
 
+    def codegen_goto_stmt(self, stmt: GotoStmt) -> None:
+        """Lower a GOTO: an unconditional branch to the block that begins the
+        target label.  All label blocks in the routine were pre-created before
+        the body was lowered, so forward and backward targets resolve alike.
+
+        The branch terminates the current block.  Statements that textually
+        follow are only reachable via another label; codegen_stmt_list opens a
+        fresh block for them as needed."""
+        target = self.normalize_label(stmt.label)
+        block = self.label_blocks.get(target)
+        if block is None:
+            raise CodegenError(f'GOTO to undefined label: {stmt.label}')
+        self.builder.branch(block)
+
     def codegen_label_stmt(self, stmt: LabelStmt) -> None:
+        target = self.normalize_label(stmt.label)
+        block = self.label_blocks.get(target)
+        if block is not None:
+            # Fall through into the label block from the preceding straight-line
+            # code, then continue lowering there.  This makes the label a join
+            # point for both ordinary fall-through and any GOTO that targets it.
+            if not self.builder.block.is_terminated:
+                self.builder.branch(block)
+            self.builder.position_at_end(block)
         inner = stmt.stmt
         if isinstance(inner, (WhileStmt, ForStmt, RepeatStmt)):
-            setattr(inner, 'label', self.normalize_label(stmt.label))
+            # A labeled loop is also a BREAK/CYCLE target; keep that wiring.
+            setattr(inner, 'label', target)
         self.codegen_stmt(inner)
+
+    def _collect_labels(self, node: Any) -> List[Union[int, str]]:
+        """Return the (normalized) ids of every label defined via a labeled
+        statement reachable within ``node`` (a statement or list of them),
+        recursing through the compound/control-flow statements that can nest
+        further statements.  Used to pre-create label blocks for a routine."""
+        found: List[Union[int, str]] = []
+
+        def walk(s: Any) -> None:
+            if s is None:
+                return
+            if isinstance(s, LabelStmt):
+                found.append(self.normalize_label(s.label))
+                walk(s.stmt)
+            elif isinstance(s, CompoundStmt):
+                for x in s.stmts:
+                    walk(x)
+            elif isinstance(s, IfStmt):
+                walk(s.then_branch)
+                walk(s.else_branch)
+            elif isinstance(s, (ForStmt, WhileStmt, WithStmt)):
+                walk(s.body)
+            elif isinstance(s, RepeatStmt):
+                for x in s.body:
+                    walk(x)
+            elif isinstance(s, CaseStmt):
+                for el in s.elements:
+                    walk(el.stmt)
+                walk(s.otherwise)
+
+        if isinstance(node, list):
+            for s in node:
+                walk(s)
+        else:
+            walk(node)
+        return found
+
+    def setup_function_labels(self, body: Any) -> Dict[Union[int, str], ir.Block]:
+        """Install a fresh per-routine label scope for ``self.current_function``,
+        pre-creating one LLVM block per label declared in ``body``.  Labels are
+        block-local in Pascal, so each routine starts with an empty map (no
+        non-local GOTO into an enclosing routine).  Returns the previous map so
+        the caller can restore it once the body is lowered."""
+        prev = self.label_blocks
+        self.label_blocks = {}
+        for lid in self._collect_labels(body):
+            if lid not in self.label_blocks:
+                self.label_blocks[lid] = self.current_function.append_basic_block(name=self.unique_name(f'label_{lid}'))
+        return prev
 
     def normalize_label(self, label: Optional[Union[int, str]]) -> Optional[Union[int, str]]:
         if isinstance(label, str):

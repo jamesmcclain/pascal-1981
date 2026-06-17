@@ -3,7 +3,6 @@ RUNTIME_BUILTINS mixin for Codegen.
 
 C runtime wrappers and memory builtins
 
-Part of Plan 1 refactoring (mixin-based architecture).
 """
 
 from __future__ import annotations
