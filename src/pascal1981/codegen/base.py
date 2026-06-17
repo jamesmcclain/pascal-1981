@@ -114,6 +114,12 @@ class CodegenBase:
         self.current_interface_decls: Dict[str, Declaration] = {}
         self.proc_param_modes: Dict[str, List[Optional[str]]] = {}
         self.loop_stack: List[LoopContext] = []
+        # Per-routine map of (normalized) label id -> the LLVM block that the
+        # corresponding labeled statement begins.  Blocks are pre-created for
+        # every label in a routine body before its statements are lowered, so a
+        # GOTO can target a label that appears either earlier (backward) or
+        # later (forward) in the source.  Reset/restored per function body.
+        self.label_blocks: Dict[Union[int, str], ir.Block] = {}
         # Enum support (checklist 9.8): map each enum member (UPPER) to the full
         # ordered member-name list of its enum so WRITE can print the symbolic
         # name of a bare member literal; cache the per-enum `[n x i8*]` name
