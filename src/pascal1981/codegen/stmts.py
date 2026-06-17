@@ -3,7 +3,6 @@ STMTS mixin for Codegen.
 
 Statement code generation
 
-Part of Plan 1 refactoring (mixin-based architecture).
 """
 
 from __future__ import annotations
