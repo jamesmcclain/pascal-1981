@@ -78,7 +78,7 @@ class CodegenBase:
     Initializes module state, builder, scope, and shared constants/tables.
     """
 
-    def __init__(self, verbose: bool = False, source_file: Optional[str] = None, force_flags: Optional[Dict[str, bool]] = None, features: Optional[Dict[str, bool]] = None):
+    def __init__(self, verbose: bool = False, source_file: Optional[str] = None, force_flags: Optional[Dict[str, bool]] = None, features: Optional[Dict[str, bool]] = None, device_triple: str = "x86_64-pc-linux-gnu"):
         # Each compilation gets its own LLVM context. Identified struct types
         # (used for named records, so self-referential linked-list nodes can
         # build) are interned by name *within a context*; the default global
@@ -87,7 +87,15 @@ class CodegenBase:
         # name would collide. A fresh context per module keeps them isolated.
         self.module = ir.Module(name="pascal_program", context=ir.Context())
         self.source_file = source_file
-        self.module.triple = "x86_64-pc-linux-gnu"  # Standard Linux target
+        self.module.triple = "x86_64-pc-linux-gnu"  # Standard Linux target (host)
+        # Lowering target for DEVICE MODULE units. Defaults to x86 (CPU-device),
+        # which collapses every address space to addrspace 0; override with a
+        # GPU triple (nvptx64.../amdgcn...) to get space-specific lowering
+        # (ads-memory-spaces-design.md S1.2/S3.2).
+        self.device_triple = device_triple
+        # True only while lowering a DEVICE MODULE unit; gates addrspace lowering
+        # so host/vintage codegen stays byte-for-byte unchanged.
+        self.is_device_module = False
         self.builder: Optional[IRBuilder] = None
         self.scope = Scope()  # global scope
         # Cache of LLVM identified struct types for named records, keyed by type
@@ -155,6 +163,19 @@ class CodegenBase:
     def feature_enabled(self, name: str) -> bool:
         """Return whether a named compile-time extension feature is enabled."""
         return self.features.get(name, False)
+
+    def _space_addrspace(self, space_ord: Optional[int]) -> int:
+        """Map a SPACE ordinal to its LLVM addrspace for the device triple.
+
+        GPU triples use the validated S3.2 table (GLOBAL=1, SHARED=3,
+        CONSTANT=4, LOCAL=5); HOST and the x86 CPU-device collapse to 0.
+        """
+        if not space_ord:  # None or 0 (HOST)
+            return 0
+        triple = self.device_triple
+        if triple.startswith('nvptx') or triple.startswith('amdgcn'):
+            return {1: 1, 2: 3, 3: 4, 4: 5}.get(space_ord, 0)
+        return 0  # device=x86 (CPU-device): spaces collapse to addrspace 0
 
     def check_enabled(self, flag: str) -> bool:
         """Effective value of a runtime-check flag at the current lowering

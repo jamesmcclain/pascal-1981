@@ -114,6 +114,13 @@ class TypesMapMixin:
         elif isinstance(type_expr, PointerType):
             base_type = self.llvm_type(type_expr.base)
             if getattr(type_expr, 'flavor', 'POINTER') == 'ADS':
+                if self.is_device_module:
+                    # Inside a DEVICE MODULE, ADS(s) OF T lowers to a typed
+                    # address-space pointer (T addrspace(k)*), collapsing the
+                    # vintage {ptr, i16} segmented pair (design S5.3).
+                    space_expr = getattr(type_expr, 'space', None)
+                    space_ord = self.eval_const_expr(space_expr) if space_expr is not None else 0
+                    return ir.PointerType(base_type, addrspace=self._space_addrspace(space_ord))
                 return ir.LiteralStructType([ir.PointerType(base_type), ir.IntType(16)])
             return ir.PointerType(base_type)
         elif isinstance(type_expr, ArrayType):

@@ -70,8 +70,17 @@ class DeclsMixin:
 
     def codegen_module(self, unit: ModuleUnit) -> ir.Module:
         """Codegen for MODULE unit."""
-        for decl in unit.decls:
-            self.codegen_decl(decl)
+        # A DEVICE MODULE lowers against the device triple, with address spaces
+        # live; a plain MODULE keeps the host triple and is byte-identical to
+        # before (ads-memory-spaces-design.md S1.2).
+        if getattr(unit, 'is_device', False):
+            self.is_device_module = True
+            self.module.triple = self.device_triple
+        try:
+            for decl in unit.decls:
+                self.codegen_decl(decl)
+        finally:
+            self.is_device_module = False
         return self.module
 
     def codegen_interface(self, unit: InterfaceUnit) -> ir.Module:
