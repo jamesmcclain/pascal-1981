@@ -335,3 +335,23 @@ instance doesn't re-trip them. Line numbers below are from the execution pass, n
   body). Legitimate contract change, not a regression.
 - *Confirmed as written:* `DEVICE`/`SPACE` are absent from the lexer (safe to treat as contextual);
   a bare identifier operand (e.g. `GLOBAL`) folds to an `Identifier` node via `parse_expression`.
+
+**Step 3 (commit `0166f59`):**
+- *Recission bans deliberately NOT implemented.* The recission set is still unfrozen (owner
+  decision pending), so this step wires the device *context* and the space machinery but enforces
+  **zero** construct bans. The `device_features()` swap on entering a `DEVICE MODULE` is in place
+  (save/restore around the body), ready to subtract recissions the moment the set is frozen.
+- *Residence needed a Symbol field.* `[SPACE(s)]` binds storage to a space, but `Symbol` had
+  nowhere to carry it — added `Symbol.space: Optional[int] = None` (`symbol_table.py`). `ADS x`
+  reads it back as the result pointee space (`AdsExpr` handling), defaulting to HOST/0.
+- *Deref invariant gated to the ADS flavor.* §3.3 is stated for pointee space generally, but
+  applying it to every `^`/ADR dereference would prejudge the (unfrozen) heap recission and risk
+  the faithful path. `_check_deref_space` fires **only for `flavor == 'ADS'`**, so plain heap
+  pointers in host code are byte-identically unaffected. Both deref sites checked
+  (`type_checker.py` selector loop + designator path).
+- *Folding reuses the Step 1 enum.* `_fold_space` resolves a bare member name against the
+  unconditionally-registered `SPACE` `EnumType` in the symbol table (ordinal = `members.index`),
+  so no separate space table is needed in the checker. Works in host modules too, but
+  `resolve_type`/`check_var_decl` reject any *use* of a space outside a `DEVICE MODULE`.
+- *No new imports leaked.* `EnumType` was already imported; `device_features` is imported lazily
+  inside `check_module_unit` to keep the module-load graph unchanged.
