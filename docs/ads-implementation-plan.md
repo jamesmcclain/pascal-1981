@@ -292,3 +292,46 @@ wanted.
 
 With Step 0 fully settled and validated, the next concrete work is **Step 1** (add
 `PointerType.space` + register the `SPACE` enum behind the feature gate) — wiring, not discovery.
+
+---
+
+## Build log — plan vs. reality (discrepancies found during execution)
+
+Things the tree did *not* match the plan/design on, recorded as they were hit so the next
+instance doesn't re-trip them. Line numbers below are from the execution pass, not the plan.
+
+**Steps 0 / 0.5 (commit `115c3f0`, 2026-06-17):**
+- *Toolchain pin lived in `pyproject.toml` only* (`dependencies = ["llvmlite>=0.40"]`), **not**
+  `setup.py` (which carries no llvmlite dep). The plan implied a pin without naming the file;
+  there is exactly one site. Bumped to `>=0.47.0`.
+- *Steps 0/0.5 are decisions, not code.* The only green-safe artifacts were the pin + an **inert**
+  `device_features()` scaffold. The recission set is **empty/NOT FROZEN** (owner decision pending),
+  and — confirming the design — the recission candidates are *language constructs*, not entries in
+  `_FEATURES`, so they cannot be feature toggles; they land as checker bans in Step 3. No
+  `gpu-spaces` flag and no `'device'` dialect added, per the ratified two-axis model.
+
+**Step 1 (commit `b458bfb`):**
+- *`CodegenBase` is not standalone-instantiable* — it calls subclass mixin methods
+  (`set_llvm_type`, etc.). The concrete entry point is `codegen.Codegen` (a mixin composite,
+  `codegen/__init__.py:39`). Tests that need a codegen object must build `Codegen()`, not
+  `CodegenBase()`.
+- *`SymbolTable.lookup` returns the `Symbol`*; check `.type`/`.kind` on it. Confirmed the
+  hand-seed of `SPACE` ordinals into `Codegen.constants` is required (the plan's Step 0 sub-check
+  held exactly).
+
+**Step 2 (commit `83af82e`) — the big one:**
+- *The attribute-reader edit list was incomplete.* The plan named **three** checker sites
+  (`type_checker.py:579/683/752`). Reality: **seven** sites read `attributes`, because four more
+  go through `getattr(decl, 'attributes', [])` in **codegen**, which a literal `.attributes` grep
+  misses — `codegen/decls.py:313/376/449` (the `attr.upper()` set-comprehensions) plus the
+  proc/func reconstruction at `decls.py:136-137`. Changing `List[str]`→`List[Attribute]` breaks
+  all of them; every `attr.upper()` becomes `attr.name.upper()`. **Lesson: grep the symbol
+  `attributes` *and* `getattr(... 'attributes'`, across `codegen/` too, before this refactor.**
+- *`next_kind(offset)` is the lookahead primitive* (`parser.py:28`); there is no `peek`. Used it
+  for the contextual `DEVICE`/`MODULE` two-token check.
+- *Two existing tests asserted the old `List[str]` attribute shape* and had to move to the
+  `Attribute` contract: `test_parser.py::test_confirmed_attributes_parse` and the readonly-local
+  codegen test (the latter only failed *through* the codegen reader sites above, not the test
+  body). Legitimate contract change, not a regression.
+- *Confirmed as written:* `DEVICE`/`SPACE` are absent from the lexer (safe to treat as contextual);
+  a bare identifier operand (e.g. `GLOBAL`) folds to an `Identifier` node via `parse_expression`.
