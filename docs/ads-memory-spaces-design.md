@@ -159,9 +159,18 @@ address to hand to a kernel but never dereferences it itself. In **vintage mode*
 > **`LOCAL`** is the per-thread private/scratch space (addrspace 5). Do not let AMDGPU's
 > "local" terminology collide with our `LOCAL`. Our names follow the CUDA/NVPTX convention.
 >
-> **[DEFAULT-caveat]** The exact device addrspace integers are the standard, stable values for
-> these backends but should be confirmed against the targeted LLVM version's datalayout before
-> being written into the grammar reference.
+> **[DEFAULT-caveat → PARTIALLY VERIFIED 2026-06-17]** Validated against the pinned toolchain
+> (`llvmlite>=0.47.0`, bundled LLVM ≈21): the `x86`, `nvptx64`, and `amdgcn` backends are all
+> present, and a `ptr addrspace(1)` store lowers to `st.global` on NVPTX — so the mechanism and
+> `GLOBAL→1` are confirmed *live*. The remaining device integers (`SHARED→3`, `CONSTANT→4`,
+> `LOCAL→5`, and AMDGPU equivalents) are the standard stable values; locking each one is now a
+> trivial empirical follow-up with the same emit-and-read-the-mnemonic harness.
+>
+> **Pointer form:** the pinned LLVM is opaque-pointer-era, but both typed (`T addrspace(k)*`)
+> and opaque (`ptr addrspace(k)`) parse and verify. The compiler uses typed pointers throughout,
+> so this design **stays typed** (`T addrspace(k)*`); the §5.3 examples are valid as written.
+> The address space rides the pointer either way, so the design is unaffected by an eventual
+> opaque migration.
 
 ### 3.3 The dereferenceability invariant
 
@@ -485,10 +494,20 @@ so the next instance knows they exist and were discussed:
 - **Width changes** under the GPU umbrella: 16-bit `INTEGER` → 32-bit; `REAL`=f64 → f32, plus
   `REAL32`/`HALF`. (Re-costed because f64 is throttled on GPUs.)
 - Target **triple/datalayout** swap and kernel **calling convention** emission.
-- The **dialect umbrella / feature-flag** seam in `features.py` (`resolve_features`, the
-  `vintage`/`extended` umbrellas) — the natural home for a `gpu` umbrella that bundles all of
-  the above. **[DEFAULT]** working name for the gate covering *this* document's contents:
-  a `gpu-spaces` feature under a `gpu` dialect umbrella.
+- The **feature-flag seam** in `features.py`. **[VERIFIED 2026-06-17 — real, with one
+  structural gap]** `resolve_features(dialect, overrides)` produces a flat `Dict[str,bool]`
+  threaded into the type checker (`type_checker.py:100`) and codegen (`base.py:81/99`), and into
+  `register_builtins(symbol_table, features)` (`type_checker.py:98`) — which is the ready hook
+  for conditionally registering the `SPACE` enum and space-aware builtins. **But:** (1) only two
+  dialects exist (`vintage` = all-off, `extended` = **all-on**), with no general umbrella
+  abstraction; (2) there is **no target axis** — the triple is a hardwired constant
+  (`base.py:90` `"x86_64-pc-linux-gnu"`); and (3) the **parser/lexer never see features**
+  (`Parser.__init__` takes only tokens), so grammar cannot be feature-gated at parse time. The
+  existing features (e.g. `readset-set-literal`) follow a **parse-the-superset, gate-semantics**
+  pattern, which is the precedent the space grammar should follow. Net: the seam is the right
+  mechanism, but the address-space work is fundamentally **target**-gated, not just
+  dialect-gated, and a target axis must be added. See the implementation-plan sketch (Step 0)
+  for the resolution.
 
 ---
 
