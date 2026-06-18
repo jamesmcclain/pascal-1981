@@ -37,6 +37,19 @@ class ModuleUnit(ASTNode):
     name: str
     uses: List[UseClause]
     decls: List[Declaration]
+    # True for a `DEVICE MODULE` (device-dialect code); False for a plain MODULE.
+    is_device: bool = False
+
+
+@dataclass
+class Attribute(ASTNode):
+    """A storage/header attribute, e.g. READONLY or the parameterized SPACE(GLOBAL).
+
+    `arg` is None for bare-keyword attributes and an Expression (folding to a
+    constant) for parameterized ones such as SPACE(constant).
+    """
+    name: str
+    arg: Optional['Expression'] = None
 
 
 @dataclass
@@ -86,7 +99,7 @@ class TypeDecl(ASTNode):
 class VarDecl(ASTNode):
     names: List[str]
     type_expr: Type
-    attributes: List[str]  # e.g., ['READONLY', 'STATIC']
+    attributes: List['Attribute']  # e.g., [Attribute('READONLY'), Attribute('STATIC')]
     # Metacommand flag state at the declaration ($INITCK/$NILCK read it).
     meta_flags: Optional[Dict[str, bool]] = None
 
@@ -111,7 +124,7 @@ class LabelDecl(ASTNode):
 class ProcDecl(ASTNode):
     name: str
     params: List[Param]
-    attributes: List[str]
+    attributes: List['Attribute']
     body: Optional[Block]  # None if EXTERN/FORWARD/EXTERNAL
 
 
@@ -120,7 +133,7 @@ class FuncDecl(ASTNode):
     name: str
     params: List[Param]
     return_type: Type
-    attributes: List[str]
+    attributes: List['Attribute']
     body: Optional[Block]  # None if EXTERN/FORWARD/EXTERNAL
 
 
@@ -410,6 +423,9 @@ class EnumType(ASTNode):
 class PointerType(ASTNode):
     base: Type
     flavor: str = 'POINTER'  # POINTER, ADR, ADS
+    # Pointee space for `ADS(s) OF T`: a constant Expression folding to a SPACE
+    # member, or None for unspecified/HOST (plain ADS/ADR).
+    space: Optional['Expression'] = None
 
 
 @dataclass

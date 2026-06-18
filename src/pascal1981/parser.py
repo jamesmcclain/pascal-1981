@@ -4,7 +4,7 @@ import argparse
 import sys
 from typing import List, Optional, Sequence, Union
 
-from .ast_nodes import (AdrExpr, AdsExpr, ArrayType, AssignStmt, ASTNode, BinOp, Block, BoolLiteral, BreakStmt, BuiltinType, CaseElement, CaseStmt, CharLiteral, CompoundStmt,
+from .ast_nodes import (AdrExpr, AdsExpr, ArrayType, AssignStmt, ASTNode, Attribute, BinOp, Block, BoolLiteral, BreakStmt, BuiltinType, CaseElement, CaseStmt, CharLiteral, CompoundStmt,
                         ConstDecl, CycleStmt, Declaration, Designator, EmptyStmt, EnumType, Expression, FileType, ForStmt, FuncCall, FuncDecl, GotoStmt, Identifier, IfStmt,
                         ImplementationUnit, IndexRange, InterfaceUnit, IntLiteral, LabelDecl, LabelStmt, LowerExpr, LStringType, ModuleUnit, NamedType, NilLiteral, Param,
                         PointerType, ProcCallStmt, ProcDecl, ProgramUnit, RangeExpr, RealLiteral, RecordType, RepeatStmt, ReturnStmt, RetypeExpr, Selector, SetConstructor, SetType,
@@ -68,6 +68,10 @@ class Parser:
             return self.parse_program_unit()
         elif self.current().kind == 'MODULE':
             return self.parse_module_unit()
+        elif self._at_device_module():
+            # Contextual keyword DEVICE preceding MODULE -> a device module.
+            self.pos += 1  # consume the contextual DEVICE identifier
+            return self.parse_module_unit(is_device=True)
         elif self.current().kind == 'INTERFACE':
             return self.parse_interface_unit()
         elif self.current().kind == 'IMPLEMENTATION':
@@ -93,7 +97,17 @@ class Parser:
         self.expect('DOT')
         return ProgramUnit(name, params, uses, block)
 
-    def parse_module_unit(self) -> ModuleUnit:
+    def _at_device_module(self) -> bool:
+        """True when the cursor is on a contextual `DEVICE` followed by `MODULE`.
+
+        `DEVICE` is not a reserved word (so vintage code may use it as an
+        identifier); it is recognized contextually only in this position.
+        """
+        cur = self.current()
+        return (cur.kind == 'IDENTIFIER' and cur.lexeme.upper() == 'DEVICE'
+                and self.next_kind(1) == 'MODULE')
+
+    def parse_module_unit(self, is_device: bool = False) -> ModuleUnit:
         self.expect('MODULE')
         name = self.expect('IDENTIFIER').lexeme
         self.expect('SEMICOLON')
@@ -107,7 +121,7 @@ class Parser:
             decls.extend(self.parse_declaration_section())
             self.skip_include_directives()
         self.expect('DOT')
-        return ModuleUnit(name, uses, decls)
+        return ModuleUnit(name, uses, decls, is_device=is_device)
 
     def parse_interface_unit(self) -> InterfaceUnit:
         self.expect('INTERFACE')
@@ -368,8 +382,8 @@ class Parser:
         type_expr = self.parse_type()
         return Param(mode, names, type_expr)
 
-    def parse_attribute_section_optional(self) -> List[str]:
-        attributes: List[str] = []
+    def parse_attribute_section_optional(self) -> List[Attribute]:
+        attributes: List[Attribute] = []
         if not self.match('LBRACKET'):
             return attributes
         if self.current().kind != 'RBRACKET':
@@ -379,14 +393,22 @@ class Parser:
         self.expect('RBRACKET')
         return attributes
 
-    def parse_attribute_item(self) -> str:
-        # The current implementation intentionally handles the six confirmed
-        # attribute keywords only. ORIGIN/PORT are documented elsewhere or
-        # unverified, and will be added in a separate pass if needed.
+    def parse_attribute_item(self) -> Attribute:
+        # Bare-keyword attributes: the six confirmed storage attributes.
         if self.current().kind in {'READONLY', 'PUBLIC', 'STATIC', 'EXTERNAL', 'EXTERN', 'PURE'}:
             attr = self.current().kind
             self.pos += 1
-            return attr
+            return Attribute(attr)
+        # SPACE(constant): the first parameterized attribute (residence of
+        # storage). `SPACE` is contextual -- recognized from an IDENTIFIER
+        # lexeme, not lexer-reserved -- so vintage `space` identifiers survive.
+        cur = self.current()
+        if cur.kind == 'IDENTIFIER' and cur.lexeme.upper() == 'SPACE':
+            self.pos += 1
+            self.expect('LPAREN')
+            arg = self.parse_expression()
+            self.expect('RPAREN')
+            return Attribute('SPACE', arg)
         self.error('expected attribute item')
 
     def parse_compound_statement(self) -> CompoundStmt:
@@ -957,9 +979,14 @@ class Parser:
             return PointerType(base, 'ADR')
         if kind == 'ADS':
             self.pos += 1
+            # Optional parameterized pointee space: ADS(constant) OF T.
+            space = None
+            if self.match('LPAREN'):
+                space = self.parse_expression()
+                self.expect('RPAREN')
             self.expect('OF')
             base = self.parse_type()
-            return PointerType(base, 'ADS')
+            return PointerType(base, 'ADS', space=space)
         if kind == 'IDENTIFIER':
             name = self.current().lexeme
             self.pos += 1

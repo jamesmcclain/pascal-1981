@@ -576,7 +576,7 @@ class PascalTypeChecker(TypeChecker):
             self.error(f"Unknown type: {decl.type_expr}", decl)
             return
 
-        readonly = 'READONLY' in {attr.upper() for attr in getattr(decl, 'attributes', [])}
+        readonly = 'READONLY' in {attr.name.upper() for attr in getattr(decl, 'attributes', [])}
 
         # Add each variable to the symbol table
         for name in decl.names:
@@ -680,7 +680,7 @@ class PascalTypeChecker(TypeChecker):
         if not decl.name:
             return
 
-        attrs = {attr.upper() for attr in getattr(decl, 'attributes', [])}
+        attrs = {attr.name.upper() for attr in getattr(decl, 'attributes', [])}
         if 'PURE' in attrs:
             for param in getattr(decl, 'params', []):
                 if getattr(param, 'mode', None) in {'VAR', 'VARS'}:
@@ -749,7 +749,7 @@ class PascalTypeChecker(TypeChecker):
         if not decl.name:
             return
 
-        attrs = {attr.upper() for attr in getattr(decl, 'attributes', [])}
+        attrs = {attr.name.upper() for attr in getattr(decl, 'attributes', [])}
         if 'PURE' in attrs:
             self.error(f"PURE is only valid on functions, not procedure '{decl.name}'", decl)
 

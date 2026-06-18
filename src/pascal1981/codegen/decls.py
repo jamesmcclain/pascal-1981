@@ -310,7 +310,7 @@ class DeclsMixin:
     def codegen_var_decl(self, decl: VarDecl) -> None:
         """Codegen for VAR declaration."""
         llvm_type = self.llvm_type(decl.type_expr)
-        attrs = {attr.upper() for attr in getattr(decl, 'attributes', [])}
+        attrs = {attr.name.upper() for attr in getattr(decl, 'attributes', [])}
         is_static = 'STATIC' in attrs
 
         # Check if the type is a string type
@@ -373,7 +373,7 @@ class DeclsMixin:
                 flat_modes.append(param.mode)
         func_type = ir.FunctionType(ir.IntType(32), param_types)
 
-        attrs = {attr.upper() for attr in getattr(decl, 'attributes', [])}
+        attrs = {attr.name.upper() for attr in getattr(decl, 'attributes', [])}
         existing = self.scope.lookup(decl.name)
         if existing and isinstance(existing.llvm_value, ir.Function):
             func = existing.llvm_value
@@ -446,7 +446,7 @@ class DeclsMixin:
 
         # Create function
         func = ir.Function(self.module, func_type, name=decl.name)
-        attrs = {attr.upper() for attr in getattr(decl, 'attributes', [])}
+        attrs = {attr.name.upper() for attr in getattr(decl, 'attributes', [])}
         if attrs.intersection({'PUBLIC', 'EXTERN', 'EXTERNAL'}):
             func.linkage = 'external'
         self.proc_param_modes[decl.name.lower()] = flat_modes
