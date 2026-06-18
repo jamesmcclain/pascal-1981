@@ -159,12 +159,20 @@ address to hand to a kernel but never dereferences it itself. In **vintage mode*
 > **`LOCAL`** is the per-thread private/scratch space (addrspace 5). Do not let AMDGPU's
 > "local" terminology collide with our `LOCAL`. Our names follow the CUDA/NVPTX convention.
 >
-> **[DEFAULT-caveat → PARTIALLY VERIFIED 2026-06-17]** Validated against the pinned toolchain
-> (`llvmlite>=0.47.0`, bundled LLVM ≈21): the `x86`, `nvptx64`, and `amdgcn` backends are all
-> present, and a `ptr addrspace(1)` store lowers to `st.global` on NVPTX — so the mechanism and
-> `GLOBAL→1` are confirmed *live*. The remaining device integers (`SHARED→3`, `CONSTANT→4`,
-> `LOCAL→5`, and AMDGPU equivalents) are the standard stable values; locking each one is now a
-> trivial empirical follow-up with the same emit-and-read-the-mnemonic harness.
+> **[VERIFIED 2026-06-17]** The full tag→addrspace table is confirmed live against the pinned
+> toolchain (`llvmlite 0.47.0`) by emitting a load through each space and reading the mnemonic:
+>
+> | space | addrspace | NVPTX (sm_70) | AMDGPU (gfx900) |
+> |-------|:--------:|---------------|-----------------|
+> | `GLOBAL`   | 1 | `ld.global`  | `global_load` |
+> | `SHARED`   | 3 | `ld.shared`  | `ds_read` (LDS) |
+> | `CONSTANT` | 4 | `ld.const`   | `global_load` (read-only path) |
+> | `LOCAL`    | 5 | `ld.local`   | `buffer_load … offen` (scratch) |
+>
+> NVPTX is a perfect 1:1 (each space → its own instruction). AMDGPU confirms the spaces are
+> distinct (global vs. LDS vs. scratch); `CONSTANT` shares the read-only global load path on this
+> GFX, which is standard AMDGPU instruction selection, not a mapping error. The integer table
+> above is now locked, not pending.
 >
 > **Pointer form:** the pinned LLVM is opaque-pointer-era, but both typed (`T addrspace(k)*`)
 > and opaque (`ptr addrspace(k)`) parse and verify. The compiler uses typed pointers throughout,

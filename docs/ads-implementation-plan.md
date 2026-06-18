@@ -146,9 +146,12 @@ additive and can follow whenever the bridge semantics are wanted.
 3. **`extended` does not imply `gpu-spaces`** — `extended` is a host language-richness umbrella,
    not a target switch; the GPU features stay off under it.
 
-## Still open
+## Verified, nothing open
 
-- **Lock the full tag→addrspace integer table (§3.2).** Now a *trivial* empirical follow-up:
-  the same harness that produced `st.global` from `addrspace(1)` can confirm `3→shared`,
-  `4→constant`, `5→local` on NVPTX (and the AMDGPU equivalents) by emitting one store per space
-  and reading the PTX/GCN mnemonic. Mechanism and `1→global` are already verified.
+- **Tag→addrspace table locked (§3.2).** Confirmed live against `llvmlite 0.47.0` by emitting a
+  load through each space: NVPTX gives a clean 1:1 (`ld.global`/`ld.shared`/`ld.const`/
+  `ld.local` for addrspace 1/3/4/5); AMDGPU confirms distinct spaces (`global_load`/`ds_read`/
+  `buffer_load`). No `[VERIFY]` items remain in the design record's core path.
+
+With Step 0 fully settled and validated, the next concrete work is **Step 1** (add
+`PointerType.space` + register the `SPACE` enum behind the feature gate) — wiring, not discovery.
