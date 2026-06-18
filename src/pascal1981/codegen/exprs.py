@@ -69,6 +69,12 @@ class ExprsMixin:
             symbol = self.scope.lookup(expr.name)
             if not symbol:
                 raise CodegenError(f'Undefined variable: {expr.name}')
+            if self.is_device_module:
+                # Step 4b: inside a DEVICE MODULE, `ADS x` is a typed address-space
+                # pointer to x's storage -- not the vintage {ptr, i16} pair. x already
+                # lives in its residence addrspace (codegen_var_decl), so its address
+                # is the correct addrspace(k)* value and matches an ADS(s) OF T slot.
+                return symbol.llvm_value
             return ir.Constant.literal_struct([symbol.llvm_value, ir.Constant(ir.IntType(16), 0)])
         elif isinstance(expr, SizeofExpr):
             # Sizeof operator (sizeof var_name or sizeof type)

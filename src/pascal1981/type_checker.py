@@ -131,6 +131,42 @@ class PascalTypeChecker(TypeChecker):
         elif space != 0 and not self.in_device_module:
             self.error("cannot dereference a device-space pointer outside a DEVICE MODULE", node)
 
+    # First recission tranche enforced as module-scoped checker bans inside a
+    # DEVICE MODULE (implementation plan Step 0.5; design S1.2/S9). The set is
+    # NOT frozen -- this is the owner-approved first tranche only.
+    _DEVICE_BANNED_HEAP = {'NEW', 'DISPOSE'}
+    _DEVICE_BANNED_IO = {
+        'WRITE', 'WRITELN', 'READ', 'READLN', 'PAGE',
+        'RESET', 'REWRITE', 'GET', 'PUT', 'CLOSE', 'DISCARD',
+        'ASSIGN', 'READFN', 'READSET',
+    }
+
+    def _check_device_recission(self, name: Optional[str], node) -> None:
+        """Reject device-hostile constructs inside a DEVICE MODULE.
+
+        First tranche: dynamic allocation (NEW/DISPOSE), host I/O, and *direct*
+        recursion. Mutual/indirect recursion is a documented follow-up (needs a
+        per-module call-graph cycle check); sets and GOTO are a later tranche.
+        """
+        if not self.in_device_module or not name:
+            return
+        up = name.upper()
+        if up in self._DEVICE_BANNED_HEAP:
+            self.error(f"dynamic allocation ('{up}') is not available in a DEVICE MODULE", node)
+            return
+        if up in self._DEVICE_BANNED_IO:
+            self.error(f"host I/O ('{up}') is not available in a DEVICE MODULE", node)
+            return
+        current = None
+        if self.current_procedure is not None and self.current_procedure.name:
+            current = self.current_procedure.name
+        elif self.current_function is not None and self.current_function.name:
+            current = self.current_function.name
+        if current and up == current.upper():
+            self.error(
+                f"recursion is not available in a DEVICE MODULE "
+                f"(routine '{current}' calls itself)", node)
+
     def _setup_builtins(self) -> None:
         """Define built-in procedures and functions in the global scope."""
         register_builtins(self.symbol_table, self.features)
@@ -1105,6 +1141,7 @@ class PascalTypeChecker(TypeChecker):
 
         # Look up the procedure (Pascal is case-insensitive)
         lookup_name = stmt.name.upper()
+        self._check_device_recission(lookup_name, stmt)
         sym = self.symbol_table.lookup(lookup_name) or self.symbol_table.lookup(stmt.name)
         is_builtin = sym is None or getattr(sym, 'is_builtin', False)
 
@@ -1942,6 +1979,7 @@ class PascalTypeChecker(TypeChecker):
             return None
         elif isinstance(expr, FuncCall):
             lookup_name = expr.name.upper()
+            self._check_device_recission(lookup_name, expr)
             sym = self.symbol_table.lookup(lookup_name) or self.symbol_table.lookup(expr.name)
             is_builtin = sym is None or getattr(sym, 'is_builtin', False)
 

@@ -346,11 +346,21 @@ class DeclsMixin:
         else:
             # Static or global variable — allocate aggregate with zero init
             prefix = self.current_function.name if self.current_function else 'global'
+            # Step 4b: residence storage. Inside a DEVICE MODULE a [SPACE(s)] global
+            # is placed in its declared address space, so its address is a typed
+            # addrspace(k)* value (consistent with ADS(s) OF T and `ADS x`). Host/
+            # default and the x86 CPU-device collapse to addrspace 0 (unchanged IR).
+            addrspace = 0
+            if self.is_device_module:
+                for attr in getattr(decl, 'attributes', []):
+                    if attr.name.upper() == 'SPACE' and getattr(attr, 'arg', None) is not None:
+                        addrspace = self._space_addrspace(self.eval_const_expr(attr.arg))
             for name in decl.names:
                 gv_name = name if not self.builder else f'{prefix}.{name}'
 
                 # Create global variable with the aggregate type
-                global_var = ir.GlobalVariable(self.module, llvm_type, name=gv_name)
+                global_var = ir.GlobalVariable(self.module, llvm_type, name=gv_name,
+                                               addrspace=addrspace)
 
                 if is_str:
                     if is_lstring:

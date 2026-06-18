@@ -235,6 +235,13 @@ class TypesMapMixin:
             return self.builder.insert_value(out, ir.Constant(target_type.elements[1], 0), 1)
 
         if isinstance(target_type, ir.PointerType) and isinstance(vt, ir.PointerType):
+            # Step 4b / design S6.3: never silently cross address spaces. A bitcast
+            # cannot change addrspace, and no-mixing is enforced in the checker, so a
+            # differing addrspace here means something slipped through -- fail loudly
+            # rather than emit illegal IR.
+            if getattr(vt, 'addrspace', 0) != getattr(target_type, 'addrspace', 0):
+                raise CodegenError(
+                    "cannot implicitly cross address spaces when passing an argument")
             return self.builder.bitcast(value, target_type)
         if isinstance(target_type, ir.IntType) and isinstance(vt, ir.IntType):
             if vt.width > target_type.width:
