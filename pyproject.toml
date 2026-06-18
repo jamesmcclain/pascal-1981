@@ -22,7 +22,7 @@ classifiers = [
     "Topic :: Software Development :: Compilers",
 ]
 dependencies = [
-    "llvmlite>=0.40",
+    "llvmlite>=0.47.0",
 ]
 
 [project.scripts]
