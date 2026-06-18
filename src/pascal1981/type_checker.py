@@ -87,6 +87,10 @@ class PascalTypeChecker(TypeChecker):
         # dereferenceability invariant and gates the address-space surface
         # (ads-memory-spaces-design.md S3.3). Programs and plain MODULEs => False.
         self.in_device_module: bool = False
+        # caller(upper) -> list of (callee(upper), call_node), collected only while
+        # checking a DEVICE MODULE body; consumed by _detect_device_recursion at
+        # module end to flag direct AND mutual recursion as call-graph cycles.
+        self._device_callgraph: dict = {}
         # Names of record types pre-declared in the current declaration block so
         # that forward and self pointer references (linked lists) resolve to a
         # stable object instead of falling back to ^CHAR.
@@ -144,9 +148,10 @@ class PascalTypeChecker(TypeChecker):
     def _check_device_recission(self, name: Optional[str], node) -> None:
         """Reject device-hostile constructs inside a DEVICE MODULE.
 
-        First tranche: dynamic allocation (NEW/DISPOSE), host I/O, and *direct*
-        recursion. Mutual/indirect recursion is a documented follow-up (needs a
-        per-module call-graph cycle check); sets and GOTO are a later tranche.
+        First tranche: dynamic allocation (NEW/DISPOSE) and host I/O are rejected
+        at the call site; recursion (direct and mutual) is recorded here as a
+        call-graph edge and flagged at module end by _detect_device_recursion.
+        Sets and GOTO are a later tranche.
         """
         if not self.in_device_module or not name:
             return
@@ -162,10 +167,37 @@ class PascalTypeChecker(TypeChecker):
             current = self.current_procedure.name
         elif self.current_function is not None and self.current_function.name:
             current = self.current_function.name
-        if current and up == current.upper():
-            self.error(
-                f"recursion is not available in a DEVICE MODULE "
-                f"(routine '{current}' calls itself)", node)
+        if current:
+            self._device_callgraph.setdefault(current.upper(), []).append((up, node))
+
+    def _detect_device_recursion(self) -> None:
+        """Flag direct and mutual recursion among DEVICE MODULE routines.
+
+        Recursion has no place on a device (tiny/absent call stack). Using the
+        call graph collected during the body check, report any routine that can
+        reach itself through one or more calls.
+        """
+        graph = self._device_callgraph
+        adj = {caller: {callee for callee, _ in edges} for caller, edges in graph.items()}
+
+        def reaches_self(start: str) -> bool:
+            seen = set()
+            stack = list(adj.get(start, ()))
+            while stack:
+                n = stack.pop()
+                if n == start:
+                    return True
+                if n not in seen:
+                    seen.add(n)
+                    stack.extend(adj.get(n, ()))
+            return False
+
+        for caller, edges in graph.items():
+            if reaches_self(caller):
+                node = edges[0][1] if edges else None
+                self.error(
+                    f"recursion is not available in a DEVICE MODULE "
+                    f"(routine '{caller}' is part of a call cycle)", node)
 
     def _setup_builtins(self) -> None:
         """Define built-in procedures and functions in the global scope."""
@@ -521,18 +553,23 @@ class PascalTypeChecker(TypeChecker):
         # dereferenceability scope for the duration of its body (design S1.2/S3.3).
         prev_in_device = self.in_device_module
         prev_features = self.features
+        prev_callgraph = self._device_callgraph
         if getattr(mod, 'is_device', False):
             from .features import device_features
             self.in_device_module = True
             self.features = device_features()
+            self._device_callgraph = {}
         try:
             # Check declarations
             if mod.decls:
                 for decl in mod.decls:
                     self.check_declaration(decl)
+            if getattr(mod, 'is_device', False):
+                self._detect_device_recursion()
         finally:
             self.in_device_module = prev_in_device
             self.features = prev_features
+            self._device_callgraph = prev_callgraph
 
     def check_interface_unit(self, iface: InterfaceUnit) -> None:
         """Type check an interface unit."""

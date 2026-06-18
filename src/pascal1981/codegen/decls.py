@@ -322,11 +322,21 @@ class DeclsMixin:
         attrs = {attr.name.upper() for attr in getattr(decl, 'attributes', [])}
         is_static = 'STATIC' in attrs
 
+        # Residence address space (DEVICE MODULE [SPACE(s)]). A non-HOST device
+        # space makes the variable statically-allocated storage in that space
+        # (like CUDA __shared__/__constant__/__device__) -- NOT a stack alloca,
+        # even inside a routine. HOST/default and the x86 CPU-device => 0.
+        residence_as = 0
+        if self.is_device_module:
+            for attr in getattr(decl, 'attributes', []):
+                if attr.name.upper() == 'SPACE' and getattr(attr, 'arg', None) is not None:
+                    residence_as = self._space_addrspace(self.eval_const_expr(attr.arg))
+
         # Check if the type is a string type
         is_str, max_len, is_lstring = self.get_string_type_info(decl.type_expr)
         initck_const = self._initck_sentinel(decl, llvm_type)
 
-        if self.builder and not is_static:
+        if self.builder and not is_static and residence_as == 0:
             # Local variable (inside a function) — allocate the aggregate inline
             for name in decl.names:
                 alloca = self.builder.alloca(llvm_type, name=name)
@@ -344,23 +354,16 @@ class DeclsMixin:
                         self.builder.store(ir.Constant(ir.IntType(8), 0), len_ptr)
                     # STRING: no initialization needed (chars are undefined until assigned)
         else:
-            # Static or global variable — allocate aggregate with zero init
+            # Static / global / device-residence storage. A [SPACE(s)] variable is
+            # allocated in its address space (residence_as); this also covers an
+            # in-routine device-space local routed here from the branch above.
             prefix = self.current_function.name if self.current_function else 'global'
-            # Step 4b: residence storage. Inside a DEVICE MODULE a [SPACE(s)] global
-            # is placed in its declared address space, so its address is a typed
-            # addrspace(k)* value (consistent with ADS(s) OF T and `ADS x`). Host/
-            # default and the x86 CPU-device collapse to addrspace 0 (unchanged IR).
-            addrspace = 0
-            if self.is_device_module:
-                for attr in getattr(decl, 'attributes', []):
-                    if attr.name.upper() == 'SPACE' and getattr(attr, 'arg', None) is not None:
-                        addrspace = self._space_addrspace(self.eval_const_expr(attr.arg))
             for name in decl.names:
                 gv_name = name if not self.builder else f'{prefix}.{name}'
 
                 # Create global variable with the aggregate type
                 global_var = ir.GlobalVariable(self.module, llvm_type, name=gv_name,
-                                               addrspace=addrspace)
+                                               addrspace=residence_as)
 
                 if is_str:
                     if is_lstring:
