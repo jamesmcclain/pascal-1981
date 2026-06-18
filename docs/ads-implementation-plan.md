@@ -355,3 +355,31 @@ instance doesn't re-trip them. Line numbers below are from the execution pass, n
   `resolve_type`/`check_var_decl` reject any *use* of a space outside a `DEVICE MODULE`.
 - *No new imports leaked.* `EnumType` was already imported; `device_features` is imported lazily
   inside `check_module_unit` to keep the module-load graph unchanged.
+
+**Step 4 — split into 4a (done, commit `9cc63d8`) and 4b (deferred):**
+- *Codegen lowers the AST type nodes, not the type-system types.* `llvm_type` reads
+  `type_expr.base`/`flavor` off the **AST** `PointerType`, so the pointee space is still an
+  `Expression` there (the checker's folded `type_system.PointerType.space` never reaches codegen).
+  Folded it in codegen via `eval_const_expr` against the Step-1-seeded `self.constants` — the
+  HOST..LOCAL ordinals are exactly why that seeding was mandatory.
+- *One module per `Codegen` instance.* There is no multi-unit dispatch loop to thread a per-unit
+  triple through; a compile lowers a single `ProgramUnit`/`ModuleUnit`. So "per-module triple" is
+  realized as: `codegen_module` flips `is_device_module` + swaps `self.module.triple` to
+  `device_triple` for a `DEVICE MODULE`, restored in `finally`. The plan's "two output modules
+  when both kinds present" presumes a driver that compiles units separately — not in scope here.
+- *Scoped to 4a; 4b explicitly deferred.* Step 4 as written touches **six** interlocking sites
+  (type lowering, `coerce_arg` seg rules, `AdsExpr` value construction, `[SPACE]` residence
+  *storage* in the right addrspace, far-param lowering, builtins). Landing all six as one
+  host-byte-identical change is high-risk. **4a delivers the safe, independently-correct slice:**
+  per-module triple + `ADS(s) OF T` → `T addrspace(k)*` type lowering, fully gated by
+  `is_device_module`. **4b (deferred):** rewrite `AdsExpr`/`coerce_arg` to carry the addrspace
+  pointer instead of the `{ptr,i16}` pair, and put `[SPACE(s)]` variable *storage* in its
+  addrspace, so a full `ADS x ... x^` round-trips. 4a does not exercise those paths.
+- *No in-tree PTX harness.* The plan references a "validated emit-and-read harness"; the §3.2
+  validation was done manually at design time and is **not** a committed test. 4a verifies at the
+  IR level (`addrspace(k)` present, correct triple, host byte-identical). A real NVPTX emit-and-
+  grep test wants a target-machine harness that doesn't exist yet — a 4b/test-infra item.
+- *`addrspace` map confirmed live:* on `nvptx64`, the four device spaces lower to addrspaces
+  `[1, 3, 4, 5]`; on the default x86 device they collapse to 0 (unprinted). Host program and
+  plain `MODULE` output is byte-identical and **independent of `device_triple`** (the flag never
+  flips for non-device units) — verified by self-compare.
