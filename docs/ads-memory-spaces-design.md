@@ -5,7 +5,7 @@ LLVM IR via `llvmlite`, with the long-term goal of also targeting LLVM GPU backe
 (NVPTX for Nvidia, AMDGPU for AMD).
 
 **Scope of this document:** the `ADS` (segmented-address) type and the machinery for
-**multiple memory spaces** (address spaces) under a future "GPU-extended" dialect. This is
+**multiple memory spaces** (address spaces) inside a future device dialect (the `DEVICE MODULE` of §1.2). This is
 *one slice* of a larger GPU-targeting conversation; see **§9 Out of Scope** for the parts
 deliberately excluded here.
 
@@ -48,16 +48,17 @@ Every non-obvious claim is tagged so you can tell ratified decisions from gap-fi
 **[DECIDED]** A segmented address is structurally `{offset, selector}` — a pointer plus a
 number that says *which memory this points into*. That is exactly the shape an address
 space needs. So instead of deleting the vintage segmented-address machinery as a dead
-real-mode artifact, we **reinterpret the segment word as an address-space tag** when the
-"emit GPU code" target bit is flipped.
+real-mode artifact, we **reinterpret the segment word as an address-space tag** inside device
+code (see §1.2).
 
-- Faithful (vintage / host) mode: the selector means an 8086 physical segment (and in
-  practice is degenerate; see §6).
-- GPU-extended mode: the selector means a *memory space* — host, global, shared, constant,
-  local.
+- Faithful (vintage / host) mode — outside any `DEVICE MODULE`: the selector means an 8086
+  physical segment (and in practice is degenerate; see §6).
+- Device mode — inside a `DEVICE MODULE` (§1.2): the selector means a *memory space* — host,
+  global, shared, constant, local.
 
-Same surface type, **target-parametric interpretation**. This mirrors how the dialect
-already treats numeric width as a dialect-controlled knob.
+Same surface type, **context-parametric interpretation** (module kind picks the rules; the
+device triple picks the lowering). This mirrors how the dialect already treats numeric width
+as a dialect-controlled knob.
 
 **Origin note (for rehydration):** the segment→space reinterpretation was the *user's*
 insight. The assistant had initially (and wrongly) proposed rescinding `ADS`/`ADSMEM`
@@ -73,6 +74,48 @@ wholesale. Do not re-propose deleting it.
   explicitly**.
 
 So `ADR` is the convenient inferred-space form; `ADS(space)` is the explicit form.
+
+### 1.2 The host/device split: `DEVICE MODULE` and two triples
+
+**[DECIDED 2026-06-17]** The extended device dialect (the `SPACE` machinery, address spaces,
+and the recissions) lives **only inside a `DEVICE MODULE`**. This supersedes the earlier flat
+`--target {host,nvptx,amdgpu}` flag with a cleaner two-axis model:
+
+- **Module kind picks the language rules.** A regular `MODULE` is host code (faithful/extended
+  host dialect). A `DEVICE MODULE` is device code (extended − recissions + the address-space
+  surface). The boundary is *lexical and static*, so "is this device code?" needs no
+  reachability analysis — it is simply "is this inside a `DEVICE MODULE`?".
+- **Two triples pick the lowering.** There are two compilation targets, `host` and `device`,
+  **both defaulting to `x86_64-pc-linux-gnu`**, each independently overridable. You override
+  `device` to `nvptx64-nvidia-cuda` / `amdgcn-amd-amdhsa` when actually targeting a GPU — but
+  you need not: a `DEVICE MODULE` compiled with `device=x86` is device-*dialect* code lowered to
+  the *CPU*, where every space collapses to addrspace 0 (the host column of §3.2). This is the
+  **OpenCL-on-CPU** case, and it makes the address-space discipline a *portability fiction*
+  enforced even on the CPU — correct, because it keeps the code portable to a real GPU, and it
+  gives you free CPU execution of device modules for development/debugging.
+
+Grammar (augments the existing `module_unit`; keyword modifier, parses the superset, gated in
+the checker by module kind):
+
+```ebnf
+module_unit = [ include_directive ] [ "DEVICE" ] "MODULE" identifier ";"
+              [ uses_clause ] module_block "." ;
+```
+
+Consequences (mostly deferred, noted so they are not over-read):
+- **Multi-target build.** A program with both module kinds produces *two* artifacts — a host
+  object and a device object/PTX — bundled fatbinary-style; codegen selects the triple per
+  module. (Implementation: plan Step 4.)
+- **Host orchestration surface.** "Device dialect only in `DEVICE MODULE`s" governs device
+  *execution*; the host side still needs a thin API to *drive* devices — launch a kernel,
+  allocate a device buffer, run the host-orchestrated transfer (it holds a `GLOBAL` handle it
+  cannot dereference). Deferred with kernels.
+- **`uses` is kind-aware.** A host `MODULE` may `uses` a `DEVICE MODULE` (to get launchable
+  kernels); a `DEVICE MODULE` may `uses` another `DEVICE MODULE` (device libraries); a
+  `DEVICE MODULE` `uses`-ing a host `MODULE` is illegal. Deferred.
+- **Granularity tradeoff (accepted):** no single function shared as both host and device code
+  without living in a shared/duplicated form. Idiomatic for a module-organized Pascal, and good
+  discipline; a deliberate v1 constraint.
 
 ---
 
@@ -93,10 +136,11 @@ rest of the spec small:
   So two spaces meet only through an explicit *data movement* — the `MOVESL`/`MOVESR` bridge
   primitives (§5.4) or a host-orchestrated transfer — never a pointer reinterpretation. This
   is why `RESPACE` was struck (§5.2).
-- **[DECIDED] Dereferenceability invariant.** A pointee space determines *which processor may
-  dereference the pointer*: `HOST` → CPU (host) code only; `GLOBAL`/`SHARED`/`CONSTANT`/
-  `LOCAL` → GPU (device) code only. The type checker enforces it, so host code cannot
-  dereference device memory and a kernel cannot dereference host memory. This bakes the
+- **[DECIDED] Dereferenceability invariant.** A pointee space determines *where the pointer may
+  be dereferenced*, scoped by **module kind** (§1.2): `HOST` → host `MODULE` code only;
+  `GLOBAL`/`SHARED`/`CONSTANT`/`LOCAL` → `DEVICE MODULE` code only. The type checker enforces it,
+  so host code cannot dereference device memory and device code cannot dereference host memory.
+  Because the module boundary is lexical, this needs no reachability analysis. This bakes the
   two-worlds (host/device) model into the type system. (See §3.3.)
 - **[DEFERRED]** The near/far parameter *monomorphization* lattice discussed earlier (§8).
 
@@ -117,8 +161,9 @@ TYPE SPACE = (HOST, GLOBAL, SHARED, CONSTANT, LOCAL);
 ```
 
 - **[DECIDED]** Registered as predeclared identifiers (the `builtins_registry` mold,
-  shadowable like `MAXINT`), **only under the GPU-extended dialect**. In vintage mode the only
-  member that exists is `HOST` (there is one memory, and it is the host's).
+  shadowable like `MAXINT`); the `SPACE` surface is meaningful **only inside a `DEVICE MODULE`**
+  (§1.2) — the type checker gates it on module kind. Outside device code the only space that
+  exists is `HOST` (there is one memory, and it is the host's).
 - **[DECIDED]** `HOST` is ordinal 0. This is intentional and better than the earlier
   `GENERIC`=0: the degenerate always-zero segment (§6) now denotes `HOST`, which is *exactly
   correct* for vintage code (the sole memory is host memory), so existing `ADS` code is
@@ -138,21 +183,24 @@ TYPE SPACE = (HOST, GLOBAL, SHARED, CONSTANT, LOCAL);
 pending a toolchain check]**
 
 Pascal enums are dense (ordinals 0..4), so the **enum ordinal is the in-language tag**, and a
-per-target table maps ordinal → LLVM address space. Device addrspace numbers are **not**
-identical to the ordinals (they keep their natural gaps because device-generic addrspace 0 is
-deliberately unused — we dropped `GENERIC`):
+per-triple table maps ordinal → LLVM address space. The relevant triple is the **device
+triple** for code inside a `DEVICE MODULE` and the **host triple** for host code (§1.2). Device
+addrspace numbers are **not** identical to the ordinals (they keep their natural gaps because
+device-generic addrspace 0 is deliberately unused — we dropped `GENERIC`):
 
-| `SPACE` member | ordinal | host target | device target | dereferenceable in |
+| `SPACE` member | ordinal | host triple | device triple (GPU) | dereferenceable in |
 |----------------|:------:|:-----------:|:-------------:|--------------------|
-| `HOST`         | 0      | addrspace 0 | — (deref is an error) | host code |
-| `GLOBAL`       | 1      | opaque handle | addrspace 1   | device code |
-| `SHARED`       | 2      | —           | addrspace 3   | device code |
-| `CONSTANT`     | 3      | —           | addrspace 4   | device code |
-| `LOCAL`        | 4      | —           | addrspace 5   | device code |
+| `HOST`         | 0      | addrspace 0 | — (deref is an error) | host `MODULE` |
+| `GLOBAL`       | 1      | opaque handle | addrspace 1   | `DEVICE MODULE` |
+| `SHARED`       | 2      | —           | addrspace 3   | `DEVICE MODULE` |
+| `CONSTANT`     | 3      | —           | addrspace 4   | `DEVICE MODULE` |
+| `LOCAL`        | 4      | —           | addrspace 5   | `DEVICE MODULE` |
 
 `GLOBAL` is an "opaque handle" in host code because the launcher *holds* a device-buffer
-address to hand to a kernel but never dereferences it itself. In **vintage mode** only the
-`HOST` row exists and everything is addrspace 0 — faithful to today.
+address to hand to a kernel but never dereferences it itself. When the **device triple defaults
+to x86** (CPU-device / OpenCL-on-CPU, §1.2), every device-triple column collapses to addrspace 0
+— the spaces become no-ops and device code runs correctly on the CPU, with the dereferenceability
+discipline still enforced for portability. In **vintage mode** only the `HOST` row exists.
 
 > **[SURVEY-caveat] Naming hazard for the next instance:** AMDGPU calls addrspace-3 the
 > "Local Data Share (LDS)" — but in *this* design that space is named **`SHARED`**, and our
@@ -182,13 +230,16 @@ address to hand to a kernel but never dereferences it itself. In **vintage mode*
 
 ### 3.3 The dereferenceability invariant
 
-**[DECIDED]** Because spaces are concrete and static, a pointee space says *which processor
-may dereference the pointer*. `HOST` is dereferenceable only in host (CPU) code; the four
-device spaces only in device (GPU) code. The type checker enforces both directions: a kernel
-dereferencing a `HOST` pointer is a compile error, and host code dereferencing a `GLOBAL`
-pointer is a compile error. This is the two-worlds (host/device) model encoded as a type rule
-rather than a convention, and it is a direct dividend of removing `GENERIC` — there is no
-longer any "could be either" space to blur the line.
+**[DECIDED]** Because spaces are concrete and static, a pointee space says *where the pointer
+may be dereferenced*, and **module kind (§1.2) provides the scope**. `HOST` is dereferenceable
+only in host `MODULE` code; the four device spaces only in `DEVICE MODULE` code. The type
+checker enforces both directions: device code dereferencing a `HOST` pointer is a compile error,
+and host code dereferencing a `GLOBAL` pointer is a compile error. Because the `DEVICE MODULE`
+boundary is lexical, "which world am I in" is answered syntactically — no reachability analysis.
+This is the two-worlds (host/device) model encoded as a type rule rather than a convention, and
+it is a joint dividend of removing `GENERIC` (no "could be either" space) and of the module split
+(a clean, static context). Note it holds even when `device=x86` (CPU-device): the discipline is
+enforced as a portability fiction so the same code ports to a real GPU unchanged.
 
 ---
 
@@ -238,8 +289,14 @@ VAR [SPACE(GLOBAL)] g: ARRAY[0..255] OF REAL;
 ```
 
 - The `constant` must fold to a `SPACE` member.
-- `SPACE` here is **contextual** (special only inside `[ ]`, exactly like `ORIGIN`), so it is
-  **not** a globally reserved word.
+- `SPACE` here is **contextual** (special only inside `[ ]`), so it is **not** a globally reserved
+  word — a vintage program may still use `space` as an identifier.
+- **[VERIFIED 2026-06-17 — implementation caveat]** The `ORIGIN(constant)` precedent above is in
+  the *grammar reference* but is **not implemented** in `parse_attribute_item` (which currently
+  handles bare keywords only). So `SPACE(constant)` is the **first parameterized attribute** in
+  the parser, and attributes are currently `List[str]` — implementing it requires a richer
+  attribute representation (an `Attribute` node) and updating the three string-set reader sites.
+  See implementation plan Step 2; this is more than "copy `ORIGIN`."
 - The bracket syntax is deliberately *loud*: it cannot be applied by accident, which is how
   the "fully aware" constraint is expressed in syntax rather than policy.
 
@@ -343,10 +400,10 @@ Not in v1.)*
 ### 5.3 Lowering: the runtime `i16` disappears in GPU mode
 
 **[DECIDED]** The `{ptr, i16}` ADS struct existed only to carry a *runtime* selector. v1
-bans runtime selectors, so in GPU-extended mode the space rides the LLVM pointer type and the
+bans runtime selectors, so inside a `DEVICE MODULE` the space rides the LLVM pointer type and the
 `i16` collapses:
 
-- GPU-extended mode: `ADS(GLOBAL) OF REAL` lowers to a **bare** `double addrspace(1)*`.
+- Device module (GPU device triple): `ADS(GLOBAL) OF REAL` lowers to a **bare** `double addrspace(1)*`.
 - Faithful mode: unchanged — `{ptr, i16}` with the segment held at 0 (see §6).
 
 Same surface type, two lowerings, target-selected.
@@ -360,7 +417,7 @@ Today the runtime **ignores the segment** and they do nothing their flat sibling
 
 **[DECIDED]**
 - **Faithful mode:** keep their existing uninteresting (segment-ignoring) behavior verbatim.
-- **GPU-extended mode:** give them genuine **cross-space block-copy** semantics. Their two
+- **Inside a `DEVICE MODULE`:** give them genuine **cross-space block-copy** semantics. Their two
   `ADSMEM` parameters may carry **different** concrete spaces, e.g.
   `MOVESL(dst: ADS(SHARED) OF CHAR; src: ADS(GLOBAL) OF CHAR; len)`.
 - These primitives are the **sanctioned on-device cross-space bridge**: under "no mixing,"
@@ -489,8 +546,17 @@ kernels land, the device-side default will most likely flip to `LOCAL`.
 These were part of the broader GPU-targeting conversation but are **not** covered here. Noted
 so the next instance knows they exist and were discussed:
 
-- Device-sublanguage framing; **reachability-scoped recissions** (host I/O, `NEW`, recursion,
-  nonlocal/irreducible `GOTO`) forbidden in kernel-reachable code.
+- Device-sublanguage framing via **`DEVICE MODULE`** (§1.2). **[DECISION — registered
+  2026-06-17, updated]** The dialect relationship is asymmetric and now scoped by module kind,
+  not a target flag: `extended` does *not* imply device; a `DEVICE MODULE` *is* the device
+  dialect = **extended minus a recission set, plus the address-space surface**. Because the whole
+  module is device code, the recissions are **module-scoped** (no reachability analysis needed).
+  Candidate recissions (not frozen; decided per-construct by implementation cost): recursion
+  (likely drop); set **I/O** and dynamic set-range construction (but *keep* the bitvector set
+  core — it is GPU-friendly); `NEW`/heap; host I/O; nonlocal/irreducible `GOTO`; general
+  pointer-chasing into a flat heap. See the implementation plan's Step 0.5.
+- **Host orchestration surface & kind-aware `uses`** (§1.2) — the host-side launch/allocate/
+  transfer API and the cross-kind `uses` rules. Deferred.
 - **Kernel marking** via a trailing `KERNEL` directive (sibling of `EXTERN`/`FORWARD`);
   launch/grid semantics. **[VERIFIED 2026-06-17 — extra home available]** `proc_decl_header`
   and `func_decl_header` already carry an `attribute_section` (grammar 196/209), so `KERNEL`
@@ -522,7 +588,7 @@ so the next instance knows they exist and were discussed:
 ## 10. One-paragraph rehydration summary
 
 We are reinterpreting the vintage `ADS` segmented-address type so its always-zero segment word
-becomes a **static memory-space tag** when a GPU target is selected — the user's insight,
+becomes a **static memory-space tag** inside device code — the user's insight,
 exploiting that the `i16` selector slot is already plumbed end-to-end but carries no
 information today. A predeclared `SPACE = (HOST, GLOBAL, SHARED, CONSTANT, LOCAL)` enum supplies
 space constants (ordinal → addrspace via a target table). `HOST`=0 is the only space in vintage
@@ -531,10 +597,15 @@ deliberately not present**, so every space is statically concrete. Each `ADS` po
 **pointer space** (where the pointer variable lives, set by `[SPACE(s)]`) and a **pointee
 space** (what it addresses, set by `ADS(s) OF T`), drawn from the same lattice but independent.
 Space is part of pointer-type identity: **static only, no mixing, fully explicit**, with a
-**dereferenceability invariant** (`HOST`=CPU-only, device spaces=GPU-only) baked into the type
-checker. Two one-line grammar extensions carry it — `[SPACE(s)]` (sibling of `ORIGIN`) and
-`ADS(s) OF T` (sibling of `STRING(n)`) — with **no new reserved words**. In GPU mode the runtime
-`i16` collapses because the space lives in the LLVM pointer type. **There is no `RESPACE`/cast**:
+**dereferenceability invariant** (`HOST` dereferenceable only in host modules, device spaces
+only in device modules) baked into the type checker. The device dialect lives **only inside a
+`DEVICE MODULE`** (one new keyword on `module_unit`); there are **two triples, `host` and
+`device`, both defaulting to x86** and independently overridable, so a `DEVICE MODULE` runs on
+the CPU (spaces collapse to addrspace 0, OpenCL-style) until you point `device` at a GPU. Two
+one-line grammar extensions carry the spaces — `[SPACE(s)]` (sibling of `ORIGIN`) and
+`ADS(s) OF T` (sibling of `STRING(n)`) — with **no new reserved words**. In a device module the
+runtime `i16` collapses because the space lives in the LLVM pointer type. **There is no
+`RESPACE`/cast**:
 with no `GENERIC`, no `addrspacecast` is legal, so crossing spaces is always a *data movement* —
 the repurposed `FILLSC`/`MOVESL`/`MOVESR` bridge primitives on-device, or a host-orchestrated
 transfer across the host/device line. The old silent `coerce_arg` segment rules are rescinded
