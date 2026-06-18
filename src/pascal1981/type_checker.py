@@ -846,15 +846,21 @@ class PascalTypeChecker(TypeChecker):
         # Create function type
         func_type = FunctionType(decl.name, param_types, return_type)
 
-        # Check for redeclaration
+        # Check for redeclaration. A FORWARD declaration is completed (not
+        # redeclared) by a later body definition.
         existing = self.symbol_table.lookup_local(decl.name)
         if existing and not getattr(existing, 'is_builtin', False):
-            self.error(f"Function '{decl.name}' already declared at {existing.location}", decl)
-            return
-
-        # Add to symbol table
-        symbol = Symbol(name=decl.name, type=func_type, kind='function', location=self.make_location(decl))
-        self.symbol_table.define(decl.name, symbol)
+            if getattr(existing, 'is_forward', False) and decl.body is not None:
+                existing.is_forward = False  # completing the forward declaration
+            else:
+                self.error(f"Function '{decl.name}' already declared at {existing.location}", decl)
+                return
+        else:
+            # Add to symbol table (mark a FORWARD declaration awaiting completion)
+            symbol = Symbol(name=decl.name, type=func_type, kind='function', location=self.make_location(decl))
+            if decl.body is None and getattr(decl, 'directive', None) == 'FORWARD':
+                symbol.is_forward = True
+            self.symbol_table.define(decl.name, symbol)
 
         # Check function body
         old_func = self.current_function
@@ -905,15 +911,22 @@ class PascalTypeChecker(TypeChecker):
         # Create procedure type
         proc_type = ProcedureType(decl.name, param_types)
 
-        # Check for redeclaration
+        # Check for redeclaration. A FORWARD declaration is completed (not
+        # redeclared) by a later body definition -- this is what makes forward
+        # references and mutual recursion expressible.
         existing = self.symbol_table.lookup_local(decl.name)
         if existing and not getattr(existing, 'is_builtin', False):
-            self.error(f"Procedure '{decl.name}' already declared at {existing.location}", decl)
-            return
-
-        # Add to symbol table
-        symbol = Symbol(name=decl.name, type=proc_type, kind='procedure', location=self.make_location(decl))
-        self.symbol_table.define(decl.name, symbol)
+            if getattr(existing, 'is_forward', False) and decl.body is not None:
+                existing.is_forward = False  # completing the forward declaration
+            else:
+                self.error(f"Procedure '{decl.name}' already declared at {existing.location}", decl)
+                return
+        else:
+            # Add to symbol table (mark a FORWARD declaration awaiting completion)
+            symbol = Symbol(name=decl.name, type=proc_type, kind='procedure', location=self.make_location(decl))
+            if decl.body is None and getattr(decl, 'directive', None) == 'FORWARD':
+                symbol.is_forward = True
+            self.symbol_table.define(decl.name, symbol)
 
         # Check procedure body
         old_proc = self.current_procedure

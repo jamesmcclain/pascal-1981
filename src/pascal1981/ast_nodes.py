@@ -126,6 +126,7 @@ class ProcDecl(ASTNode):
     params: List[Param]
     attributes: List['Attribute']
     body: Optional[Block]  # None if EXTERN/FORWARD/EXTERNAL
+    directive: Optional[str] = None  # 'FORWARD' | 'EXTERN' | 'EXTERNAL' when body is None
 
 
 @dataclass
@@ -135,6 +136,7 @@ class FuncDecl(ASTNode):
     return_type: Type
     attributes: List['Attribute']
     body: Optional[Block]  # None if EXTERN/FORWARD/EXTERNAL
+    directive: Optional[str] = None  # 'FORWARD' | 'EXTERN' | 'EXTERNAL' when body is None
 
 
 @dataclass

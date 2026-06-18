@@ -321,25 +321,29 @@ class Parser:
         name, params, attributes = self.parse_proc_decl_header()
         self.expect('SEMICOLON')
         body: Optional[Block] = None
+        directive: Optional[str] = None
         if self.current().kind in {'EXTERN', 'EXTERNAL', 'FORWARD'}:
+            directive = self.current().kind
             self.pos += 1
             self.expect('SEMICOLON')
         else:
             body = self.parse_block()
             self.expect('SEMICOLON')
-        return ProcDecl(name, params, attributes, body)
+        return ProcDecl(name, params, attributes, body, directive)
 
     def parse_func_decl(self) -> FuncDecl:
         name, params, return_type, attributes = self.parse_func_decl_header()
         self.expect('SEMICOLON')
         body: Optional[Block] = None
+        directive: Optional[str] = None
         if self.current().kind in {'EXTERN', 'EXTERNAL', 'FORWARD'}:
+            directive = self.current().kind
             self.pos += 1
             self.expect('SEMICOLON')
         else:
             body = self.parse_block()
             self.expect('SEMICOLON')
-        return FuncDecl(name, params, return_type, attributes, body)
+        return FuncDecl(name, params, return_type, attributes, body, directive)
 
     def parse_proc_decl_header(self) -> tuple[str, List[Param], List[str]]:
         self.expect('PROCEDURE')
