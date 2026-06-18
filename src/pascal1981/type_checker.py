@@ -19,7 +19,7 @@ from .ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt
 from .ast_nodes import EnumType as ASTEnumType
 from .ast_nodes import Expression
 from .ast_nodes import FileType as ASTFileType
-from .ast_nodes import (ForStmt, FuncCall, FuncDecl, Identifier, IfStmt, ImplementationUnit, InterfaceUnit, IntLiteral, LabelStmt, LowerExpr)
+from .ast_nodes import (ForStmt, FuncCall, FuncDecl, GotoStmt, Identifier, IfStmt, ImplementationUnit, InterfaceUnit, IntLiteral, LabelStmt, LowerExpr)
 from .ast_nodes import LStringType as ASTLStringType
 from .ast_nodes import ModuleUnit, NamedType, NilLiteral
 from .ast_nodes import PointerType as ASTPointerType
@@ -956,6 +956,15 @@ class PascalTypeChecker(TypeChecker):
             self.check_statement(stmt.stmt)
         elif isinstance(stmt, WithStmt):
             self.check_with_stmt(stmt)
+        elif isinstance(stmt, GotoStmt):
+            # Recission (2nd tranche): GOTO is rejected inside a DEVICE MODULE.
+            # SIMT loop-structurizer backends need structured, reducible control
+            # flow. This bans ALL goto -- a conservative superset of the stated
+            # "nonlocal/irreducible" intent, since the checker has no label-scope
+            # table or CFG reducibility analysis to draw a finer line. Outside a
+            # device module GOTO keeps its existing (unchecked) behavior.
+            if self.in_device_module:
+                self.error("GOTO is not available in a DEVICE MODULE", stmt)
 
     def check_with_stmt(self, stmt: WithStmt) -> None:
         """Type check a WITH statement.
@@ -1856,6 +1865,15 @@ class PascalTypeChecker(TypeChecker):
                         return None
                     if not low_type.equivalent_to(high_type):
                         self.error(f"Set range bounds must have the same ordinal type, got {low_type} and {high_type}", el)
+                        return None
+                    # Recission (2nd tranche): a set range with a non-constant bound
+                    # ('A'..x) needs a runtime loop to set the bits -- banned in a
+                    # DEVICE MODULE. The static bitvector core (constant ranges,
+                    # union/intersect/membership) stays; a dynamic *singleton* [x]
+                    # is fine (a single shift) and is not affected here.
+                    if self.in_device_module and not self.is_constant_set_element(el):
+                        self.error("dynamic set-range construction (a set range with a "
+                                   "non-constant bound) is not available in a DEVICE MODULE", el)
                         return None
                     cur_type = low_type
                 else:
