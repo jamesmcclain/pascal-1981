@@ -83,6 +83,10 @@ class PascalTypeChecker(TypeChecker):
         self.current_interface_decls: Dict[str, Any] = {}
         self.source_file = source_file  # Path to the source file being compiled
         self.features: Dict[str, bool] = features if features is not None else {}
+        # True only while checking the body of a DEVICE MODULE. Drives the
+        # dereferenceability invariant and gates the address-space surface
+        # (ads-memory-spaces-design.md S3.3). Programs and plain MODULEs => False.
+        self.in_device_module: bool = False
         # Names of record types pre-declared in the current declaration block so
         # that forward and self pointer references (linked lists) resolve to a
         # stable object instead of falling back to ^CHAR.
@@ -92,6 +96,40 @@ class PascalTypeChecker(TypeChecker):
     def feature_enabled(self, name: str) -> bool:
         """Return whether a named compile-time extension feature is enabled."""
         return self.features.get(name, False)
+
+    # ---- ADS address-space helpers (ads-memory-spaces-design.md S3-S5) ----
+
+    def _fold_space(self, expr) -> Optional[int]:
+        """Fold a SPACE attribute/operand expression to its enum ordinal.
+
+        Accepts a bare member name (e.g. GLOBAL). Returns the ordinal
+        (HOST=0..LOCAL=4), or None if it is not a SPACE member.
+        """
+        name = getattr(expr, 'name', None)
+        if name is None:
+            return None
+        sym = self.symbol_table.lookup(name)
+        if sym is None or not isinstance(sym.type, EnumType) or sym.type.name != 'SPACE':
+            return None
+        try:
+            return sym.type.members.index(name.upper())
+        except ValueError:
+            return None
+
+    def _check_deref_space(self, ptr_type, node) -> None:
+        """Enforce the dereferenceability invariant for spaced ADS pointers.
+
+        HOST-space (or unspecified) pointers may be dereferenced only in host
+        code; the four device spaces only inside a DEVICE MODULE. Gated to the
+        ADS flavor so plain ^/ADR heap pointers are untouched (design S3.3).
+        """
+        if not isinstance(ptr_type, PointerType) or ptr_type.flavor != 'ADS':
+            return
+        space = ptr_type.space if ptr_type.space is not None else 0  # default HOST
+        if space == 0 and self.in_device_module:
+            self.error("cannot dereference a HOST-space pointer inside a DEVICE MODULE", node)
+        elif space != 0 and not self.in_device_module:
+            self.error("cannot dereference a device-space pointer outside a DEVICE MODULE", node)
 
     def _setup_builtins(self) -> None:
         """Define built-in procedures and functions in the global scope."""
@@ -442,10 +480,23 @@ class PascalTypeChecker(TypeChecker):
                 # Import symbols
                 self.import_symbols(interface, use_clause)
 
-        # Check declarations
-        if mod.decls:
-            for decl in mod.decls:
-                self.check_declaration(decl)
+        # A DEVICE MODULE switches into the device dialect (extended minus the
+        # recission set, plus the address-space surface) and the two-worlds
+        # dereferenceability scope for the duration of its body (design S1.2/S3.3).
+        prev_in_device = self.in_device_module
+        prev_features = self.features
+        if getattr(mod, 'is_device', False):
+            from .features import device_features
+            self.in_device_module = True
+            self.features = device_features()
+        try:
+            # Check declarations
+            if mod.decls:
+                for decl in mod.decls:
+                    self.check_declaration(decl)
+        finally:
+            self.in_device_module = prev_in_device
+            self.features = prev_features
 
     def check_interface_unit(self, iface: InterfaceUnit) -> None:
         """Type check an interface unit."""
@@ -577,6 +628,16 @@ class PascalTypeChecker(TypeChecker):
             return
 
         readonly = 'READONLY' in {attr.name.upper() for attr in getattr(decl, 'attributes', [])}
+        # [SPACE(s)] residence attribute: gated on DEVICE MODULE, folded to an
+        # ordinal carried on each variable's Symbol (design S4.4).
+        residence = None
+        for attr in getattr(decl, 'attributes', []):
+            if attr.name.upper() == 'SPACE':
+                residence = self._fold_space(attr.arg)
+                if residence is None:
+                    self.error("invalid address space in [SPACE(...)] attribute", decl)
+                elif not self.in_device_module:
+                    self.error("address spaces require a DEVICE MODULE", decl)
 
         # Add each variable to the symbol table
         for name in decl.names:
@@ -587,7 +648,7 @@ class PascalTypeChecker(TypeChecker):
                 continue
 
             # Create symbol
-            symbol = Symbol(name=name, type=var_type, kind='var', location=self.get_node_location(decl), is_mutable=not readonly)
+            symbol = Symbol(name=name, type=var_type, kind='var', location=self.get_node_location(decl), is_mutable=not readonly, space=residence)
             self.symbol_table.define(name, symbol)
 
     def check_const_decl(self, decl: ConstDecl) -> None:
@@ -1744,12 +1805,14 @@ class PascalTypeChecker(TypeChecker):
                 return None
             return PointerType(sym.type, flavor='ADR')
         elif isinstance(expr, AdsExpr):
-            # Segmented address-of operator (ads var_name)
+            # Segmented address-of operator (ads var_name). The result pointee
+            # space is the operand's storage residence, defaulting to HOST/0
+            # (design S4.4).
             sym = self.symbol_table.lookup(expr.name)
             if not sym:
                 self.error(f"Undefined variable: {expr.name}", expr)
                 return None
-            return PointerType(sym.type, flavor='ADS')
+            return PointerType(sym.type, flavor='ADS', space=getattr(sym, 'space', None))
         elif isinstance(expr, SizeofExpr):
             # Sizeof operator (sizeof var_name or type)
             return INTEGER_TYPE
@@ -1829,6 +1892,7 @@ class PascalTypeChecker(TypeChecker):
                         if not isinstance(current_type, PointerType):
                             self.error(f"Cannot dereference non-pointer type {current_type}", expr)
                             return None
+                        self._check_deref_space(current_type, expr)
                         current_type = current_type.target_type
             return current_type
         elif isinstance(expr, Identifier):
@@ -2209,6 +2273,7 @@ class PascalTypeChecker(TypeChecker):
                     if isinstance(current_type, FileType):
                         current_type = current_type.element_type
                     elif isinstance(current_type, PointerType):
+                        self._check_deref_space(current_type, designator)
                         current_type = current_type.target_type
                     else:
                         self.error(f"Cannot dereference non-pointer/non-file type {current_type}", designator)
@@ -2368,7 +2433,17 @@ class PascalTypeChecker(TypeChecker):
         elif isinstance(type_expr, ASTPointerType):
             base_type = self.resolve_type(type_expr.base)
             flavor = getattr(type_expr, 'flavor', 'POINTER')
-            return PointerType(base_type, flavor=flavor) if base_type else PointerType(CHAR_TYPE, flavor=flavor)
+            # ADS(s) OF T: fold the pointee space and gate it on DEVICE MODULE.
+            space_ord = None
+            space_expr = getattr(type_expr, 'space', None)
+            if space_expr is not None:
+                space_ord = self._fold_space(space_expr)
+                if space_ord is None:
+                    self.error(f"invalid address space in {flavor} type", type_expr)
+                elif not self.in_device_module:
+                    self.error("address spaces require a DEVICE MODULE", type_expr)
+            target = base_type if base_type else CHAR_TYPE
+            return PointerType(target, flavor=flavor, space=space_ord)
         else:
             return None
 

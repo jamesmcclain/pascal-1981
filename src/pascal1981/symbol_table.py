@@ -34,6 +34,10 @@ class Symbol:
     is_mutable: bool = True  # False for constants and parameters
     value: Any = None  # For codegen: LLVM value
     is_builtin: bool = False  # True for predeclared standard symbols
+    # Storage residence: the SPACE ordinal this variable lives in, from a
+    # [SPACE(s)] attribute. None means unspecified (implicitly HOST/0). Only
+    # meaningful inside a DEVICE MODULE (ads-memory-spaces-design.md S4.4).
+    space: Optional[int] = None
 
     def __repr__(self) -> str:
         return f"Symbol({self.name}: {self.type}, kind={self.kind})"
