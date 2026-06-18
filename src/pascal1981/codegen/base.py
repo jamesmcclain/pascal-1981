@@ -106,6 +106,15 @@ class CodegenBase:
             'SEQUENTIAL': 0,
             'TERMINAL': 1,
             'DIRECT': 2,
+            # SPACE enum ordinals. Builtin enums do not auto-seed codegen's
+            # constants (only the checker symbol table gets them), so they are
+            # hand-seeded here alongside MAXINT (plan Step 0/Step 1), otherwise
+            # ADS(GLOBAL) type-checks but fails to fold. Inert outside device code.
+            'HOST': 0,
+            'GLOBAL': 1,
+            'SHARED': 2,
+            'CONSTANT': 3,
+            'LOCAL': 4,
         }
         if self.feature_enabled('wide-integers'):
             self.constants['MAXINT32'] = 2147483647

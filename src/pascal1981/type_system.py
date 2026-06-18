@@ -255,15 +255,30 @@ class PointerType(Type):
 
     target_type: Type
     flavor: str = 'POINTER'  # POINTER, ADR, ADS
+    # Pointee address space for ADS pointers: a SPACE ordinal (HOST=0..LOCAL=4)
+    # or None for an unspecified/plain pointer (implicitly HOST). Part of type
+    # identity for ADS pointers (ads-memory-spaces-design.md S5.1).
+    space: Optional[int] = None
 
     def __str__(self) -> str:
         prefix = {'ADR': 'ADR OF ', 'ADS': 'ADS OF '}.get(self.flavor, '^')
+        if self.flavor == 'ADS' and self.space is not None:
+            prefix = f'ADS({self.space}) OF '
         return f"{prefix}{self.target_type}"
 
     def equivalent_to(self, other: Type) -> bool:
         if not isinstance(other, PointerType):
             return False
-        return self.flavor == other.flavor or self.flavor == 'POINTER' or other.flavor == 'POINTER'
+        # Plain '^T' heap pointers remain a wildcard, matching any flavor.
+        if self.flavor == 'POINTER' or other.flavor == 'POINTER':
+            return True
+        if self.flavor != other.flavor:
+            return False
+        # When both sides are ADS, the pointee space is part of identity:
+        # ADS(GLOBAL) OF T and ADS(SHARED) OF T are distinct, incompatible types.
+        if self.flavor == 'ADS' and self.space != other.space:
+            return False
+        return True
 
 
 @dataclass

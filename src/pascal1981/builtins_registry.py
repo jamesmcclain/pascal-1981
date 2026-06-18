@@ -83,12 +83,20 @@ def register_builtins(symbol_table, features=None) -> None:
     define_builtin('SEQUENTIAL', filemodes_type, 'const')
     define_builtin('TERMINAL', filemodes_type, 'const')
     define_builtin('DIRECT', filemodes_type, 'const')
+    # Predeclared SPACE enum (address-space constants). Registered
+    # unconditionally; its *meaning* is gated by module kind in the checker
+    # (ads-memory-spaces-design.md S3.1), so it is inert outside DEVICE MODULEs.
+    # Ordinals follow list order: HOST=0, GLOBAL=1, SHARED=2, CONSTANT=3, LOCAL=4.
+    space_type = EnumType(['HOST', 'GLOBAL', 'SHARED', 'CONSTANT', 'LOCAL'], name='SPACE')
+    for _space_member in space_type.members:
+        define_builtin(_space_member, space_type, 'const')
 
     # Types
     text_type = FileType(CHAR_TYPE, structure='ASCII')
     define_builtin('TEXT', text_type, 'type')
     define_builtin('STRING', StringType(256), 'type')
     define_builtin('FILEMODES', filemodes_type, 'type')
+    define_builtin('SPACE', space_type, 'type')
     define_builtin('FCBFQQ', RecordType('FCBFQQ', {'MODE': filemodes_type, 'TRAP': BOOLEAN_TYPE, 'ERRS': INTEGER_TYPE}), 'type')
 
     # Variables/Files
