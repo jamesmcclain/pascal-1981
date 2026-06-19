@@ -68,14 +68,22 @@ class Parser:
             return self.parse_program_unit()
         elif self.current().kind == 'MODULE':
             return self.parse_module_unit()
-        elif self._at_device_module():
+        elif self._at_device_prefix('MODULE'):
             # Contextual keyword DEVICE preceding MODULE -> a device module.
             self.pos += 1  # consume the contextual DEVICE identifier
             return self.parse_module_unit(is_device=True)
         elif self.current().kind == 'INTERFACE':
             return self.parse_interface_unit()
+        elif self._at_device_prefix('INTERFACE'):
+            # Contextual keyword DEVICE preceding INTERFACE -> a device interface.
+            self.pos += 1
+            return self.parse_interface_unit(is_device=True)
         elif self.current().kind == 'IMPLEMENTATION':
             return self.parse_implementation_unit()
+        elif self._at_device_prefix('IMPLEMENTATION'):
+            # Contextual keyword DEVICE preceding IMPLEMENTATION -> a device implementation.
+            self.pos += 1
+            return self.parse_implementation_unit(is_device=True)
         else:
             self.error('expected compilation unit start')
 
@@ -97,15 +105,20 @@ class Parser:
         self.expect('DOT')
         return ProgramUnit(name, params, uses, block)
 
-    def _at_device_module(self) -> bool:
-        """True when the cursor is on a contextual `DEVICE` followed by `MODULE`.
+    def _at_device_prefix(self, next_kind: str) -> bool:
+        """True when the cursor is on a contextual `DEVICE` followed by `next_kind`.
 
         `DEVICE` is not a reserved word (so vintage code may use it as an
-        identifier); it is recognized contextually only in this position.
+        identifier); it is recognized contextually only immediately before a
+        device-marked compilation-unit keyword.
         """
         cur = self.current()
         return (cur.kind == 'IDENTIFIER' and cur.lexeme.upper() == 'DEVICE'
-                and self.next_kind(1) == 'MODULE')
+                and self.next_kind(1) == next_kind)
+
+    def _at_device_module(self) -> bool:
+        """Backward-compatible helper for DEVICE MODULE call sites/tests."""
+        return self._at_device_prefix('MODULE')
 
     def parse_module_unit(self, is_device: bool = False) -> ModuleUnit:
         self.expect('MODULE')
@@ -134,7 +147,7 @@ class Parser:
             self.expect('DOT')
         return ModuleUnit(name, uses, decls, is_device=is_device)
 
-    def parse_interface_unit(self) -> InterfaceUnit:
+    def parse_interface_unit(self, is_device: bool = False) -> InterfaceUnit:
         self.expect('INTERFACE')
         self.expect('SEMICOLON')
         self.skip_include_directives()
@@ -159,15 +172,17 @@ class Parser:
         # AND terminates the interface -- there is no second END. The unit is therefore
         # self-delimiting: when include-spliced, this END;/`;` is immediately followed by
         # the IMPLEMENTATION/PROGRAM/MODULE that included it, with no special-casing.
+        has_init = False
         if self.current().kind == 'BEGIN':
+            has_init = True
             self.parse_compound_statement()  # consumes BEGIN [statements] END
             self.expect('SEMICOLON')
         else:
             self.expect('END')
             self.expect('SEMICOLON')
-        return InterfaceUnit(name, params, uses, decls)
+        return InterfaceUnit(name, params, uses, decls, is_device=is_device, has_init=has_init)
 
-    def parse_implementation_unit(self) -> ImplementationUnit:
+    def parse_implementation_unit(self, is_device: bool = False) -> ImplementationUnit:
         self.expect('IMPLEMENTATION')
         self.expect('OF')
         name = self.expect('IDENTIFIER').lexeme
@@ -186,7 +201,7 @@ class Parser:
             init_body = self.parse_compound_statement().stmts
         self.skip_include_directives()
         self.expect('DOT')
-        return ImplementationUnit(name, uses, decls, init_body)
+        return ImplementationUnit(name, uses, decls, init_body, is_device=is_device)
 
     def parse_uses_clause(self) -> List[UseClause]:
         self.expect('USES')

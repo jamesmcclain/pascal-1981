@@ -58,6 +58,10 @@ class InterfaceUnit(ASTNode):
     params: List[str]
     uses: List[UseClause]
     decls: List[Declaration]
+    # True for a `DEVICE INTERFACE` (device-dialect code); False for a plain INTERFACE.
+    is_device: bool = False
+    # True when the optional interface initializer block (`BEGIN ... END;`) was present.
+    has_init: bool = False
 
 
 @dataclass
@@ -66,6 +70,8 @@ class ImplementationUnit(ASTNode):
     uses: List[UseClause]
     decls: List[Declaration]
     init_body: Optional[List[Statement]]  # None if no BEGIN..END
+    # True for a `DEVICE IMPLEMENTATION` (device-dialect code); False for a plain IMPLEMENTATION.
+    is_device: bool = False
     interface: Optional[InterfaceUnit] = None
 
 

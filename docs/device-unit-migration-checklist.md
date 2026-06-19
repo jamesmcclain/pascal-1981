@@ -25,7 +25,7 @@ set. The new *engineering* is mostly in the three "beyond" items.
   editing.** (This codebase has repeatedly proven that.)
 - **Green gate** = the condition that must hold before the item is "done." The universal green
   gate, in addition to any stated one: **full suite stays green** (`PYTHONPATH=src python3 -m
-  pytest tests/ -q`, currently `607 passed, 52 subtests`) **and** host/vintage + existing
+  pytest tests/ -q`, currently `614 passed, 52 subtests`) **and** host/vintage + existing
   `DEVICE MODULE` output is unchanged.
 
 **Companion docs.** `docs/cuda-kernel-prescription.md` §1.5 (the decision and the
@@ -41,7 +41,7 @@ separate compilation, **each file must self-declare device-ness** — when the i
 compiled alone, the parser/checker/codegen must know it is device code *without* reading the
 interface. So the marker appears on both files.
 
-- [ ] **0.1 Choose the marker placement.** Two coherent options:
+- [x] **0.1 Choose the marker placement.** Two coherent options:
   - **(A, recommended) Contextual `DEVICE` prefix on the compilation unit**, mirroring the
     existing `DEVICE MODULE` exactly: `DEVICE INTERFACE; UNIT name (exports); … END;` and
     `DEVICE IMPLEMENTATION OF name; … .`. Pros: a near-copy of `_at_device_module`
@@ -51,7 +51,7 @@ interface. So the marker appears on both files.
     (still needs a `DEVICE IMPLEMENTATION OF`), so it is less uniform.
   - **Recommendation:** option A. The rest of this checklist assumes A; if the owner picks B,
     only Phase 1.1/1.2 anchors shift.
-- [ ] **0.2 Confirm `DEVICE` stays a contextual keyword** (not lexer-reserved), so vintage code
+- [x] **0.2 Confirm `DEVICE` stays a contextual keyword** (not lexer-reserved), so vintage code
   may still use `device` as an identifier — same property the current `DEVICE MODULE` relies on
   (`parser.py:_at_device_module`, grammar note at `ebnf_grammar.md:39`).
 
@@ -61,31 +61,32 @@ interface. So the marker appears on both files.
 
 ### 1.1 AST
 
-- [ ] **1.1.1 Mark device-ness on the unit AST nodes.** Add `is_device: bool = False` to
+- [x] **1.1.1 Mark device-ness on the unit AST nodes.** Add `is_device: bool = False` to
   `InterfaceUnit` (`ast_nodes.py:56`) and `ImplementationUnit` (`ast_nodes.py:64`), mirroring
   `ModuleUnit.is_device` (`ast_nodes.py:41`).
-- [ ] **1.1.2 Record initializer-block presence for the ban (Phase 1.5).** `ImplementationUnit`
+- [x] **1.1.2 Record initializer-block presence for the ban (Phase 1.5).** `ImplementationUnit`
   already carries `init_body`; `InterfaceUnit` does **not** store its optional `BEGIN … END`
   block. Either add a `has_init: bool = False` field to `InterfaceUnit`, or plan to reject the
-  init block at parse time for device interfaces (see 1.5.2). Pick one now.
+  init block at parse time for device interfaces (see 1.5.2). Pick one now. **Chosen and
+  implemented:** `InterfaceUnit.has_init: bool = False`.
 
 ### 1.2 Parser + EBNF grammar
 
-- [ ] **1.2.1 Dispatch the new device units.** In `parse_compilation_unit` (`parser.py:66`),
+- [x] **1.2.1 Dispatch the new device units.** In `parse_compilation_unit` (`parser.py:66`),
   add detection for a contextual `DEVICE` preceding `INTERFACE` / `IMPLEMENTATION`, parallel to
   the existing `_at_device_module` branch (`parser.py:72`). Factor a small helper
   (`_at_device_prefix(next_kind)`) or add `_at_device_interface` / `_at_device_implementation`
   beside `_at_device_module` (`parser.py:99`).
-- [ ] **1.2.2 Thread the flag through the unit parsers.** Give `parse_interface_unit`
+- [x] **1.2.2 Thread the flag through the unit parsers.** Give `parse_interface_unit`
   (`parser.py:137`) and `parse_implementation_unit` (`parser.py:170`) an `is_device: bool =
   False` parameter (mirroring `parse_module_unit(is_device=)`, `parser.py:110`), and pass
   `is_device` into the constructed `InterfaceUnit` / `ImplementationUnit`.
-- [ ] **1.2.3 Update the EBNF grammar.** In `docs/ebnf_grammar.md`, extend `interface_unit`
+- [x] **1.2.3 Update the EBNF grammar.** In `docs/ebnf_grammar.md`, extend `interface_unit`
   (`:45`) and `implementation_unit` (`:55`) with an optional leading `[ "DEVICE" ]`, mirroring
   the `module_unit` treatment (`:32`) and its contextual-keyword note (`:39`). State that a
   `DEVICE INTERFACE`/`DEVICE IMPLEMENTATION` is the device dialect (extended − recissions +
   address-space surface), exactly as the `DEVICE MODULE` note says.
-- [ ] **1.2.4 Parser acceptance tests.** `DEVICE INTERFACE; UNIT U (f); … END;` ⇒
+- [x] **1.2.4 Parser acceptance tests.** `DEVICE INTERFACE; UNIT U (f); … END;` ⇒
   `InterfaceUnit.is_device is True`; plain `INTERFACE;` ⇒ `False`. Same for
   `DEVICE IMPLEMENTATION OF U; … .`. **Regression:** a vintage program using `device` as an
   ordinary identifier still parses (contextual-keyword safety) — mirror the existing

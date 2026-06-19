@@ -36,13 +36,16 @@ module_unit =
     [ uses_clause ]
     module_block "." ;
 
-(* DEVICE is a CONTEXTUAL keyword (recognized only immediately before MODULE),
-   not a reserved word -- vintage code may still use `device` as an identifier.
-   Inside a DEVICE MODULE the extended dialect applies minus a module-scoped
-   recission set (recursion, NEW/heap, host I/O, GOTO, dynamic set-range), plus
-   the address-space surface (the SPACE attribute and ADS(space) OF type). *)
+(* DEVICE is a CONTEXTUAL keyword (recognized only immediately before MODULE,
+   INTERFACE, or IMPLEMENTATION), not a reserved word -- vintage code may still
+   use `device` as an identifier. Inside a DEVICE MODULE / DEVICE INTERFACE /
+   DEVICE IMPLEMENTATION the device dialect applies: extended minus a
+   module-scoped recission set (recursion, NEW/heap, host I/O, GOTO, dynamic
+   set-range), plus the address-space surface (the SPACE attribute and
+   ADS(space) OF type). *)
 
 interface_unit =
+    [ "DEVICE" ]
     "INTERFACE" ";"
     "UNIT" identifier [ "(" identifier_list ")" ] ";"
     [ uses_clause ]
@@ -50,13 +53,16 @@ interface_unit =
     [ "BEGIN" [ statement { ";" statement } [ ";" ] ] ]
     "END" ";" ;
     (* {BEGIN}- END ; : one END terminates the optional init block AND the
-       interface. GRAPHI = "BEGIN END;", BASEPLOT = "END;". Never two ENDs. *)
+       interface. GRAPHI = "BEGIN END;", BASEPLOT = "END;". Never two ENDs.
+       DEVICE INTERFACE selects the device dialect. *)
 
 implementation_unit =
     [ include_directive ]
+    [ "DEVICE" ]
     "IMPLEMENTATION" "OF" identifier ";"
     [ uses_clause ]
     implementation_block "." ;
+    (* DEVICE IMPLEMENTATION selects the device dialect. *)
 
 
 (* ═══════════════════════════════════════════════════════════════════
