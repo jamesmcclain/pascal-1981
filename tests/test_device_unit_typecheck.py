@@ -97,6 +97,64 @@ class TestDeviceImplementationRecissions(unittest.TestCase):
         self.assertTrue(r.success, r.errors)
 
 
+class TestDeviceUnitInitializerBan(unittest.TestCase):
+    def test_device_interface_initializer_block_rejected(self):
+        r = typecheck_source(
+            "DEVICE INTERFACE;\n"
+            "UNIT U;\n"
+            "BEGIN\n"
+            "END;\n"
+        )
+        self.assertFalse(r.success)
+        self.assertIn("initializer code is not available in a DEVICE UNIT", _errs(r))
+
+    def test_plain_interface_initializer_block_still_allowed(self):
+        r = typecheck_source(
+            "INTERFACE;\n"
+            "UNIT U;\n"
+            "BEGIN\n"
+            "END;\n"
+        )
+        self.assertTrue(r.success, msg=_errs(r))
+
+    def test_device_implementation_initializer_block_rejected(self):
+        iface = (
+            "DEVICE INTERFACE;\n"
+            "UNIT TEST (go);\n"
+            "PROCEDURE go;\n"
+            "END;\n"
+        )
+        impl = (
+            "DEVICE IMPLEMENTATION OF TEST;\n"
+            "PROCEDURE go;\n"
+            "BEGIN\n"
+            "END;\n"
+            "BEGIN\n"
+            "END.\n"
+        )
+        result = typecheck_module(iface_code=iface, impl_code=impl)
+        self.assertFalse(result.success)
+        self.assertIn("initializer code is not available in a DEVICE UNIT", _errs(result))
+
+    def test_plain_implementation_initializer_block_still_allowed(self):
+        iface = (
+            "INTERFACE;\n"
+            "UNIT TEST (go);\n"
+            "PROCEDURE go;\n"
+            "END;\n"
+        )
+        impl = (
+            "IMPLEMENTATION OF TEST;\n"
+            "PROCEDURE go;\n"
+            "BEGIN\n"
+            "END;\n"
+            "BEGIN\n"
+            "END.\n"
+        )
+        result = typecheck_module(iface_code=iface, impl_code=impl)
+        self.assertTrue(result.success, msg=_errs(result))
+
+
 class TestDeviceUnitConsistency(unittest.TestCase):
     def test_device_implementation_requires_device_interface(self):
         iface = (

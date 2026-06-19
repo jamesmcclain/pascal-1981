@@ -148,12 +148,13 @@ class PascalTypeChecker(TypeChecker):
     }
 
     def _check_device_recission(self, name: Optional[str], node) -> None:
-        """Reject device-hostile constructs inside a DEVICE MODULE.
+        """Reject device-hostile constructs inside device code.
 
-        First tranche: dynamic allocation (NEW/DISPOSE) and host I/O are rejected
-        at the call site; recursion (direct and mutual) is recorded here as a
-        call-graph edge and flagged at module end by _detect_device_recursion.
-        Sets and GOTO are a later tranche.
+        Checker-enforced recissions include dynamic allocation (NEW/DISPOSE),
+        host I/O, recursion (recorded here and flagged at device-compiland end
+        by _detect_device_recursion), GOTO, dynamic set ranges, and the DEVICE
+        UNIT initializer-block ban handled at unit scope. The construct-shaped
+        bans live here/in the checker rather than in feature flags.
         """
         if not self.in_device_module or not name:
             return
@@ -595,6 +596,8 @@ class PascalTypeChecker(TypeChecker):
                 self.import_symbols(interface, use_clause)
 
         with self._device_context(getattr(iface, 'is_device', False)):
+            if getattr(iface, 'is_device', False) and getattr(iface, 'has_init', False):
+                self.error("initializer code is not available in a DEVICE UNIT", None)
             # Check declarations
             if iface.decls:
                 for decl in iface.decls:
@@ -630,6 +633,8 @@ class PascalTypeChecker(TypeChecker):
         self.current_interface_decls = {getattr(decl, 'name', '').lower(): decl for decl in (iface.decls if iface else []) if getattr(decl, 'name', None)}
         try:
             with self._device_context(getattr(impl, 'is_device', False)):
+                if getattr(impl, 'is_device', False) and impl.init_body is not None:
+                    self.error("initializer code is not available in a DEVICE UNIT", None)
                 if impl.decls:
                     for decl in impl.decls:
                         self.check_declaration(decl)

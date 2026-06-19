@@ -76,16 +76,17 @@ def extended_features() -> Dict[str, bool]:
 #
 # The recission set is deliberately EMPTY and NOT FROZEN. The candidate
 # constructs (recursion, set I/O / dynamic set ranges, NEW/heap, host I/O,
-# nonlocal GOTO, flat-heap pointer-chasing) are *language constructs*, not
-# entries in _FEATURES, so they are enforced as module-scoped checker bans in
-# Step 3 -- not expressible as feature toggles. Names listed here that match a
-# real feature flag are turned off; the rest are owned by the checker. The set
-# stays empty until the owner decides the recission set per-construct.
+# nonlocal GOTO, flat-heap pointer-chasing, and DEVICE UNIT initializer
+# blocks) are *language constructs*, not entries in _FEATURES, so they are
+# enforced as device-compiland-scoped checker bans rather than feature
+# toggles. Names listed here that match a real feature flag are turned off;
+# the rest are owned by the checker. The set stays empty until the owner
+# decides the recission set per-construct.
 _DEVICE_RECISSIONS: frozenset[str] = frozenset()  # NOT FROZEN -- owner decision pending
 
 
 def device_features(host_features: Dict[str, bool] | None = None) -> Dict[str, bool]:
-    """Build the DEVICE MODULE feature set from a host baseline.
+    """Build the device-compiland feature set from a host baseline.
 
     Scaffold only: not yet consumed by any caller. The active feature set
     becomes module-scoped (plan Step 0.5) once the parser learns the DEVICE

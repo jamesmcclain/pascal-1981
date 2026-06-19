@@ -25,7 +25,7 @@ set. The new *engineering* is mostly in the three "beyond" items.
   editing.** (This codebase has repeatedly proven that.)
 - **Green gate** = the condition that must hold before the item is "done." The universal green
   gate, in addition to any stated one: **full suite stays green** (`PYTHONPATH=src python3 -m
-  pytest tests/ -q`, currently `629 passed, 52 subtests`) **and** host/vintage + existing
+  pytest tests/ -q`, currently `633 passed, 52 subtests`) **and** host/vintage + existing
   `DEVICE MODULE` output is unchanged.
 
 **Companion docs.** `docs/cuda-kernel-prescription.md` §1.5 (the decision and the
@@ -160,15 +160,15 @@ A `DEVICE UNIT` may **not** carry an initializer block — neither the interface
 `BEGIN … END` nor the implementation's `BEGIN … END.` body. This is a new module-scoped
 rescission in the same family as recursion / heap / host-I/O.
 
-- [ ] **1.5.1 Reject the implementation init body.** In `check_implementation_unit`, when
+- [x] **1.5.1 Reject the implementation init body.** In `check_implementation_unit`, when
   `impl.is_device` and `impl.init_body` is non-empty, `self.error("initializer code is not
   available in a DEVICE UNIT", …)`.
-- [ ] **1.5.2 Reject the interface init block.** Using the 1.1.2 indicator (`has_init`) — or, if
+- [x] **1.5.2 Reject the interface init block.** Using the 1.1.2 indicator (`has_init`) — or, if
   you chose parse-time rejection, in `parse_interface_unit` (`parser.py:137`) when `is_device`
   and a `BEGIN` is seen — raise the same "initializer code is not available in a DEVICE UNIT"
   error. **Recommendation:** checker-level for consistency with the other recissions; that needs
   the `has_init` field from 1.1.2.
-- [ ] **1.5.3 Record it in the recission registry.** Note this ban alongside the others
+- [x] **1.5.3 Record it in the recission registry.** Note this ban alongside the others
   (`features.py:_DEVICE_RECISSIONS` comment / `type_checker.py:_check_device_recission`) so the
   recission set's documentation stays truthful. (It is construct-shaped, so it is a checker ban,
   not a feature flag — same as recursion.)
