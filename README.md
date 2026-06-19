@@ -229,6 +229,86 @@ These are the features that made Pascal suitable for writing operating systems, 
 - **Feature-gated wide integers** — `INTEGER32` and `INTEGER64` are available only with `-f wide-integers`; unflagged builds preserve the vintage 16-bit `INTEGER` surface.
 
 
+## Device Code and Memory Spaces (experimental)
+
+The vintage segmented-address machinery (`ADS`, `ADSMEM`, `FILLSC`/`MOVESL`/`MOVESR`)
+is being repurposed into a static **memory-space** system for targeting LLVM GPU
+backends. The design record is [`docs/ads-memory-spaces-design.md`](docs/ads-memory-spaces-design.md)
+and the build sequence is [`docs/ads-implementation-plan.md`](docs/ads-implementation-plan.md).
+This is in-progress work; the surface below is real and tested, but the host
+orchestration/launch API and kernel marking are still deferred.
+
+### The two-axis model
+
+- **Module kind picks the language rules.** A regular `MODULE` is host code. A
+  `DEVICE MODULE` is device code: the extended dialect, minus a module-scoped
+  recission set (recursion, `NEW`/heap, host I/O, `GOTO`, dynamic set-range
+  construction), plus the address-space surface. The boundary is lexical, so "is
+  this device code" needs no reachability analysis.
+- **Two target triples pick the lowering**, both defaulting to
+  `x86_64-pc-linux-gnu` and independently overridable: `host` for `MODULE` code,
+  `device` for `DEVICE MODULE` code. Point `device` at `nvptx64-nvidia-cuda` or
+  `amdgcn-amd-amdhsa` for a real GPU; leave it at x86 to run device-dialect code
+  on the CPU (every space collapses to addrspace 0 — the OpenCL-on-CPU case).
+
+### Memory spaces
+
+A predeclared enum `SPACE = (HOST, GLOBAL, SHARED, CONSTANT, LOCAL)` supplies the
+space tags (meaningful only inside a `DEVICE MODULE`). Each `ADS` pointer carries
+two independent spaces:
+
+- **pointer space** — where the pointer variable itself lives, set by a
+  `[SPACE(s)]` residence attribute: `VAR [SPACE(GLOBAL)] g: ARRAY[0..255] OF REAL;`
+- **pointee space** — what it addresses, set on the type: `TYPE p = ADS(GLOBAL) OF REAL;`
+
+Space is part of pointer-type identity: **static only, no mixing, fully explicit.**
+A *dereferenceability invariant* is enforced by the type checker — `HOST` pointers
+are dereferenceable only in host modules, the four device spaces only in device
+modules. Crossing spaces is never a pointer cast (there is no `RESPACE`); it is
+always a **data copy** via the `FILLSC`/`MOVESL`/`MOVESR` bridge (on-device) or a
+host-orchestrated transfer (across the host/device line). Inside a `DEVICE MODULE`
+those three builtins accept operands in *different* concrete spaces and lower to an
+addrspace-aware byte loop (`ld.global`/`st.shared`-class on NVPTX); on the device
+triple the spaces map `GLOBAL→1, SHARED→3, CONSTANT→4, LOCAL→5`.
+
+### How to build device code
+
+**Today (Python API).** The device triple is currently a `compile_to_llvm`
+parameter, not yet a CLI flag — so device builds go through the package API:
+
+```python
+from pascal1981.codegen import compile_to_llvm
+from pascal1981.type_checker import PascalTypeChecker
+from pascal1981.parser import parse_file
+
+ast = parse_file("kernel.pas")
+assert PascalTypeChecker().check(ast).success
+
+# CPU device (runnable here): spaces collapse to addrspace 0
+ir_cpu = compile_to_llvm(ast)                                   # device defaults to x86
+
+# GPU device (IR emitted; needs an NVPTX/AMDGPU toolchain to run)
+ir_gpu = compile_to_llvm(ast, device_triple="nvptx64-nvidia-cuda")
+```
+
+The **CPU-device** case produces runnable artifacts. A `DEVICE MODULE` has no
+`main`, so link its IR against a host driver — e.g. a small C harness that
+declares the module's globals and entry routine — with `clang`:
+
+```bash
+clang kernel.ll host_driver.c -o demo && ./demo
+```
+
+The **GPU-device** case (`nvptx64`/`amdgcn`) emits correct addrspace-qualified
+LLVM IR, but producing and running a real GPU artifact needs an NVIDIA/AMD
+toolchain and runtime that this project does not bundle — so on a host without a
+GPU runtime that path is code-generation-complete but not executable.
+
+**Future.** A `--device-triple` CLI flag, the host launch/allocate/transfer API,
+kind-aware `uses`, and `KERNEL` marking are planned but not yet implemented; see
+the design record's *Out of Scope* section and the implementation plan.
+
+
 ## Project Scope
 
 This is a **full reimplementation** of IBM Pascal 2.0. The goal is not a subset or tutorial language, but complete dialect coverage as specified in the original IBM Pascal 2.0 manual. 
