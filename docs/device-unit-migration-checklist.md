@@ -181,7 +181,7 @@ rescission in the same family as recursion / heap / host-I/O.
   the three routines; implementation with the bodies; **no init block**) and confirm it
   type-checks, lowers, links via the **fixed `USES` path** (`uses-fix.patch` must be applied),
   and runs on the CPU device — producing the same 25 primes. This is the parity milestone.
-  Covered by `tests/test_device_unit_primes.py` (temp interface + implementation + `USES`
+  Covered by `tests/integration/test_device_primes.py` (temp interface + implementation + `USES`
   program, separate IR generation, clang link, expected-primes output match).
 
 ---
