@@ -120,7 +120,18 @@ class Parser:
         while self.current().kind in self.declaration_starters():
             decls.extend(self.parse_declaration_section())
             self.skip_include_directives()
-        self.expect('DOT')
+
+        # Vintage IBM/MS Pascal modules are "programs without a body" and end
+        # with END.  The reimplementation has historically also accepted a
+        # shorthand bare-dot terminator for module fixtures.  Accept both, but
+        # do not accept a compound statement body: `MODULE M; BEGIN END.` must
+        # still fail because the END here is only a terminator after the module
+        # declaration part.
+        if self.current().kind == 'END':
+            self.expect('END')
+            self.expect('DOT')
+        else:
+            self.expect('DOT')
         return ModuleUnit(name, uses, decls, is_device=is_device)
 
     def parse_interface_unit(self) -> InterfaceUnit:
