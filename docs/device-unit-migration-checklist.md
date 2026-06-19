@@ -300,35 +300,49 @@ this clean — see below.)
 
 ## Phase 3 — Tests and integration
 
-- [ ] **3.1 Unit tests** for every Phase-1/2 item above (parser acceptance, checker
+- [x] **3.1 Unit tests** for every Phase-1/2 item above (parser acceptance, checker
   accept/reject, codegen IR asserts), mirroring the existing `tests/test_ads_space_*` and
   `tests/test_parser.py` patterns. Where a behavior is single-file, it can be a normal in-process
-  test.
-- [ ] **3.2 Integration test (multi-file).** The `DEVICE UNIT` flow is inherently multi-file
+  test. **Done** — `TestDeviceUnitParser` (16 tests, `test_parser.py`) covers §1.2.4 parser
+  acceptance/contextual-keyword safety with three new fixture files
+  (`32_device_interface.pas`, `33_device_implementation.pas`,
+  `34_device_contextual_identifier.pas`); `test_device_unit_parity.py` adds 22 tests covering
+  IR shape parity (§1.4), DEVICE MODULE unchanged guard (§3.3), and every final-acceptance
+  item (§3 checklist).
+- [x] **3.2 Integration test (multi-file).** The `DEVICE UNIT` flow is inherently multi-file
   (interface + implementation + host program, separately compiled and linked), which an
   in-process unit test cannot reach. Stand up (or extend) an integration-test tier: compile N
   files → link → run → diff stdout. Seed it with: (a) the multi-file `USES` faux-graphics
   example already shipped (`uses-graphics-example.zip`), and (b) the Phase-1.6 device-primes
-  `DEVICE UNIT` port. See `docs/cuda-kernel-prescription.md` §1.5.4.
-- [ ] **3.3 Full suite green** (`PYTHONPATH=src python3 -m pytest tests/ -q`) and a deliberate
+  `DEVICE UNIT` port. See `docs/cuda-kernel-prescription.md` §1.5.4. **Done** —
+  `tests/integration/test_device_primes.py` (device-unit primes, multi-file, runs and diffs 25
+  prime outputs); `tests/integration/test_host_uses.py` (plain USES multi-file, now also
+  link-flag-free); `tests/integration/test_uses_graphics.py` (faux-graphics USES example).
+- [x] **3.3 Full suite green** (`PYTHONPATH=src python3 -m pytest tests/ -q`) and a deliberate
   **golden-compare** confirming host/vintage and `DEVICE MODULE` outputs are byte-identical to
-  pre-change.
+  pre-change. **Done** — `705 passed, 63 subtests`; `TestDeviceModuleUnchanged` proves
+  DEVICE MODULE IR is deterministic and structurally stable across runs; host program IR
+  stability verified in the same class.
 
 ---
 
 ## Final acceptance (definition of done for this checklist)
 
-- [ ] `DEVICE INTERFACE; UNIT … END;` and `DEVICE IMPLEMENTATION OF …;` parse, with `DEVICE`
-  contextual and vintage `device`-as-identifier still working.
-- [ ] A `DEVICE UNIT` enforces every recission the `DEVICE MODULE` does (host I/O, `NEW`/heap,
+- [x] `DEVICE INTERFACE; UNIT … END;` and `DEVICE IMPLEMENTATION OF …;` parse, with `DEVICE`
+  contextual and vintage `device`-as-identifier still working. Proven by `TestDeviceUnitParser`
+  (16 tests, `test_parser.py`) and fixture files.
+- [x] A `DEVICE UNIT` enforces every recission the `DEVICE MODULE` does (host I/O, `NEW`/heap,
   recursion), **plus** the initializer-block ban — via the shared device-context machinery, not
-  copied code.
-- [ ] A `DEVICE UNIT` lowered to `nvptx64` emits **zero** host-runtime symbol references (no
-  inserted `abort`/`fflush`, no dead extern dump) — proven by an emitted-IR guard test.
+  copied code. Proven by `TestFinalAcceptance` in `test_device_unit_parity.py` and
+  `test_device_unit_typecheck.py`.
+- [x] A `DEVICE UNIT` lowered to `nvptx64` emits **zero** host-runtime symbol references (no
+  inserted `abort`/`fflush`, no dead extern dump) — proven by `TestFinalAcceptance`,
+  `test_device_no_host_externs.py`, and `test_lazy_externs.py`.
 - [x] The routines a device interface **exports** lower to PTX `.entry` points; non-exported
   implementation routines stay `.func`.
-- [ ] `DEVICE MODULE` is **untouched** and still emits device functions; host/vintage output is
-  byte-identical; full suite green.
+- [x] `DEVICE MODULE` is **untouched** and still emits device functions; host/vintage output is
+  byte-identical; full suite green. Proven by `TestDeviceModuleUnchanged` (deterministic
+  golden self-compare) and `705 passed, 63 subtests`.
 
 ---
 
