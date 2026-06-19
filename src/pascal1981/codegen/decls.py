@@ -13,6 +13,7 @@ import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
 from ..ast_nodes import *
+from ..parser import parse_file
 from .base import CodegenError, Scope
 
 
@@ -138,12 +139,42 @@ class DeclsMixin:
         if not module_path:
             return
         ast = parse_file(module_path)
-        decls = getattr(ast, 'decls', [])
-        for decl in decls:
-            if isinstance(decl, (ProcDecl, FuncDecl)) and getattr(decl, 'name', None):
-                self.codegen_decl(
-                    ProcDecl(decl.name, decl.params, getattr(decl, 'attributes', []), body=None
-                             ) if isinstance(decl, ProcDecl) else FuncDecl(decl.name, decl.params, decl.return_type, getattr(decl, 'attributes', []), body=None))
+
+        # Build the exported routines in export order. For an INTERFACE UNIT the
+        # export order is the unit's export list (UNIT G (BJUMP, WJUMP)); for a
+        # MODULE/IMPLEMENTATION it is declaration order. This mirrors the type
+        # checker's import_symbols pairing so a renaming USES binds the local
+        # alias to the right exported symbol.
+        if isinstance(ast, InterfaceUnit):
+            paired = list(zip(getattr(ast, 'params', []), getattr(ast, 'decls', [])))
+            export_routines = [(n, d) for (n, d) in paired if isinstance(d, (ProcDecl, FuncDecl))]
+        else:
+            export_routines = [(d.name, d) for d in getattr(ast, 'decls', [])
+                               if isinstance(d, (ProcDecl, FuncDecl)) and getattr(d, 'name', None)]
+
+        # A renaming USES (e.g. `USES GRAPHICS (MOVE, PLOT)`) binds the imports
+        # positionally onto the exports; a plain USES imports each under its own
+        # name.
+        if use_clause.imports:
+            aliases = list(use_clause.imports)
+            pairs = [(aliases[i], export_routines[i][1]) for i in range(min(len(aliases), len(export_routines)))]
+        else:
+            pairs = list(export_routines)
+
+        for alias, decl in pairs:
+            exported = decl.name
+            # The external LLVM function keeps the REAL exported name so it
+            # resolves against the separately-compiled IMPLEMENTATION's symbol.
+            if isinstance(decl, ProcDecl):
+                self.codegen_decl(ProcDecl(exported, decl.params, getattr(decl, 'attributes', []), body=None))
+            else:
+                self.codegen_decl(FuncDecl(exported, decl.params, decl.return_type, getattr(decl, 'attributes', []), body=None))
+            # Bind the call-site alias (MOVE) to that same function (@BJUMP).
+            if alias and alias.lower() != exported.lower():
+                sym = self.scope.lookup(exported)
+                if sym is not None:
+                    self.scope.define(alias, sym.llvm_value, None)
+                    self.proc_param_modes[alias.lower()] = self.proc_param_modes.get(exported.lower(), [])
 
     def codegen_decl(self, decl: Declaration) -> None:
         """Codegen a declaration."""
