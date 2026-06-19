@@ -417,6 +417,17 @@ PYTHONPATH=src python3 -m pytest tests/test_parser.py tests/test_typecheck.py -q
 
 # Codegen only (requires llvmlite + clang)
 PYTHONPATH=src python3 -m pytest tests/test_codegen.py -q
+
+# Multi-file integration tests (real files on disk, separate compile/link/run)
+PYTHONPATH=src python3 -m pytest tests/integration/ -q
+```
+
+For one integration fixture at a time:
+
+```bash
+PYTHONPATH=src python3 -m pytest tests/integration/test_device_primes.py -q
+PYTHONPATH=src python3 -m pytest tests/integration/test_host_uses.py -q
+PYTHONPATH=src python3 -m pytest tests/integration/test_uses_graphics.py -q
 ```
 
 ### Test Organization
@@ -438,13 +449,18 @@ PYTHONPATH=src python3 -m pytest tests/test_codegen.py -q
 
 - **`tests/test_runtime_fixes.py`** — hostile run tests pinning previously-wrong runtime behaviors: NEW sizing, ENCODE/DECODE, SCANNE, and the file subsystem (buffer-variable model, RESET/GET interleaves, mode-enforcement aborts, ASSIGN/CLOSE/DISCARD/READSET/READFN).
 
+- **`tests/integration/`** — Multi-file integration tier. These tests materialize
+  real on-disk projects and exercise interface resolution, `USES` binding,
+  separate IR generation, `clang` linking, and native execution. See
+  [`docs/integration-tests.md`](docs/integration-tests.md).
+
 - **`tests/test_integration.py`** — Legacy integration corpus (currently removed from supported test suite).
 
 ### Dependency Isolation
 
 The front end (lexer, parser, type checker) is pure Python with **no `llvmlite` dependency**. This means:
 - `test_parser.py` and `test_typecheck.py` run on any Python 3.8+ system
-- `test_codegen.py` requires `llvmlite` and `clang` but is the only place that imports them
+- `test_codegen.py` and `tests/integration/` require `llvmlite` and `clang`
 - If codegen dependencies are missing, the suite auto-skips those tests without failure
 
 ## Implementation Notes
