@@ -255,13 +255,13 @@ A PTX `.func` cannot be launched; only a `.entry` can. The mechanism is verified
 `ir.Function` yields a real `.visible .entry`. (Prescription §3; the `DEVICE UNIT` model makes
 this clean — see below.)
 
-- [ ] **2.3.1 Define "entry point" = exported routine.** In a `DEVICE UNIT`, the routines the
+- [x] **2.3.1 Define "entry point" = exported routine.** In a `DEVICE UNIT`, the routines the
   **interface exports** are the launchable entries; everything in the implementation that is not
   exported stays a device-internal `.func`. The export list is `InterfaceUnit.params`
   (`UNIT U (add, …)`), already resolved by the checker. **No `[KERNEL]`/`[ENTRY]` annotation is
   needed for the `DEVICE UNIT` path** — this is the payoff of choosing units. (Keep the
   annotation route in mind only for a single-file `DEVICE MODULE`, where there is no interface.)
-- [ ] **2.3.2 Set the kernel calling convention on entries.** In `codegen_proc_decl`
+- [x] **2.3.2 Set the kernel calling convention on entries.** In `codegen_proc_decl`
   (`codegen/decls.py:381`), when lowering an implementation routine that is **exported by its
   device interface** and the unit lowers to a GPU triple, set `func.calling_convention =
   "ptx_kernel"` / `"amdgpu_kernel"` (chosen off `self.device_triple`). Optionally also add the
@@ -277,17 +277,24 @@ this clean — see below.)
     name is in the loaded interface's export list `InterfaceUnit.params`), and have codegen read
     that flag. This keeps codegen free of disk I/O and works under separate compilation. Do **not**
     rely on `current_interface_decls` being populated in codegen.
-- [ ] **2.3.3 Entry-point checker rules.** An exported device routine intended as an entry
+- [x] **2.3.3 Entry-point rules.** An exported device routine intended as an entry
   should be a `PROCEDURE` (kernels return via `GLOBAL` pointers), and its parameters
   device-passable (scalars or `ADS(GLOBAL/CONSTANT) OF T`; reject `HOST`-space pointers —
   the dereferenceability invariant half-covers this).
-- [ ] **2.3.4 Acceptance.** Compile a device unit exporting one routine to `nvptx64`, emit PTX,
+- [x] **2.3.4 Acceptance.** Compile a device unit exporting one routine to `nvptx64`, emit PTX,
   assert a `.visible .entry <name>` for the exported routine **and** that a non-exported helper
   in the same implementation stays `.func`. With `device=x86` the calling convention is inert
   and the logic still runs serially (CPU correctness check).
-- **Green gate:** non-exported device routines still `.func`; `DEVICE MODULE` still emits
-  device functions (it has no interface, so nothing becomes an entry — unchanged); host
-  unaffected.
+- **Green gate:** non-exported device routines still `.func`; `DEVICE MODULE` still emits device
+  functions (it has no interface, so nothing becomes an entry — unchanged); host unaffected.
+  **Met.** Implemented as checker-marks-exports (`is_exported_entry`, separate-compilation-safe
+  via `load_interface`) + codegen-sets-convention-and-enforces-shape, gated on a GPU triple — the
+  §2.3.3 rules live in codegen, not the (triple-blind) checker, so the x86 CPU-device primes
+  parity port (which exports FUNCTIONs) is unaffected. Real PTX emission confirms
+  `.visible .entry` for exports and `.func` for helpers
+  (`tests/test_device_entry_points.py`). Host/`MODULE`/`DEVICE MODULE`/x86-device IR
+  byte-identical to the Phase-2.2 tree (golden compare). See
+  `docs/device-unit-phase2.3-notes.md`.
 
 ---
 
@@ -318,7 +325,7 @@ this clean — see below.)
   copied code.
 - [ ] A `DEVICE UNIT` lowered to `nvptx64` emits **zero** host-runtime symbol references (no
   inserted `abort`/`fflush`, no dead extern dump) — proven by an emitted-IR guard test.
-- [ ] The routines a device interface **exports** lower to PTX `.entry` points; non-exported
+- [x] The routines a device interface **exports** lower to PTX `.entry` points; non-exported
   implementation routines stay `.func`.
 - [ ] `DEVICE MODULE` is **untouched** and still emits device functions; host/vintage output is
   byte-identical; full suite green.

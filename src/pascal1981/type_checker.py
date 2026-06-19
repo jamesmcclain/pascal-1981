@@ -603,6 +603,25 @@ class PascalTypeChecker(TypeChecker):
                 for decl in iface.decls:
                     self.check_declaration(decl)
 
+    def _mark_exported_entries(self, impl: ImplementationUnit, iface: Any) -> None:
+        """Flag each device-implementation routine whose name the interface
+        exports (checklist S2.3.1).  In a DEVICE UNIT the interface's export
+        list (`InterfaceUnit.params`) *is* the set of launchable kernel entries;
+        everything else stays a device-internal routine.
+
+        Marking happens here, on the implementation AST, precisely because the
+        checker loads the interface from disk (`load_interface`) even under
+        separate compilation, whereas codegen never sees it (S2.3.2 caveat).
+        Codegen then reads the flag rather than re-deriving the export list.
+        """
+        export_names = {n.lower() for n in getattr(iface, 'params', []) or []}
+        if not export_names:
+            return
+        for decl in impl.decls or []:
+            name = getattr(decl, 'name', None)
+            if name and name.lower() in export_names and isinstance(decl, (ProcDecl, FuncDecl)):
+                decl.is_exported_entry = True
+
     def check_implementation_unit(self, impl: ImplementationUnit) -> None:
         """Type check an implementation unit and validate against its interface."""
         source_dir = str(Path(self.source_file).parent) if self.source_file else None
@@ -617,6 +636,8 @@ class PascalTypeChecker(TypeChecker):
             if getattr(impl, 'is_device', False) != getattr(iface, 'is_device', False):
                 self.error("device-ness of implementation must match its interface", None)
             self.validate_implementation_against_interface(impl, iface)
+            if getattr(impl, 'is_device', False):
+                self._mark_exported_entries(impl, iface)
 
         if impl.uses:
             for use_clause in impl.uses:

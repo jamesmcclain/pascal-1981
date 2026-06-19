@@ -38,8 +38,8 @@ _BODY = (
     "  y := x * x;\n"
     "  a[x] := y;\n"
     "  CASE y OF\n"
-    "    1: x := 1;\n"
-    "    2: x := 2;\n"
+    "    1: y := 1;\n"
+    "    2: y := 2;\n"
     "  END;\n"
     "END;\n"
 )
@@ -108,8 +108,11 @@ class TestDeviceModuleNoRuntimeChecks(unittest.TestCase):
 class TestDeviceUnitNoRuntimeChecks(unittest.TestCase):
     """The same guarantee under the DEVICE UNIT (separate-compilation) shape."""
 
-    _IFACE = "DEVICE INTERFACE;\nUNIT U (go);\nPROCEDURE go (VAR x: INTEGER);\nEND;\n"
-    _IMPL = "DEVICE IMPLEMENTATION OF U;\nPROCEDURE go (VAR x: INTEGER);\n" + _BODY + ".\n"
+    # The exported routine is a launchable kernel entry (S2.3), so its
+    # parameter must be device-passable: a value scalar, not a VAR (host-space
+    # pointer).  The body still exercises MATHCK/INDEXCK/RANGECK with value x.
+    _IFACE = "DEVICE INTERFACE;\nUNIT U (go);\nPROCEDURE go (x: INTEGER);\nEND;\n"
+    _IMPL = "DEVICE IMPLEMENTATION OF U;\nPROCEDURE go (x: INTEGER);\n" + _BODY + ".\n"
 
     _HOST_IFACE = "INTERFACE;\nUNIT U (go);\nPROCEDURE go (VAR x: INTEGER);\nEND;\n"
     _HOST_IMPL = "IMPLEMENTATION OF U;\nPROCEDURE go (VAR x: INTEGER);\n" + _BODY + ".\n"
