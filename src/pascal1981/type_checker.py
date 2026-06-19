@@ -1229,6 +1229,14 @@ class PascalTypeChecker(TypeChecker):
             elif lookup_name == 'READSET':
                 self._check_readset_args(stmt)
                 return
+            elif lookup_name in {'FILLSC', 'MOVESL', 'MOVESR'} and self.in_device_module:
+                # Step 5: inside a DEVICE MODULE the segmented bridge builtins are
+                # the one sanctioned cross-space op (design S5.4) -- their two
+                # ADSMEM params may carry *different* concrete spaces, so the
+                # equal-space identity rule (which the generic arg check would
+                # enforce against the space-less ADSMEM formal) is relaxed here.
+                self._check_seg_bridge_args(stmt, lookup_name)
+                return
 
         if not sym:
             self.error(f"Undefined procedure: {stmt.name}", stmt)
@@ -1302,6 +1310,35 @@ class PascalTypeChecker(TypeChecker):
         arg_type = self.infer_expression_type(arg)
         if not isinstance(arg_type, FileType):
             self.error(f"Argument 1 type mismatch: {name} expects a file variable, got {arg_type}", stmt)
+
+    def _check_seg_bridge_args(self, stmt: ProcCallStmt, name: str) -> None:
+        """Step 5: type-check FILLSC/MOVESL/MOVESR inside a DEVICE MODULE.
+
+        FILLSC(loc: ADSMEM; len: WORD; val: CHAR);
+        MOVESL/MOVESR(src, dst: ADSMEM; len: WORD).
+
+        The pointer operands must be ADS-flavor (segmented) pointers, but they
+        may name *different* concrete spaces -- this is the sanctioned on-device
+        cross-space data-movement bridge (design S5.4), so no equal-space rule
+        applies.  The length must be an ordinal and FILLSC's fill value a CHAR.
+        """
+        if len(stmt.args) != 3:
+            self.error(f"Procedure '{stmt.name}' expects 3 arguments, got {len(stmt.args)}", stmt)
+            return
+        ptr_positions = (0,) if name == 'FILLSC' else (0, 1)
+        for i in ptr_positions:
+            arg_type = self.infer_expression_type(stmt.args[i])
+            if not isinstance(arg_type, PointerType) or arg_type.flavor != 'ADS':
+                self.error(f"{name} argument {i + 1} must be a segmented (ADS) pointer, "
+                           f"got {arg_type}", stmt)
+        len_pos = 1 if name == 'FILLSC' else 2
+        len_type = self.infer_expression_type(stmt.args[len_pos])
+        if len_type is not None and not self._is_ordinal_type(len_type):
+            self.error(f"{name} length argument must be an integer, got {len_type}", stmt)
+        if name == 'FILLSC':
+            val_type = self.infer_expression_type(stmt.args[2])
+            if val_type is not None and not val_type.equivalent_to(CHAR_TYPE):
+                self.error(f"FILLSC fill value must be a CHAR, got {val_type}", stmt)
 
     def _check_assign_file_args(self, stmt: ProcCallStmt) -> None:
         if len(stmt.args) != 2:

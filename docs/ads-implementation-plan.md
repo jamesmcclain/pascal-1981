@@ -383,3 +383,36 @@ instance doesn't re-trip them. Line numbers below are from the execution pass, n
   `[1, 3, 4, 5]`; on the default x86 device they collapse to 0 (unprinted). Host program and
   plain `MODULE` output is byte-identical and **independent of `device_triple`** (the flag never
   flips for non-device units) — verified by self-compare.
+
+**Step 5 — `FILLSC`/`MOVESL`/`MOVESR` cross-space bridge (device modules):**
+- *Done, with the codegen seam in a different place than the plan named.* The plan pointed at
+  `codegen/runtime_builtins.py:_runtime_fillmove` and a `builtins_registry` relaxation. Reality:
+  - **Dispatch is intercepted in `codegen/stmts.py:codegen_proc_call_stmt`, not in
+    `_runtime_fillmove`.** The seg builtins are predeclared *externs* (`base.py:_register_predeclared_externs`
+    defines `movesl`/`movesr`/`fillsc` with a non-`None` `llvm_value`), so the dispatcher's
+    `if not symbol or symbol.llvm_value is None:` builtin branch is **never taken** for them in
+    host code — they fall through to the generic extern-call path. `builtin_movesl`/`_runtime_fillmove`
+    are effectively dead for the predeclared case. So the device branch is a new early intercept
+    `if self.is_device_module and lookup_name in {FILLSC,MOVESL,MOVESR}: self._device_seg_bridge(...)`
+    placed *before* symbol resolution. Host path is untouched (the intercept is gated on
+    `is_device_module`).
+  - **`FILLSC` was never wired into the `stmts.py` builtin if-chain at all** (only `MOVE*` were).
+    It reached codegen solely via the generic extern path. The Step-5 device intercept gives it a
+    real device lowering; host `FILLSC` is unchanged (still the extern).
+  - **Type-checker relaxation lives in `check_proc_call_stmt`, gated on `in_device_module`.** A new
+    `_check_seg_bridge_args` accepts ADS-flavor operands of *any* concrete space (the cross-space
+    sanction) and is only consulted inside a `DEVICE MODULE`; outside, the generic arg check (which
+    enforces the equal-space identity rule against the space-less `ADSMEM` formal) is unchanged. No
+    `builtins_registry` edit was needed — the formal stays `ADS`/space=None; the relaxation is a
+    checker special-case, not a signature change.
+  - *Lowering is an explicit byte loop*, not the intrinsic memcpy/memset: load-from-src-addrspace /
+    store-to-dst-addrspace (`MOVESL` forward, `MOVESR` backward via `len-1-i`), `FILLSC` stores the
+    constant byte. Chosen over `llvm.memcpy.p1.p3…` to avoid per-addrspace intrinsic-name mangling
+    and to keep the CPU-device output trivially runnable.
+  - *CPU-device case is executed, not just emitted.* With `device=x86` all spaces collapse to
+    addrspace 0 and the loop is an ordinary byte copy; verified end-to-end by clang-linking the
+    device-module IR against a tiny C harness (`MOVESL` then `FILLSC` ⇒ `g=Z, s=A`). GPU triples
+    emit `ld.global`/`st.shared`-class addrspace loads/stores but are **not** run here (no
+    NVPTX/AMDGPU runtime on the VM) — code generated, artifacts intentionally incomplete.
+  - Tests: `tests/test_ads_space_step5.py` (type-check accept/reject, GPU addrspace lowering,
+    `MOVESR` backward loop, CPU-device addrspace-0 + a `@requires_exe` run, host-unchanged).
