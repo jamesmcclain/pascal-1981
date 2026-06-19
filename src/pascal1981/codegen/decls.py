@@ -50,7 +50,7 @@ class DeclsMixin:
         """Codegen for PROGRAM unit."""
         # Import any modules referenced by USES before we codegen the body.
         for use_clause in unit.uses:
-            self.codegen_use_clause(use_clause)
+            self.codegen_use_clause(use_clause, local_interfaces=getattr(unit, 'local_interfaces', []))
 
         # Codegen all declarations
         for decl in unit.block.decls:
@@ -132,23 +132,35 @@ class DeclsMixin:
     # Declarations
     # ========================================================================
 
-    def codegen_use_clause(self, use_clause: UseClause) -> None:
+    def codegen_use_clause(self, use_clause: UseClause, local_interfaces=None) -> None:
         """Import declarations from a USES module as external symbols."""
-        module_path = None
-        import os
-        from pathlib import Path
-        search_dir = Path(self.source_file).parent if self.source_file else Path('.')
-        for candidate in (use_clause.name, use_clause.name.lower(), use_clause.name.upper()):
-            for suffix in ('', '.inc', '.pas'):
-                path = search_dir / f'{candidate}{suffix}'
-                if path.exists():
-                    module_path = str(path)
+        # Prefer an interface that was spliced into this file via $INCLUDE over
+        # a disk lookup — mirrors the type checker's local_interfaces path.
+        ast = None
+        if local_interfaces:
+            ast = next(
+                (i for i in local_interfaces
+                 if i.name.upper() == use_clause.name.upper()),
+                None,
+            )
+
+        if ast is None:
+            # Fall back to disk-based resolution (existing behaviour).
+            module_path = None
+            import os
+            from pathlib import Path
+            search_dir = Path(self.source_file).parent if self.source_file else Path('.')
+            for candidate in (use_clause.name, use_clause.name.lower(), use_clause.name.upper()):
+                for suffix in ('', '.inc', '.pas'):
+                    path = search_dir / f'{candidate}{suffix}'
+                    if path.exists():
+                        module_path = str(path)
+                        break
+                if module_path:
                     break
-            if module_path:
-                break
-        if not module_path:
-            return
-        ast = parse_file(module_path)
+            if not module_path:
+                return
+            ast = parse_file(module_path)
 
         # Build the exported routines in export order. For an INTERFACE UNIT the
         # export order is the unit's export list (UNIT G (BJUMP, WJUMP)); for a

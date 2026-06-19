@@ -90,6 +90,43 @@ These are worse than missing features because they fail late or silently.
   Moved to item 9.5 for the full metacommand list. `$INCLUDE` stays working for
   now; the remaining brace directives need an explicit policy later.
 
+- [x] **1.5a — `$INCLUDE` lexical splicing (fragment includes).** `[OBSERVED]` **S**
+  A `(*$INCLUDE:'file'*)` or `{$INCLUDE:'file'}` directive splices the named
+  file's token stream inline at lex time.  Declaration fragments (VAR, CONST,
+  PROCEDURE, …) can be shared across files this way.  The include path is
+  resolved relative to the including file with a case-insensitive fallback pass.
+  Recursive includes are detected and rejected with a `LexerError`.
+  - Tests: `tests/integration/test_include_directive.py` (8 tests, `[OBSERVED]`)
+    covers VAR/CONST/PROCEDURE/multi-kind fragments, both `(*…*)` and `{…}` syntax
+    forms, missing-file error, and recursive-include guard.
+
+- [x] **1.5b — `$INCLUDE` spliced INTERFACE units (single header).** `[OBSERVED]` **S**
+  A source file may precede its compilation unit with one `$INCLUDE` that
+  splices a full `INTERFACE; UNIT …; END;` block.  The parser attaches the
+  spliced interface to `unit.local_interfaces`; the type checker and codegen
+  both consult `local_interfaces` before falling back to disk when resolving
+  `USES` imports.  This allows a PROGRAM to `USES` a unit whose interface
+  exists only as a shared header file — no separate on-disk interface file
+  is required.
+  - Tests: `tests/integration/test_include_interface.py` (5 tests, `[OBSERVED]`)
+    covers plain and renamed `USES`, IR alias correctness, disk-fallback
+    regression, and unknown-module error path.
+
+- [x] **1.5c — `$INCLUDE` spliced INTERFACE units (multiple headers).** `[OBSERVED]` **S**
+  A source file may splice in *two or more* INTERFACE headers before its
+  compilation unit — the canonical pattern being an IMPLEMENTATION that
+  includes its own interface header AND one or more dependency interface
+  headers.  The parser loops over leading `INTERFACE` tokens (each arriving
+  via a prior `$INCLUDE` splice); `unit.interface` is assigned by name-match
+  (the interface whose name equals the implementation's unit name); all
+  spliced interfaces are placed in `unit.local_interfaces` for USES
+  resolution.  `USES` in the implementation resolves dependency interfaces
+  from `local_interfaces` without requiring any disk file for those units.
+  - Tests: `tests/integration/test_include_multi_interface.py` (10 tests,
+    `[OBSERVED]`) covers parser AST shape, name-matched `unit.interface`,
+    type-checker USES resolution without disk files, and end-to-end build
+    and run for both plain and renamed `USES` forms.
+
 ---
 
 ## 2. Grammar — features in the manual missing from BOTH the EBNF doc and the parser

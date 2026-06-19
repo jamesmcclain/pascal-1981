@@ -533,18 +533,27 @@ class PascalTypeChecker(TypeChecker):
             # Get directory of source file for module resolution
             source_dir = str(Path(self.source_file).parent) if self.source_file else None
             for use_clause in prog.uses:
-                # Resolve module path
+                # Prefer an interface that was spliced into this file via
+                # $INCLUDE over a disk lookup.  This lets a program include a
+                # shared header file and USES the unit it declares without
+                # requiring a separate on-disk interface file.
+                spliced = next(
+                    (i for i in getattr(prog, 'local_interfaces', [])
+                     if i.name.upper() == use_clause.name.upper()),
+                    None,
+                )
+                if spliced is not None:
+                    self.import_symbols(spliced, use_clause)
+                    continue
+
+                # Fall back to disk-based resolution (existing behaviour).
                 module_path = self.resolve_module_path(use_clause.name, source_dir)
                 if module_path is None:
                     self.error(f"Module '{use_clause.name}' not found", None)
                     continue
-
-                # Load interface
                 interface = self.load_interface(module_path)
                 if interface is None:
                     continue
-
-                # Import symbols
                 self.import_symbols(interface, use_clause)
 
         # Now type-check the program block
@@ -557,18 +566,24 @@ class PascalTypeChecker(TypeChecker):
             # Get directory of source file for module resolution
             source_dir = str(Path(self.source_file).parent) if self.source_file else None
             for use_clause in mod.uses:
-                # Resolve module path
+                # Prefer a spliced (in-file) interface over a disk lookup.
+                spliced = next(
+                    (i for i in getattr(mod, 'local_interfaces', [])
+                     if i.name.upper() == use_clause.name.upper()),
+                    None,
+                )
+                if spliced is not None:
+                    self.import_symbols(spliced, use_clause)
+                    continue
+
+                # Fall back to disk-based resolution (existing behaviour).
                 module_path = self.resolve_module_path(use_clause.name, source_dir)
                 if module_path is None:
                     self.error(f"Module '{use_clause.name}' not found", None)
                     continue
-
-                # Load interface
                 interface = self.load_interface(module_path)
                 if interface is None:
                     continue
-
-                # Import symbols
                 self.import_symbols(interface, use_clause)
 
         # A DEVICE MODULE switches into the device dialect (extended minus the
@@ -641,6 +656,17 @@ class PascalTypeChecker(TypeChecker):
 
         if impl.uses:
             for use_clause in impl.uses:
+                # Prefer a spliced (in-file) interface over a disk lookup.
+                spliced = next(
+                    (i for i in getattr(impl, 'local_interfaces', [])
+                     if i.name.upper() == use_clause.name.upper()),
+                    None,
+                )
+                if spliced is not None:
+                    self.import_symbols(spliced, use_clause)
+                    continue
+
+                # Fall back to disk-based resolution (existing behaviour).
                 module_path = self.resolve_module_path(use_clause.name, source_dir)
                 if module_path is None:
                     self.error(f"Module '{use_clause.name}' not found", None)
