@@ -25,7 +25,7 @@ set. The new *engineering* is mostly in the three "beyond" items.
   editing.** (This codebase has repeatedly proven that.)
 - **Green gate** = the condition that must hold before the item is "done." The universal green
   gate, in addition to any stated one: **full suite stays green** (`PYTHONPATH=src python3 -m
-  pytest tests/ -q`, currently `633 passed, 52 subtests`) **and** host/vintage + existing
+  pytest tests/ -q`, currently `634 passed, 52 subtests`) **and** host/vintage + existing
   `DEVICE MODULE` output is unchanged.
 
 **Companion docs.** `docs/cuda-kernel-prescription.md` §1.5 (the decision and the
@@ -177,10 +177,12 @@ rescission in the same family as recursion / heap / host-I/O.
 
 ### 1.6 Parity acceptance
 
-- [ ] **1.6.1** Port the device-primes example to the `DEVICE UNIT` shape (interface exporting
+- [x] **1.6.1** Port the device-primes example to the `DEVICE UNIT` shape (interface exporting
   the three routines; implementation with the bodies; **no init block**) and confirm it
   type-checks, lowers, links via the **fixed `USES` path** (`uses-fix.patch` must be applied),
   and runs on the CPU device — producing the same 25 primes. This is the parity milestone.
+  Covered by `tests/test_device_unit_primes.py` (temp interface + implementation + `USES`
+  program, separate IR generation, clang link, expected-primes output match).
 
 ---
 
