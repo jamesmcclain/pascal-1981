@@ -25,7 +25,7 @@ set. The new *engineering* is mostly in the three "beyond" items.
   editing.** (This codebase has repeatedly proven that.)
 - **Green gate** = the condition that must hold before the item is "done." The universal green
   gate, in addition to any stated one: **full suite stays green** (`PYTHONPATH=src python3 -m
-  pytest tests/ -q`, currently `614 passed, 52 subtests`) **and** host/vintage + existing
+  pytest tests/ -q`, currently `622 passed, 52 subtests`) **and** host/vintage + existing
   `DEVICE MODULE` output is unchanged.
 
 **Companion docs.** `docs/cuda-kernel-prescription.md` §1.5 (the decision and the
@@ -101,26 +101,26 @@ The device dialect is gated by `in_device_module` (`type_checker.py:89`). `check
 `device_features()`, reset the callgraph, run the body, call `_detect_device_recursion()` at
 the end, then restore in `finally`.
 
-- [ ] **1.3.1 Factor the device-context wrapper.** Extract the save/set/restore logic from
+- [x] **1.3.1 Factor the device-context wrapper.** Extract the save/set/restore logic from
   `check_module_unit` into a reusable helper (e.g. a context manager `_device_context(active:
   bool)` or a `_enter_device_dialect()` / `_exit_device_dialect()` pair). This avoids copying
   the dance three times and keeps `DEVICE MODULE` and `DEVICE UNIT` semantically identical by
   construction.
-- [ ] **1.3.2 Wrap `check_interface_unit`** (`type_checker.py:574`) in the device context when
+- [x] **1.3.2 Wrap `check_interface_unit`** (`type_checker.py:574`) in the device context when
   `iface.is_device`. Run the existing declaration checks inside it. Call
   `_detect_device_recursion()` at the end (interfaces are mostly headers, but routines with
   bodies can appear; keep it symmetric).
-- [ ] **1.3.3 Wrap `check_implementation_unit`** (`type_checker.py:594`) in the device context
+- [x] **1.3.3 Wrap `check_implementation_unit`** (`type_checker.py:594`) in the device context
   when `impl.is_device`. The implementation is where bodies live, so this is the main site the
   recissions (host I/O, `NEW`/heap, recursion) will actually fire — and they already do, off
   `in_device_module`, with **no new recission code** (`_check_device_recission`
   `:148`, `_detect_device_recursion` `:173`). Ensure the callgraph is reset/scoped per
   implementation.
-- [ ] **1.3.4 Device-consistency check.** When `check_implementation_unit` loads/validates
+- [x] **1.3.4 Device-consistency check.** When `check_implementation_unit` loads/validates
   against its interface (`validate_implementation_against_interface`, called at `:604`), assert
   that `impl.is_device == iface.is_device`. A `DEVICE IMPLEMENTATION OF` a non-device interface
   (or vice versa) is an error ("device-ness of implementation must match its interface").
-- [ ] **1.3.5 Generalize the `in_device_module` *name* (optional, low-risk).** The flag now
+- [x] **1.3.5 Generalize the `in_device_module` *name* (optional, low-risk).** The flag now
   means "in device code," not specifically a module. Either leave the name (cheapest; add a
   one-line comment that "module" now reads "device compiland") or rename `in_device_module` →
   `in_device_code` and `is_device_module` → `is_device_code` across the tree. **Recommendation:

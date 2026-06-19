@@ -91,13 +91,14 @@ class CodegenBase:
         # override with --host-triple for cross-compilation of the host side.
         self.host_triple = host_triple
         self.module.triple = host_triple
-        # Lowering target for DEVICE MODULE units. Defaults to x86 (CPU-device),
-        # which collapses every address space to addrspace 0; override with a
-        # GPU triple (nvptx64.../amdgcn...) to get space-specific lowering
-        # (ads-memory-spaces-design.md S1.2/S3.2).
+        # Lowering target for device compilands (historical name kept for the
+        # existing DEVICE MODULE path; DEVICE UNIT lowering reuses it later).
+        # Defaults to x86 (CPU-device), which collapses every address space to
+        # addrspace 0; override with a GPU triple (nvptx64.../amdgcn...) to get
+        # space-specific lowering (ads-memory-spaces-design.md S1.2/S3.2).
         self.device_triple = device_triple
-        # True only while lowering a DEVICE MODULE unit; gates addrspace lowering
-        # so host/vintage codegen stays byte-for-byte unchanged.
+        # Historical name: now means "currently lowering device code" once
+        # DEVICE UNIT codegen is wired. Host/vintage codegen stays unchanged.
         self.is_device_module = False
         self.builder: Optional[IRBuilder] = None
         self.scope = Scope()  # global scope

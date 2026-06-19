@@ -9,6 +9,7 @@ Performs semantic analysis on the AST:
 """
 
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -83,9 +84,10 @@ class PascalTypeChecker(TypeChecker):
         self.current_interface_decls: Dict[str, Any] = {}
         self.source_file = source_file  # Path to the source file being compiled
         self.features: Dict[str, bool] = features if features is not None else {}
-        # True only while checking the body of a DEVICE MODULE. Drives the
+        # Historical name: now true while checking any device compiland body
+        # (DEVICE MODULE / DEVICE INTERFACE / DEVICE IMPLEMENTATION). Drives the
         # dereferenceability invariant and gates the address-space surface
-        # (ads-memory-spaces-design.md S3.3). Programs and plain MODULEs => False.
+        # (ads-memory-spaces-design.md S3.3). Programs and plain host units => False.
         self.in_device_module: bool = False
         # caller(upper) -> list of (callee(upper), call_node), collected only while
         # checking a DEVICE MODULE body; consumed by _detect_device_recursion at
@@ -198,6 +200,26 @@ class PascalTypeChecker(TypeChecker):
                 self.error(
                     f"recursion is not available in a DEVICE MODULE "
                     f"(routine '{caller}' is part of a call cycle)", node)
+
+    @contextmanager
+    def _device_context(self, active: bool):
+        """Temporarily switch the checker into the device dialect/context."""
+        prev_in_device = self.in_device_module
+        prev_features = self.features
+        prev_callgraph = self._device_callgraph
+        if active:
+            from .features import device_features
+            self.in_device_module = True
+            self.features = device_features()
+            self._device_callgraph = {}
+        try:
+            yield
+            if active:
+                self._detect_device_recursion()
+        finally:
+            self.in_device_module = prev_in_device
+            self.features = prev_features
+            self._device_callgraph = prev_callgraph
 
     def _setup_builtins(self) -> None:
         """Define built-in procedures and functions in the global scope."""
@@ -551,25 +573,11 @@ class PascalTypeChecker(TypeChecker):
         # A DEVICE MODULE switches into the device dialect (extended minus the
         # recission set, plus the address-space surface) and the two-worlds
         # dereferenceability scope for the duration of its body (design S1.2/S3.3).
-        prev_in_device = self.in_device_module
-        prev_features = self.features
-        prev_callgraph = self._device_callgraph
-        if getattr(mod, 'is_device', False):
-            from .features import device_features
-            self.in_device_module = True
-            self.features = device_features()
-            self._device_callgraph = {}
-        try:
+        with self._device_context(getattr(mod, 'is_device', False)):
             # Check declarations
             if mod.decls:
                 for decl in mod.decls:
                     self.check_declaration(decl)
-            if getattr(mod, 'is_device', False):
-                self._detect_device_recursion()
-        finally:
-            self.in_device_module = prev_in_device
-            self.features = prev_features
-            self._device_callgraph = prev_callgraph
 
     def check_interface_unit(self, iface: InterfaceUnit) -> None:
         """Type check an interface unit."""
@@ -586,10 +594,11 @@ class PascalTypeChecker(TypeChecker):
                     continue
                 self.import_symbols(interface, use_clause)
 
-        # Check declarations
-        if iface.decls:
-            for decl in iface.decls:
-                self.check_declaration(decl)
+        with self._device_context(getattr(iface, 'is_device', False)):
+            # Check declarations
+            if iface.decls:
+                for decl in iface.decls:
+                    self.check_declaration(decl)
 
     def check_implementation_unit(self, impl: ImplementationUnit) -> None:
         """Type check an implementation unit and validate against its interface."""
@@ -602,6 +611,8 @@ class PascalTypeChecker(TypeChecker):
             else:
                 self.error(f"Interface file for module '{impl.name}' not found", None)
         if iface:
+            if getattr(impl, 'is_device', False) != getattr(iface, 'is_device', False):
+                self.error("device-ness of implementation must match its interface", None)
             self.validate_implementation_against_interface(impl, iface)
 
         if impl.uses:
@@ -618,9 +629,10 @@ class PascalTypeChecker(TypeChecker):
         old_iface = self.current_interface_decls
         self.current_interface_decls = {getattr(decl, 'name', '').lower(): decl for decl in (iface.decls if iface else []) if getattr(decl, 'name', None)}
         try:
-            if impl.decls:
-                for decl in impl.decls:
-                    self.check_declaration(decl)
+            with self._device_context(getattr(impl, 'is_device', False)):
+                if impl.decls:
+                    for decl in impl.decls:
+                        self.check_declaration(decl)
         finally:
             self.current_interface_decls = old_iface
 
