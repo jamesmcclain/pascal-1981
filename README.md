@@ -397,13 +397,13 @@ pascal-1981/
 
 ## Testing
 
-One unified test suite built on Python's stdlib `unittest`, with automatic detection of optional dependencies. Tests are organized by **pipeline layer**, so you can run the subset relevant to your changes without requiring the full LLVM toolchain.
+One unified test suite built on `pytest`, with automatic detection of optional dependencies. Tests are organized by **pipeline layer**, so you can run the subset relevant to your changes without requiring the full LLVM toolchain.
 
 ### Run the entire test suite
 
 ```bash
 # All tests from a source checkout; codegen tests auto-skip if llvmlite/clang are unavailable
-PYTHONPATH=src python3 -m unittest discover -s tests -v
+PYTHONPATH=src python3 -m pytest tests/ -q
 ```
 
 If you installed the package into the active environment, `PYTHONPATH=src` is not
@@ -413,10 +413,10 @@ needed.
 
 ```bash
 # Parser accept/reject corpus + type rules (no llvmlite needed)
-PYTHONPATH=src python3 -m unittest tests.test_parser tests.test_typecheck
+PYTHONPATH=src python3 -m pytest tests/test_parser.py tests/test_typecheck.py -q
 
 # Codegen only (requires llvmlite + clang)
-PYTHONPATH=src python3 -m unittest tests.test_codegen
+PYTHONPATH=src python3 -m pytest tests/test_codegen.py -q
 ```
 
 ### Test Organization
