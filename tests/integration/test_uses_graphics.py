@@ -89,7 +89,7 @@ class TestUsesGraphicsIntegration(unittest.TestCase):
                 project_dir,
                 ['plotbox.ll', 'graphics_impl.ll'],
                 exe_name=exe_name,
-                link_flags=['-Wl,--allow-multiple-definition'],
+                link_flags=[],
             )
             run = subprocess.run([exe_path], capture_output=True, text=True)
             self.assertEqual(run.returncode, 0, msg=run.stderr)
