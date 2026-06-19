@@ -25,7 +25,7 @@ set. The new *engineering* is mostly in the three "beyond" items.
   editing.** (This codebase has repeatedly proven that.)
 - **Green gate** = the condition that must hold before the item is "done." The universal green
   gate, in addition to any stated one: **full suite stays green** (`PYTHONPATH=src python3 -m
-  pytest tests/ -q`, currently `622 passed, 52 subtests`) **and** host/vintage + existing
+  pytest tests/ -q`, currently `629 passed, 52 subtests`) **and** host/vintage + existing
   `DEVICE MODULE` output is unchanged.
 
 **Companion docs.** `docs/cuda-kernel-prescription.md` §1.5 (the decision and the
@@ -137,16 +137,16 @@ the end, then restore in `finally`.
 storage (`decls.py:330`), and the `_device_seg_bridge` (`runtime_builtins.py:330`) all key off
 `is_device_module` — so they work unchanged once the flag is set.
 
-- [ ] **1.4.1 Factor the codegen device-gating** the same way as 1.3.1 (a small
+- [x] **1.4.1 Factor the codegen device-gating** the same way as 1.3.1 (a small
   `_enter_device_codegen()` / `finally` restore, or a context manager) so module and unit share
   it.
-- [ ] **1.4.2 Gate `codegen_interface`** (`codegen/decls.py:87`) on `unit.is_device`: set
+- [x] **1.4.2 Gate `codegen_interface`** (`codegen/decls.py:87`) on `unit.is_device`: set
   `is_device_module = True` + device triple for the body, restore in `finally`.
-- [ ] **1.4.3 Gate `codegen_implementation`** (`codegen/decls.py:93`) likewise on
+- [x] **1.4.3 Gate `codegen_implementation`** (`codegen/decls.py:93`) likewise on
   `unit.is_device`. This is where device routine bodies, `[SPACE]` residence, and the seg-bridge
   actually lower; confirm they emit addrspace-correct IR exactly as the `DEVICE MODULE` primes
   example does.
-- [ ] **1.4.4 Codegen parity tests.** A `DEVICE IMPLEMENTATION OF` with `[SPACE(SHARED)]` /
+- [x] **1.4.4 Codegen parity tests.** A `DEVICE IMPLEMENTATION OF` with `[SPACE(SHARED)]` /
   `[SPACE(GLOBAL)]` arrays and a `MOVESL` bridge, compiled with `--device-triple
   nvptx64-nvidia-cuda`, emits the same `addrspace(3)`/`addrspace(1)` + `ld.shared`→`st.global`
   shape the device-primes `DEVICE MODULE` does. With default `device=x86`, spaces collapse to

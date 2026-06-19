@@ -7,6 +7,7 @@ Declaration code generation
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Any, List, Optional, Tuple, Union
 
 import llvmlite.ir as ir
@@ -19,6 +20,18 @@ from .base import CodegenError, Scope
 
 class DeclsMixin:
     """Mixin for decls functionality."""
+
+    @contextmanager
+    def _device_codegen_context(self, active: bool):
+        """Temporarily switch lowering into device-code mode."""
+        prev_is_device = self.is_device_module
+        if active:
+            self.is_device_module = True
+            self.module.triple = self.device_triple
+        try:
+            yield
+        finally:
+            self.is_device_module = prev_is_device
 
     def codegen(self, unit: Union[ProgramUnit, ModuleUnit, InterfaceUnit, ImplementationUnit]) -> ir.Module:
         """Generate LLVM IR from AST root."""
@@ -74,20 +87,16 @@ class DeclsMixin:
         # A DEVICE MODULE lowers against the device triple, with address spaces
         # live; a plain MODULE keeps the host triple and is byte-identical to
         # before (ads-memory-spaces-design.md S1.2).
-        if getattr(unit, 'is_device', False):
-            self.is_device_module = True
-            self.module.triple = self.device_triple
-        try:
+        with self._device_codegen_context(getattr(unit, 'is_device', False)):
             for decl in unit.decls:
                 self.codegen_decl(decl)
-        finally:
-            self.is_device_module = False
         return self.module
 
     def codegen_interface(self, unit: InterfaceUnit) -> ir.Module:
         """Codegen for INTERFACE unit (declarations only)."""
-        for decl in unit.decls:
-            self.codegen_decl(decl)
+        with self._device_codegen_context(getattr(unit, 'is_device', False)):
+            for decl in unit.decls:
+                self.codegen_decl(decl)
         return self.module
 
     def codegen_implementation(self, unit: ImplementationUnit) -> ir.Module:
@@ -95,26 +104,27 @@ class DeclsMixin:
         old_iface = self.current_interface_decls
         self.current_interface_decls = {getattr(decl, 'name', '').lower(): decl for decl in (unit.interface.decls if unit.interface else []) if getattr(decl, 'name', None)}
         try:
-            for decl in unit.decls:
-                self.codegen_decl(decl)
+            with self._device_codegen_context(getattr(unit, 'is_device', False)):
+                for decl in unit.decls:
+                    self.codegen_decl(decl)
+
+                # Codegen init body if present
+                if unit.init_body:
+                    init_type = ir.FunctionType(ir.IntType(32), [])
+                    init_name = f'pascal_init_{unit.name.lower()}'
+                    init_func = ir.Function(self.module, init_type, name=init_name)
+                    entry_block = init_func.append_basic_block(name='entry')
+                    self.builder = IRBuilder(entry_block)
+                    self.current_function = init_func
+
+                    prev_labels = self.setup_function_labels(unit.init_body)
+                    self.codegen_stmt_list(unit.init_body)
+                    self.label_blocks = prev_labels
+
+                    if not self.builder.block.is_terminated:
+                        self.builder.ret(ir.Constant(ir.IntType(32), 0))
         finally:
             self.current_interface_decls = old_iface
-
-        # Codegen init body if present
-        if unit.init_body:
-            init_type = ir.FunctionType(ir.IntType(32), [])
-            init_name = f'pascal_init_{unit.name.lower()}'
-            init_func = ir.Function(self.module, init_type, name=init_name)
-            entry_block = init_func.append_basic_block(name='entry')
-            self.builder = IRBuilder(entry_block)
-            self.current_function = init_func
-
-            prev_labels = self.setup_function_labels(unit.init_body)
-            self.codegen_stmt_list(unit.init_body)
-            self.label_blocks = prev_labels
-
-            if not self.builder.block.is_terminated:
-                self.builder.ret(ir.Constant(ir.IntType(32), 0))
 
         return self.module
 
