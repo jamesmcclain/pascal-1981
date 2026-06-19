@@ -416,3 +416,36 @@ instance doesn't re-trip them. Line numbers below are from the execution pass, n
     NVPTX/AMDGPU runtime on the VM) — code generated, artifacts intentionally incomplete.
   - Tests: `tests/test_ads_space_step5.py` (type-check accept/reject, GPU addrspace lowering,
     `MOVESR` backward loop, CPU-device addrspace-0 + a `@requires_exe` run, host-unchanged).
+
+## Missing GPU runtime support (what's needed to compile & run device artifacts)
+
+We emit correct `nvptx64`/`amdgcn` LLVM IR today, but turning that IR into a *loadable,
+runnable* GPU artifact needs a vendor toolchain + runtime that this VM does not have. What is
+absent and what to install:
+
+**Common (IR → GPU machine code).** The bundled `llvmlite` LLVM carries the `nvptx64`/`amdgcn`
+backends, so IR→PTX/GCN can in principle be emitted in-process; but assembling and *linking* a
+real device binary, and launching it from the host, needs the vendor stacks below. We also lack
+a host **launch/allocate/transfer** layer (deferred design item) — without it there is no way to
+copy buffers to the device, launch a kernel, and copy results back, even with the runtimes
+installed.
+
+**NVIDIA path.**
+- **CUDA Toolkit** (`nvcc`, `ptxas`, `cuobjdump`, `fatbinary`) — assembles PTX → SASS cubin and
+  bundles fatbinaries. Needs a CUDA-capable GPU + matching **NVIDIA driver** (`libcuda`) to run.
+- **CUDA runtime / driver API** (`libcudart` / `libcuda`) for the host orchestration calls
+  (`cuMemAlloc`/`cuMemcpy*`/`cuLaunchKernel`). Alternatively the **CUDA backend of clang** can
+  consume our PTX/IR. Practically: install the CUDA Toolkit (e.g. `cuda-toolkit-12-x`) and the
+  proprietary driver; confirm with `nvidia-smi` and `ptxas --version`.
+
+**AMD path.**
+- **ROCm** stack: `rocm-llvm`/`lld` (for `amdgcn` codegen + linking), the **HIP** runtime
+  (`libamdhip64`) or the lower-level **HSA runtime** (`libhsa-runtime64`) for allocate/copy/launch,
+  and `amdgpu` kernel driver. Needs a ROCm-supported AMD GPU. Confirm with `rocminfo` /
+  `rocm-smi`.
+
+**CPU fallback (works now, no install).** `device=x86` lowers every space to addrspace 0, so a
+`DEVICE MODULE` compiles and *runs* on the CPU via the existing `clang` path — the
+OpenCL-on-CPU development case. This is the only device target executable on this VM; the
+NVIDIA/AMD paths are code-generation-complete but require the stacks above to assemble, link,
+and launch.
