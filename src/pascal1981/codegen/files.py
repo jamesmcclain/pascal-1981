@@ -51,9 +51,8 @@ class FilesMixin:
         handle = self.builder.load(file_slot)
         fptr = self.builder.bitcast(handle, self.file_fcb_type().as_pointer())
         if touch:
-            touch_fn = self.scope.lookup('pas_file_touch_buffer').llvm_value
-            self.builder.call(touch_fn, [fptr])
-        buf_fn = self.scope.lookup('pas_file_buffer').llvm_value
+            self.builder.call(self.runtime_extern('pas_file_touch_buffer'), [fptr])
+        buf_fn = self.runtime_extern('pas_file_buffer')
         raw = self.builder.call(buf_fn, [fptr])
         return self.builder.bitcast(raw, ir.PointerType(self.llvm_type(elem_type)))
 

@@ -241,7 +241,7 @@ class StringsMixin:
         max_len = self._dest_string_max_len(args[1])
         end_block = self._guard_string_capacity(new_len, max_len, 'insert', enabled=enabled)
         tail_len = self.builder.sub(dst_len, self.builder.sub(pos, one))
-        memmove = self.scope.lookup('memmove').llvm_value
+        memmove = self.runtime_extern('memmove')
         dst_start = self.builder.gep(dst_chars, [self.builder.sub(pos, one)])
         src_start = self.builder.gep(dst_chars, [self.builder.sub(pos, one)])
         self.builder.call(memmove, [self.builder.gep(dst_chars, [self.builder.add(self.builder.sub(pos, one), src_len)]), dst_start, self.builder.zext(tail_len, ir.IntType(64))])
@@ -267,7 +267,7 @@ class StringsMixin:
         zero = ir.Constant(ir.IntType(32), 0)
         start = self.builder.sub(pos, one)
         rem = self.builder.sub(dst_len, self.builder.add(start, count))
-        memmove = self.scope.lookup('memmove').llvm_value
+        memmove = self.runtime_extern('memmove')
         self.builder.call(memmove, [self.builder.gep(dst_chars, [start]), self.builder.gep(dst_chars, [self.builder.add(start, count)]), self.builder.zext(rem, ir.IntType(64))])
         new_len = self.builder.sub(dst_len, count)
         if isinstance(args[0], (Identifier, Designator)) and self.get_string_type_info(getattr(self.scope.lookup(args[0].name), 'type_expr', None))[2]:
@@ -277,26 +277,20 @@ class StringsMixin:
     def builtin_positn(self, args: List[Expression]) -> ir.Value:
         hay_chars, hay_len = self.get_string_chars_and_len(args[0])
         needle_chars, needle_len = self.get_string_chars_and_len(args[1])
-        fn = self.scope.lookup('positn')
-        if not fn:
-            raise CodegenError('Undefined helper: positn')
-        return self.builder.call(fn.llvm_value, [hay_chars, hay_len, needle_chars, needle_len])
+        return self.builder.call(self.runtime_extern('positn'), [hay_chars, hay_len, needle_chars, needle_len])
 
     def builtin_scaneq_scanne(self, lookup_name: str, args: List[Expression]) -> ir.Value:
         L = self.coerce_printf_int(self.codegen_expr(args[0]))
         P = self.codegen_expr(args[1])
         S_chars, S_len = self.get_string_chars_and_len(args[2])
         I = self.coerce_printf_int(self.codegen_expr(args[3]))
-        fn = self.scope.lookup(lookup_name.lower())
-        if not fn:
-            raise CodegenError(f'Undefined helper: {lookup_name.lower()}')
         stop_flag = ir.Constant(ir.IntType(32), 1 if lookup_name == 'SCANEQ' else 0)
         # Pass the first-character pointer together with the explicit character
         # count. The runtime indexes characters 0-based (Pascal position I maps
         # to chars[I-1]); it must not treat the buffer as length-prefixed, since
         # STRING has no length byte and the LSTRING char pointer already points
         # past its own prefix.
-        return self.builder.call(fn.llvm_value, [L, P, S_chars, S_len, I, stop_flag])
+        return self.builder.call(self.runtime_extern(lookup_name.lower()), [L, P, S_chars, S_len, I, stop_flag])
 
     def builtin_encode(self, args: List[Expression]) -> ir.Value:
         dest = args[0].expr if isinstance(args[0], WriteArg) else args[0]
@@ -325,14 +319,11 @@ class StringsMixin:
             val = self.codegen_expr(value_arg)
             if isinstance(val.type, ir.IntType) and val.type.width < 32:
                 val = self.builder.sext(val, ir.IntType(32))
-        fn = self.scope.lookup('encode_value')
-        if not fn:
-            raise CodegenError('Undefined helper: encode_value')
         # encode_value(dest_chars, dest_capacity, dest_raw, value, width, precision, _)
         # dest_raw points at the aggregate base so the runtime can set the
         # LSTRING length-prefix byte after writing the characters.
         return self.builder.call(
-            fn.llvm_value,
+            self.runtime_extern('encode_value'),
             [dest_chars,
              ir.Constant(ir.IntType(32), dest_cap),
              self.builder.bitcast(dest_ptr,
@@ -361,11 +352,8 @@ class StringsMixin:
                         dest_size = sz
                 except Exception:
                     dest_size = 4
-        fn = self.scope.lookup('decode_value')
-        if not fn:
-            raise CodegenError('Undefined helper: decode_value')
         # decode_value(src_chars, src_len, dest_raw, dest_size, ...)
-        return self.builder.call(fn.llvm_value, [
+        return self.builder.call(self.runtime_extern('decode_value'), [
             src_chars, src_len,
             self.builder.bitcast(dest_ptr,
                                  ir.IntType(8).as_pointer()),

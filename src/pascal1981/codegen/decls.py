@@ -496,7 +496,13 @@ class DeclsMixin:
         else:
             # Create function
             func = ir.Function(self.module, func_type, name=decl.name)
-        if attrs.intersection({'PUBLIC', 'EXTERN', 'EXTERNAL'}):
+        # Directive ('extern') and attributes ([PUBLIC]) both request external linkage.
+        # Previously the eager extern dump masked a missing `directive` check here:
+        # pre-registered externs already had linkage='external', so the condition
+        # being False was harmless.  Fixed now so source-level `; extern;` declarations
+        # always emit `declare external` IR regardless of pre-registration.
+        _directive = getattr(decl, 'directive', '') or ''
+        if attrs.intersection({'PUBLIC', 'EXTERN', 'EXTERNAL'}) or _directive.upper() in ('EXTERN', 'EXTERNAL', 'PUBLIC'):
             func.linkage = 'external'
         self._apply_kernel_entry(decl, func)
         self.proc_param_modes[decl.name.lower()] = flat_modes
@@ -562,7 +568,8 @@ class DeclsMixin:
         # Create function
         func = ir.Function(self.module, func_type, name=decl.name)
         attrs = {attr.name.upper() for attr in getattr(decl, 'attributes', [])}
-        if attrs.intersection({'PUBLIC', 'EXTERN', 'EXTERNAL'}):
+        _directive = getattr(decl, 'directive', '') or ''
+        if attrs.intersection({'PUBLIC', 'EXTERN', 'EXTERNAL'}) or _directive.upper() in ('EXTERN', 'EXTERNAL', 'PUBLIC'):
             func.linkage = 'external'
         self._apply_kernel_entry(decl, func)
         self.proc_param_modes[decl.name.lower()] = flat_modes

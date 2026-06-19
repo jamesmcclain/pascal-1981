@@ -1,17 +1,14 @@
-"""Checklist S2.2.2 — device IR carries no host-runtime extern dump.
+"""Checklist S2.2.1 (full/lazy form) — no dead host-runtime externs in any IR.
 
-`_register_predeclared_externs` used to add the whole host-runtime family
-(fillc/fillsc/movel/mover/movesl/movesr/memmove/pas_read_*/...) to *every*
-module at construction, so device IR shipped dead host-runtime `declare`s even
-though the seg-bridge lowers FILLSC/MOVESL/MOVESR inline and host I/O/heap are
-rescinded in device code.  S2.2.1 skips that dump for a device compiland that
-lowers to a GPU triple.
+The lazy registration scheme (replacing the old eager dump) ensures that a
+runtime extern only appears in the emitted module when codegen actually
+references it.  Dead externs — never referenced — never appear in the IR,
+for *every* compile path (host, GPU device, x86 CPU-device).
 
-These are *artifact*-level guards: they compile to LLVM IR and assert on the
+These are artifact-level guards: they compile to LLVM IR and assert on the
 emitted module's symbol references, catching the whole class of leak rather
 than one symbol.  The forbidden set is the union named by the checklist green
-gate (S2.2.2) and the S2.1 trap pair, so this file doubles as the comprehensive
-"no host-runtime symbol in device IR" check.
+gate (S2.2.2) and the S2.1 trap pair.
 """
 
 import os
@@ -130,24 +127,43 @@ class TestDeviceModuleNoHostExterns(unittest.TestCase):
         self.assertEqual(_present(ir), [], ir)
 
 
-class TestHostAndCpuDeviceUnchanged(unittest.TestCase):
-    """The skip is scoped to GPU triples; everything else keeps the externs."""
+class TestLazyExternProperty(unittest.TestCase):
+    """Lazy registration: externs appear IFF codegen references them."""
 
-    def test_plain_unit_still_dumps_externs(self):
+    def test_host_unit_with_no_io_or_strings_has_zero_host_runtime_declares(self):
+        # A plain host UNIT that does no I/O, string ops, or heap allocation
+        # must emit zero host-runtime declares under lazy registration.
         host_iface = "INTERFACE;\nUNIT U (go);\nPROCEDURE go;\nEND;\n"
         host_impl = "IMPLEMENTATION OF U;\nPROCEDURE go;\nBEGIN END;\n.\n"
         ir = _compile_unit(host_iface, host_impl)
-        # Host runtime is linked against, so the predeclared externs remain.
-        self.assertGreater(_refs(ir, 'memmove'), 0)
-        self.assertGreater(_refs(ir, 'movel'), 0)
+        self.assertEqual(_present(ir), [],
+                         f'dead host-runtime externs in plain unit with no I/O:\n{ir}')
+        # No declares at all for an empty procedure body
+        self.assertEqual(ir.count('declare'), 0,
+                         f'unexpected declares in empty host unit:\n{ir}')
 
-    def test_x86_cpu_device_keeps_externs(self):
-        # x86 CPU-device is NOT a GPU triple: it links the host runtime and so
-        # keeps the externs.  This is the deliberate green-safe boundary
-        # (checklist S2.2.1) — byte-identical to pre-change behavior.
+    def test_host_unit_with_movel_only_emits_movel(self):
+        # A unit that uses MOVEL should emit exactly 'movel' and nothing else
+        # from the host-runtime family.  This is the proof that lazy registration
+        # is narrower than the old eager dump.
+        host_iface = "INTERFACE;\nUNIT U (go);\nPROCEDURE go;\nEND;\n"
+        host_impl = ("IMPLEMENTATION OF U;\n"
+                     "VAR a, b: ARRAY[1..4] OF CHAR;\n"
+                     "PROCEDURE go;\nBEGIN MOVEL(ADR a, ADR b, WRD(4)) END;\n.\n")
+        ir = _compile_unit(host_iface, host_impl)
+        self.assertGreater(_refs(ir, 'movel'), 0, 'movel should be referenced')
+        self.assertEqual(_refs(ir, 'memmove'), 0, 'memmove should NOT appear')
+        self.assertEqual(_refs(ir, 'mover'), 0,  'mover should NOT appear')
+
+    def test_x86_cpu_device_unit_without_io_has_no_host_runtime_declares(self):
+        # The lazy form is wider than the old GPU-triple gated skip:
+        # even an x86 CPU-device unit emits zero host-runtime declares when
+        # it doesn't reference any of them (the VADD kernel only does
+        # MOVESL, which is lowered inline by the seg-bridge).
         ir = _compile_unit(_VADD_IFACE, _VADD_IMPL, module_name='VADD')  # default x86 triple
         self.assertIn('target triple = "x86_64-pc-linux-gnu"', ir)
-        self.assertGreater(_refs(ir, 'memmove'), 0)
+        self.assertEqual(_present(ir), [],
+                         f'dead host-runtime externs in x86 device unit:\n{ir}')
 
 
 if __name__ == '__main__':

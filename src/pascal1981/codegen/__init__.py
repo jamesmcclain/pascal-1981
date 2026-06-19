@@ -39,9 +39,9 @@ from .types_map import TypesMapMixin
 class Codegen(CodegenBase, TypesMapMixin, ConstFoldMixin, RuntimeBuiltinsMixin, FilesMixin, SetsMixin, StringsMixin, IoWriteReadMixin, StmtsMixin, DeclsMixin, ExprsMixin):
     """LLVM IR code generator."""
 
-    def __init__(self, verbose: bool = False, source_file: Optional[str] = None, force_flags: Optional[Dict[str, bool]] = None, features: Optional[Dict[str, bool]] = None, device_triple: str = "x86_64-pc-linux-gnu", host_triple: str = "x86_64-pc-linux-gnu", skip_host_runtime_externs: bool = False):
+    def __init__(self, verbose: bool = False, source_file: Optional[str] = None, force_flags: Optional[Dict[str, bool]] = None, features: Optional[Dict[str, bool]] = None, device_triple: str = "x86_64-pc-linux-gnu", host_triple: str = "x86_64-pc-linux-gnu", is_root_compiland: bool = True):
         """Initialize Codegen with all mixins."""
-        super().__init__(verbose=verbose, source_file=source_file, force_flags=force_flags, features=features, device_triple=device_triple, host_triple=host_triple, skip_host_runtime_externs=skip_host_runtime_externs)
+        super().__init__(verbose=verbose, source_file=source_file, force_flags=force_flags, features=features, device_triple=device_triple, host_triple=host_triple, is_root_compiland=is_root_compiland)
 
     # ========================================================================
     # Type System
@@ -81,13 +81,11 @@ def compile_to_llvm(
         merged['RANGECK'] = force_rangeck
     if force_flags:
         merged.update(force_flags)
-    # checklist S2.2.1: only a device compiland (is_device on the unit) that
-    # lowers to a *GPU* triple skips the host-runtime extern dump.  This is the
-    # single place that sees both the AST's device-ness and the target triple,
-    # so the decision is made here and threaded into construction; every other
-    # compile keeps the externs and stays byte-identical.
-    skip_host_runtime_externs = bool(getattr(ast, 'is_device', False)) and _is_gpu_triple(device_triple)
-    codegen = Codegen(verbose=verbose, source_file=source_file, force_flags=merged or None, features=features, device_triple=device_triple, host_triple=host_triple, skip_host_runtime_externs=skip_host_runtime_externs)
+    # Checklist S4.1: only the root compiland (PROGRAM or launchable MODULE)
+    # emits a strong definition of @input/@output; a UNIT emits external
+    # declarations so the linker finds exactly one definition per program.
+    is_root_compiland = not isinstance(ast, (InterfaceUnit, ImplementationUnit))
+    codegen = Codegen(verbose=verbose, source_file=source_file, force_flags=merged or None, features=features, device_triple=device_triple, host_triple=host_triple, is_root_compiland=is_root_compiland)
     module = codegen.codegen(ast)
     return str(module)
 

@@ -36,6 +36,12 @@ class IoWriteReadMixin:
         return ir.Function(self.module, fn_ty, name=name)
 
     def _read_helper(self, name: str, llvm_ptr_ty: ir.Type, extra: Optional[List[ir.Type]] = None) -> ir.Function:
+        # If a canonical factory exists, use it: preserves the correct full
+        # signature (e.g. pas_fread_int is (fcb_ptr, i32*)->i32, not (i32*)->i32).
+        # Previously this worked because _register_predeclared_externs pre-created
+        # the functions; now we must delegate explicitly.
+        if name in self._extern_factories:
+            return self.runtime_extern(name)
         for f in self.module.functions:
             if f.name == name:
                 return f
@@ -82,7 +88,7 @@ class IoWriteReadMixin:
             out_sym = self.scope.lookup('OUTPUT')
             in_fcb = self.builder.bitcast(self.builder.load(in_sym.llvm_value), self.file_fcb_type().as_pointer())
             out_fcb = self.builder.bitcast(self.builder.load(out_sym.llvm_value), self.file_fcb_type().as_pointer())
-            self.builder.call(self.scope.lookup('pas_file_attach_std').llvm_value, [in_fcb, out_fcb])
+            self.builder.call(self.runtime_extern('pas_file_attach_std'), [in_fcb, out_fcb])
         return fcb
 
     def build_write_format_and_args(self, args: List[Union[Expression, WriteArg]]) -> tuple[str, List[ir.Value], Optional[ir.Value]]:
@@ -215,7 +221,7 @@ class IoWriteReadMixin:
         if file_fcb is None:
             self.builder.call(self.printf_func(), [ptr] + printf_args)
         else:
-            self.builder.call(self.scope.lookup('pas_write_fmt').llvm_value, [file_fcb, ptr] + printf_args)
+            self.builder.call(self.runtime_extern('pas_write_fmt'), [file_fcb, ptr] + printf_args)
 
     def builtin_writeln(self, args):
         fmt_str, printf_args, file_fcb = self.build_write_format_and_args(args)
@@ -228,7 +234,7 @@ class IoWriteReadMixin:
         if file_fcb is None:
             self.builder.call(self.printf_func(), [ptr] + printf_args)
         else:
-            self.builder.call(self.scope.lookup('pas_write_fmt').llvm_value, [file_fcb, ptr] + printf_args)
+            self.builder.call(self.runtime_extern('pas_write_fmt'), [file_fcb, ptr] + printf_args)
 
     def _read_ptr(self, arg):
         return self.resolve_designator_ptr(arg if isinstance(arg, Designator) else Designator(arg.name, []))
@@ -303,7 +309,7 @@ class IoWriteReadMixin:
                 raise CodegenError(f"READ/READLN cannot read a value of type {type_label}")
             if is_lstring:
                 if file_fcb is not None:
-                    fn = self.scope.lookup('pas_fread_lstring').llvm_value
+                    fn = self.runtime_extern('pas_fread_lstring')
                     call_args = [file_fcb, self.builder.bitcast(ptr, ir.IntType(8).as_pointer()), ir.Constant(ir.IntType(32), max_len)]
                 else:
                     fn = self._read_helper('pas_read_lstring', ir.IntType(8).as_pointer(), [ir.IntType(32)])
@@ -315,7 +321,7 @@ class IoWriteReadMixin:
                 # and the LSTRING reader; vintage stop/consume behavior is a
                 # differential-probe candidate.
                 if file_fcb is not None:
-                    fn = self.scope.lookup('pas_fread_string').llvm_value
+                    fn = self.runtime_extern('pas_fread_string')
                     call_args = [file_fcb, self.builder.bitcast(ptr, ir.IntType(8).as_pointer()), ir.Constant(ir.IntType(32), max_len)]
                 else:
                     fn = self._read_helper('pas_read_string', ir.IntType(8).as_pointer(), [ir.IntType(32)])
@@ -341,7 +347,7 @@ class IoWriteReadMixin:
         set_slot = self.builder.alloca(self.set_llvm_type(), name='readset_set')
         self.builder.store(set_val, set_slot)
         self.builder.call(
-            self.scope.lookup('pas_freadset').llvm_value,
+            self.runtime_extern('pas_freadset'),
             [file_fcb, self.builder.bitcast(dest_ptr,
                                             ir.IntType(8).as_pointer()),
              ir.Constant(ir.IntType(32), max_len), set_slot])
@@ -358,7 +364,7 @@ class IoWriteReadMixin:
             ty = self.resolve_type_alias(self._pas_type(arg)) if self._pas_type(arg) is not None else None
             if isinstance(ty, (ResolvedFileType, FileType)):
                 target_fcb = self._file_selector_fcb(arg)
-                self.builder.call(self.scope.lookup('pas_fread_filename').llvm_value, [file_fcb, target_fcb])
+                self.builder.call(self.runtime_extern('pas_fread_filename'), [file_fcb, target_fcb])
             else:
                 self._emit_read_target(arg, file_fcb)
 
@@ -374,7 +380,7 @@ class IoWriteReadMixin:
             self._emit_read_target(arg, file_fcb)
         if consume_eol:
             if file_fcb is not None:
-                self.builder.call(self.scope.lookup('pas_freadln_skip').llvm_value, [file_fcb])
+                self.builder.call(self.runtime_extern('pas_freadln_skip'), [file_fcb])
             else:
                 self.builder.call(self._read_helper('pas_readln_skip', ir.VoidType()), [])
 

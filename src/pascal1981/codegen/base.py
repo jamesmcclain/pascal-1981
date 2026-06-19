@@ -89,7 +89,7 @@ class CodegenBase:
     Initializes module state, builder, scope, and shared constants/tables.
     """
 
-    def __init__(self, verbose: bool = False, source_file: Optional[str] = None, force_flags: Optional[Dict[str, bool]] = None, features: Optional[Dict[str, bool]] = None, device_triple: str = "x86_64-pc-linux-gnu", host_triple: str = "x86_64-pc-linux-gnu", skip_host_runtime_externs: bool = False):
+    def __init__(self, verbose: bool = False, source_file: Optional[str] = None, force_flags: Optional[Dict[str, bool]] = None, features: Optional[Dict[str, bool]] = None, device_triple: str = "x86_64-pc-linux-gnu", host_triple: str = "x86_64-pc-linux-gnu", is_root_compiland: bool = True):
         # Each compilation gets its own LLVM context. Identified struct types
         # (used for named records, so self-referential linked-list nodes can
         # build) are interned by name *within a context*; the default global
@@ -113,6 +113,7 @@ class CodegenBase:
         self.is_device_module = False
         self.builder: Optional[IRBuilder] = None
         self.scope = Scope()  # global scope
+        self._root_scope = self.scope  # fixed reference; self.scope moves during function lowering
         # Cache of LLVM identified struct types for named records, keyed by type
         # name. Lets self-referential records (linked-list nodes) build without
         # infinite recursion: the handle is cached before its body is set.
@@ -166,16 +167,17 @@ class CodegenBase:
         # lowered (set by codegen_stmt).  Expression-level runtime checks
         # (INDEXCK, MATHCK, NILCK) read it via check_enabled().
         self._stmt_meta: Optional[Dict[str, bool]] = None
-        # checklist S2.2.1: a device compiland lowering to a GPU triple never
-        # uses the host-runtime extern set (FILLSC/MOVESL/... lower inline via
-        # the seg-bridge; host I/O and heap are rescinded), so dumping these
-        # declares would leave dead host-runtime symbols in device IR.  Skip
-        # the whole set in that case.  Every other compile (host, vintage, and
-        # the x86 CPU-device) registers exactly as before -> byte-identical.
-        self._skip_host_runtime_externs = skip_host_runtime_externs
-        if not skip_host_runtime_externs:
-            self._register_predeclared_externs()
-        self._register_predeclared_files()
+        # Lazy extern registration (checklist S2.2.1 full/lazy form): build a
+        # factory registry now (cheap — no IR emitted), materialise each extern
+        # the first time codegen actually references it via runtime_extern().
+        # Dead externs (never referenced) never appear in the module IR at all,
+        # making "no dead host-runtime declare" hold for every triple — not just
+        # GPU device targets.  The old gated-skip scaffolding is removed.
+        self._build_extern_factories()
+        # INPUT/OUTPUT: root compiland (PROGRAM / MODULE) owns the strong
+        # definition; a UNIT emits declare-only (external global) so the linker
+        # resolves to the single copy in the root (S4.1).
+        self._register_predeclared_files(is_root_compiland)
 
     def _log(self, msg: str) -> None:
         """Emit a diagnostic line to stderr when verbose mode is on."""
@@ -250,132 +252,132 @@ class CodegenBase:
         self.builder.unreachable()
         self.builder.position_at_end(ok_block)
 
-    def _register_predeclared_files(self) -> None:
-        """Declare INPUT and OUTPUT as real predeclared TEXT file handles."""
+    def _register_predeclared_files(self, is_root_compiland: bool = True) -> None:
+        """Declare INPUT and OUTPUT as predeclared TEXT file handles.
+
+        Root compilands (PROGRAM / launchable MODULE) emit a strong global
+        definition — the single owner of these program-wide singletons.
+        Non-root compilands (UNIT interface / implementation) emit an external
+        declaration only; the linker resolves their reference to the root's
+        definition.  This prevents multiple-definition collisions when linking
+        a host program with one or more compiled units (checklist S4.1).
+        """
         text_type = FileType(NamedType('CHAR', None), structure='ASCII')
         for name in ('INPUT', 'OUTPUT'):
             gv = ir.GlobalVariable(self.module, ir.IntType(8).as_pointer(), name=name.lower())
-            gv.initializer = ir.Constant(ir.IntType(8).as_pointer(), None)
+            if is_root_compiland:
+                gv.initializer = ir.Constant(ir.IntType(8).as_pointer(), None)  # strong definition
+            else:
+                gv.linkage = 'external'  # declare-only; definition lives in root compiland
             self.scope.define(name, gv, text_type)
 
-    def _register_predeclared_externs(self) -> None:
-        """Predeclare runtime externs that behave like builtins.
+    def _build_extern_factories(self) -> None:
+        """Build a registry of zero-arg factory callables for every host-runtime extern.
 
-        The flat variants (fillc/movel/mover) take ADRMEM (i8*) addresses; the
-        segmented variants (fillsc/movesl/movesr) take ADSMEM addresses, modeled
-        as a {flat pointer, segment word} pair to match ADS pointers."""
-        ads_ty = ir.LiteralStructType([ir.IntType(8).as_pointer(), ir.IntType(16)])
-        fill_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer(), ir.IntType(16), ir.IntType(8)])
-        seg_fill_ty = ir.FunctionType(ir.IntType(32), [ads_ty, ir.IntType(16), ir.IntType(8)])
-        fillc = ir.Function(self.module, fill_ty, name='fillc')
-        fillc.linkage = 'external'
-        self.scope.define('fillc', fillc, None)
-        fillsc = ir.Function(self.module, seg_fill_ty, name='fillsc')
-        fillsc.linkage = 'external'
-        self.scope.define('fillsc', fillsc, None)
-        mov_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer(), ir.IntType(16)])
-        seg_mov_ty = ir.FunctionType(ir.IntType(32), [ads_ty, ads_ty, ir.IntType(16)])
-        movel = ir.Function(self.module, mov_ty, name='movel')
-        movel.linkage = 'external'
-        self.scope.define('movel', movel, None)
-        mover = ir.Function(self.module, mov_ty, name='mover')
-        mover.linkage = 'external'
-        self.scope.define('mover', mover, None)
-        movesl = ir.Function(self.module, seg_mov_ty, name='movesl')
-        movesl.linkage = 'external'
-        self.scope.define('movesl', movesl, None)
-        movesr = ir.Function(self.module, seg_mov_ty, name='movesr')
-        movesr.linkage = 'external'
-        self.scope.define('movesr', movesr, None)
-        memmove_ty = ir.FunctionType(ir.VoidType(), [ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer(), ir.IntType(64)])
-        memmove_fn = ir.Function(self.module, memmove_ty, name='memmove')
-        memmove_fn.linkage = 'external'
-        self.scope.define('memmove', memmove_fn, None)
-        read_int_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(32).as_pointer()])
-        read_word_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(16).as_pointer()])
-        read_real_ty = ir.FunctionType(ir.IntType(32), [ir.DoubleType().as_pointer()])
-        read_char_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer()])
-        read_lstr_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer(), ir.IntType(32)])
-        read_skip_ty = ir.FunctionType(ir.VoidType(), [])
-        for name, ty in [('pas_read_int', read_int_ty), ('pas_read_word', read_word_ty), ('pas_read_real', read_real_ty), ('pas_read_char', read_char_ty),
-                         ('pas_read_lstring', read_lstr_ty), ('pas_readln_skip', read_skip_ty)]:
-            fn = ir.Function(self.module, ty, name=name)
-            fn.linkage = 'external'
-            self.scope.define(name, fn, None)
-        positn_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer(), ir.IntType(32), ir.IntType(8).as_pointer(), ir.IntType(32)])
-        positn_fn = ir.Function(self.module, positn_ty, name='positn')
-        positn_fn.linkage = 'external'
-        self.scope.define('positn', positn_fn, None)
-        scaneq_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(32), ir.IntType(8), ir.IntType(8).as_pointer(), ir.IntType(32), ir.IntType(32), ir.IntType(32)])
-        scaneq_fn = ir.Function(self.module, scaneq_ty, name='scaneq')
-        scaneq_fn.linkage = 'external'
-        self.scope.define('scaneq', scaneq_fn, None)
-        scanne_fn = ir.Function(self.module, scaneq_ty, name='scanne')
-        scanne_fn.linkage = 'external'
-        self.scope.define('scanne', scanne_fn, None)
-        encode_bool_ty = ir.FunctionType(
-            ir.IntType(32),
-            [ir.IntType(8).as_pointer(), ir.IntType(32),
-             ir.IntType(8).as_pointer(), ir.IntType(32),
-             ir.IntType(32), ir.IntType(32), ir.IntType(32)])
-        encode_fn = ir.Function(self.module, encode_bool_ty, name='encode_value')
-        encode_fn.linkage = 'external'
-        self.scope.define('encode_value', encode_fn, None)
-        decode_fn = ir.Function(self.module, encode_bool_ty, name='decode_value')
-        decode_fn.linkage = 'external'
-        self.scope.define('decode_value', decode_fn, None)
-        malloc_ty = ir.FunctionType(ir.IntType(8).as_pointer(), [ir.IntType(64)])
-        free_ty = ir.FunctionType(ir.VoidType(), [ir.IntType(8).as_pointer()])
-        malloc_fn = ir.Function(self.module, malloc_ty, name='malloc')
-        malloc_fn.linkage = 'external'
-        self.scope.define('malloc', malloc_fn, None)
-        free_fn = ir.Function(self.module, free_ty, name='free')
-        free_fn.linkage = 'external'
-        self.scope.define('free', free_fn, None)
-        # File-control block, one fixed layout for every file type:
-        #   {i32 element-size, i32 structure (0=binary FILE OF T, 1=ASCII/TEXT),
-        #    i32 touched (buffer-accessed flag), i32 mode/eof bookkeeping,
-        #    i8* current-component buffer, i8* runtime handle, i8* bound name}.
-        fcb_ty = self.file_fcb_type()
+        Calling a factory creates the corresponding ir.Function in self.module
+        with external linkage.  Nothing is added to the module until the first
+        call to runtime_extern(name).  Types are computed once here (cheap;
+        no IR emitted) and captured in closures.
+        """
+        m = self.module  # captured by all factories
+        # Shared type shorthands.
+        i8p  = ir.IntType(8).as_pointer()
+        i8   = ir.IntType(8)
+        i16  = ir.IntType(16)
+        i32  = ir.IntType(32)
+        i64  = ir.IntType(64)
+        f64  = ir.DoubleType()
+        void = ir.VoidType()
+        ads_ty  = ir.LiteralStructType([i8p, i16])
+        fcb_ty  = self.file_fcb_type()
         fcb_ptr = fcb_ty.as_pointer()
-        file_buffer_ty = ir.FunctionType(ir.IntType(8).as_pointer(), [fcb_ptr])
-        file_touch_ty = ir.FunctionType(ir.VoidType(), [fcb_ptr])
-        i32 = ir.IntType(32)
-        file_buffer = ir.Function(self.module, file_buffer_ty, name='pas_file_buffer')
-        file_buffer.linkage = 'external'
-        self.scope.define('pas_file_buffer', file_buffer, None)
-        file_touch = ir.Function(self.module, file_touch_ty, name='pas_file_touch_buffer')
-        file_touch.linkage = 'external'
-        self.scope.define('pas_file_touch_buffer', file_touch, None)
-        set_ptr = self.set_llvm_type().as_pointer()
-        for name, ty in [('pas_file_reset', ir.FunctionType(ir.VoidType(), [fcb_ptr])), ('pas_file_rewrite', ir.FunctionType(ir.VoidType(), [fcb_ptr])),
-                         ('pas_file_get', ir.FunctionType(ir.VoidType(), [fcb_ptr])), ('pas_file_put', ir.FunctionType(ir.VoidType(), [fcb_ptr])),
-                         ('pas_file_close', ir.FunctionType(ir.VoidType(), [fcb_ptr])), ('pas_file_discard', ir.FunctionType(ir.VoidType(), [fcb_ptr])),
-                         ('pas_file_assign', ir.FunctionType(ir.VoidType(), [fcb_ptr, ir.IntType(8).as_pointer(), ir.IntType(32)])),
-                         ('pas_fread_filename', ir.FunctionType(ir.VoidType(), [fcb_ptr, fcb_ptr])),
-                         ('pas_freadset', ir.FunctionType(ir.VoidType(), [fcb_ptr, ir.IntType(8).as_pointer(), ir.IntType(32), set_ptr])),
-                         ('pas_file_attach_std', ir.FunctionType(ir.VoidType(), [fcb_ptr, fcb_ptr])), ('pas_file_eof', ir.FunctionType(ir.IntType(32), [fcb_ptr])),
-                         ('pas_file_eoln', ir.FunctionType(ir.IntType(32), [fcb_ptr]))]:
-            fn = ir.Function(self.module, ty, name=name)
+        set_ptr = ir.ArrayType(i64, 4).as_pointer()
+
+        def _f(name: str, ty: ir.FunctionType):
+            """Create one external ir.Function in the module."""
+            fn = ir.Function(m, ty, name=name)
             fn.linkage = 'external'
-            self.scope.define(name, fn, None)
-        write_fmt = ir.Function(self.module, ir.FunctionType(ir.IntType(32), [fcb_ptr, ir.IntType(8).as_pointer()], var_arg=True), name='pas_write_fmt')
-        write_fmt.linkage = 'external'
-        self.scope.define('pas_write_fmt', write_fmt, None)
-        for name, ptr_ty in [('pas_fread_int', ir.IntType(32).as_pointer()), ('pas_fread_word', ir.IntType(16).as_pointer()), ('pas_fread_real', ir.DoubleType().as_pointer()),
-                             ('pas_fread_char', ir.IntType(8).as_pointer())]:
-            fn = ir.Function(self.module, ir.FunctionType(ir.IntType(32), [fcb_ptr, ptr_ty]), name=name)
-            fn.linkage = 'external'
-            self.scope.define(name, fn, None)
-        fread_lstr = ir.Function(self.module, ir.FunctionType(ir.IntType(32), [fcb_ptr, ir.IntType(8).as_pointer(), ir.IntType(32)]), name='pas_fread_lstring')
-        fread_lstr.linkage = 'external'
-        self.scope.define('pas_fread_lstring', fread_lstr, None)
-        fread_str = ir.Function(self.module, ir.FunctionType(ir.IntType(32), [fcb_ptr, ir.IntType(8).as_pointer(), ir.IntType(32)]), name='pas_fread_string')
-        fread_str.linkage = 'external'
-        self.scope.define('pas_fread_string', fread_str, None)
-        fread_skip = ir.Function(self.module, ir.FunctionType(ir.VoidType(), [fcb_ptr]), name='pas_freadln_skip')
-        fread_skip.linkage = 'external'
-        self.scope.define('pas_freadln_skip', fread_skip, None)
+            return fn
+
+        def _mk(name: str, ty: ir.FunctionType):
+            """Return a zero-arg factory that creates the function on first call."""
+            return lambda: _f(name, ty)
+
+        self._extern_factories: Dict[str, Any] = {
+            # ---- fill family -----------------------------------------------
+            'fillc':  _mk('fillc',  ir.FunctionType(i32, [i8p, i16, i8])),
+            'fillsc': _mk('fillsc', ir.FunctionType(i32, [ads_ty, i16, i8])),
+            # ---- move family -----------------------------------------------
+            'movel':  _mk('movel',  ir.FunctionType(i32, [i8p, i8p, i16])),
+            'mover':  _mk('mover',  ir.FunctionType(i32, [i8p, i8p, i16])),
+            'movesl': _mk('movesl', ir.FunctionType(i32, [ads_ty, ads_ty, i16])),
+            'movesr': _mk('movesr', ir.FunctionType(i32, [ads_ty, ads_ty, i16])),
+            # ---- memory ----------------------------------------------------
+            'memmove': _mk('memmove', ir.FunctionType(void, [i8p, i8p, i64])),
+            'malloc':  _mk('malloc',  ir.FunctionType(i8p,  [i64])),
+            'free':    _mk('free',    ir.FunctionType(void, [i8p])),
+            # ---- string helpers --------------------------------------------
+            'positn':       _mk('positn',       ir.FunctionType(i32, [i8p, i32, i8p, i32])),
+            'scaneq':       _mk('scaneq',       ir.FunctionType(i32, [i32, i8, i8p, i32, i32, i32])),
+            'scanne':       _mk('scanne',       ir.FunctionType(i32, [i32, i8, i8p, i32, i32, i32])),
+            'encode_value': _mk('encode_value', ir.FunctionType(i32, [i8p, i32, i8p, i32, i32, i32, i32])),
+            'decode_value': _mk('decode_value', ir.FunctionType(i32, [i8p, i32, i8p, i32, i32, i32, i32])),
+            # ---- stdin read family -----------------------------------------
+            'pas_read_int':    _mk('pas_read_int',    ir.FunctionType(i32,  [i32.as_pointer()])),
+            'pas_read_word':   _mk('pas_read_word',   ir.FunctionType(i32,  [i16.as_pointer()])),
+            'pas_read_real':   _mk('pas_read_real',   ir.FunctionType(i32,  [f64.as_pointer()])),
+            'pas_read_char':   _mk('pas_read_char',   ir.FunctionType(i32,  [i8p])),
+            'pas_read_lstring':_mk('pas_read_lstring',ir.FunctionType(i32,  [i8p, i32])),
+            'pas_readln_skip': _mk('pas_readln_skip', ir.FunctionType(void, [])),
+            # ---- file-based read family ------------------------------------
+            'pas_fread_int':    _mk('pas_fread_int',    ir.FunctionType(i32,  [fcb_ptr, i32.as_pointer()])),
+            'pas_fread_word':   _mk('pas_fread_word',   ir.FunctionType(i32,  [fcb_ptr, i16.as_pointer()])),
+            'pas_fread_real':   _mk('pas_fread_real',   ir.FunctionType(i32,  [fcb_ptr, f64.as_pointer()])),
+            'pas_fread_char':   _mk('pas_fread_char',   ir.FunctionType(i32,  [fcb_ptr, i8p])),
+            'pas_fread_lstring':_mk('pas_fread_lstring',ir.FunctionType(i32,  [fcb_ptr, i8p, i32])),
+            'pas_fread_string': _mk('pas_fread_string', ir.FunctionType(i32,  [fcb_ptr, i8p, i32])),
+            'pas_freadln_skip': _mk('pas_freadln_skip', ir.FunctionType(void, [fcb_ptr])),
+            'pas_freadset':     _mk('pas_freadset',     ir.FunctionType(void, [fcb_ptr, i8p, i32, set_ptr])),
+            'pas_fread_filename':_mk('pas_fread_filename', ir.FunctionType(void, [fcb_ptr, fcb_ptr])),
+            # ---- file control ----------------------------------------------
+            'pas_file_buffer':       _mk('pas_file_buffer',       ir.FunctionType(i8p,  [fcb_ptr])),
+            'pas_file_touch_buffer': _mk('pas_file_touch_buffer', ir.FunctionType(void, [fcb_ptr])),
+            'pas_file_reset':        _mk('pas_file_reset',        ir.FunctionType(void, [fcb_ptr])),
+            'pas_file_rewrite':      _mk('pas_file_rewrite',      ir.FunctionType(void, [fcb_ptr])),
+            'pas_file_get':          _mk('pas_file_get',          ir.FunctionType(void, [fcb_ptr])),
+            'pas_file_put':          _mk('pas_file_put',          ir.FunctionType(void, [fcb_ptr])),
+            'pas_file_close':        _mk('pas_file_close',        ir.FunctionType(void, [fcb_ptr])),
+            'pas_file_discard':      _mk('pas_file_discard',      ir.FunctionType(void, [fcb_ptr])),
+            'pas_file_assign':       _mk('pas_file_assign',       ir.FunctionType(void, [fcb_ptr, i8p, i32])),
+            'pas_file_attach_std':   _mk('pas_file_attach_std',   ir.FunctionType(void, [fcb_ptr, fcb_ptr])),
+            'pas_file_eof':          _mk('pas_file_eof',          ir.FunctionType(i32,  [fcb_ptr])),
+            'pas_file_eoln':         _mk('pas_file_eoln',         ir.FunctionType(i32,  [fcb_ptr])),
+            # ---- write -----------------------------------------------------
+            'pas_write_fmt': _mk('pas_write_fmt', ir.FunctionType(i32, [fcb_ptr, i8p], var_arg=True)),
+        }
+
+    def runtime_extern(self, name: str) -> ir.Function:
+        """Return the ir.Function for a named host-runtime extern, materialising
+        it on first reference (lazy registration).
+
+        - Checks scope first (O(log n), covers the common second-reference case).
+        - Falls back to a module.functions scan as a safety net for functions
+          already created by _read_helper / _runtime_func (which bypass scope).
+        - Creates from the factory registry on the first true reference, then
+          caches the result in the root scope so all future calls hit path 1.
+        """
+        sym = self.scope.lookup(name)
+        if sym is not None:
+            return sym.llvm_value
+        # Safety net: created by _read_helper/_runtime_func without going through scope
+        for f in self.module.functions:
+            if f.name == name:
+                self._root_scope.define(name, f, None)
+                return f
+        # First reference: materialise from factory
+        fn = self._extern_factories[name]()
+        self._root_scope.define(name, fn, None)
+        return fn
 
     def file_fcb_type(self) -> ir.Type:
         """The file-control-block layout: [i32 element-size, i32 structure,

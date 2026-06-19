@@ -111,7 +111,7 @@ class RuntimeBuiltinsMixin:
                 alloc_size = 0
         if alloc_size <= 0:
             alloc_size = 8
-        raw = self.builder.call(self.scope.lookup('malloc').llvm_value, [ir.Constant(ir.IntType(64), alloc_size)])
+        raw = self.builder.call(self.runtime_extern('malloc'), [ir.Constant(ir.IntType(64), alloc_size)])
         casted = self.builder.bitcast(raw, self.llvm_type(sym.type_expr))
         self.builder.store(casted, ptr_addr)
 
@@ -128,14 +128,11 @@ class RuntimeBuiltinsMixin:
             raise CodegenError('DISPOSE requires a pointer variable')
         ptr_val = self.builder.load(ptr_addr)
         raw = self.builder.bitcast(ptr_val, ir.IntType(8).as_pointer())
-        self.builder.call(self.scope.lookup('free').llvm_value, [raw])
+        self.builder.call(self.runtime_extern('free'), [raw])
         self.builder.store(ir.Constant(self.llvm_type(sym.type_expr), None), ptr_addr)
 
     def _file_helper(self, name: str) -> ir.Function:
-        fn = self.scope.lookup(name)
-        if not fn:
-            raise CodegenError(f'Undefined runtime helper: {name}')
-        return fn.llvm_value
+        return self.runtime_extern(name)
 
     def _builtin_file_op(self, pas_name: str, helper_name: str, args: List[Expression]) -> None:
         if len(args) != 1:
@@ -304,10 +301,7 @@ class RuntimeBuiltinsMixin:
         src = self.codegen_expr(args[0])
         dst = self.codegen_expr(args[1])
         length = self.codegen_expr(args[2])
-        fn = self.scope.lookup(name)
-        if not fn:
-            raise CodegenError(f'Undefined procedure: {name}')
-        self.builder.call(fn.llvm_value, [src, dst, length])
+        self.builder.call(self.runtime_extern(name.lower()), [src, dst, length])
 
     def _as_i8_space_ptr(self, ptr: ir.Value) -> ir.Value:
         """Reinterpret a (possibly addrspace-qualified) pointer as i8* in the

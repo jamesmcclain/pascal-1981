@@ -106,7 +106,7 @@ class TestDevicePrimesIntegration(unittest.TestCase):
             ],
             link_ir_relpaths=['kernel.ll', 'main.ll'],
             exe_name='primes',
-            link_flags=['-Wl,--allow-multiple-definition'],
+            link_flags=[],
         )
         self.assertEqual(rc, 0, msg=err)
         self.assertEqual([line.strip() for line in out.splitlines() if line.strip()], _EXPECTED)
