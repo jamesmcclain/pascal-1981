@@ -60,6 +60,17 @@ class Scope:
         return None
 
 
+def _is_gpu_triple(triple: str) -> bool:
+    """True for real GPU target triples (NVPTX / AMDGPU).
+
+    Single source of truth shared by addrspace lowering (_space_addrspace) and
+    the device host-runtime-extern skip (checklist S2.2.1).  The x86 CPU-device
+    triple is deliberately *not* a GPU triple: there address spaces collapse to
+    0 and device code still links the host runtime, so its externs stay (the
+    green-safe boundary)."""
+    return triple.startswith('nvptx') or triple.startswith('amdgcn')
+
+
 _SCALAR_SIZES = {
     'INTEGER': 2,
     'INTEGER32': 4,
@@ -78,7 +89,7 @@ class CodegenBase:
     Initializes module state, builder, scope, and shared constants/tables.
     """
 
-    def __init__(self, verbose: bool = False, source_file: Optional[str] = None, force_flags: Optional[Dict[str, bool]] = None, features: Optional[Dict[str, bool]] = None, device_triple: str = "x86_64-pc-linux-gnu", host_triple: str = "x86_64-pc-linux-gnu"):
+    def __init__(self, verbose: bool = False, source_file: Optional[str] = None, force_flags: Optional[Dict[str, bool]] = None, features: Optional[Dict[str, bool]] = None, device_triple: str = "x86_64-pc-linux-gnu", host_triple: str = "x86_64-pc-linux-gnu", skip_host_runtime_externs: bool = False):
         # Each compilation gets its own LLVM context. Identified struct types
         # (used for named records, so self-referential linked-list nodes can
         # build) are interned by name *within a context*; the default global
@@ -155,7 +166,15 @@ class CodegenBase:
         # lowered (set by codegen_stmt).  Expression-level runtime checks
         # (INDEXCK, MATHCK, NILCK) read it via check_enabled().
         self._stmt_meta: Optional[Dict[str, bool]] = None
-        self._register_predeclared_externs()
+        # checklist S2.2.1: a device compiland lowering to a GPU triple never
+        # uses the host-runtime extern set (FILLSC/MOVESL/... lower inline via
+        # the seg-bridge; host I/O and heap are rescinded), so dumping these
+        # declares would leave dead host-runtime symbols in device IR.  Skip
+        # the whole set in that case.  Every other compile (host, vintage, and
+        # the x86 CPU-device) registers exactly as before -> byte-identical.
+        self._skip_host_runtime_externs = skip_host_runtime_externs
+        if not skip_host_runtime_externs:
+            self._register_predeclared_externs()
         self._register_predeclared_files()
 
     def _log(self, msg: str) -> None:
@@ -176,8 +195,7 @@ class CodegenBase:
         """
         if not space_ord:  # None or 0 (HOST)
             return 0
-        triple = self.device_triple
-        if triple.startswith('nvptx') or triple.startswith('amdgcn'):
+        if _is_gpu_triple(self.device_triple):
             return {1: 1, 2: 3, 3: 4, 4: 5}.get(space_ord, 0)
         return 0  # device=x86 (CPU-device): spaces collapse to addrspace 0
 

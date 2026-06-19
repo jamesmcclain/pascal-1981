@@ -222,15 +222,31 @@ movesl/movesr/memmove/pas_read_int/…` to **every** module at construction, hos
 or not — so device IR carries dead host-runtime `declare`s. The seg-bridge intercept
 (`_device_seg_bridge`) does **not** use these in device code. (Prescription §2.3.A2.)
 
-- [ ] **2.2.1 Gate or lazily register the dump.** Either (preferred, wider) register these
+- [x] **2.2.1 Gate or lazily register the dump.** Either (preferred, wider) register these
   externs **on demand** at first reference, or (minimal, green-safe) **skip** the host-runtime
   set when `is_device_module` and the unit lowers to a GPU triple. Start with the gated skip.
-- [ ] **2.2.2 Emitted-IR guard test (the durable check).** Compile the device-unit vector-add
+  **Implemented (gated skip).** The dump runs in `__init__`, *before* `is_device_module` is set,
+  so the skip is decided in `compile_to_llvm` — the one site holding both `ast.is_device` and the
+  target triple — and threaded in via a new `skip_host_runtime_externs` constructor flag
+  (`getattr(ast,'is_device',False) and _is_gpu_triple(device_triple)`). Scope is GPU-triple only;
+  x86 CPU-device keeps the externs (it links the host runtime). The wider lazy form is left as the
+  documented follow-up. See `docs/device-unit-phase2.2-notes.md` §1–§3.
+- [x] **2.2.2 Emitted-IR guard test (the durable check).** Compile the device-unit vector-add
   and primes to `nvptx64` and assert the module declares/references **none** of
   `{abort, fflush, memmove, movel, mover, movesl, movesr, fillc, fillsc, pas_read_int,
   pas_read_word, pas_read_real}`. Assert on the **artifact**, not the checker — this catches the
-  whole class of leak, not just today's instance.
-- **Green gate:** device IR has no host-runtime declares; host IR unchanged.
+  whole class of leak, not just today's instance. **Done** —
+  `tests/test_device_no_host_externs.py` asserts the full forbidden set absent (and zero
+  `declare`s) for a vector-add `DEVICE UNIT` on both `nvptx64` and `amdgcn` and for a single-file
+  `DEVICE MODULE`, with negative assertions that a plain unit and the x86 CPU-device still carry
+  the externs.
+- **Green gate:** device IR has no host-runtime declares; host IR unchanged. **Met** for
+  GPU-triple device compiles (proven by `tests/test_device_no_host_externs.py`); host/vintage,
+  plain `MODULE`, and x86 CPU-device IR are byte-identical to the pre-change (Phase-2.1) tree
+  (golden compare). **Note:** the skip is GPU-triple-scoped, so the x86-device CPU-link path
+  (e.g. `tests/integration/test_device_primes.py`) is unchanged and still needs
+  `-Wl,--allow-multiple-definition`; retiring that flag awaits the wider lazy-registration form
+  of 2.2.1 (see notes §3).
 
 ### 2.3 Emit entry points, not just device functions
 
