@@ -19,8 +19,9 @@ get an actual GPU kernel to **launch, run, and return a result** on real hardwar
 
 **Progress summary (2026-06-19):** Milestones A (self-contained IR) and B (entry points) are
 **complete**. §1.5 (DEVICE UNIT foundation, USES fix, init-block rescission, integration-test
-tier) is **complete**. Milestones C (parallel execution model), D (host orchestration), and E
-(AMDGPU stack) remain prescribed. Suite: **705 passed, 63 subtests**.
+tier) is **complete**. Milestone C (parallel execution model) is **planned and ready to start** —
+see the build sequence in `docs/milestone-c-parallel-execution-plan.md`. Milestones D (host
+orchestration) and E (AMDGPU stack) remain prescribed. Suite: **705 passed, 63 subtests**.
 
 ---
 
@@ -321,6 +322,10 @@ host IR byte-identical.
 ---
 
 ## 4. Milestone C - the parallel execution model (what makes a kernel *viable*)
+
+> **Build sequence:** `docs/milestone-c-parallel-execution-plan.md` turns this section
+> into ordered, green-gated items (index intrinsics, `SYNCTHREADS`, the grid-stride
+> CPU-device correctness contract, the `INTEGER32` index-width decision).
 
 **This is the §4 gap, and the direct answer to "what language extensions do I need for viable
 parallel kernels?"** A kernel with no thread indices is just a slow serial function that
