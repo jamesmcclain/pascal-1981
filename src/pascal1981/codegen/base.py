@@ -78,7 +78,7 @@ class CodegenBase:
     Initializes module state, builder, scope, and shared constants/tables.
     """
 
-    def __init__(self, verbose: bool = False, source_file: Optional[str] = None, force_flags: Optional[Dict[str, bool]] = None, features: Optional[Dict[str, bool]] = None, device_triple: str = "x86_64-pc-linux-gnu"):
+    def __init__(self, verbose: bool = False, source_file: Optional[str] = None, force_flags: Optional[Dict[str, bool]] = None, features: Optional[Dict[str, bool]] = None, device_triple: str = "x86_64-pc-linux-gnu", host_triple: str = "x86_64-pc-linux-gnu"):
         # Each compilation gets its own LLVM context. Identified struct types
         # (used for named records, so self-referential linked-list nodes can
         # build) are interned by name *within a context*; the default global
@@ -87,7 +87,10 @@ class CodegenBase:
         # name would collide. A fresh context per module keeps them isolated.
         self.module = ir.Module(name="pascal_program", context=ir.Context())
         self.source_file = source_file
-        self.module.triple = "x86_64-pc-linux-gnu"  # Standard Linux target (host)
+        # Lowering target for host MODULE / PROGRAM units. Defaults to x86 Linux;
+        # override with --host-triple for cross-compilation of the host side.
+        self.host_triple = host_triple
+        self.module.triple = host_triple
         # Lowering target for DEVICE MODULE units. Defaults to x86 (CPU-device),
         # which collapses every address space to addrspace 0; override with a
         # GPU triple (nvptx64.../amdgcn...) to get space-specific lowering

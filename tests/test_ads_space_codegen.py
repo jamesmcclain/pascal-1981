@@ -34,6 +34,18 @@ class TestDeviceTriple(unittest.TestCase):
         ir = _compile("MODULE M; VAR x: INTEGER; .")
         self.assertIn('target triple = "x86_64-pc-linux-gnu"', ir)
 
+    def test_host_triple_override_drives_host_units(self):
+        ir = _compile("PROGRAM P; VAR x: INTEGER; BEGIN x := 1 END.",
+                      host_triple='aarch64-unknown-linux-gnu')
+        self.assertIn('target triple = "aarch64-unknown-linux-gnu"', ir)
+
+    def test_host_and_device_triples_are_independent(self):
+        # A DEVICE MODULE uses the device triple regardless of the host triple.
+        ir = _compile("DEVICE MODULE M; VAR g: ADS(GLOBAL) OF INTEGER; .",
+                      host_triple='aarch64-unknown-linux-gnu',
+                      device_triple='nvptx64-nvidia-cuda')
+        self.assertIn('target triple = "nvptx64-nvidia-cuda"', ir)
+
 
 class TestAddrspaceLowering(unittest.TestCase):
     def test_space_table_on_gpu_triple(self):

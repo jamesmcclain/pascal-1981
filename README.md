@@ -273,8 +273,27 @@ triple the spaces map `GLOBAL→1, SHARED→3, CONSTANT→4, LOCAL→5`.
 
 ### How to build device code
 
-**Today (Python API).** The device triple is currently a `compile_to_llvm`
-parameter, not yet a CLI flag — so device builds go through the package API:
+Two CLI flags select the target triples, independently:
+
+- `--host-triple TRIPLE` — the triple for host `MODULE`/`PROGRAM` units
+  (default `x86_64-pc-linux-gnu`).
+- `--device-triple TRIPLE` — the triple for `DEVICE MODULE` units; set it to
+  `nvptx64-nvidia-cuda` or `amdgcn-amd-amdhsa` for a real GPU. It defaults to the
+  host x86 triple (the CPU-device case, where address spaces collapse to
+  addrspace 0).
+
+```bash
+# CPU device (runnable here): spaces collapse to addrspace 0
+pascal1981 kernel.pas kernel.ll
+
+# GPU device: IR carries addrspace(1)/addrspace(3)/... (needs a GPU toolchain to run)
+pascal1981 --device-triple nvptx64-nvidia-cuda kernel.pas kernel.ll
+
+# Cross-compile the host side too (triples are independent)
+pascal1981 --host-triple aarch64-unknown-linux-gnu kernel.pas kernel.ll
+```
+
+The same triples are available on the `compile_to_llvm` package API:
 
 ```python
 from pascal1981.codegen import compile_to_llvm
@@ -284,10 +303,7 @@ from pascal1981.parser import parse_file
 ast = parse_file("kernel.pas")
 assert PascalTypeChecker().check(ast).success
 
-# CPU device (runnable here): spaces collapse to addrspace 0
-ir_cpu = compile_to_llvm(ast)                                   # device defaults to x86
-
-# GPU device (IR emitted; needs an NVPTX/AMDGPU toolchain to run)
+ir_cpu = compile_to_llvm(ast)                                    # CPU device (x86)
 ir_gpu = compile_to_llvm(ast, device_triple="nvptx64-nvidia-cuda")
 ```
 
@@ -304,9 +320,9 @@ LLVM IR, but producing and running a real GPU artifact needs an NVIDIA/AMD
 toolchain and runtime that this project does not bundle — so on a host without a
 GPU runtime that path is code-generation-complete but not executable.
 
-**Future.** A `--device-triple` CLI flag, the host launch/allocate/transfer API,
-kind-aware `uses`, and `KERNEL` marking are planned but not yet implemented; see
-the design record's *Out of Scope* section and the implementation plan.
+**Future.** The host launch/allocate/transfer API, kind-aware `uses`, and
+`KERNEL` marking are planned but not yet implemented; see the design record's
+*Out of Scope* section and the implementation plan.
 
 
 ## Project Scope
