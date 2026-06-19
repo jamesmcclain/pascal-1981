@@ -31,7 +31,7 @@ class TestDeviceInterfaceContext(unittest.TestCase):
             "END;\n"
         )
         self.assertFalse(r.success)
-        self.assertIn("DEVICE MODULE", _errs(r))
+        self.assertIn("device code", _errs(r).lower())
 
 
 class TestDeviceImplementationRecissions(unittest.TestCase):
@@ -55,7 +55,10 @@ class TestDeviceImplementationRecissions(unittest.TestCase):
             "PROCEDURE loop; BEGIN END;\n"
             ".\n"
         )
-        self.assertIn("host i/o", self._err(src))
+        err = self._err(src)
+        self.assertIn("host i/o", err)
+        self.assertIn("device code", err)
+        self.assertNotIn("device module", err)
 
     def test_new_banned_in_device_implementation(self):
         src = (
@@ -66,7 +69,10 @@ class TestDeviceImplementationRecissions(unittest.TestCase):
             "PROCEDURE loop; BEGIN END;\n"
             ".\n"
         )
-        self.assertIn("dynamic allocation", self._err(src))
+        err = self._err(src)
+        self.assertIn("dynamic allocation", err)
+        self.assertIn("device code", err)
+        self.assertNotIn("device module", err)
 
     def test_recursion_banned_in_device_implementation(self):
         src = (
@@ -75,7 +81,10 @@ class TestDeviceImplementationRecissions(unittest.TestCase):
             "PROCEDURE loop; BEGIN loop; END;\n"
             ".\n"
         )
-        self.assertIn("recursion", self._err(src))
+        err = self._err(src)
+        self.assertIn("recursion", err)
+        self.assertIn("device code", err)
+        self.assertNotIn("device module", err)
 
     def test_same_constructs_allowed_in_plain_implementation(self):
         plain_iface = (

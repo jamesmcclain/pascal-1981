@@ -16,12 +16,12 @@ class TestSpaceRequiresDeviceModule(unittest.TestCase):
     def test_ads_space_type_outside_device_rejected(self):
         r = typecheck_source("MODULE M; TYPE p = ADS(GLOBAL) OF REAL; .")
         self.assertFalse(r.success)
-        self.assertIn("DEVICE MODULE", _errs(r))
+        self.assertIn("device code", _errs(r).lower())
 
     def test_space_attribute_outside_device_rejected(self):
         r = typecheck_source("MODULE M; VAR [SPACE(GLOBAL)] g: REAL; .")
         self.assertFalse(r.success)
-        self.assertIn("DEVICE MODULE", _errs(r))
+        self.assertIn("device code", _errs(r).lower())
 
     def test_ads_space_type_inside_device_accepted(self):
         r = typecheck_source("DEVICE MODULE M; TYPE p = ADS(GLOBAL) OF REAL; .")

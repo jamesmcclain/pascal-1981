@@ -133,9 +133,9 @@ class PascalTypeChecker(TypeChecker):
             return
         space = ptr_type.space if ptr_type.space is not None else 0  # default HOST
         if space == 0 and self.in_device_module:
-            self.error("cannot dereference a HOST-space pointer inside a DEVICE MODULE", node)
+            self.error("cannot dereference a HOST-space pointer inside device code", node)
         elif space != 0 and not self.in_device_module:
-            self.error("cannot dereference a device-space pointer outside a DEVICE MODULE", node)
+            self.error("cannot dereference a device-space pointer outside device code", node)
 
     # First recission tranche enforced as module-scoped checker bans inside a
     # DEVICE MODULE (implementation plan Step 0.5; design S1.2/S9). The set is
@@ -160,10 +160,10 @@ class PascalTypeChecker(TypeChecker):
             return
         up = name.upper()
         if up in self._DEVICE_BANNED_HEAP:
-            self.error(f"dynamic allocation ('{up}') is not available in a DEVICE MODULE", node)
+            self.error(f"dynamic allocation ('{up}') is not available in device code", node)
             return
         if up in self._DEVICE_BANNED_IO:
-            self.error(f"host I/O ('{up}') is not available in a DEVICE MODULE", node)
+            self.error(f"host I/O ('{up}') is not available in device code", node)
             return
         current = None
         if self.current_procedure is not None and self.current_procedure.name:
@@ -199,7 +199,7 @@ class PascalTypeChecker(TypeChecker):
             if reaches_self(caller):
                 node = edges[0][1] if edges else None
                 self.error(
-                    f"recursion is not available in a DEVICE MODULE "
+                    f"recursion is not available in device code "
                     f"(routine '{caller}' is part of a call cycle)", node)
 
     @contextmanager
@@ -727,7 +727,7 @@ class PascalTypeChecker(TypeChecker):
                 if residence is None:
                     self.error("invalid address space in [SPACE(...)] attribute", decl)
                 elif not self.in_device_module:
-                    self.error("address spaces require a DEVICE MODULE", decl)
+                    self.error("address spaces require device code", decl)
 
         # Add each variable to the symbol table
         for name in decl.names:
@@ -994,7 +994,7 @@ class PascalTypeChecker(TypeChecker):
             # table or CFG reducibility analysis to draw a finer line. Outside a
             # device module GOTO keeps its existing (unchecked) behavior.
             if self.in_device_module:
-                self.error("GOTO is not available in a DEVICE MODULE", stmt)
+                self.error("GOTO is not available in device code", stmt)
 
     def check_with_stmt(self, stmt: WithStmt) -> None:
         """Type check a WITH statement.
@@ -1940,7 +1940,7 @@ class PascalTypeChecker(TypeChecker):
                     # is fine (a single shift) and is not affected here.
                     if self.in_device_module and not self.is_constant_set_element(el):
                         self.error("dynamic set-range construction (a set range with a "
-                                   "non-constant bound) is not available in a DEVICE MODULE", el)
+                                   "non-constant bound) is not available in device code", el)
                         return None
                     cur_type = low_type
                 else:
@@ -2601,7 +2601,7 @@ class PascalTypeChecker(TypeChecker):
                 if space_ord is None:
                     self.error(f"invalid address space in {flavor} type", type_expr)
                 elif not self.in_device_module:
-                    self.error("address spaces require a DEVICE MODULE", type_expr)
+                    self.error("address spaces require device code", type_expr)
             target = base_type if base_type else CHAR_TYPE
             return PointerType(target, flavor=flavor, space=space_ord)
         else:

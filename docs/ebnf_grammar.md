@@ -57,12 +57,13 @@ interface_unit =
        DEVICE INTERFACE selects the device dialect. *)
 
 implementation_unit =
-    [ include_directive ]
     [ "DEVICE" ]
     "IMPLEMENTATION" "OF" identifier ";"
     [ uses_clause ]
     implementation_block "." ;
-    (* DEVICE IMPLEMENTATION selects the device dialect. *)
+    (* DEVICE IMPLEMENTATION selects the device dialect. The contextual
+       DEVICE prefix is recognized at compilation-unit start, immediately
+       before IMPLEMENTATION. *)
 
 
 (* ═══════════════════════════════════════════════════════════════════
