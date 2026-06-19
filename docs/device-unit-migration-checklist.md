@@ -198,14 +198,22 @@ Today the math-overflow check (`mathck`) and friends emit host `fflush`+`abort` 
 device IR via `emit_runtime_abort` (`runtime_builtins.py:45`, called `:201`); the choke point
 for "is this check active" is `check_enabled` (`codegen/base.py`). (Prescription §2.3.A1.)
 
-- [ ] **2.1.1 Disable host-trapping checks in device code.** Make `check_enabled` return
+- [x] **2.1.1 Disable host-trapping checks in device code.** Make `check_enabled` return
   `False` for `MATHCK`/`RANGECK`/`INDEXCK`/`NILCK`/`STACKCK` when `is_device_module`. Cheapest,
-  and matches GPU reality (those traps don't exist there).
+  and matches GPU reality (those traps don't exist there). **Implemented** via a shared
+  `_device_checks_suppressed(flag)` predicate (`codegen/base.py`) consulted by **both**
+  `check_enabled` and `effective_flag` (`codegen/stmts.py`) — the latter is required because
+  `RANGECK` (the `CASE`-no-match trap and string-capacity guard) is evaluated through
+  `effective_flag`, *not* `check_enabled`, so gating only `check_enabled` would have left those
+  two `abort` sites firing. See `docs/device-unit-phase2.1-notes.md` §1.
 - [ ] **2.1.2 (Optional, later) device trap instead of disable.** If guard rails are wanted
   on-device, emit `llvm.trap()` (NVPTX `trap;`, AMDGPU `s_trap`) instead of the `fflush`+`abort`
   host pair when `is_device_module`. Defer; do 2.1.1 first.
 - **Green gate:** a `DEVICE UNIT` (or `DEVICE MODULE`) compiled to `nvptx64` contains **zero**
   `call … @abort` / `@fflush`; host IR byte-identical (the gate is `is_device_module`).
+  **Met** — proven by `tests/test_device_no_runtime_checks.py` (artifact-level assert on emitted
+  IR for both the unit and module shapes, plus host-still-traps counterparts) and a golden
+  byte-identical compare of host/`MODULE`-on-host output.
 
 ### 2.2 Stop dumping predeclared externs unconditionally
 

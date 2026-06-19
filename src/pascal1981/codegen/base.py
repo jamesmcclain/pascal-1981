@@ -181,11 +181,36 @@ class CodegenBase:
             return {1: 1, 2: 3, 3: 4, 4: 5}.get(space_ord, 0)
         return 0  # device=x86 (CPU-device): spaces collapse to addrspace 0
 
+    # Runtime-check flags whose failure path lowers to a *host* trap
+    # (fflush+abort, via emit_runtime_abort / _emit_case_no_match_trap /
+    # _guard_string_capacity).  In device code those host symbols don't exist,
+    # so the checks are suppressed wholesale (checklist S2.1.1; prescription
+    # S2.3.A1).  INITCK is deliberately excluded: it zero-initializes rather
+    # than trapping, so it is harmless — and arguably desirable — on device.
+    _HOST_TRAPPING_CHECKS = frozenset({'MATHCK', 'RANGECK', 'INDEXCK', 'NILCK', 'STACKCK'})
+
+    def _device_checks_suppressed(self, flag: str) -> bool:
+        """True when a host-trapping runtime check must be elided because we
+        are currently lowering device code.
+
+        Single chokepoint shared by the two flag-evaluation paths
+        (check_enabled for expression-level MATHCK/INDEXCK/NILCK, and
+        effective_flag for statement-level RANGECK).  Fires only under
+        is_device_module, so host/vintage and DEVICE-MODULE-on-host lowering
+        stay byte-identical; on a GPU triple it is what makes device IR carry
+        zero abort/fflush (checklist S2.1 green gate).  A future S2.1.2 could
+        swap the elision here for an on-device llvm.trap() instead.
+        """
+        return self.is_device_module and flag in self._HOST_TRAPPING_CHECKS
+
     def check_enabled(self, flag: str) -> bool:
         """Effective value of a runtime-check flag at the current lowering
-        point.  Priority: CLI force override > metacommand state of the
-        innermost enclosing statement > the manual's documented default.
+        point.  Priority: device-code suppression > CLI force override >
+        metacommand state of the innermost enclosing statement > the manual's
+        documented default.
         """
+        if self._device_checks_suppressed(flag):
+            return False
         if flag in self.force_flags:
             return self.force_flags[flag]
         if self._stmt_meta is not None and flag in self._stmt_meta:
