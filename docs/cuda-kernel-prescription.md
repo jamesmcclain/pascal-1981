@@ -16,12 +16,6 @@ get an actual GPU kernel to **launch, run, and return a result** on real hardwar
 - **[DEFAULT]** — a reasonable assistant-chosen default for an unratified question; flag before
   building on it heavily.
 
-> **A note on "closed" items.** This is a vibe-coding build, and several things the design
-> docs mark as done are done *narrowly*. The single most important lesson from the
-> verification pass below: **a call-site ban is not the same as keeping a symbol out of the
-> emitted IR.** The recission work (§2) is the worked example. Re-verify "done" items by
-> reading the *emitted artifact*, not the checker.
-
 ---
 
 ## 0. Where you actually are (verified baseline)
@@ -48,7 +42,7 @@ The four findings that gate a real kernel, each expanded below:
 | # | Gap | Symptom (verified) |
 |---|-----|--------------------|
 | §2 | Device IR is **not self-contained** | `kernel_nvptx.ll` *calls* `abort`/`fflush` and declares `pas_read_int`/`memmove`/`movel`… — all host symbols |
-| §3 | There are **no kernels**, only device functions | PTX has `.func` ×5, `.entry` ×0; no `nvvm.annotations` |
+| §3 | There are **no entry points**, only device functions | PTX has `.func` ×5, `.entry` ×0; no `nvvm.annotations` |
 | §4 | **No parallel execution model** | the "kernel" is a serial sieve; no `threadIdx`, no barrier, no grid |
 | §5 | **No host orchestration** | nothing allocates device memory, copies buffers, or launches |
 | §6 | **AMDGPU back end crashes** (bonus, ROCm-only) | `LLVM ERROR: Cannot select: FrameIndex` on `build_primes` |
@@ -60,30 +54,47 @@ stays byte-identical throughout.
 
 ## 1. The end-state we are building toward
 
-A minimal but *real* CUDA bring-up: a `DEVICE MODULE` exporting one kernel that does
+A minimal but *real* CUDA bring-up: a device compiland exporting one kernel that does
 something embarrassingly parallel (vector add is the canonical smoke test — keep the sieve as
 a second step), a host `PROGRAM` that allocates two input buffers and one output buffer on the
 device, copies inputs up, launches the kernel over an N-thread grid, copies the result back,
-and prints it. Concretely:
+and prints it.
+
+Written in the `DEVICE UNIT` shape recommended in §1.5 — where the launchable entry points are
+exactly the routines the unit *exports* (§3) — the device side is an interface plus an
+implementation:
 
 ```pascal
-DEVICE MODULE vadd;
-PROCEDURE add(a, b, c: ADS(GLOBAL) OF REAL; n: INTEGER); [KERNEL];
-VAR i: INTEGER;
-BEGIN
-  i := THREADIDX_X + BLOCKIDX_X * BLOCKDIM_X;   { the parallel index }
-  IF i < n THEN
-    c^[i] := a^[i] + b^[i]
+{ device interface: the exported name `add` is the launchable entry (§3) }
+INTERFACE;
+UNIT vadd (add);
+PROCEDURE add(a, b, c: ADS(GLOBAL) OF REAL; n: INTEGER);
 END;
-.
 ```
 
 ```pascal
+{ device implementation }
+IMPLEMENTATION OF vadd;
+PROCEDURE add(a, b, c: ADS(GLOBAL) OF REAL; n: INTEGER);
+VAR i: INTEGER;
+BEGIN
+  i := THREADIDX_X + BLOCKIDX_X * BLOCKDIM_X;   { the parallel index, §4 }
+  IF i < n THEN
+    c^[i] := a^[i] + b^[i]
+END;
+.   { no initializer block — forbidden in a DEVICE UNIT, §1.5.3 }
+```
+
+and the host program `USES` the device unit to launch it by name (the `USES` path is verified
+working, §1.5.1):
+
+```pascal
 PROGRAM main(output);
+USES vadd (add);                       { import the kernel entry by name }
 { host-side device API, see §5 }
 ...
 BEGIN
-  da := DEVALLOC(n * SIZEOF(REAL));  { etc. }
+  da := DEVALLOC(n * SIZEOF(REAL));    { etc. }
   DEVCOPYTO(da, @ha, n * SIZEOF(REAL));
   ...
   LAUNCH(add, GRID(blocks), BLOCK(threads), da, db, dc, n);
@@ -96,10 +107,93 @@ Everything between here and that program is the prescription.
 
 ---
 
-## 2. Milestone A — make device IR self-contained (the recission gap, for real)
+## 1.5 Foundational decision — `DEVICE UNIT` vs `DEVICE MODULE` [RECOMMENDED: `DEVICE UNIT`; owner-ratifiable]
 
-**This is the §2 gap and the answer to "I asked the agent to forbid host runtime-backed
-builtins and host I/O — I guess it didn't do it?"** It *partly* did. Here is the exact state.
+This choice is foundational: it determines how the host names a kernel to launch it (§5.4) and
+how launchable entry points are distinguished from device-internal helpers (§3). It was
+reopened by a correction to an earlier claim.
+
+### 1.5.1 Correction: `USES` is not broken [VERIFIED — reproduced and fixed]
+
+An earlier pass concluded "`uses` codegen is broken" and routed around it with `EXTERN`-by-name.
+That was wrong, and rested on a wrong mental model — that `USES` is how you reach a `MODULE`'s
+exports. In the vintage dialect, `USES` pairs with a **`UNIT`** (an `INTERFACE` +
+`IMPLEMENTATION OF` pair), not with a plain `MODULE`. Reproduced against the tree:
+
+- The grammar, type checker, and codegen all implement `INTERFACE`/`UNIT`/`USES`/
+  `IMPLEMENTATION OF`; the checker even resolves the manual's positional **renaming** import
+  (`USES GRAPHICS (MOVE, PLOT)` aliasing the exported `BJUMP, WJUMP`).
+- The only real defects were two small codegen bugs, both now fixed (patch `uses-fix.patch`):
+  **(1)** `codegen_use_clause` called `parse_file` without importing it — *that* was the
+  "undefined `parse_file`" the after-action report saw; a one-line fix. **(2)** The positional
+  rename was not threaded into codegen, so a renamed import's call site found no symbol; fixed by
+  declaring the external under its real exported name and binding the alias to it.
+- With those applied, the IBM manual's PLOTBOX/GRAPHICS example (stubbed) **compiles, links
+  against a separately-compiled `IMPLEMENTATION OF GRAPHICS`, and runs** — both the plain and the
+  renamed `USES` forms. 607 tests stay green. (See the multi-file example shipped beside this
+  doc; it is the seed of a future integration test — §1.5.4.)
+
+So `USES` works, and the design's intended "host `uses` the device code to get launchable
+kernels" is a *live* path — but only if the device code is a `UNIT`.
+
+### 1.5.2 The decision
+
+Because `USES` is a `UNIT` mechanism, a device compiland that the host launches by name should be
+a **`DEVICE UNIT`** (an `INTERFACE` + `IMPLEMENTATION OF`), not a `DEVICE MODULE`. The
+recommendation is to adopt `DEVICE UNIT`. Dividends:
+
+- **Entry points fall out of exports, with no new syntax (§3).** A unit's interface lists what it
+  exports; those exported routines are exactly the launchable kernels, and everything in the
+  implementation the interface does *not* export is a device-internal helper `.func`. This
+  answers — for free — the "how do we mark entry points" question that a `DEVICE MODULE` would
+  otherwise need an annotation for. (This supersedes the earlier `[KERNEL]`-on-every-routine
+  idea, which was redundant: being inside a device compiland already makes code device code; the
+  thing that needs marking is *entry-ness*, and the export list supplies it.)
+- **Host launch is the verified `USES` path (§5.4),** not an `EXTERN`-by-name workaround.
+- **Device helper libraries compose,** matching the manual's two-tier shape (a `UNIT` that `USES`
+  another `UNIT` — GRAPHICS uses BASEPLOT). A `DEVICE UNIT` may `uses` another `DEVICE UNIT` for
+  shared device code; design §1.2's cross-kind rules still apply (a device unit may not `uses` a
+  host unit).
+
+Costs / open points:
+- **More ceremony.** A `UNIT` is two files (interface + implementation) versus a single-file
+  `DEVICE MODULE`. Mild for a one-kernel smoke test; real for many small kernels. A future
+  single-file sugar could collapse the common case, but that is not v1.
+- **Naming.** `DEVICE UNIT` reads well and reuses the existing `UNIT` machinery. `DEVICE MODULE`
+  could be kept as an alias for the single-file, non-exporting case, but two surfaces for one
+  concept is itself a cost; pick one as primary. **[RECOMMENDED]** `DEVICE UNIT` primary.
+
+The overall `UNIT`-vs-`MODULE` selection remains the owner's to ratify; everything below is
+written to work either way, and "the device compiland" is used where the distinction does not
+matter. Where it *does* matter — entry-point marking (§3) and host launch (§5.4) — both the
+export-driven (`UNIT`) and the annotation (`MODULE`) routes are given.
+
+### 1.5.3 Rescission: no initializer code in a `DEVICE UNIT` [DECIDED 2026-06-19]
+
+A vintage `UNIT` may carry an **initializer block** — the optional `BEGIN … END` in an interface,
+and the `BEGIN … END.` body of an `IMPLEMENTATION OF`. On a device there is no host-style
+"module load runs this once" moment, and an initializer would smuggle in exactly the
+host-runtime, ordering-dependent code the device dialect is trying to keep out. So **a
+`DEVICE UNIT` may not have an initializer block**, in either the interface or the implementation.
+This is a new module-scoped **rescission**, in the same family as recursion / `NEW`-heap /
+host-I/O (design §9; prescription §2.3.A4): enforce it as a checker ban when the unit is a device
+unit and an init block is present — *"initializer code is not available in a DEVICE UNIT."* A
+device implementation therefore ends after its declarations (no trailing `BEGIN … END.`); a
+device interface ends at `END;` with no `BEGIN`.
+
+### 1.5.4 The multi-file `USES` example (future integration test)
+
+The faux-graphics example reproduced for §1.5.1 ships as a `.zip` beside this doc. It is
+deliberately **multi-file** (a program, an interface unit, and an implementation unit, compiled
+separately and linked) — which is *why it is not a normal in-process unit test*: it exercises the
+on-disk interface resolution, separate compilation, and cross-unit linking that a single-buffer
+parser/checker test cannot reach. It is the first concrete candidate for an **integration-test**
+tier (compile N files → link → run → diff stdout). Standing up that tier is future work; until
+then the example doubles as a manual smoke test for the `USES` path.
+
+---
+
+## 2. Milestone A — make device IR self-contained (the recission gap, for real)
 
 ### 2.1 What was actually built [VERIFIED]
 
@@ -171,11 +265,19 @@ A3 guard test passes on both sample kernels.
 
 ---
 
-## 3. Milestone B — emit kernels, not device functions (the `[KERNEL]` marker)
+## 3. Milestone B — emit *entry points*, not just device functions
 
 **This is the §3 gap and the single thing that makes an artifact launchable.** A PTX `.func`
-cannot be the target of `cuLaunchKernel`; only a `.entry` can. Today every routine is a
+cannot be the target of `cuLaunchKernel`; only a `.entry` can. Today every device routine is a
 `.func`.
+
+The framing matters. Being inside a device compiland already makes a routine device code — that
+is *not* what needs marking (so there is **no `[KERNEL]`-on-everything** marker; that earlier idea
+was redundant). What needs marking is which device routines are **launchable entry points**
+versus device-internal helpers. Both are device code; only an entry point gets the kernel calling
+convention and is findable by `cuModuleGetFunction`. A helper (say a `device_min(a,b)` the kernel
+calls) must stay a plain `.func`, or it pays launch-ABI overhead on an internal call and clutters
+the launchable-symbol namespace.
 
 ### 3.1 The mechanism [VERIFIED — tested while writing this]
 
@@ -192,43 +294,43 @@ For **AMDGPU** the equivalent is calling convention `amdgpu_kernel`.
 it is one assignment, target-uniform in shape, and verified. Add `nvvm.annotations` too if a
 given CUDA loader path wants it.
 
-### 3.2 Surface syntax [PRESCRIBED]
+### 3.2 Which routines become entry points
 
-The design already scouted the home for this: `proc_decl_header`/`func_decl_header` carry an
-`attribute_section` (grammar 196/209), so a **`[KERNEL]` header attribute** drops in with no
-new grammar — exactly parallel to how `[SPACE(...)]` rides the variable attribute slot.
-(A trailing directive in the `EXTERN`/`FORWARD` slot is the alternative; the attribute is
-cleaner and the parser already parses it.)
+**[RECOMMENDED — export-driven, ties to §1.5]** In the `DEVICE UNIT` model, an entry point is a
+routine the unit's **interface exports**; everything in the implementation that is not exported
+is a device-internal helper `.func`. No new syntax: the export list *is* the entry-point list.
+This is the preferred answer and the main reason §1.5 leans `DEVICE UNIT`.
 
-```pascal
-PROCEDURE add(a, b, c: ADS(GLOBAL) OF REAL; n: INTEGER); [KERNEL];
-```
+**[ALTERNATIVE — explicit `[ENTRY]` annotation]** If the device compiland is a single-file
+`DEVICE MODULE` (no interface to read exports from), mark the launchable routines with an
+`[ENTRY]` header attribute — note *entry*, not *kernel*: the routine is device code regardless;
+the attribute only says it is launchable. This reuses the existing `attribute_section` on
+proc/func headers (grammar 196/209), so it needs no new grammar. Default without `[ENTRY]` is a
+device-internal `.func`.
 
-Rules to enforce in the checker:
-- `[KERNEL]` is legal **only inside a `DEVICE MODULE`** (reuse the `in_device_module` gate).
-- A kernel returns nothing — restrict to `PROCEDURE`, or require `FUNCTION` return to be
-  ignored. **[DEFAULT]** procedures only; kernels write results through `GLOBAL` pointers.
-- Kernel parameters must be device-passable: scalars, or `ADS(GLOBAL/CONSTANT) OF T`. Reject
-  `HOST`-space pointers (the dereferenceability invariant already half-does this).
-- A kernel may be `uses`-imported by a host module for launch (that is the *only* cross-kind
-  reference allowed; §5.4).
+Either way, enforce in the checker:
+- entry-ness is legal only in a device compiland;
+- an entry point returns nothing — restrict to `PROCEDURE` (kernels write results through
+  `GLOBAL` pointers); **[DEFAULT]** procedures only;
+- entry parameters must be device-passable: scalars or `ADS(GLOBAL/CONSTANT) OF T`; reject
+  `HOST`-space pointers (the dereferenceability invariant half-does this already).
 
 ### 3.3 Codegen [PRESCRIBED]
 
-In `codegen_proc_decl` (`decls.py:381`), when the decl carries `KERNEL` and
-`self.is_device_module`:
-- set `func.calling_convention = "ptx_kernel"` (nvptx) / `"amdgpu_kernel"` (amdgcn), chosen
-  off `self.device_triple`;
+In `codegen_proc_decl` (`decls.py`), when a routine is an entry point (exported from a device
+unit, or `[ENTRY]`-marked) and the unit lowers to a GPU triple:
+- set `func.calling_convention = "ptx_kernel"` (nvptx) / `"amdgpu_kernel"` (amdgcn), chosen off
+  `self.device_triple`;
 - optionally add the `nvvm.annotations` entry;
-- ensure kernel params that are `ADS(GLOBAL) OF T` lower to `T addrspace(1)*` (the type
-  lowering from Step 4a already does this — verify it fires for *parameters*, not just
-  variables; param lowering was the deferred 4b slice, see §6 note).
+- ensure entry params that are `ADS(GLOBAL) OF T` lower to `T addrspace(1)*` (the Step-4a type
+  lowering does this for variables — verify it fires for *parameters*; param lowering was the
+  deferred 4b slice, see §6 note).
 
-**Acceptance:** compile a `[KERNEL]` proc to `nvptx64`, emit PTX, assert `.entry <name>`
-appears and the param is a `.param .u64` pointing into global. Add the symmetric AMDGPU assert
-once §6 is fixed.
+**Acceptance:** compile a device unit exporting one entry to `nvptx64`, emit PTX, assert
+`.entry <name>` appears, the param is a `.param .u64` into global, **and a non-exported helper in
+the same implementation stays `.func`.** Add the symmetric AMDGPU assert once §6 is fixed.
 
-**Green gate:** non-kernel device functions still emit `.func`; host unaffected.
+**Green gate:** non-entry device routines still emit `.func`; host unaffected.
 
 ---
 
@@ -341,18 +443,21 @@ host shim `cuModuleLoadData` it. You do **not** need a fatbinary to launch. So:
   and the device artifact is *PTX loaded at runtime* rather than `clang`-linked into the host
   binary, that hack disappears.
 
-### 5.4 Host-side launch surface + kind-aware `uses` [PRESCRIBED]
+### 5.4 Host-side launch surface (host `USES` the device unit) [PRESCRIBED]
 
-- A host `MODULE`/`PROGRAM` must be able to name a kernel to launch it. The design's
-  kind-aware `uses` (host may `uses` a `DEVICE MODULE` to get launchable kernels) is the
-  intended path but is **deferred and `uses` codegen is currently broken** (the after-action
-  report hit an undefined `parse_file` in the import path). **[GAP]** For first bring-up,
-  **don't fix `uses`** — pass the kernel by *name string* to `LAUNCH('add', …)`, mirroring how
-  the working example already uses `EXTERN`-by-name instead of `uses`. Fix `uses` later as its
-  own task.
-- `GRID(x[,y[,z]])` and `BLOCK(x[,y[,z]])` are just argument-packing sugar over the six
-  `unsigned` geometry args to `cuLaunchKernel`. Start with plain integer args and add the sugar
-  later.
+- A host `PROGRAM`/`MODULE` names a kernel to launch it via the **verified `USES` path** (§1.5):
+  `USES vadd (add);` imports the entry `add` by name, and `LAUNCH(add, …)` launches it. This is
+  the intended design path (host `uses` device code to get launchable kernels) and it **now
+  works** — the earlier "`uses` is broken, use `EXTERN`-by-name" guidance was based on a
+  since-fixed one-line bug and is **rescinded** (`uses-fix.patch`).
+- **What "launch" lowers to.** `LAUNCH(add, …)` does not call `@add` directly — the host cannot
+  call a GPU function. It lowers to the host shim's `pas_dev_launch(module, "add", …)` (§5.2),
+  which `cuModuleGetFunction`s the entry *by name* out of the loaded PTX and `cuLaunchKernel`s
+  it. So the `USES`-imported `add` gives you the name and signature for type-checking the call;
+  the shim does the actual dispatch by that name. (This is also why §1.5's "exported = entry"
+  works cleanly: the export list is precisely the set of names the host can hand the shim.)
+- `GRID(x[,y[,z]])`/`BLOCK(x[,y[,z]])` are argument-packing sugar over the six geometry args to
+  `cuLaunchKernel`. Start with plain integers, add the sugar later.
 - Kernel arguments cross the boundary as: scalars by value, device buffers as the opaque
   `GLOBAL` handle returned by `DEVALLOC`. `cuLaunchKernel` takes a `void**` of arg pointers;
   the shim assembles it.
@@ -401,15 +506,15 @@ currently gets away without it.
 **Keep using it as the primary correctness loop** for every milestone above:
 - §2 (self-contained IR): the CPU path already links clean; use the GPU-triple guard test
   (A3) for the no-host-symbols invariant.
-- §3 (`[KERNEL]`): on `device=x86` the calling convention is inert/ignored — kernel *logic*
-  still runs serially, so you can test kernel *correctness* on CPU before you have a GPU.
+- §3 (entry points): on `device=x86` the kernel calling convention is inert/ignored — kernel
+  *logic* still runs serially, so you can test kernel *correctness* on CPU before you have a GPU.
 - §4 (intrinsics): provide CPU-device lowerings — `THREADIDX_X`→0, `BLOCKDIM_X`→1,
   `SYNCTHREADS`→no-op — so a kernel run on the CPU executes as a single-thread grid and
   produces the right scalar answer. This lets you validate kernel math with zero GPU.
 - §5 (orchestration): a CPU-device shim where `DEVALLOC`=`malloc`, copies=`memcpy`, `LAUNCH`=a
   direct call. Same Pascal program, no GPU. Then swap the shim for the CUDA one.
 
-This is the OpenCL-on-CPU dividend the design designed for; lean on it.
+This is the CPU-device dividend the design designed for; lean on it.
 
 ---
 
@@ -461,8 +566,8 @@ Each step is independently landable and keeps host/vintage byte-identical.
 
 1. **A1–A3 (self-contained device IR).** Cheapest, and unblocks every later artifact check.
    Without it nothing GPU-side links. *(Milestone A.)*
-2. **B (`[KERNEL]` → `.entry`).** One-line codegen mechanism, verified; small grammar reuse.
-   *(Milestone B.)*
+2. **B (entry points → `.entry`).** One-line codegen mechanism, verified; export-driven in the
+   `DEVICE UNIT` model, so no new syntax (§3). *(Milestone B.)*
 3. **C.1/C.2 (thread-index intrinsics + `SYNCTHREADS`), with CPU-device lowerings.** Now a
    kernel can be *written* and validated for correctness on the CPU device. *(Milestone D core.)*
 4. **PTX emission driver mode** (§5.3) — turn device IR into a `.ptx` artifact via the device
@@ -474,16 +579,18 @@ Each step is independently landable and keeps host/vintage byte-identical.
    calls + `cuModuleLoadData(ptx)`. **First real GPU launch here.**
 8. **Datalayout/alloca hygiene** (§6) — fixes AMDGPU and is latently correct for NVPTX.
 9. **Ergonomics & breadth:** `FORALL`, `GRID/BLOCK` sugar, width changes (`REAL32`/`HALF`,
-   32-bit index), kind-aware `uses` (replacing launch-by-name-string), fatbinary path,
-   freeze the rest of the recission set.
+   32-bit index), device helper libraries (`DEVICE UNIT` uses `DEVICE UNIT`) and cross-kind
+   `uses`-rule enforcement, fatbinary path, and freezing the rest of the recission set
+   (including the §1.5.3 initializer-block ban).
 
 Milestones 1–7 are the path to a running CUDA kernel. 8–9 are breadth and polish.
 
 ## 10. Definition of done (the smoke test)
 
 A committed, reproducible test that:
-1. compiles a `[KERNEL]` vector-add `DEVICE MODULE` to `nvptx64`, asserts the PTX has a
-   `.visible .entry` and **zero** host-runtime symbol references (the §2 denylist);
+1. compiles a vector-add **device unit** (one exported entry) to `nvptx64`, asserts the PTX has
+   a `.visible .entry` for the exported routine, that any non-exported helper stays `.func`, and
+   **zero** host-runtime symbol references (the §2 denylist);
 2. runs the same kernel through the **CPU-device** orchestration end-to-end and checks the
    numeric result (no GPU needed — runs in CI on this VM);
 3. *(gated on `@requires_gpu`)* runs the kernel through the **CUDA** shim in the container and
@@ -513,4 +620,10 @@ Commands/results behind the [VERIFIED]/[GAP] tags, so the next instance can re-r
   `.visible .entry` in PTX. ✔ (§3 mechanism)
 - **AMDGPU back end aborts:** `amdgcn-amd-amdhsa`/`gfx900` `emit_assembly` on `build_primes` →
   `LLVM ERROR: Cannot select: FrameIndex<0>`. ✔ (§6 gap)
+- **`USES` is not broken (§1.5.1):** the IBM manual PLOTBOX/GRAPHICS example (stubbed,
+  OCR-corrected) — a `PROGRAM` that `USES` a separately-compiled `INTERFACE`/`IMPLEMENTATION OF
+  GRAPHICS` — compiled, linked, and ran, in both plain (`USES GRAPHICS`) and renamed
+  (`USES GRAPHICS (MOVE, PLOT)`) forms, after a two-line codegen fix (`parse_file` import + rename
+  binding; `uses-fix.patch`). The renamed form lowered `MOVE`→`@BJUMP`, `PLOT`→`@WJUMP`. 607
+  tests stay green. ✔ (Multi-file example shipped beside this doc — §1.5.4.)
 - **Tests:** `607 passed, 52 subtests`. ✔
