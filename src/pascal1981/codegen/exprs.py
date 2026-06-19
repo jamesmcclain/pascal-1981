@@ -69,6 +69,12 @@ class ExprsMixin:
             symbol = self.scope.lookup(expr.name)
             if not symbol:
                 raise CodegenError(f'Undefined variable: {expr.name}')
+            if self.is_device_module:
+                # Step 4b: inside a DEVICE MODULE, `ADS x` is a typed address-space
+                # pointer to x's storage -- not the vintage {ptr, i16} pair. x already
+                # lives in its residence addrspace (codegen_var_decl), so its address
+                # is the correct addrspace(k)* value and matches an ADS(s) OF T slot.
+                return symbol.llvm_value
             return ir.Constant.literal_struct([symbol.llvm_value, ir.Constant(ir.IntType(16), 0)])
         elif isinstance(expr, SizeofExpr):
             # Sizeof operator (sizeof var_name or sizeof type)
@@ -119,7 +125,12 @@ class ExprsMixin:
             symbol = self.scope.lookup(expr.name) or self.scope.lookup(key)
             if not symbol:
                 raise CodegenError(f'Undefined variable: {expr.name}')
-            if symbol.type_expr is None and getattr(symbol.llvm_value, 'function_type', None) and len(symbol.llvm_value.function_type.args) == 0:
+            # Vintage Pascal permits a parameterless function to be used in an
+            # expression without an empty actual-parameter list, e.g.
+            # `count := prime_count;`.  The type checker already treats such an
+            # identifier as the function's return type; codegen must likewise
+            # emit a zero-argument call whenever the symbol denotes a function.
+            if isinstance(symbol.llvm_value, ir.Function) and len(symbol.llvm_value.function_type.args) == 0:
                 return self.builder.call(symbol.llvm_value, [])
             # Parameters are passed by value, don't load them
             if symbol.is_parameter:

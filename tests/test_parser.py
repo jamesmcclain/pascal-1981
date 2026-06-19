@@ -190,8 +190,8 @@ class TestParserJudgmentCalls(unittest.TestCase):
         ast = parse_source("PROGRAM P; VAR [STATIC, READONLY] x: INTEGER; PROCEDURE Q [PUBLIC, EXTERN, PURE]; BEGIN END; BEGIN END.")
         var_decl = ast.block.decls[0]
         proc_decl = ast.block.decls[1]
-        self.assertEqual(var_decl.attributes, ['STATIC', 'READONLY'])
-        self.assertEqual(proc_decl.attributes, ['PUBLIC', 'EXTERN', 'PURE'])
+        self.assertEqual([a.name for a in var_decl.attributes], ['STATIC', 'READONLY'])
+        self.assertEqual([a.name for a in proc_decl.attributes], ['PUBLIC', 'EXTERN', 'PURE'])
 
     def test_manual_radix_integer_constant(self):
         """The manual radix form n#digits should lex and parse as an integer constant."""

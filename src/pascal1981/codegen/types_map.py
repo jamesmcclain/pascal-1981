@@ -114,6 +114,13 @@ class TypesMapMixin:
         elif isinstance(type_expr, PointerType):
             base_type = self.llvm_type(type_expr.base)
             if getattr(type_expr, 'flavor', 'POINTER') == 'ADS':
+                if self.is_device_module:
+                    # Inside a DEVICE MODULE, ADS(s) OF T lowers to a typed
+                    # address-space pointer (T addrspace(k)*), collapsing the
+                    # vintage {ptr, i16} segmented pair (design S5.3).
+                    space_expr = getattr(type_expr, 'space', None)
+                    space_ord = self.eval_const_expr(space_expr) if space_expr is not None else 0
+                    return ir.PointerType(base_type, addrspace=self._space_addrspace(space_ord))
                 return ir.LiteralStructType([ir.PointerType(base_type), ir.IntType(16)])
             return ir.PointerType(base_type)
         elif isinstance(type_expr, ArrayType):
@@ -228,6 +235,13 @@ class TypesMapMixin:
             return self.builder.insert_value(out, ir.Constant(target_type.elements[1], 0), 1)
 
         if isinstance(target_type, ir.PointerType) and isinstance(vt, ir.PointerType):
+            # Step 4b / design S6.3: never silently cross address spaces. A bitcast
+            # cannot change addrspace, and no-mixing is enforced in the checker, so a
+            # differing addrspace here means something slipped through -- fail loudly
+            # rather than emit illegal IR.
+            if getattr(vt, 'addrspace', 0) != getattr(target_type, 'addrspace', 0):
+                raise CodegenError(
+                    "cannot implicitly cross address spaces when passing an argument")
             return self.builder.bitcast(value, target_type)
         if isinstance(target_type, ir.IntType) and isinstance(vt, ir.IntType):
             if vt.width > target_type.width:

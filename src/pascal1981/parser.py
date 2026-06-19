@@ -4,7 +4,7 @@ import argparse
 import sys
 from typing import List, Optional, Sequence, Union
 
-from .ast_nodes import (AdrExpr, AdsExpr, ArrayType, AssignStmt, ASTNode, BinOp, Block, BoolLiteral, BreakStmt, BuiltinType, CaseElement, CaseStmt, CharLiteral, CompoundStmt,
+from .ast_nodes import (AdrExpr, AdsExpr, ArrayType, AssignStmt, ASTNode, Attribute, BinOp, Block, BoolLiteral, BreakStmt, BuiltinType, CaseElement, CaseStmt, CharLiteral, CompoundStmt,
                         ConstDecl, CycleStmt, Declaration, Designator, EmptyStmt, EnumType, Expression, FileType, ForStmt, FuncCall, FuncDecl, GotoStmt, Identifier, IfStmt,
                         ImplementationUnit, IndexRange, InterfaceUnit, IntLiteral, LabelDecl, LabelStmt, LowerExpr, LStringType, ModuleUnit, NamedType, NilLiteral, Param,
                         PointerType, ProcCallStmt, ProcDecl, ProgramUnit, RangeExpr, RealLiteral, RecordType, RepeatStmt, ReturnStmt, RetypeExpr, Selector, SetConstructor, SetType,
@@ -68,10 +68,22 @@ class Parser:
             return self.parse_program_unit()
         elif self.current().kind == 'MODULE':
             return self.parse_module_unit()
+        elif self._at_device_prefix('MODULE'):
+            # Contextual keyword DEVICE preceding MODULE -> a device module.
+            self.pos += 1  # consume the contextual DEVICE identifier
+            return self.parse_module_unit(is_device=True)
         elif self.current().kind == 'INTERFACE':
             return self.parse_interface_unit()
+        elif self._at_device_prefix('INTERFACE'):
+            # Contextual keyword DEVICE preceding INTERFACE -> a device interface.
+            self.pos += 1
+            return self.parse_interface_unit(is_device=True)
         elif self.current().kind == 'IMPLEMENTATION':
             return self.parse_implementation_unit()
+        elif self._at_device_prefix('IMPLEMENTATION'):
+            # Contextual keyword DEVICE preceding IMPLEMENTATION -> a device implementation.
+            self.pos += 1
+            return self.parse_implementation_unit(is_device=True)
         else:
             self.error('expected compilation unit start')
 
@@ -93,7 +105,22 @@ class Parser:
         self.expect('DOT')
         return ProgramUnit(name, params, uses, block)
 
-    def parse_module_unit(self) -> ModuleUnit:
+    def _at_device_prefix(self, next_kind: str) -> bool:
+        """True when the cursor is on a contextual `DEVICE` followed by `next_kind`.
+
+        `DEVICE` is not a reserved word (so vintage code may use it as an
+        identifier); it is recognized contextually only immediately before a
+        device-marked compilation-unit keyword.
+        """
+        cur = self.current()
+        return (cur.kind == 'IDENTIFIER' and cur.lexeme.upper() == 'DEVICE'
+                and self.next_kind(1) == next_kind)
+
+    def _at_device_module(self) -> bool:
+        """Backward-compatible helper for DEVICE MODULE call sites/tests."""
+        return self._at_device_prefix('MODULE')
+
+    def parse_module_unit(self, is_device: bool = False) -> ModuleUnit:
         self.expect('MODULE')
         name = self.expect('IDENTIFIER').lexeme
         self.expect('SEMICOLON')
@@ -106,10 +133,21 @@ class Parser:
         while self.current().kind in self.declaration_starters():
             decls.extend(self.parse_declaration_section())
             self.skip_include_directives()
-        self.expect('DOT')
-        return ModuleUnit(name, uses, decls)
 
-    def parse_interface_unit(self) -> InterfaceUnit:
+        # Vintage IBM/MS Pascal modules are "programs without a body" and end
+        # with END.  The reimplementation has historically also accepted a
+        # shorthand bare-dot terminator for module fixtures.  Accept both, but
+        # do not accept a compound statement body: `MODULE M; BEGIN END.` must
+        # still fail because the END here is only a terminator after the module
+        # declaration part.
+        if self.current().kind == 'END':
+            self.expect('END')
+            self.expect('DOT')
+        else:
+            self.expect('DOT')
+        return ModuleUnit(name, uses, decls, is_device=is_device)
+
+    def parse_interface_unit(self, is_device: bool = False) -> InterfaceUnit:
         self.expect('INTERFACE')
         self.expect('SEMICOLON')
         self.skip_include_directives()
@@ -134,15 +172,17 @@ class Parser:
         # AND terminates the interface -- there is no second END. The unit is therefore
         # self-delimiting: when include-spliced, this END;/`;` is immediately followed by
         # the IMPLEMENTATION/PROGRAM/MODULE that included it, with no special-casing.
+        has_init = False
         if self.current().kind == 'BEGIN':
+            has_init = True
             self.parse_compound_statement()  # consumes BEGIN [statements] END
             self.expect('SEMICOLON')
         else:
             self.expect('END')
             self.expect('SEMICOLON')
-        return InterfaceUnit(name, params, uses, decls)
+        return InterfaceUnit(name, params, uses, decls, is_device=is_device, has_init=has_init)
 
-    def parse_implementation_unit(self) -> ImplementationUnit:
+    def parse_implementation_unit(self, is_device: bool = False) -> ImplementationUnit:
         self.expect('IMPLEMENTATION')
         self.expect('OF')
         name = self.expect('IDENTIFIER').lexeme
@@ -161,7 +201,7 @@ class Parser:
             init_body = self.parse_compound_statement().stmts
         self.skip_include_directives()
         self.expect('DOT')
-        return ImplementationUnit(name, uses, decls, init_body)
+        return ImplementationUnit(name, uses, decls, init_body, is_device=is_device)
 
     def parse_uses_clause(self) -> List[UseClause]:
         self.expect('USES')
@@ -307,25 +347,29 @@ class Parser:
         name, params, attributes = self.parse_proc_decl_header()
         self.expect('SEMICOLON')
         body: Optional[Block] = None
+        directive: Optional[str] = None
         if self.current().kind in {'EXTERN', 'EXTERNAL', 'FORWARD'}:
+            directive = self.current().kind
             self.pos += 1
             self.expect('SEMICOLON')
         else:
             body = self.parse_block()
             self.expect('SEMICOLON')
-        return ProcDecl(name, params, attributes, body)
+        return ProcDecl(name, params, attributes, body, directive)
 
     def parse_func_decl(self) -> FuncDecl:
         name, params, return_type, attributes = self.parse_func_decl_header()
         self.expect('SEMICOLON')
         body: Optional[Block] = None
+        directive: Optional[str] = None
         if self.current().kind in {'EXTERN', 'EXTERNAL', 'FORWARD'}:
+            directive = self.current().kind
             self.pos += 1
             self.expect('SEMICOLON')
         else:
             body = self.parse_block()
             self.expect('SEMICOLON')
-        return FuncDecl(name, params, return_type, attributes, body)
+        return FuncDecl(name, params, return_type, attributes, body, directive)
 
     def parse_proc_decl_header(self) -> tuple[str, List[Param], List[str]]:
         self.expect('PROCEDURE')
@@ -368,8 +412,8 @@ class Parser:
         type_expr = self.parse_type()
         return Param(mode, names, type_expr)
 
-    def parse_attribute_section_optional(self) -> List[str]:
-        attributes: List[str] = []
+    def parse_attribute_section_optional(self) -> List[Attribute]:
+        attributes: List[Attribute] = []
         if not self.match('LBRACKET'):
             return attributes
         if self.current().kind != 'RBRACKET':
@@ -379,14 +423,22 @@ class Parser:
         self.expect('RBRACKET')
         return attributes
 
-    def parse_attribute_item(self) -> str:
-        # The current implementation intentionally handles the six confirmed
-        # attribute keywords only. ORIGIN/PORT are documented elsewhere or
-        # unverified, and will be added in a separate pass if needed.
+    def parse_attribute_item(self) -> Attribute:
+        # Bare-keyword attributes: the six confirmed storage attributes.
         if self.current().kind in {'READONLY', 'PUBLIC', 'STATIC', 'EXTERNAL', 'EXTERN', 'PURE'}:
             attr = self.current().kind
             self.pos += 1
-            return attr
+            return Attribute(attr)
+        # SPACE(constant): the first parameterized attribute (residence of
+        # storage). `SPACE` is contextual -- recognized from an IDENTIFIER
+        # lexeme, not lexer-reserved -- so vintage `space` identifiers survive.
+        cur = self.current()
+        if cur.kind == 'IDENTIFIER' and cur.lexeme.upper() == 'SPACE':
+            self.pos += 1
+            self.expect('LPAREN')
+            arg = self.parse_expression()
+            self.expect('RPAREN')
+            return Attribute('SPACE', arg)
         self.error('expected attribute item')
 
     def parse_compound_statement(self) -> CompoundStmt:
@@ -957,9 +1009,14 @@ class Parser:
             return PointerType(base, 'ADR')
         if kind == 'ADS':
             self.pos += 1
+            # Optional parameterized pointee space: ADS(constant) OF T.
+            space = None
+            if self.match('LPAREN'):
+                space = self.parse_expression()
+                self.expect('RPAREN')
             self.expect('OF')
             base = self.parse_type()
-            return PointerType(base, 'ADS')
+            return PointerType(base, 'ADS', space=space)
         if kind == 'IDENTIFIER':
             name = self.current().lexeme
             self.pos += 1

@@ -5,13 +5,16 @@ This module is the single source of truth for:
   • Capability probes (llvmlite, clang)
   • Skip decorators
   • In-process helpers (parse, type-check, IR generation, build & run)
+  • Multi-file integration-test project helpers
 """
 
 import importlib.util
 import os
 import shutil
+import subprocess
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 
 # Capability probes
@@ -29,6 +32,9 @@ requires_exe = unittest.skipUnless(CAN_BUILD_EXE, "requires llvmlite + clang (na
 from pascal1981.lexer import LexerError, lex_file
 from pascal1981.parser import ParserError, parse_file
 from pascal1981.type_checker import (PascalTypeChecker, TypeCheckError, TypeCheckResult)
+
+RUNTIME_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "runtime")
+RUNTIME_LIB = os.path.join(RUNTIME_DIR, "build", "libpascalrt.a")
 
 
 def _write_temp(src: str) -> str:
@@ -108,6 +114,121 @@ def typecheck_module(iface_code: str = None, impl_code: str = None, prog_code: s
         return checker.check(ast)
     finally:
         shutil.rmtree(tmpdir)
+
+
+@contextmanager
+def temporary_pascal_project(files: dict[str, str]):
+    """Materialize a temporary multi-file Pascal project on disk.
+
+    Args:
+        files: Mapping of relative path -> file content. Paths may include
+            extensionless interface basenames such as ``kernel``.
+
+    Yields:
+        Project directory path.
+    """
+    tmpdir = tempfile.mkdtemp()
+    try:
+        for relpath, content in files.items():
+            path = os.path.join(tmpdir, relpath)
+            os.makedirs(os.path.dirname(path) or tmpdir, exist_ok=True)
+            with open(path, 'w') as f:
+                f.write(content)
+        yield tmpdir
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def compile_pascal_file(source_path: str, output_path: str = None, *, features=None,
+                        host_triple: str = 'x86_64-pc-linux-gnu',
+                        device_triple: str = 'x86_64-pc-linux-gnu') -> str:
+    """Parse, type-check, and lower one Pascal source file to LLVM IR.
+
+    Returns the output .ll path. Raises RuntimeError on type-check failure.
+    """
+    from pascal1981.codegen import compile_to_llvm
+
+    ast = parse_file(source_path)
+    result = PascalTypeChecker(source_file=source_path, features=features).check(ast)
+    if not result.success:
+        raise RuntimeError(f"Type check failed for {source_path}: {result.errors}")
+    ir = compile_to_llvm(ast, source_file=source_path, features=features,
+                         host_triple=host_triple, device_triple=device_triple)
+    if output_path is None:
+        output_path = f"{source_path}.ll"
+    with open(output_path, 'w') as f:
+        f.write(ir)
+    return output_path
+
+
+def compile_pascal_project(project_dir: str, compile_pairs: list[tuple[str, str]], *, features=None,
+                           host_triple: str = 'x86_64-pc-linux-gnu',
+                           device_triple: str = 'x86_64-pc-linux-gnu') -> dict[str, str]:
+    """Compile multiple Pascal files in one project directory.
+
+    Args:
+        project_dir: Root directory holding the source files.
+        compile_pairs: ``[(source_relpath, output_relpath), ...]``.
+
+    Returns:
+        Mapping of source_relpath -> absolute output .ll path.
+    """
+    outputs = {}
+    for source_rel, output_rel in compile_pairs:
+        source_path = os.path.join(project_dir, source_rel)
+        output_path = os.path.join(project_dir, output_rel)
+        outputs[source_rel] = compile_pascal_file(
+            source_path,
+            output_path,
+            features=features,
+            host_triple=host_triple,
+            device_triple=device_triple,
+        )
+    return outputs
+
+
+def link_pascal_project(project_dir: str, ir_relpaths: list[str], *, exe_name: str = 'prog',
+                        runtime_libs: list[str] = None, link_flags: list[str] = None) -> str:
+    """Link one or more LLVM IR files plus the Pascal runtime into an executable."""
+    runtime_libs = runtime_libs or [RUNTIME_LIB]
+    link_flags = link_flags or []
+    exe_path = os.path.join(project_dir, exe_name)
+    sources = [os.path.join(project_dir, relpath) for relpath in ir_relpaths]
+    result = subprocess.run(
+        ['clang', *sources, *runtime_libs, *link_flags, '-o', exe_path],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"clang failed: {result.stderr}")
+    return exe_path
+
+
+def build_and_run_pascal_project(files: dict[str, str], compile_pairs: list[tuple[str, str]],
+                                 link_ir_relpaths: list[str], *, exe_name: str = 'prog',
+                                 runtime_libs: list[str] = None, link_flags: list[str] = None,
+                                 run_args: list[str] = None, stdin: str = '', features=None,
+                                 host_triple: str = 'x86_64-pc-linux-gnu',
+                                 device_triple: str = 'x86_64-pc-linux-gnu') -> tuple[int, str, str]:
+    """Full multi-file integration path: write files, compile separately, link, run."""
+    run_args = run_args or []
+    with temporary_pascal_project(files) as project_dir:
+        compile_pascal_project(
+            project_dir,
+            compile_pairs,
+            features=features,
+            host_triple=host_triple,
+            device_triple=device_triple,
+        )
+        exe_path = link_pascal_project(
+            project_dir,
+            link_ir_relpaths,
+            exe_name=exe_name,
+            runtime_libs=runtime_libs,
+            link_flags=link_flags,
+        )
+        run = subprocess.run([exe_path, *run_args], input=stdin, capture_output=True, text=True)
+        return run.returncode, run.stdout, run.stderr
 
 
 # Codegen helpers are defined in test_codegen.py to keep llvmlite imports isolated

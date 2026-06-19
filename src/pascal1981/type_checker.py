@@ -9,6 +9,7 @@ Performs semantic analysis on the AST:
 """
 
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -19,7 +20,7 @@ from .ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt
 from .ast_nodes import EnumType as ASTEnumType
 from .ast_nodes import Expression
 from .ast_nodes import FileType as ASTFileType
-from .ast_nodes import (ForStmt, FuncCall, FuncDecl, Identifier, IfStmt, ImplementationUnit, InterfaceUnit, IntLiteral, LabelStmt, LowerExpr)
+from .ast_nodes import (ForStmt, FuncCall, FuncDecl, GotoStmt, Identifier, IfStmt, ImplementationUnit, InterfaceUnit, IntLiteral, LabelStmt, LowerExpr)
 from .ast_nodes import LStringType as ASTLStringType
 from .ast_nodes import ModuleUnit, NamedType, NilLiteral
 from .ast_nodes import PointerType as ASTPointerType
@@ -83,6 +84,15 @@ class PascalTypeChecker(TypeChecker):
         self.current_interface_decls: Dict[str, Any] = {}
         self.source_file = source_file  # Path to the source file being compiled
         self.features: Dict[str, bool] = features if features is not None else {}
+        # Historical name: now true while checking any device compiland body
+        # (DEVICE MODULE / DEVICE INTERFACE / DEVICE IMPLEMENTATION). Drives the
+        # dereferenceability invariant and gates the address-space surface
+        # (ads-memory-spaces-design.md S3.3). Programs and plain host units => False.
+        self.in_device_module: bool = False
+        # caller(upper) -> list of (callee(upper), call_node), collected only while
+        # checking a DEVICE MODULE body; consumed by _detect_device_recursion at
+        # module end to flag direct AND mutual recursion as call-graph cycles.
+        self._device_callgraph: dict = {}
         # Names of record types pre-declared in the current declaration block so
         # that forward and self pointer references (linked lists) resolve to a
         # stable object instead of falling back to ^CHAR.
@@ -92,6 +102,125 @@ class PascalTypeChecker(TypeChecker):
     def feature_enabled(self, name: str) -> bool:
         """Return whether a named compile-time extension feature is enabled."""
         return self.features.get(name, False)
+
+    # ---- ADS address-space helpers (ads-memory-spaces-design.md S3-S5) ----
+
+    def _fold_space(self, expr) -> Optional[int]:
+        """Fold a SPACE attribute/operand expression to its enum ordinal.
+
+        Accepts a bare member name (e.g. GLOBAL). Returns the ordinal
+        (HOST=0..LOCAL=4), or None if it is not a SPACE member.
+        """
+        name = getattr(expr, 'name', None)
+        if name is None:
+            return None
+        sym = self.symbol_table.lookup(name)
+        if sym is None or not isinstance(sym.type, EnumType) or sym.type.name != 'SPACE':
+            return None
+        try:
+            return sym.type.members.index(name.upper())
+        except ValueError:
+            return None
+
+    def _check_deref_space(self, ptr_type, node) -> None:
+        """Enforce the dereferenceability invariant for spaced ADS pointers.
+
+        HOST-space (or unspecified) pointers may be dereferenced only in host
+        code; the four device spaces only inside a DEVICE MODULE. Gated to the
+        ADS flavor so plain ^/ADR heap pointers are untouched (design S3.3).
+        """
+        if not isinstance(ptr_type, PointerType) or ptr_type.flavor != 'ADS':
+            return
+        space = ptr_type.space if ptr_type.space is not None else 0  # default HOST
+        if space == 0 and self.in_device_module:
+            self.error("cannot dereference a HOST-space pointer inside device code", node)
+        elif space != 0 and not self.in_device_module:
+            self.error("cannot dereference a device-space pointer outside device code", node)
+
+    # First recission tranche enforced as module-scoped checker bans inside a
+    # DEVICE MODULE (implementation plan Step 0.5; design S1.2/S9). The set is
+    # NOT frozen -- this is the owner-approved first tranche only.
+    _DEVICE_BANNED_HEAP = {'NEW', 'DISPOSE'}
+    _DEVICE_BANNED_IO = {
+        'WRITE', 'WRITELN', 'READ', 'READLN', 'PAGE',
+        'RESET', 'REWRITE', 'GET', 'PUT', 'CLOSE', 'DISCARD',
+        'ASSIGN', 'READFN', 'READSET',
+    }
+
+    def _check_device_recission(self, name: Optional[str], node) -> None:
+        """Reject device-hostile constructs inside device code.
+
+        Checker-enforced recissions include dynamic allocation (NEW/DISPOSE),
+        host I/O, recursion (recorded here and flagged at device-compiland end
+        by _detect_device_recursion), GOTO, dynamic set ranges, and the DEVICE
+        UNIT initializer-block ban handled at unit scope. The construct-shaped
+        bans live here/in the checker rather than in feature flags.
+        """
+        if not self.in_device_module or not name:
+            return
+        up = name.upper()
+        if up in self._DEVICE_BANNED_HEAP:
+            self.error(f"dynamic allocation ('{up}') is not available in device code", node)
+            return
+        if up in self._DEVICE_BANNED_IO:
+            self.error(f"host I/O ('{up}') is not available in device code", node)
+            return
+        current = None
+        if self.current_procedure is not None and self.current_procedure.name:
+            current = self.current_procedure.name
+        elif self.current_function is not None and self.current_function.name:
+            current = self.current_function.name
+        if current:
+            self._device_callgraph.setdefault(current.upper(), []).append((up, node))
+
+    def _detect_device_recursion(self) -> None:
+        """Flag direct and mutual recursion among DEVICE MODULE routines.
+
+        Recursion has no place on a device (tiny/absent call stack). Using the
+        call graph collected during the body check, report any routine that can
+        reach itself through one or more calls.
+        """
+        graph = self._device_callgraph
+        adj = {caller: {callee for callee, _ in edges} for caller, edges in graph.items()}
+
+        def reaches_self(start: str) -> bool:
+            seen = set()
+            stack = list(adj.get(start, ()))
+            while stack:
+                n = stack.pop()
+                if n == start:
+                    return True
+                if n not in seen:
+                    seen.add(n)
+                    stack.extend(adj.get(n, ()))
+            return False
+
+        for caller, edges in graph.items():
+            if reaches_self(caller):
+                node = edges[0][1] if edges else None
+                self.error(
+                    f"recursion is not available in device code "
+                    f"(routine '{caller}' is part of a call cycle)", node)
+
+    @contextmanager
+    def _device_context(self, active: bool):
+        """Temporarily switch the checker into the device dialect/context."""
+        prev_in_device = self.in_device_module
+        prev_features = self.features
+        prev_callgraph = self._device_callgraph
+        if active:
+            from .features import device_features
+            self.in_device_module = True
+            self.features = device_features()
+            self._device_callgraph = {}
+        try:
+            yield
+            if active:
+                self._detect_device_recursion()
+        finally:
+            self.in_device_module = prev_in_device
+            self.features = prev_features
+            self._device_callgraph = prev_callgraph
 
     def _setup_builtins(self) -> None:
         """Define built-in procedures and functions in the global scope."""
@@ -442,10 +571,14 @@ class PascalTypeChecker(TypeChecker):
                 # Import symbols
                 self.import_symbols(interface, use_clause)
 
-        # Check declarations
-        if mod.decls:
-            for decl in mod.decls:
-                self.check_declaration(decl)
+        # A DEVICE MODULE switches into the device dialect (extended minus the
+        # recission set, plus the address-space surface) and the two-worlds
+        # dereferenceability scope for the duration of its body (design S1.2/S3.3).
+        with self._device_context(getattr(mod, 'is_device', False)):
+            # Check declarations
+            if mod.decls:
+                for decl in mod.decls:
+                    self.check_declaration(decl)
 
     def check_interface_unit(self, iface: InterfaceUnit) -> None:
         """Type check an interface unit."""
@@ -462,10 +595,13 @@ class PascalTypeChecker(TypeChecker):
                     continue
                 self.import_symbols(interface, use_clause)
 
-        # Check declarations
-        if iface.decls:
-            for decl in iface.decls:
-                self.check_declaration(decl)
+        with self._device_context(getattr(iface, 'is_device', False)):
+            if getattr(iface, 'is_device', False) and getattr(iface, 'has_init', False):
+                self.error("initializer code is not available in a DEVICE UNIT", None)
+            # Check declarations
+            if iface.decls:
+                for decl in iface.decls:
+                    self.check_declaration(decl)
 
     def check_implementation_unit(self, impl: ImplementationUnit) -> None:
         """Type check an implementation unit and validate against its interface."""
@@ -478,6 +614,8 @@ class PascalTypeChecker(TypeChecker):
             else:
                 self.error(f"Interface file for module '{impl.name}' not found", None)
         if iface:
+            if getattr(impl, 'is_device', False) != getattr(iface, 'is_device', False):
+                self.error("device-ness of implementation must match its interface", None)
             self.validate_implementation_against_interface(impl, iface)
 
         if impl.uses:
@@ -494,9 +632,12 @@ class PascalTypeChecker(TypeChecker):
         old_iface = self.current_interface_decls
         self.current_interface_decls = {getattr(decl, 'name', '').lower(): decl for decl in (iface.decls if iface else []) if getattr(decl, 'name', None)}
         try:
-            if impl.decls:
-                for decl in impl.decls:
-                    self.check_declaration(decl)
+            with self._device_context(getattr(impl, 'is_device', False)):
+                if getattr(impl, 'is_device', False) and impl.init_body is not None:
+                    self.error("initializer code is not available in a DEVICE UNIT", None)
+                if impl.decls:
+                    for decl in impl.decls:
+                        self.check_declaration(decl)
         finally:
             self.current_interface_decls = old_iface
 
@@ -576,7 +717,17 @@ class PascalTypeChecker(TypeChecker):
             self.error(f"Unknown type: {decl.type_expr}", decl)
             return
 
-        readonly = 'READONLY' in {attr.upper() for attr in getattr(decl, 'attributes', [])}
+        readonly = 'READONLY' in {attr.name.upper() for attr in getattr(decl, 'attributes', [])}
+        # [SPACE(s)] residence attribute: gated on DEVICE MODULE, folded to an
+        # ordinal carried on each variable's Symbol (design S4.4).
+        residence = None
+        for attr in getattr(decl, 'attributes', []):
+            if attr.name.upper() == 'SPACE':
+                residence = self._fold_space(attr.arg)
+                if residence is None:
+                    self.error("invalid address space in [SPACE(...)] attribute", decl)
+                elif not self.in_device_module:
+                    self.error("address spaces require device code", decl)
 
         # Add each variable to the symbol table
         for name in decl.names:
@@ -587,7 +738,7 @@ class PascalTypeChecker(TypeChecker):
                 continue
 
             # Create symbol
-            symbol = Symbol(name=name, type=var_type, kind='var', location=self.get_node_location(decl), is_mutable=not readonly)
+            symbol = Symbol(name=name, type=var_type, kind='var', location=self.get_node_location(decl), is_mutable=not readonly, space=residence)
             self.symbol_table.define(name, symbol)
 
     def check_const_decl(self, decl: ConstDecl) -> None:
@@ -680,7 +831,7 @@ class PascalTypeChecker(TypeChecker):
         if not decl.name:
             return
 
-        attrs = {attr.upper() for attr in getattr(decl, 'attributes', [])}
+        attrs = {attr.name.upper() for attr in getattr(decl, 'attributes', [])}
         if 'PURE' in attrs:
             for param in getattr(decl, 'params', []):
                 if getattr(param, 'mode', None) in {'VAR', 'VARS'}:
@@ -712,15 +863,21 @@ class PascalTypeChecker(TypeChecker):
         # Create function type
         func_type = FunctionType(decl.name, param_types, return_type)
 
-        # Check for redeclaration
+        # Check for redeclaration. A FORWARD declaration is completed (not
+        # redeclared) by a later body definition.
         existing = self.symbol_table.lookup_local(decl.name)
         if existing and not getattr(existing, 'is_builtin', False):
-            self.error(f"Function '{decl.name}' already declared at {existing.location}", decl)
-            return
-
-        # Add to symbol table
-        symbol = Symbol(name=decl.name, type=func_type, kind='function', location=self.make_location(decl))
-        self.symbol_table.define(decl.name, symbol)
+            if getattr(existing, 'is_forward', False) and decl.body is not None:
+                existing.is_forward = False  # completing the forward declaration
+            else:
+                self.error(f"Function '{decl.name}' already declared at {existing.location}", decl)
+                return
+        else:
+            # Add to symbol table (mark a FORWARD declaration awaiting completion)
+            symbol = Symbol(name=decl.name, type=func_type, kind='function', location=self.make_location(decl))
+            if decl.body is None and getattr(decl, 'directive', None) == 'FORWARD':
+                symbol.is_forward = True
+            self.symbol_table.define(decl.name, symbol)
 
         # Check function body
         old_func = self.current_function
@@ -749,7 +906,7 @@ class PascalTypeChecker(TypeChecker):
         if not decl.name:
             return
 
-        attrs = {attr.upper() for attr in getattr(decl, 'attributes', [])}
+        attrs = {attr.name.upper() for attr in getattr(decl, 'attributes', [])}
         if 'PURE' in attrs:
             self.error(f"PURE is only valid on functions, not procedure '{decl.name}'", decl)
 
@@ -771,15 +928,22 @@ class PascalTypeChecker(TypeChecker):
         # Create procedure type
         proc_type = ProcedureType(decl.name, param_types)
 
-        # Check for redeclaration
+        # Check for redeclaration. A FORWARD declaration is completed (not
+        # redeclared) by a later body definition -- this is what makes forward
+        # references and mutual recursion expressible.
         existing = self.symbol_table.lookup_local(decl.name)
         if existing and not getattr(existing, 'is_builtin', False):
-            self.error(f"Procedure '{decl.name}' already declared at {existing.location}", decl)
-            return
-
-        # Add to symbol table
-        symbol = Symbol(name=decl.name, type=proc_type, kind='procedure', location=self.make_location(decl))
-        self.symbol_table.define(decl.name, symbol)
+            if getattr(existing, 'is_forward', False) and decl.body is not None:
+                existing.is_forward = False  # completing the forward declaration
+            else:
+                self.error(f"Procedure '{decl.name}' already declared at {existing.location}", decl)
+                return
+        else:
+            # Add to symbol table (mark a FORWARD declaration awaiting completion)
+            symbol = Symbol(name=decl.name, type=proc_type, kind='procedure', location=self.make_location(decl))
+            if decl.body is None and getattr(decl, 'directive', None) == 'FORWARD':
+                symbol.is_forward = True
+            self.symbol_table.define(decl.name, symbol)
 
         # Check procedure body
         old_proc = self.current_procedure
@@ -822,6 +986,15 @@ class PascalTypeChecker(TypeChecker):
             self.check_statement(stmt.stmt)
         elif isinstance(stmt, WithStmt):
             self.check_with_stmt(stmt)
+        elif isinstance(stmt, GotoStmt):
+            # Recission (2nd tranche): GOTO is rejected inside a DEVICE MODULE.
+            # SIMT loop-structurizer backends need structured, reducible control
+            # flow. This bans ALL goto -- a conservative superset of the stated
+            # "nonlocal/irreducible" intent, since the checker has no label-scope
+            # table or CFG reducibility analysis to draw a finer line. Outside a
+            # device module GOTO keeps its existing (unchecked) behavior.
+            if self.in_device_module:
+                self.error("GOTO is not available in device code", stmt)
 
     def check_with_stmt(self, stmt: WithStmt) -> None:
         """Type check a WITH statement.
@@ -1044,6 +1217,7 @@ class PascalTypeChecker(TypeChecker):
 
         # Look up the procedure (Pascal is case-insensitive)
         lookup_name = stmt.name.upper()
+        self._check_device_recission(lookup_name, stmt)
         sym = self.symbol_table.lookup(lookup_name) or self.symbol_table.lookup(stmt.name)
         is_builtin = sym is None or getattr(sym, 'is_builtin', False)
 
@@ -1071,6 +1245,14 @@ class PascalTypeChecker(TypeChecker):
                 return
             elif lookup_name == 'READSET':
                 self._check_readset_args(stmt)
+                return
+            elif lookup_name in {'FILLSC', 'MOVESL', 'MOVESR'} and self.in_device_module:
+                # Step 5: inside a DEVICE MODULE the segmented bridge builtins are
+                # the one sanctioned cross-space op (design S5.4) -- their two
+                # ADSMEM params may carry *different* concrete spaces, so the
+                # equal-space identity rule (which the generic arg check would
+                # enforce against the space-less ADSMEM formal) is relaxed here.
+                self._check_seg_bridge_args(stmt, lookup_name)
                 return
 
         if not sym:
@@ -1145,6 +1327,35 @@ class PascalTypeChecker(TypeChecker):
         arg_type = self.infer_expression_type(arg)
         if not isinstance(arg_type, FileType):
             self.error(f"Argument 1 type mismatch: {name} expects a file variable, got {arg_type}", stmt)
+
+    def _check_seg_bridge_args(self, stmt: ProcCallStmt, name: str) -> None:
+        """Step 5: type-check FILLSC/MOVESL/MOVESR inside a DEVICE MODULE.
+
+        FILLSC(loc: ADSMEM; len: WORD; val: CHAR);
+        MOVESL/MOVESR(src, dst: ADSMEM; len: WORD).
+
+        The pointer operands must be ADS-flavor (segmented) pointers, but they
+        may name *different* concrete spaces -- this is the sanctioned on-device
+        cross-space data-movement bridge (design S5.4), so no equal-space rule
+        applies.  The length must be an ordinal and FILLSC's fill value a CHAR.
+        """
+        if len(stmt.args) != 3:
+            self.error(f"Procedure '{stmt.name}' expects 3 arguments, got {len(stmt.args)}", stmt)
+            return
+        ptr_positions = (0,) if name == 'FILLSC' else (0, 1)
+        for i in ptr_positions:
+            arg_type = self.infer_expression_type(stmt.args[i])
+            if not isinstance(arg_type, PointerType) or arg_type.flavor != 'ADS':
+                self.error(f"{name} argument {i + 1} must be a segmented (ADS) pointer, "
+                           f"got {arg_type}", stmt)
+        len_pos = 1 if name == 'FILLSC' else 2
+        len_type = self.infer_expression_type(stmt.args[len_pos])
+        if len_type is not None and not self._is_ordinal_type(len_type):
+            self.error(f"{name} length argument must be an integer, got {len_type}", stmt)
+        if name == 'FILLSC':
+            val_type = self.infer_expression_type(stmt.args[2])
+            if val_type is not None and not val_type.equivalent_to(CHAR_TYPE):
+                self.error(f"FILLSC fill value must be a CHAR, got {val_type}", stmt)
 
     def _check_assign_file_args(self, stmt: ProcCallStmt) -> None:
         if len(stmt.args) != 2:
@@ -1722,6 +1933,15 @@ class PascalTypeChecker(TypeChecker):
                     if not low_type.equivalent_to(high_type):
                         self.error(f"Set range bounds must have the same ordinal type, got {low_type} and {high_type}", el)
                         return None
+                    # Recission (2nd tranche): a set range with a non-constant bound
+                    # ('A'..x) needs a runtime loop to set the bits -- banned in a
+                    # DEVICE MODULE. The static bitvector core (constant ranges,
+                    # union/intersect/membership) stays; a dynamic *singleton* [x]
+                    # is fine (a single shift) and is not affected here.
+                    if self.in_device_module and not self.is_constant_set_element(el):
+                        self.error("dynamic set-range construction (a set range with a "
+                                   "non-constant bound) is not available in device code", el)
+                        return None
                     cur_type = low_type
                 else:
                     cur_type = self.infer_expression_type(el)
@@ -1744,12 +1964,14 @@ class PascalTypeChecker(TypeChecker):
                 return None
             return PointerType(sym.type, flavor='ADR')
         elif isinstance(expr, AdsExpr):
-            # Segmented address-of operator (ads var_name)
+            # Segmented address-of operator (ads var_name). The result pointee
+            # space is the operand's storage residence, defaulting to HOST/0
+            # (design S4.4).
             sym = self.symbol_table.lookup(expr.name)
             if not sym:
                 self.error(f"Undefined variable: {expr.name}", expr)
                 return None
-            return PointerType(sym.type, flavor='ADS')
+            return PointerType(sym.type, flavor='ADS', space=getattr(sym, 'space', None))
         elif isinstance(expr, SizeofExpr):
             # Sizeof operator (sizeof var_name or type)
             return INTEGER_TYPE
@@ -1829,6 +2051,7 @@ class PascalTypeChecker(TypeChecker):
                         if not isinstance(current_type, PointerType):
                             self.error(f"Cannot dereference non-pointer type {current_type}", expr)
                             return None
+                        self._check_deref_space(current_type, expr)
                         current_type = current_type.target_type
             return current_type
         elif isinstance(expr, Identifier):
@@ -1878,6 +2101,7 @@ class PascalTypeChecker(TypeChecker):
             return None
         elif isinstance(expr, FuncCall):
             lookup_name = expr.name.upper()
+            self._check_device_recission(lookup_name, expr)
             sym = self.symbol_table.lookup(lookup_name) or self.symbol_table.lookup(expr.name)
             is_builtin = sym is None or getattr(sym, 'is_builtin', False)
 
@@ -2209,6 +2433,7 @@ class PascalTypeChecker(TypeChecker):
                     if isinstance(current_type, FileType):
                         current_type = current_type.element_type
                     elif isinstance(current_type, PointerType):
+                        self._check_deref_space(current_type, designator)
                         current_type = current_type.target_type
                     else:
                         self.error(f"Cannot dereference non-pointer/non-file type {current_type}", designator)
@@ -2368,7 +2593,17 @@ class PascalTypeChecker(TypeChecker):
         elif isinstance(type_expr, ASTPointerType):
             base_type = self.resolve_type(type_expr.base)
             flavor = getattr(type_expr, 'flavor', 'POINTER')
-            return PointerType(base_type, flavor=flavor) if base_type else PointerType(CHAR_TYPE, flavor=flavor)
+            # ADS(s) OF T: fold the pointee space and gate it on DEVICE MODULE.
+            space_ord = None
+            space_expr = getattr(type_expr, 'space', None)
+            if space_expr is not None:
+                space_ord = self._fold_space(space_expr)
+                if space_ord is None:
+                    self.error(f"invalid address space in {flavor} type", type_expr)
+                elif not self.in_device_module:
+                    self.error("address spaces require device code", type_expr)
+            target = base_type if base_type else CHAR_TYPE
+            return PointerType(target, flavor=flavor, space=space_ord)
         else:
             return None
 

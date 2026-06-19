@@ -229,6 +229,102 @@ These are the features that made Pascal suitable for writing operating systems, 
 - **Feature-gated wide integers** — `INTEGER32` and `INTEGER64` are available only with `-f wide-integers`; unflagged builds preserve the vintage 16-bit `INTEGER` surface.
 
 
+## Device Code and Memory Spaces (experimental)
+
+The vintage segmented-address machinery (`ADS`, `ADSMEM`, `FILLSC`/`MOVESL`/`MOVESR`)
+is being repurposed into a static **memory-space** system for targeting LLVM GPU
+backends. The design record is [`docs/ads-memory-spaces-design.md`](docs/ads-memory-spaces-design.md)
+and the build sequence is [`docs/ads-implementation-plan.md`](docs/ads-implementation-plan.md).
+This is in-progress work; the surface below is real and tested, but the host
+orchestration/launch API and kernel marking are still deferred.
+
+### The two-axis model
+
+- **Module kind picks the language rules.** A regular `MODULE` is host code. A
+  `DEVICE MODULE` is device code: the extended dialect, minus a module-scoped
+  recission set (recursion, `NEW`/heap, host I/O, `GOTO`, dynamic set-range
+  construction), plus the address-space surface. The boundary is lexical, so "is
+  this device code" needs no reachability analysis.
+- **Two target triples pick the lowering**, both defaulting to
+  `x86_64-pc-linux-gnu` and independently overridable: `host` for `MODULE` code,
+  `device` for `DEVICE MODULE` code. Point `device` at `nvptx64-nvidia-cuda` or
+  `amdgcn-amd-amdhsa` for a real GPU; leave it at x86 to run device-dialect code
+  on the CPU (every space collapses to addrspace 0 — the OpenCL-on-CPU case).
+
+### Memory spaces
+
+A predeclared enum `SPACE = (HOST, GLOBAL, SHARED, CONSTANT, LOCAL)` supplies the
+space tags (meaningful only inside a `DEVICE MODULE`). Each `ADS` pointer carries
+two independent spaces:
+
+- **pointer space** — where the pointer variable itself lives, set by a
+  `[SPACE(s)]` residence attribute: `VAR [SPACE(GLOBAL)] g: ARRAY[0..255] OF REAL;`
+- **pointee space** — what it addresses, set on the type: `TYPE p = ADS(GLOBAL) OF REAL;`
+
+Space is part of pointer-type identity: **static only, no mixing, fully explicit.**
+A *dereferenceability invariant* is enforced by the type checker — `HOST` pointers
+are dereferenceable only in host modules, the four device spaces only in device
+modules. Crossing spaces is never a pointer cast (there is no `RESPACE`); it is
+always a **data copy** via the `FILLSC`/`MOVESL`/`MOVESR` bridge (on-device) or a
+host-orchestrated transfer (across the host/device line). Inside a `DEVICE MODULE`
+those three builtins accept operands in *different* concrete spaces and lower to an
+addrspace-aware byte loop (`ld.global`/`st.shared`-class on NVPTX); on the device
+triple the spaces map `GLOBAL→1, SHARED→3, CONSTANT→4, LOCAL→5`.
+
+### How to build device code
+
+Two CLI flags select the target triples, independently:
+
+- `--host-triple TRIPLE` — the triple for host `MODULE`/`PROGRAM` units
+  (default `x86_64-pc-linux-gnu`).
+- `--device-triple TRIPLE` — the triple for `DEVICE MODULE` units; set it to
+  `nvptx64-nvidia-cuda` or `amdgcn-amd-amdhsa` for a real GPU. It defaults to the
+  host x86 triple (the CPU-device case, where address spaces collapse to
+  addrspace 0).
+
+```bash
+# CPU device (runnable here): spaces collapse to addrspace 0
+pascal1981 kernel.pas kernel.ll
+
+# GPU device: IR carries addrspace(1)/addrspace(3)/... (needs a GPU toolchain to run)
+pascal1981 --device-triple nvptx64-nvidia-cuda kernel.pas kernel.ll
+
+# Cross-compile the host side too (triples are independent)
+pascal1981 --host-triple aarch64-unknown-linux-gnu kernel.pas kernel.ll
+```
+
+The same triples are available on the `compile_to_llvm` package API:
+
+```python
+from pascal1981.codegen import compile_to_llvm
+from pascal1981.type_checker import PascalTypeChecker
+from pascal1981.parser import parse_file
+
+ast = parse_file("kernel.pas")
+assert PascalTypeChecker().check(ast).success
+
+ir_cpu = compile_to_llvm(ast)                                    # CPU device (x86)
+ir_gpu = compile_to_llvm(ast, device_triple="nvptx64-nvidia-cuda")
+```
+
+The **CPU-device** case produces runnable artifacts. A `DEVICE MODULE` has no
+`main`, so link its IR against a host driver — e.g. a small C harness that
+declares the module's globals and entry routine — with `clang`:
+
+```bash
+clang kernel.ll host_driver.c -o demo && ./demo
+```
+
+The **GPU-device** case (`nvptx64`/`amdgcn`) emits correct addrspace-qualified
+LLVM IR, but producing and running a real GPU artifact needs an NVIDIA/AMD
+toolchain and runtime that this project does not bundle — so on a host without a
+GPU runtime that path is code-generation-complete but not executable.
+
+**Future.** The host launch/allocate/transfer API, kind-aware `uses`, and
+`KERNEL` marking are planned but not yet implemented; see the design record's
+*Out of Scope* section and the implementation plan.
+
+
 ## Project Scope
 
 This is a **full reimplementation** of IBM Pascal 2.0. The goal is not a subset or tutorial language, but complete dialect coverage as specified in the original IBM Pascal 2.0 manual. 
@@ -301,13 +397,13 @@ pascal-1981/
 
 ## Testing
 
-One unified test suite built on Python's stdlib `unittest`, with automatic detection of optional dependencies. Tests are organized by **pipeline layer**, so you can run the subset relevant to your changes without requiring the full LLVM toolchain.
+One unified test suite built on `pytest`, with automatic detection of optional dependencies. Tests are organized by **pipeline layer**, so you can run the subset relevant to your changes without requiring the full LLVM toolchain.
 
 ### Run the entire test suite
 
 ```bash
 # All tests from a source checkout; codegen tests auto-skip if llvmlite/clang are unavailable
-PYTHONPATH=src python3 -m unittest discover -s tests -v
+PYTHONPATH=src python3 -m pytest tests/ -q
 ```
 
 If you installed the package into the active environment, `PYTHONPATH=src` is not
@@ -317,10 +413,21 @@ needed.
 
 ```bash
 # Parser accept/reject corpus + type rules (no llvmlite needed)
-PYTHONPATH=src python3 -m unittest tests.test_parser tests.test_typecheck
+PYTHONPATH=src python3 -m pytest tests/test_parser.py tests/test_typecheck.py -q
 
 # Codegen only (requires llvmlite + clang)
-PYTHONPATH=src python3 -m unittest tests.test_codegen
+PYTHONPATH=src python3 -m pytest tests/test_codegen.py -q
+
+# Multi-file integration tests (real files on disk, separate compile/link/run)
+PYTHONPATH=src python3 -m pytest tests/integration/ -q
+```
+
+For one integration fixture at a time:
+
+```bash
+PYTHONPATH=src python3 -m pytest tests/integration/test_device_primes.py -q
+PYTHONPATH=src python3 -m pytest tests/integration/test_host_uses.py -q
+PYTHONPATH=src python3 -m pytest tests/integration/test_uses_graphics.py -q
 ```
 
 ### Test Organization
@@ -342,13 +449,18 @@ PYTHONPATH=src python3 -m unittest tests.test_codegen
 
 - **`tests/test_runtime_fixes.py`** — hostile run tests pinning previously-wrong runtime behaviors: NEW sizing, ENCODE/DECODE, SCANNE, and the file subsystem (buffer-variable model, RESET/GET interleaves, mode-enforcement aborts, ASSIGN/CLOSE/DISCARD/READSET/READFN).
 
+- **`tests/integration/`** — Multi-file integration tier. These tests materialize
+  real on-disk projects and exercise interface resolution, `USES` binding,
+  separate IR generation, `clang` linking, and native execution. See
+  [`docs/integration-tests.md`](docs/integration-tests.md).
+
 - **`tests/test_integration.py`** — Legacy integration corpus (currently removed from supported test suite).
 
 ### Dependency Isolation
 
 The front end (lexer, parser, type checker) is pure Python with **no `llvmlite` dependency**. This means:
 - `test_parser.py` and `test_typecheck.py` run on any Python 3.8+ system
-- `test_codegen.py` requires `llvmlite` and `clang` but is the only place that imports them
+- `test_codegen.py` and `tests/integration/` require `llvmlite` and `clang`
 - If codegen dependencies are missing, the suite auto-skips those tests without failure
 
 ## Implementation Notes

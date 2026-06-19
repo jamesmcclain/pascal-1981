@@ -7,17 +7,31 @@ Declaration code generation
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Any, List, Optional, Tuple, Union
 
 import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
 from ..ast_nodes import *
+from ..parser import parse_file
 from .base import CodegenError, Scope
 
 
 class DeclsMixin:
     """Mixin for decls functionality."""
+
+    @contextmanager
+    def _device_codegen_context(self, active: bool):
+        """Temporarily switch lowering into device-code mode."""
+        prev_is_device = self.is_device_module
+        if active:
+            self.is_device_module = True
+            self.module.triple = self.device_triple
+        try:
+            yield
+        finally:
+            self.is_device_module = prev_is_device
 
     def codegen(self, unit: Union[ProgramUnit, ModuleUnit, InterfaceUnit, ImplementationUnit]) -> ir.Module:
         """Generate LLVM IR from AST root."""
@@ -70,14 +84,19 @@ class DeclsMixin:
 
     def codegen_module(self, unit: ModuleUnit) -> ir.Module:
         """Codegen for MODULE unit."""
-        for decl in unit.decls:
-            self.codegen_decl(decl)
+        # A DEVICE MODULE lowers against the device triple, with address spaces
+        # live; a plain MODULE keeps the host triple and is byte-identical to
+        # before (ads-memory-spaces-design.md S1.2).
+        with self._device_codegen_context(getattr(unit, 'is_device', False)):
+            for decl in unit.decls:
+                self.codegen_decl(decl)
         return self.module
 
     def codegen_interface(self, unit: InterfaceUnit) -> ir.Module:
         """Codegen for INTERFACE unit (declarations only)."""
-        for decl in unit.decls:
-            self.codegen_decl(decl)
+        with self._device_codegen_context(getattr(unit, 'is_device', False)):
+            for decl in unit.decls:
+                self.codegen_decl(decl)
         return self.module
 
     def codegen_implementation(self, unit: ImplementationUnit) -> ir.Module:
@@ -85,26 +104,27 @@ class DeclsMixin:
         old_iface = self.current_interface_decls
         self.current_interface_decls = {getattr(decl, 'name', '').lower(): decl for decl in (unit.interface.decls if unit.interface else []) if getattr(decl, 'name', None)}
         try:
-            for decl in unit.decls:
-                self.codegen_decl(decl)
+            with self._device_codegen_context(getattr(unit, 'is_device', False)):
+                for decl in unit.decls:
+                    self.codegen_decl(decl)
+
+                # Codegen init body if present
+                if unit.init_body:
+                    init_type = ir.FunctionType(ir.IntType(32), [])
+                    init_name = f'pascal_init_{unit.name.lower()}'
+                    init_func = ir.Function(self.module, init_type, name=init_name)
+                    entry_block = init_func.append_basic_block(name='entry')
+                    self.builder = IRBuilder(entry_block)
+                    self.current_function = init_func
+
+                    prev_labels = self.setup_function_labels(unit.init_body)
+                    self.codegen_stmt_list(unit.init_body)
+                    self.label_blocks = prev_labels
+
+                    if not self.builder.block.is_terminated:
+                        self.builder.ret(ir.Constant(ir.IntType(32), 0))
         finally:
             self.current_interface_decls = old_iface
-
-        # Codegen init body if present
-        if unit.init_body:
-            init_type = ir.FunctionType(ir.IntType(32), [])
-            init_name = f'pascal_init_{unit.name.lower()}'
-            init_func = ir.Function(self.module, init_type, name=init_name)
-            entry_block = init_func.append_basic_block(name='entry')
-            self.builder = IRBuilder(entry_block)
-            self.current_function = init_func
-
-            prev_labels = self.setup_function_labels(unit.init_body)
-            self.codegen_stmt_list(unit.init_body)
-            self.label_blocks = prev_labels
-
-            if not self.builder.block.is_terminated:
-                self.builder.ret(ir.Constant(ir.IntType(32), 0))
 
         return self.module
 
@@ -129,12 +149,42 @@ class DeclsMixin:
         if not module_path:
             return
         ast = parse_file(module_path)
-        decls = getattr(ast, 'decls', [])
-        for decl in decls:
-            if isinstance(decl, (ProcDecl, FuncDecl)) and getattr(decl, 'name', None):
-                self.codegen_decl(
-                    ProcDecl(decl.name, decl.params, getattr(decl, 'attributes', []), body=None
-                             ) if isinstance(decl, ProcDecl) else FuncDecl(decl.name, decl.params, decl.return_type, getattr(decl, 'attributes', []), body=None))
+
+        # Build the exported routines in export order. For an INTERFACE UNIT the
+        # export order is the unit's export list (UNIT G (BJUMP, WJUMP)); for a
+        # MODULE/IMPLEMENTATION it is declaration order. This mirrors the type
+        # checker's import_symbols pairing so a renaming USES binds the local
+        # alias to the right exported symbol.
+        if isinstance(ast, InterfaceUnit):
+            paired = list(zip(getattr(ast, 'params', []), getattr(ast, 'decls', [])))
+            export_routines = [(n, d) for (n, d) in paired if isinstance(d, (ProcDecl, FuncDecl))]
+        else:
+            export_routines = [(d.name, d) for d in getattr(ast, 'decls', [])
+                               if isinstance(d, (ProcDecl, FuncDecl)) and getattr(d, 'name', None)]
+
+        # A renaming USES (e.g. `USES GRAPHICS (MOVE, PLOT)`) binds the imports
+        # positionally onto the exports; a plain USES imports each under its own
+        # name.
+        if use_clause.imports:
+            aliases = list(use_clause.imports)
+            pairs = [(aliases[i], export_routines[i][1]) for i in range(min(len(aliases), len(export_routines)))]
+        else:
+            pairs = list(export_routines)
+
+        for alias, decl in pairs:
+            exported = decl.name
+            # The external LLVM function keeps the REAL exported name so it
+            # resolves against the separately-compiled IMPLEMENTATION's symbol.
+            if isinstance(decl, ProcDecl):
+                self.codegen_decl(ProcDecl(exported, decl.params, getattr(decl, 'attributes', []), body=None))
+            else:
+                self.codegen_decl(FuncDecl(exported, decl.params, decl.return_type, getattr(decl, 'attributes', []), body=None))
+            # Bind the call-site alias (MOVE) to that same function (@BJUMP).
+            if alias and alias.lower() != exported.lower():
+                sym = self.scope.lookup(exported)
+                if sym is not None:
+                    self.scope.define(alias, sym.llvm_value, None)
+                    self.proc_param_modes[alias.lower()] = self.proc_param_modes.get(exported.lower(), [])
 
     def codegen_decl(self, decl: Declaration) -> None:
         """Codegen a declaration."""
@@ -310,14 +360,24 @@ class DeclsMixin:
     def codegen_var_decl(self, decl: VarDecl) -> None:
         """Codegen for VAR declaration."""
         llvm_type = self.llvm_type(decl.type_expr)
-        attrs = {attr.upper() for attr in getattr(decl, 'attributes', [])}
+        attrs = {attr.name.upper() for attr in getattr(decl, 'attributes', [])}
         is_static = 'STATIC' in attrs
+
+        # Residence address space (DEVICE MODULE [SPACE(s)]). A non-HOST device
+        # space makes the variable statically-allocated storage in that space
+        # (like CUDA __shared__/__constant__/__device__) -- NOT a stack alloca,
+        # even inside a routine. HOST/default and the x86 CPU-device => 0.
+        residence_as = 0
+        if self.is_device_module:
+            for attr in getattr(decl, 'attributes', []):
+                if attr.name.upper() == 'SPACE' and getattr(attr, 'arg', None) is not None:
+                    residence_as = self._space_addrspace(self.eval_const_expr(attr.arg))
 
         # Check if the type is a string type
         is_str, max_len, is_lstring = self.get_string_type_info(decl.type_expr)
         initck_const = self._initck_sentinel(decl, llvm_type)
 
-        if self.builder and not is_static:
+        if self.builder and not is_static and residence_as == 0:
             # Local variable (inside a function) — allocate the aggregate inline
             for name in decl.names:
                 alloca = self.builder.alloca(llvm_type, name=name)
@@ -335,13 +395,16 @@ class DeclsMixin:
                         self.builder.store(ir.Constant(ir.IntType(8), 0), len_ptr)
                     # STRING: no initialization needed (chars are undefined until assigned)
         else:
-            # Static or global variable — allocate aggregate with zero init
+            # Static / global / device-residence storage. A [SPACE(s)] variable is
+            # allocated in its address space (residence_as); this also covers an
+            # in-routine device-space local routed here from the branch above.
             prefix = self.current_function.name if self.current_function else 'global'
             for name in decl.names:
                 gv_name = name if not self.builder else f'{prefix}.{name}'
 
                 # Create global variable with the aggregate type
-                global_var = ir.GlobalVariable(self.module, llvm_type, name=gv_name)
+                global_var = ir.GlobalVariable(self.module, llvm_type, name=gv_name,
+                                               addrspace=residence_as)
 
                 if is_str:
                     if is_lstring:
@@ -373,7 +436,7 @@ class DeclsMixin:
                 flat_modes.append(param.mode)
         func_type = ir.FunctionType(ir.IntType(32), param_types)
 
-        attrs = {attr.upper() for attr in getattr(decl, 'attributes', [])}
+        attrs = {attr.name.upper() for attr in getattr(decl, 'attributes', [])}
         existing = self.scope.lookup(decl.name)
         if existing and isinstance(existing.llvm_value, ir.Function):
             func = existing.llvm_value
@@ -446,7 +509,7 @@ class DeclsMixin:
 
         # Create function
         func = ir.Function(self.module, func_type, name=decl.name)
-        attrs = {attr.upper() for attr in getattr(decl, 'attributes', [])}
+        attrs = {attr.name.upper() for attr in getattr(decl, 'attributes', [])}
         if attrs.intersection({'PUBLIC', 'EXTERN', 'EXTERNAL'}):
             func.linkage = 'external'
         self.proc_param_modes[decl.name.lower()] = flat_modes

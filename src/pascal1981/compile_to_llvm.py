@@ -38,6 +38,12 @@ def main() -> int:
                         help='Feature umbrella: vintage enables no extensions; extended enables all registered features.')
     parser.add_argument('--list-features', action='store_true', help='List registered extension features and exit.')
     parser.add_argument('--print-runtime-path', action='store_true', help='Print the bundled libpascalrt.a path and exit.')
+    parser.add_argument('--host-triple', default='x86_64-pc-linux-gnu', metavar='TRIPLE',
+                        help='LLVM target triple for host MODULE/PROGRAM units (default: x86_64-pc-linux-gnu).')
+    parser.add_argument('--device-triple', default='x86_64-pc-linux-gnu', metavar='TRIPLE',
+                        help='LLVM target triple for DEVICE MODULE units; e.g. nvptx64-nvidia-cuda or '
+                             'amdgcn-amd-amdhsa. Defaults to the host x86 triple (CPU-device: address '
+                             'spaces collapse to addrspace 0).')
     # ----------------------------------------------------------------
     # Runtime-check flag overrides
     # Each flag follows the same tri-state convention:
@@ -137,7 +143,8 @@ def main() -> int:
             if val != 'source':
                 force_flags[flag_name] = (val == 'on')
 
-        ir = compile_to_llvm(ast, verbose=verbose, source_file=source_file, force_flags=force_flags or None, features=features)
+        ir = compile_to_llvm(ast, verbose=verbose, source_file=source_file, force_flags=force_flags or None, features=features,
+                             host_triple=args.host_triple, device_triple=args.device_triple)
 
         # Output
         if output_file:

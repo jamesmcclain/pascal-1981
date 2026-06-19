@@ -31,11 +31,21 @@ program_unit =
 
 module_unit =
     [ include_directive ]
-    "MODULE" identifier ";"
+    [ "DEVICE" ]                  (* DEVICE MODULE = device-dialect code (GPU); *)
+    "MODULE" identifier ";"      (* see docs/ads-memory-spaces-design.md S1.2  *)
     [ uses_clause ]
     module_block "." ;
 
+(* DEVICE is a CONTEXTUAL keyword (recognized only immediately before MODULE,
+   INTERFACE, or IMPLEMENTATION), not a reserved word -- vintage code may still
+   use `device` as an identifier. Inside a DEVICE MODULE / DEVICE INTERFACE /
+   DEVICE IMPLEMENTATION the device dialect applies: extended minus a
+   module-scoped recission set (recursion, NEW/heap, host I/O, GOTO, dynamic
+   set-range), plus the address-space surface (the SPACE attribute and
+   ADS(space) OF type). *)
+
 interface_unit =
+    [ "DEVICE" ]
     "INTERFACE" ";"
     "UNIT" identifier [ "(" identifier_list ")" ] ";"
     [ uses_clause ]
@@ -43,13 +53,17 @@ interface_unit =
     [ "BEGIN" [ statement { ";" statement } [ ";" ] ] ]
     "END" ";" ;
     (* {BEGIN}- END ; : one END terminates the optional init block AND the
-       interface. GRAPHI = "BEGIN END;", BASEPLOT = "END;". Never two ENDs. *)
+       interface. GRAPHI = "BEGIN END;", BASEPLOT = "END;". Never two ENDs.
+       DEVICE INTERFACE selects the device dialect. *)
 
 implementation_unit =
-    [ include_directive ]
+    [ "DEVICE" ]
     "IMPLEMENTATION" "OF" identifier ";"
     [ uses_clause ]
     implementation_block "." ;
+    (* DEVICE IMPLEMENTATION selects the device dialect. The contextual
+       DEVICE prefix is recognized at compilation-unit start, immediately
+       before IMPLEMENTATION. *)
 
 
 (* ═══════════════════════════════════════════════════════════════════
@@ -155,7 +169,11 @@ attribute_item =
     | "PURE"                        (* declare routine side-effect-free *)
     | "OVERLAY"                     (* declare routine as overlay-loaded *)
     | "FORTRAN"                     (* use Fortran calling conventions *)
-    | "ORIGIN" "(" constant ")" ;   (* bind EXTERN routine to absolute address *)
+    | "ORIGIN" "(" constant ")"     (* bind EXTERN routine to absolute address *)
+    | "SPACE" "(" constant ")" ;    (* pointer-space residence: bind storage to a
+                                       SPACE member; DEVICE MODULE only. The
+                                       constant must fold to a SPACE ordinal.
+                                       SPACE is contextual, not reserved. *)
 
 (* NOTE: Commas inside an attribute's parentheses (e.g. [ORIGIN(100,200)])
    are parsed as attribute separators, causing errors. All parameterized
@@ -322,7 +340,7 @@ factor =
     | "(" expression ")"
     | "NOT" factor                              (* unary boolean negation            *)
     | "ADR" identifier                        (* 16-bit near offset of identifier *)
-    | "ADS" identifier                        (* segmented address; LLVM lowers segment to 0 *)
+    | "ADS" identifier                        (* segmented address; pointee space inferred from operand's residence (HOST outside a DEVICE MODULE) *)
     | "SIZEOF" "(" ( identifier | type ) ")"  (* byte size of identifier or type  *)
     | "UPPER" "(" identifier ")"              (* upper bound of super array        *)
     | set_constructor ;
@@ -395,9 +413,13 @@ record_type = [ "PACKED" ] "RECORD" field_list "END" ;
 field_list  = field_decl { ";" field_decl } [ ";" ] ;
 field_decl  = identifier_list ":" type ;
 
+(* ADS(constant) OF type names the POINTEE space explicitly (DEVICE MODULE only);
+   the constant folds to a SPACE member. Bare `ADS OF type` leaves it implicit
+   (HOST). See docs/ads-memory-spaces-design.md S4.2. *)
 pointer_type = "^" type
              | "ADR" "OF" type
-             | "ADS" "OF" type ;
+             | "ADS" "OF" type
+             | "ADS" "(" constant ")" "OF" type ;   (* pointee address space *)
 
 (* [OBSERVED] SET OF is implemented end-to-end (checklist 9.6). All sets
    use one fixed representation: a 256-bit bitvector (four i64 words), so
@@ -698,6 +720,9 @@ character = (* any printable ASCII character in the range 0x20–0x7E,
 | `metacommand_comment` — new section documenting all 30 metacommands (Chapter 4): ON/OFF switches with defaults, INTEGER/STRING listing metacommands, typeless `$PUSH`/`$POP`/`$MESSAGE`/`$INCONST`, and `$IF`/`$THEN`/`$ELSE`/`$END` conditional compilation with nesting semantics | DOCUMENTED | Checklist §9.5; IBM Pascal manual Chapter 4 |
 | `io_data_param` — `P::N` now parsed and lowered on WRITE/WRITELN; comment updated (was: rejected by parser) | OBSERVED | Discrepancy D-002 differential probe (vintage accepts, output `        123.46`); manual 12-17 |
 | Metacommand codegen — $INDEXCK/$MATHCK/$NILCK/$INITCK now emit runtime checks; $STACKCK ruled a documented no-op; INITCK sentinel widened to INT32_MIN | OBSERVED | Manual metacommand pages (images, Chapter 4); checklist runtime-check item; TestRuntimeCheckFlags |
+| `module_unit` — optional contextual `DEVICE` modifier added (`DEVICE MODULE`) for GPU device-dialect code | ADDED (ADS memory-spaces) | docs/ads-memory-spaces-design.md S1.2; tests/test_ads_space_*.py |
+| `attribute_item` — `"SPACE" "(" constant ")"` added (pointer-space residence; DEVICE MODULE only) | ADDED (ADS memory-spaces) | design S4.1; tests/test_ads_space_parse.py |
+| `pointer_type` — `"ADS" "(" constant ")" "OF" type` added (explicit pointee address space) | ADDED (ADS memory-spaces) | design S4.2; tests/test_ads_space_parse.py |
 
 ---
 

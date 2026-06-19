@@ -309,6 +309,86 @@ class RuntimeBuiltinsMixin:
             raise CodegenError(f'Undefined procedure: {name}')
         self.builder.call(fn.llvm_value, [src, dst, length])
 
+    def _as_i8_space_ptr(self, ptr: ir.Value) -> ir.Value:
+        """Reinterpret a (possibly addrspace-qualified) pointer as i8* in the
+        same address space, for byte-granular block copy/fill."""
+        addrspace = getattr(ptr.type, 'addrspace', 0)
+        want = ir.IntType(8).as_pointer(addrspace)
+        if ptr.type != want:
+            ptr = self.builder.bitcast(ptr, want)
+        return ptr
+
+    def _to_i64(self, val: ir.Value) -> ir.Value:
+        i64 = ir.IntType(64)
+        if isinstance(val.type, ir.IntType):
+            if val.type.width < 64:
+                return self.builder.zext(val, i64)
+            if val.type.width > 64:
+                return self.builder.trunc(val, i64)
+        return val
+
+    def _device_seg_bridge(self, name: str, args: List[Expression]) -> None:
+        """Lower FILLSC/MOVESL/MOVESR inside a DEVICE MODULE (design S5.4).
+
+        Emits an explicit byte loop that loads from the source address space and
+        stores to the destination address space -- the one sanctioned cross-space
+        bridge.  On the CPU device (device=x86) every space collapses to
+        addrspace 0, so the loop is an ordinary, runnable byte copy/fill; on a GPU
+        triple the loads/stores carry the operands' addrspace(k) and are emitted
+        for the device backend (not executed on this host).
+
+        MOVESL copies forward (low->high), MOVESR backward (high->low); FILLSC
+        writes a constant byte.  Both moves are cross-space and never overlap.
+        """
+        i8 = ir.IntType(8)
+        i64 = ir.IntType(64)
+        if name == 'FILLSC':
+            dst = self._as_i8_space_ptr(self.codegen_expr(args[0]))
+            length = self._to_i64(self.codegen_expr(args[1]))
+            fill = self.codegen_expr(args[2])
+            if isinstance(fill.type, ir.IntType) and fill.type.width != 8:
+                fill = (self.builder.trunc(fill, i8) if fill.type.width > 8
+                        else self.builder.zext(fill, i8))
+            src = None
+            reverse = False
+        else:
+            src = self._as_i8_space_ptr(self.codegen_expr(args[0]))
+            dst = self._as_i8_space_ptr(self.codegen_expr(args[1]))
+            length = self._to_i64(self.codegen_expr(args[2]))
+            fill = None
+            reverse = (name == 'MOVESR')
+
+        zero = ir.Constant(i64, 0)
+        one = ir.Constant(i64, 1)
+        nm1 = self.builder.sub(length, one) if reverse else None
+
+        parent = self.builder.block.parent
+        cond_bb = parent.append_basic_block(name.lower() + '_cond')
+        body_bb = parent.append_basic_block(name.lower() + '_body')
+        end_bb = parent.append_basic_block(name.lower() + '_end')
+
+        entry_bb = self.builder.block
+        self.builder.branch(cond_bb)
+
+        self.builder.position_at_end(cond_bb)
+        idx = self.builder.phi(i64, name='i')
+        idx.add_incoming(zero, entry_bb)
+        cond = self.builder.icmp_unsigned('<', idx, length)
+        self.builder.cbranch(cond, body_bb, end_bb)
+
+        self.builder.position_at_end(body_bb)
+        off = self.builder.sub(nm1, idx) if reverse else idx
+        if name == 'FILLSC':
+            self.builder.store(fill, self.builder.gep(dst, [off]))
+        else:
+            byte = self.builder.load(self.builder.gep(src, [off]))
+            self.builder.store(byte, self.builder.gep(dst, [off]))
+        nxt = self.builder.add(idx, one)
+        idx.add_incoming(nxt, body_bb)
+        self.builder.branch(cond_bb)
+
+        self.builder.position_at_end(end_bb)
+
     def _coerce_to_word(self, val: ir.Value) -> ir.Value:
         """Coerce an integer value to i16 (WORD) for a runtime call."""
         if isinstance(val.type, ir.IntType):

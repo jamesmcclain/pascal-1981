@@ -207,6 +207,12 @@ class StmtsMixin:
     def codegen_proc_call_stmt(self, stmt: ProcCallStmt) -> None:
         """Codegen for procedure call statement."""
         lookup_name = stmt.name.upper()
+        if self.is_device_module and lookup_name in {'FILLSC', 'MOVESL', 'MOVESR'}:
+            # Step 5: inside a DEVICE MODULE these lower to addrspace-aware copy/
+            # fill loops across the operands' concrete spaces -- not the vintage
+            # extern call with the {ptr, i16} segmented ABI (which host code keeps).
+            self._device_seg_bridge(lookup_name, stmt.args)
+            return
         symbol = self.scope.lookup(lookup_name) or self.scope.lookup(stmt.name)
         if not symbol or symbol.llvm_value is None:
             # Try built-in procedures
