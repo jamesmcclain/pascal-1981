@@ -452,7 +452,7 @@ PYTHONPATH=src python3 -m pytest tests/integration/test_uses_graphics.py -q
 - **`tests/integration/`** — Multi-file integration tier. These tests materialize
   real on-disk projects and exercise interface resolution, `USES` binding,
   separate IR generation, `clang` linking, and native execution. See
-  [`docs/integration-tests.md`](docs/integration-tests.md).
+  [`docs/old/integration-tests.md`](docs/old/integration-tests.md).
 
 - **`tests/test_integration.py`** — Legacy integration corpus (currently removed from supported test suite).
 
