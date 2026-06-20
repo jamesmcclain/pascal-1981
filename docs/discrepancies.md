@@ -25,7 +25,8 @@ BEGIN WRITELN(LOWER(s)); WRITELN(UPPER(s)) END.
 - **Adjudication:** the manual text describes `STRING` and `LSTRING` as super-array forms, so the vintage acceptance is consistent with the documented dialect. The modern compiler currently treats these forms as string types rather than array-like super arrays for `LOWER` / `UPPER`. `[INFERRED]`
 - **Severity:** semantic gap in super-array/string interaction; affects `LOWER` / `UPPER` usability on `STRING(n)` and `LSTRING(n)` values.
 
-## D-002 — `NEW` long form on a `SUPER ARRAY` pointer referent
+## D-002 — `NEW` long form on a `SUPER ARRAY` pointer referent — remediated
+- **Status:** remediated in modern normal-code type checking and codegen; covered by `tests/test_runtime_fixes.py::TestNewAllocationSize` `[OBSERVED]`
 - **Probe:**
 
 ```pascal

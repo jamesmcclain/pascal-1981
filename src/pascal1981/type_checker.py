@@ -786,6 +786,7 @@ class PascalTypeChecker(TypeChecker):
 
             # Create symbol
             symbol = Symbol(name=name, type=var_type, kind='var', location=self.get_node_location(decl), is_mutable=not readonly, space=residence)
+            setattr(symbol, 'type_expr', decl.type_expr)
             self.symbol_table.define(name, symbol)
 
     def check_const_decl(self, decl: ConstDecl) -> None:
@@ -871,7 +872,9 @@ class PascalTypeChecker(TypeChecker):
             for member in resolved_type.members:
                 self.symbol_table.define(member, Symbol(name=member, type=resolved_type, kind='const', location=self.get_node_location(decl), is_mutable=False))
 
-        self.symbol_table.define(decl.name, Symbol(name=decl.name, type=resolved_type, kind='type', location=self.get_node_location(decl), is_mutable=False))
+        symbol = Symbol(name=decl.name, type=resolved_type, kind='type', location=self.get_node_location(decl), is_mutable=False)
+        setattr(symbol, 'type_expr', decl.type_expr)
+        self.symbol_table.define(decl.name, symbol)
 
     def check_func_decl(self, decl: FuncDecl) -> None:
         """Type check a function declaration."""
@@ -1864,10 +1867,26 @@ class PascalTypeChecker(TypeChecker):
             self.error("POSITN: second argument must be STRING or LSTRING", stmt)
             return
 
+    def _resolve_ast_type_alias(self, type_expr):
+        seen = set()
+        while isinstance(type_expr, NamedType):
+            key = type_expr.name.upper()
+            sym = self.symbol_table.lookup(type_expr.name) or self.symbol_table.lookup(key)
+            aliased = getattr(sym, 'type_expr', None) if sym and sym.kind == 'type' else None
+            if aliased is None or key in seen:
+                break
+            seen.add(key)
+            type_expr = aliased
+        return type_expr
+
+    def _is_super_array_type_expr(self, type_expr) -> bool:
+        type_expr = self._resolve_ast_type_alias(type_expr)
+        return isinstance(type_expr, ASTArrayType) and bool(getattr(type_expr, 'super', False))
+
     def _check_new_args(self, stmt: ProcCallStmt) -> None:
-        """Type check NEW(VAR P: ^T)."""
-        if len(stmt.args) != 1:
-            self.error(f"NEW expects 1 argument, got {len(stmt.args)}", stmt)
+        """Type check NEW(VAR P: ^T) and long-form NEW for super arrays."""
+        if len(stmt.args) < 1:
+            self.error(f"NEW expects at least 1 argument, got {len(stmt.args)}", stmt)
             return
         arg = stmt.args[0]
         if not isinstance(arg, (Identifier, Designator)):
@@ -1882,6 +1901,29 @@ class PascalTypeChecker(TypeChecker):
             return
         if not sym.is_mutable:
             self.error("NEW: argument must be mutable (VAR parameter)", stmt)
+            return
+
+        type_expr = getattr(sym, 'type_expr', None)
+        ptr_expr = self._resolve_ast_type_alias(type_expr)
+        pointee_expr = ptr_expr.base if isinstance(ptr_expr, ASTPointerType) else None
+        is_super_array = self._is_super_array_type_expr(pointee_expr) if pointee_expr is not None else False
+
+        if len(stmt.args) == 1:
+            if is_super_array:
+                self.error("NEW: super array allocation requires upper bound arguments", stmt)
+            return
+
+        if not is_super_array:
+            self.error(f"NEW expects 1 argument, got {len(stmt.args)}", stmt)
+            return
+
+        # Current implementation supports the observed one-dimensional SUPER ARRAY form.
+        if len(stmt.args) != 2:
+            self.error(f"NEW: super array allocation expects 1 upper bound, got {len(stmt.args) - 1}", stmt)
+            return
+        bound_type = self.infer_expression_type(stmt.args[1], INTEGER_TYPE)
+        if bound_type and not can_assign(bound_type, INTEGER_TYPE):
+            self.error(f"NEW: super array upper bound must be INTEGER, got {bound_type}", stmt)
             return
 
     def _check_dispose_args(self, stmt: ProcCallStmt) -> None:

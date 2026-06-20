@@ -88,6 +88,38 @@ class TestNewAllocationSize(unittest.TestCase):
         ir = compile_to_ir(src)
         self.assertIn('call i8* @"malloc"(i64 2)', ir)
 
+    def test_new_long_form_super_array_typechecks(self):
+        """D-002: long-form NEW supplies the upper bound for a super array."""
+        src = ("PROGRAM P; TYPE VECT = SUPER ARRAY [0..*] OF INTEGER; "
+               "VAR p: ^VECT; BEGIN NEW(p, 10) END.")
+        result = typecheck_source(src)
+        self.assertTrue(result.success, [e.message for e in result.errors])
+
+    def test_new_short_form_super_array_rejected(self):
+        """Super arrays require long-form NEW with upper bounds."""
+        src = ("PROGRAM P; TYPE VECT = SUPER ARRAY [0..*] OF INTEGER; "
+               "VAR p: ^VECT; BEGIN NEW(p) END.")
+        result = typecheck_source(src)
+        self.assertFalse(result.success)
+        self.assertIn("NEW: super array allocation requires upper bound arguments",
+                      [e.message for e in result.errors])
+
+    def test_new_long_form_non_super_array_rejected(self):
+        """Do not treat long-form NEW as a generic pointer allocation spelling."""
+        src = "PROGRAM P; VAR p: ^INTEGER; BEGIN NEW(p, 10) END."
+        result = typecheck_source(src)
+        self.assertFalse(result.success)
+        self.assertIn("NEW expects 1 argument, got 2", [e.message for e in result.errors])
+
+    def test_new_long_form_super_array_lowers_to_dynamic_malloc_size(self):
+        """NEW(p, hi) allocates (hi - lower + 1) elements for a super array."""
+        src = ("PROGRAM P; TYPE VECT = SUPER ARRAY [0..*] OF INTEGER; "
+               "VAR p: ^VECT; BEGIN NEW(p, 10) END.")
+        ir = compile_to_ir(src)
+        self.assertIn('call i8* @"malloc"(i64 %', ir)
+        self.assertIn('mul i64', ir)
+        self.assertIn(', 2', ir)
+
 
 @requires_llvm
 class TestEncodeDecodeArgs(unittest.TestCase):

@@ -79,8 +79,8 @@ class RuntimeBuiltinsMixin:
         self._runtime_fillmove('MOVESR', args)
 
     def builtin_new(self, args: List[Expression]) -> None:
-        if len(args) != 1:
-            raise CodegenError(f'NEW expects 1 argument, got {len(args)}')
+        if len(args) < 1:
+            raise CodegenError(f'NEW expects at least 1 argument, got {len(args)}')
         target = args[0]
         if isinstance(target, Identifier):
             target = Designator(target.name, [])
@@ -92,26 +92,46 @@ class RuntimeBuiltinsMixin:
         if not sym or not isinstance(ptr_type, PointerType):
             raise CodegenError('NEW requires a pointer variable')
         pointee = getattr(ptr_type, 'target_type', None) or getattr(ptr_type, 'base', None)
+        resolved_pointee = self.resolve_type_alias(pointee)
         alloc_ty = self.llvm_type(pointee)
-        # Size the heap block from the pointee's real byte size. The module
-        # carries an empty target datalayout, so DataLayout.get_type_alloc_size()
-        # silently fell back to a hard-coded 8 here and under-allocated for any
-        # pointee larger than 8 bytes (e.g. a multi-field RECORD), corrupting the
-        # heap on the first full write. get_type_size() resolves array bounds and
-        # record layouts the same way SIZEOF does.
-        alloc_size = 0
-        try:
-            alloc_size = self.get_type_size(self.resolve_type_alias(pointee))
-        except Exception:
-            alloc_size = 0
-        if alloc_size <= 0 and getattr(self.module, 'data_layout', None):
+
+        if len(args) > 1:
+            if not (isinstance(resolved_pointee, ArrayType) and getattr(resolved_pointee, 'super', False)):
+                raise CodegenError(f'NEW expects 1 argument, got {len(args)}')
+            if len(args) != 2:
+                raise CodegenError(f'NEW super array allocation expects 1 upper bound, got {len(args) - 1}')
+            lower = self.eval_const_expr(resolved_pointee.index_range.low)
+            elem_size = self.get_type_size(resolved_pointee.element_type)
+            upper_val = self.codegen_expr(args[1])
+            if isinstance(upper_val.type, ir.IntType) and upper_val.type.width < 64:
+                upper64 = self.builder.sext(upper_val, ir.IntType(64))
+            elif isinstance(upper_val.type, ir.IntType) and upper_val.type.width > 64:
+                upper64 = self.builder.trunc(upper_val, ir.IntType(64))
+            else:
+                upper64 = upper_val
+            count = self.builder.sub(upper64, ir.Constant(ir.IntType(64), lower - 1))
+            alloc_size = self.builder.mul(count, ir.Constant(ir.IntType(64), elem_size))
+        else:
+            # Size the heap block from the pointee's real byte size. The module
+            # carries an empty target datalayout, so DataLayout.get_type_alloc_size()
+            # silently fell back to a hard-coded 8 here and under-allocated for any
+            # pointee larger than 8 bytes (e.g. a multi-field RECORD), corrupting the
+            # heap on the first full write. get_type_size() resolves array bounds and
+            # record layouts the same way SIZEOF does.
+            alloc_size_int = 0
             try:
-                alloc_size = self.module.data_layout.get_type_alloc_size(alloc_ty)
+                alloc_size_int = self.get_type_size(resolved_pointee)
             except Exception:
-                alloc_size = 0
-        if alloc_size <= 0:
-            alloc_size = 8
-        raw = self.builder.call(self.runtime_extern('malloc'), [ir.Constant(ir.IntType(64), alloc_size)])
+                alloc_size_int = 0
+            if alloc_size_int <= 0 and getattr(self.module, 'data_layout', None):
+                try:
+                    alloc_size_int = self.module.data_layout.get_type_alloc_size(alloc_ty)
+                except Exception:
+                    alloc_size_int = 0
+            if alloc_size_int <= 0:
+                alloc_size_int = 8
+            alloc_size = ir.Constant(ir.IntType(64), alloc_size_int)
+        raw = self.builder.call(self.runtime_extern('malloc'), [alloc_size])
         casted = self.builder.bitcast(raw, self.llvm_type(sym.type_expr))
         self.builder.store(casted, ptr_addr)
 
