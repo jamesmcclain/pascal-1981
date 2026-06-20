@@ -102,6 +102,34 @@ class TestArrayBoundIntrinsicCodegen(unittest.TestCase):
         self.assertIn("2", ir)
 
 
+class TestStringLowerUpperSemantics(unittest.TestCase):
+    """D-001: STRING/LSTRING participate in LOWER/UPPER like super arrays."""
+
+    def test_string_lower_upper_typechecks(self):
+        src = "PROGRAM P; VAR s: STRING(10); BEGIN WRITELN(LOWER(s)); WRITELN(UPPER(s)) END."
+        result = typecheck_source(src)
+        self.assertTrue(result.success, [e.message for e in result.errors])
+
+    def test_lstring_lower_upper_typechecks(self):
+        src = "PROGRAM P; VAR s: LSTRING(10); BEGIN WRITELN(LOWER(s)); WRITELN(UPPER(s)) END."
+        result = typecheck_source(src)
+        self.assertTrue(result.success, [e.message for e in result.errors])
+
+    @requires_exe
+    def test_string_lower_upper_matches_vintage_bounds(self):
+        src = "PROGRAM P; VAR s: STRING(10); BEGIN WRITELN(LOWER(s)); WRITELN(UPPER(s)) END."
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.split(), ["1", "10"])
+
+    @requires_exe
+    def test_lstring_lower_upper_matches_vintage_bounds(self):
+        src = "PROGRAM P; VAR s: LSTRING(10); BEGIN WRITELN(LOWER(s)); WRITELN(UPPER(s)) END."
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.split(), ["0", "10"])
+
+
 @requires_llvm
 class TestLStringLengthSemantics(unittest.TestCase):
     """LSTRING is length-prefixed, not null-terminated (manual 6-18/6-19).

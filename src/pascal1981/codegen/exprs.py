@@ -94,8 +94,21 @@ class ExprsMixin:
             symbol = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
             if not symbol or symbol.type_expr is None:
                 raise CodegenError(f'Undefined variable: {expr.name}')
-            ty = symbol.type_expr
-            if hasattr(ty, 'index_range'):
+            ty = self.resolve_type_alias(symbol.type_expr)
+            if isinstance(ty, NamedType) and ty.name.upper() in {'STRING', 'LSTRING'}:
+                max_len = int(ty.param) if isinstance(ty.param, int) else 256
+                lower = 1 if ty.name.upper() == 'STRING' else 0
+                upper = max_len
+            elif isinstance(ty, ResolvedStringType):
+                lower = 1
+                upper = ty.max_len
+            elif isinstance(ty, ResolvedLStringType):
+                lower = 0
+                upper = ty.max_len
+            elif isinstance(ty, LStringType):
+                lower = 0
+                upper = ty.max_len
+            elif hasattr(ty, 'index_range'):
                 lower = self.eval_const_expr(ty.index_range.low)
                 upper = None if ty.index_range.high is None else self.eval_const_expr(ty.index_range.high)
             elif hasattr(ty, 'lower_bound') and hasattr(ty, 'upper_bound'):

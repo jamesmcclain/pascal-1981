@@ -1,6 +1,7 @@
 # Differential discrepancies
 
-## D-001 — `LOWER` / `UPPER` on `STRING(n)` and `LSTRING(n)`
+## D-001 — `LOWER` / `UPPER` on `STRING(n)` and `LSTRING(n)` — remediated
+- **Status:** remediated in modern normal-code type checking and codegen; covered by `tests/test_codegen_strings_bounds.py::TestStringLowerUpperSemantics` `[OBSERVED]`
 - **Probe:**
 
 ```pascal

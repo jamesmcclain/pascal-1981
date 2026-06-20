@@ -2037,7 +2037,7 @@ class PascalTypeChecker(TypeChecker):
                 self.error(f"Undefined variable: {expr.name}", expr)
                 return None
             ty = sym.type
-            if isinstance(ty, ArrayType):
+            if isinstance(ty, (ArrayType, StringType, LStringType)):
                 return INTEGER_TYPE
             self.error(f"Function '{type(expr).__name__[:-4].upper()}' expects an array variable", expr)
             return None
