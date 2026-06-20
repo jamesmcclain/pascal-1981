@@ -2068,7 +2068,7 @@ class PascalTypeChecker(TypeChecker):
                         if selector.index_or_field:
                             index_type = self.infer_expression_type(selector.index_or_field)
                             expected = current_type.effective_index_type
-                            if index_type and not index_type.equivalent_to(expected):
+                            if index_type and not self._valid_array_index_type(index_type, expected):
                                 self.error(f"Array index must be {expected}, got {index_type}", expr)
                         current_type = current_type.element_type
                     elif selector.kind == 'FIELD':
@@ -2431,6 +2431,18 @@ class PascalTypeChecker(TypeChecker):
             return None
         return SetConstructor([sel.index_or_field for sel in designator.selectors], designator.name)
 
+    def _valid_array_index_type(self, index_type: Optional[Type], expected: Type) -> bool:
+        """Return whether ``index_type`` is valid for an array selector.
+
+        DEVICE code uses INTEGER32 thread/block indices.  Permit those as array
+        indices in DEVICE source while preserving vintage host behaviour.
+        """
+        if index_type is None:
+            return False
+        if index_type.equivalent_to(expected):
+            return True
+        return self.in_device_module and index_type.equivalent_to(INTEGER32_TYPE) and expected.equivalent_to(INTEGER_TYPE)
+
     def infer_designator_type(self, designator: Designator) -> Optional[Type]:
         """Infer the type of a designator (with selectors for array/record access)."""
         typed_set = self._designator_as_typed_set_constructor(designator)
@@ -2464,7 +2476,7 @@ class PascalTypeChecker(TypeChecker):
                     if selector.index_or_field:
                         index_type = self.infer_expression_type(selector.index_or_field)
                         expected = current_type.effective_index_type
-                        if index_type and not index_type.equivalent_to(expected):
+                        if index_type and not self._valid_array_index_type(index_type, expected):
                             self.error(f"Array index must be {expected}, got {index_type}", designator)
                     current_type = current_type.element_type
 

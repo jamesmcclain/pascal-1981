@@ -117,8 +117,10 @@ class StmtsMixin:
         if not symbol:
             raise CodegenError(f'Undefined variable: {target_name}')
 
-        # Can't assign to parameters (passed by value)
-        if symbol.is_parameter:
+        # Can't assign to parameters themselves (passed by value), but assigning
+        # through a pointer parameter designator such as p^[i] is a store to the
+        # pointee, not a rebinding of the parameter value.
+        if symbol.is_parameter and not stmt.target.selectors:
             raise CodegenError(f'Cannot assign to parameter: {target_name}')
 
         # Check if the target is a string type

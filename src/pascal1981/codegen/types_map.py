@@ -377,6 +377,7 @@ class TypesMapMixin:
 
         ptr = symbol.llvm_value
         cur_type = symbol.type_expr
+        base_is_parameter = symbol.is_parameter
 
         if designator.selectors:
             for selector in designator.selectors:
@@ -453,8 +454,11 @@ class TypesMapMixin:
                         ptr = self._file_buffer_ptr(ptr, base.element_type, getattr(base, 'structure', 'BINARY') == 'ASCII')
                         cur_type = base.element_type
                     else:
-                        # Pointer dereference
-                        ptr = self.builder.load(ptr)
+                        # Pointer dereference.  Pointer parameters are already
+                        # pointer values; pointer variables are slots holding a
+                        # pointer and must be loaded first.
+                        if not base_is_parameter:
+                            ptr = self.builder.load(ptr)
                         # $NILCK (manual: default +): error on dereferencing
                         # NIL (0) or — only with $INITCK — the uninitialized
                         # sentinel (1).  The manual's odd-pointer and
