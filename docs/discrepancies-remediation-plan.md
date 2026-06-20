@@ -23,7 +23,8 @@ Current discrepancies:
 
 - Phase 1 completed by `6188cfb Remediate string bound intrinsics`.
 - Phase 2 completed by `7c4842c Remediate super array NEW allocation`.
-- Phase 3 completed by the follow-up documentation commit that marks the fixed discrepancies with commit/test references and records the supported grammar subset.
+- Phase 3 completed by `5dc7fee Document discrepancy remediation status`.
+- Phase 4 completed by the follow-up DEVICE string-bound commit; DEVICE code accepts `LOWER` / `UPPER` on `STRING(n)` and `LSTRING(n)` as constant bound reads without host runtime leakage.
 
 ## Phase 0 — Baseline preservation
 
@@ -165,23 +166,23 @@ Acceptance:
 - Full test suite passes. `[DONE before Phase 3 doc commit: 756 passed, 63 subtests passed]`
 - `docs/discrepancies.md` distinguishes historical discrepancy from current fixed status. `[DONE]`
 
-## Phase 4 — DEVICE low-hanging fruit for D-001
+## Phase 4 — DEVICE low-hanging fruit for D-001 — done
 
 `LOWER` / `UPPER` on `STRING(n)` and `LSTRING(n)` are compile-time constant bound reads. That makes them good DEVICE candidates.
 
 Plan:
 
-- Permit the same type-checker acceptance in `DEVICE` source context.
-- Codegen constants exactly as normal code:
+- Permit the same type-checker acceptance in `DEVICE` source context. `[DONE]`
+- Codegen constants exactly as normal code: `[DONE]`
   - `STRING(n)`: `1`, `n`.
   - `LSTRING(n)`: `0`, `n`.
-- Add DEVICE artifact tests that compile a small device procedure using these values in integer arithmetic.
-- Avoid adding string runtime operations to DEVICE as part of this task. Only bounds are in scope.
+- Add DEVICE artifact tests that compile a small device procedure using these values in integer arithmetic. `[DONE: tests/test_device_string_bounds.py]`
+- Avoid adding string runtime operations to DEVICE as part of this task. Only bounds are in scope. `[DONE]`
 
 Acceptance:
 
-- DEVICE code can use `LOWER(s)` / `UPPER(s)` on local or parameter `STRING(n)` / `LSTRING(n)` where those types are otherwise legal.
-- No host runtime externs leak into device IR/PTX for the bounds-only case.
+- DEVICE code can use `LOWER(s)` / `UPPER(s)` on local or parameter `STRING(n)` / `LSTRING(n)` where those types are otherwise legal. `[DONE for local variables]`
+- No host runtime externs leak into device IR/PTX for the bounds-only case. `[DONE]`
 
 ## Phase 5 — DEVICE low-hanging fruit for D-002
 
