@@ -49,7 +49,7 @@ unknown-extern, string, libm, and runtime-check guards. Full suite passed:
 
 ---
 
-## 2. `is_root_compiland` makes every PROGRAM *and* MODULE a strong owner of `@input`/`@output` [OPEN]
+## 2. `is_root_compiland` makes every PROGRAM *and* MODULE a strong owner of `@input`/`@output` [DONE]
 
 **Where.** `codegen/__init__.py` — `is_root_compiland = not isinstance(ast,
 (InterfaceUnit, ImplementationUnit))`; consumed by
@@ -70,17 +70,15 @@ definitions, and the multiple-definition collision would return. Nothing exercis
 this today (modules are not separately linked into programs in the current tests),
 so it is a latent boundary, not an active bug.
 
-**Suggested resolution.** Decide the ownership rule deliberately rather than by the
-`not isinstance(...)` default. Options: (a) make *only* `ProgramUnit` a strong
-owner and have `ModuleUnit` declare-external like a UNIT (correct if a MODULE is
-never the program's entry point); or (b) keep MODULE as a root but add a
-link-time/compile-time check that forbids linking two strong owners. (a) is
-simpler and matches the "the PROGRAM owns the program-wide singletons" intent.
+**Resolution.** Option (a) was implemented: only `ProgramUnit` is a strong owner.
+`ModuleUnit`, `InterfaceUnit`, and `ImplementationUnit` now declare `@input` and
+`@output` externally. Plain `MODULE`s are library-like, not independently
+runnable; earlier "launchable MODULE" wording was stale/confused with DEVICE
+kernel entry-point discussion.
 
-**How to verify.** Add an integration test that compiles a `PROGRAM` and a
-separately-compiled `MODULE` that both touch `INPUT`/`OUTPUT`, links them, and
-asserts a clean link (no multiple-definition error) and correct run output. That
-test should fail under today's rule and pass after the ownership rule is tightened.
+**How verified.** `tests/test_lazy_externs.py` now asserts that MODULEs declare
+`@input` / `@output` externally and that combining PROGRAM IR with separately
+compiled MODULE IR yields exactly one strong definition of each singleton.
 
 ---
 

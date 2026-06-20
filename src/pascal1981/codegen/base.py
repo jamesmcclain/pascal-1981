@@ -175,9 +175,9 @@ class CodegenBase:
         # GPU device targets.  The old gated-skip scaffolding is removed.
         self._runtime_extern_cache: Dict[str, ir.Function] = {}
         self._build_extern_factories()
-        # INPUT/OUTPUT: root compiland (PROGRAM / MODULE) owns the strong
-        # definition; a UNIT emits declare-only (external global) so the linker
-        # resolves to the single copy in the root (S4.1).
+        # INPUT/OUTPUT: only PROGRAM owns the strong definition; MODULE and
+        # UNIT compilands emit declare-only (external global) so the linker
+        # resolves to the single copy in the program root (S4.1).
         self._register_predeclared_files(is_root_compiland)
 
     def _log(self, msg: str) -> None:
@@ -256,12 +256,12 @@ class CodegenBase:
     def _register_predeclared_files(self, is_root_compiland: bool = True) -> None:
         """Declare INPUT and OUTPUT as predeclared TEXT file handles.
 
-        Root compilands (PROGRAM / launchable MODULE) emit a strong global
-        definition — the single owner of these program-wide singletons.
-        Non-root compilands (UNIT interface / implementation) emit an external
-        declaration only; the linker resolves their reference to the root's
-        definition.  This prevents multiple-definition collisions when linking
-        a host program with one or more compiled units (checklist S4.1).
+        PROGRAM compilands emit a strong global definition — the single owner
+        of these program-wide singletons. MODULE and UNIT compilands emit an
+        external declaration only; the linker resolves their reference to the
+        PROGRAM definition. This prevents multiple-definition collisions when
+        linking a host program with one or more compiled library objects
+        (checklist S4.1).
         """
         text_type = FileType(NamedType('CHAR', None), structure='ASCII')
         for name in ('INPUT', 'OUTPUT'):

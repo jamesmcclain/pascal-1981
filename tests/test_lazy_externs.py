@@ -9,10 +9,10 @@ Two orthogonal properties verified here:
    extern is structurally impossible" invariant.
 
 2. **INPUT/OUTPUT single-definition property (§4.1)**
-   PROGRAM / launchable MODULE is the root compiland: it owns the strong global
-   definitions @input and @output.  Any UNIT (interface + implementation) emits
-   external declarations only.  When both modules are linked, exactly one strong
-   definition of each exists.
+   PROGRAM is the root compiland: it owns the strong global definitions @input
+   and @output. MODULE and UNIT compilands emit external declarations only.
+   When library objects are linked with a PROGRAM, exactly one strong definition
+   of each exists.
 """
 
 import os
@@ -179,7 +179,7 @@ class TestZeroDeclareGuarantee(unittest.TestCase):
 
 
 class TestInputOutputOwnership(unittest.TestCase):
-    """Root compiland owns INPUT/OUTPUT; units declare them externally."""
+    """PROGRAM owns INPUT/OUTPUT; MODULE/UNIT declare them externally."""
 
     def test_program_owns_input_output(self):
         """A PROGRAM emits strong global definitions for @input and @output."""
@@ -192,12 +192,15 @@ class TestInputOutputOwnership(unittest.TestCase):
         self.assertNotIn('input',  extern)
         self.assertNotIn('output', extern)
 
-    def test_module_owns_input_output(self):
-        """A MODULE (launchable root) also emits strong definitions."""
+    def test_module_declares_input_output_externally(self):
+        """A MODULE is library-like and does not own process-wide files."""
         ir_text = _compile('MODULE M; .')
+        extern = _extern_globals(ir_text)
+        self.assertIn('input',  extern, '@input should be external decl in MODULE')
+        self.assertIn('output', extern, '@output should be external decl in MODULE')
         strong = _strong_globals(ir_text)
-        self.assertIn('input',  strong, '@input should be a strong def in MODULE')
-        self.assertIn('output', strong, '@output should be a strong def in MODULE')
+        self.assertNotIn('input',  strong)
+        self.assertNotIn('output', strong)
 
     def test_unit_declares_input_output_externally(self):
         """A UNIT (interface + implementation) emits external declarations for
@@ -215,13 +218,7 @@ class TestInputOutputOwnership(unittest.TestCase):
         self.assertNotIn('output', strong)
 
     def test_no_multiple_strong_defs_when_linking_program_and_unit(self):
-        """After lazy registration + Option-1 ownership, linking a PROGRAM IR
-        with a UNIT IR produces exactly one strong definition of @input and
-        @output combined (no multiple-definition collision).
-
-        We verify at the IR level: program has strong defs, unit has extern
-        decls, so the union has exactly one strong definition each.
-        """
+        """Linking a PROGRAM IR with a UNIT IR has one owner of @input/@output."""
         prog_ir = _compile('PROGRAM P; BEGIN END.')
         iface = 'INTERFACE;\nUNIT U (go);\nPROCEDURE go;\nEND;\n'
         impl  = 'IMPLEMENTATION OF U;\nPROCEDURE go;\nBEGIN END;\n.\n'
@@ -240,6 +237,23 @@ class TestInputOutputOwnership(unittest.TestCase):
         # Unit references them via external decl
         self.assertIn('input',  unit_extern)
         self.assertIn('output', unit_extern)
+
+    def test_no_multiple_strong_defs_when_linking_program_and_module(self):
+        """PROGRAM + separately compiled MODULE must not both define files."""
+        prog_ir = _compile('PROGRAM P; BEGIN END.')
+        module_ir = _compile('MODULE M; VAR x: INTEGER; .')
+
+        prog_strong = _strong_globals(prog_ir)
+        module_strong = _strong_globals(module_ir)
+        module_extern = _extern_globals(module_ir)
+        combined_strong = prog_strong + module_strong
+
+        self.assertEqual(combined_strong.count('input'), 1)
+        self.assertEqual(combined_strong.count('output'), 1)
+        self.assertNotIn('input', module_strong)
+        self.assertNotIn('output', module_strong)
+        self.assertIn('input', module_extern)
+        self.assertIn('output', module_extern)
 
 
 if __name__ == '__main__':
