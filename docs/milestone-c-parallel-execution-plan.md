@@ -208,7 +208,7 @@ repetitive. Tracked here only so it is not forgotten. No green gate (no work).
 
 ## Phase C.5 — Tests & acceptance
 
-- [ ] **C.5.1 Unit/artifact tests.** Mirror the device-unit test discipline
+- [x] **C.5.1 Unit/artifact tests.** Mirror the device-unit test discipline
   (assert on the emitted IR, both triples):
   - `nvptx64`: each index read emits its specific `llvm.nvvm.read.ptx.sreg.*`
     intrinsic; `SYNCTHREADS` emits `llvm.nvvm.barrier0`; still zero host-runtime
@@ -218,18 +218,19 @@ repetitive. Tracked here only so it is not forgotten. No green gate (no work).
     no sibling lanes to wait for.
   - Normal host code using any of these is rejected with a device-only diagnostic;
     `DEVICE` code targeting `device=x86` accepts them and lowers them to the CPU-device constants.
-- [ ] **C.5.2 CPU-device correctness (the headline).** A **grid-stride vector-add**
+- [x] **C.5.2 CPU-device correctness (the headline).** A **grid-stride vector-add**
   `DEVICE UNIT` (and a `SHARED`-staging kernel using `SYNCTHREADS`) compiled to
   `device=x86`, linked, and **run**, producing the correct full-array result.
   This is the proof that the parallel model is correct independent of any GPU.
   **Progress:** the grid-stride vector-add half is now covered by
   `tests/integration/test_device_grid_stride.py`; the `SHARED`+`SYNCTHREADS`
   half is covered by `tests/integration/test_device_shared_syncthreads.py`.
-- [ ] **C.5.3 Definition-of-done (prescription §10, point 2 dependency).** With
+- [x] **C.5.3 Definition-of-done (prescription §10, point 2 dependency).** With
   C.1/C.2 in place, the "vector-add kernel computes the right numeric result on the
   CPU device (no GPU needed)" smoke test (§10) becomes achievable; wire it as a
   standing integration test. **Green gate:** prescription §10 point (2) can be
-  ticked from `[PRESCRIBED]` to `[DONE]`.
+  ticked from `[PRESCRIBED]` to `[DONE]` for the Milestone-C CPU-device body
+  contract; Milestone-D launch orchestration remains separate.
 
 ---
 

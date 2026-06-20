@@ -14,6 +14,19 @@ END;
 .
 """
 
+ALL_INDEX_READS_SRC = """
+DEVICE MODULE M;
+VAR x: INTEGER32;
+PROCEDURE go;
+BEGIN
+  x := THREADIDX_X + THREADIDX_Y + THREADIDX_Z
+     + BLOCKIDX_X + BLOCKIDX_Y + BLOCKIDX_Z
+     + BLOCKDIM_X + BLOCKDIM_Y + BLOCKDIM_Z
+     + GRIDDIM_X + GRIDDIM_Y + GRIDDIM_Z
+END;
+.
+"""
+
 
 class DeviceIndexIntrinsicTypecheckTests(unittest.TestCase):
     def test_normal_host_code_rejects_threadidx(self):
@@ -45,13 +58,21 @@ class DeviceIndexIntrinsicCodegenTests(unittest.TestCase):
         self.assertIn('mul i32 0, 1', ir)
         self.assertIn('add i32 %".3", 1', ir)
 
-    def test_nvptx_lowers_reads_to_special_register_intrinsics(self):
-        ir = self._compile(DEVICE_SRC, device_triple='nvptx64-nvidia-cuda')
+    def test_nvptx_lowers_all_reads_to_special_register_intrinsics(self):
+        ir = self._compile(ALL_INDEX_READS_SRC, device_triple='nvptx64-nvidia-cuda')
         for name in [
             'llvm.nvvm.read.ptx.sreg.tid.x',
+            'llvm.nvvm.read.ptx.sreg.tid.y',
+            'llvm.nvvm.read.ptx.sreg.tid.z',
             'llvm.nvvm.read.ptx.sreg.ctaid.x',
+            'llvm.nvvm.read.ptx.sreg.ctaid.y',
+            'llvm.nvvm.read.ptx.sreg.ctaid.z',
             'llvm.nvvm.read.ptx.sreg.ntid.x',
+            'llvm.nvvm.read.ptx.sreg.ntid.y',
+            'llvm.nvvm.read.ptx.sreg.ntid.z',
             'llvm.nvvm.read.ptx.sreg.nctaid.x',
+            'llvm.nvvm.read.ptx.sreg.nctaid.y',
+            'llvm.nvvm.read.ptx.sreg.nctaid.z',
         ]:
             self.assertIn(name, ir)
         self.assertNotIn('declare void @abort', ir)
