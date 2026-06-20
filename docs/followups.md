@@ -1,0 +1,85 @@
+# Follow-ups / tracked tech-debt
+
+A home for known, non-blocking issues we have consciously decided to defer, so
+they are not lost. Each item states what it is, where it lives, why it matters,
+a suggested resolution, and how to verify the fix. Status is one of OPEN /
+IN-PROGRESS / DONE.
+
+These are not bugs that produce wrong output today; they are seams worth
+closing when the surrounding code is next touched. Items 1 and 2 were surfaced
+while reviewing the lazy-extern / `INPUT`/`OUTPUT`-ownership work (checklist
+S2.2.1 full form + S4.1).
+
+---
+
+## 1. `runtime_extern` has a dual function-creation path (and a linear-scan safety net) [OPEN]
+
+**Where.** `codegen/base.py` — `runtime_extern(name)` and `_build_extern_factories`;
+the bypassing creators are `io_write_read.py` (`_read_helper`) and the
+`_runtime_func`/`_declare_libm_func` helpers.
+
+**What.** The lazy-extern scheme materialises host-runtime externs from a factory
+registry on first reference and caches them in `_root_scope`. But not every
+runtime function goes through that registry: `_read_helper` and the libm/runtime
+helpers still create `ir.Function`s directly, outside the factory path. To cope,
+`runtime_extern` has a **middle tier** that linearly scans `self.module.functions`
+for a name the registry/scope did not already have, then adopts it into
+`_root_scope`. So there are two ways a runtime function can come into being, and
+`runtime_extern` papers over the gap with an O(n) scan.
+
+**Why it matters.** It is correct and cached (the scan runs at most once per
+name), so there is no behavioural or real performance problem today. But the dual
+creation path is a latent inconsistency: a future signature change to one of the
+`_read_helper`-created functions would not be reflected in the factory registry
+(or vice-versa), and the two could silently drift. The linear scan is also a
+small smell that signals the migration to the registry was not completed.
+
+**Suggested resolution.** Route the remaining direct creators (`_read_helper`,
+the `pas_fread_*` canonical signatures, any libm/runtime helper that creates a
+named extern) through the factory registry so the registry is the single source
+of truth for every host-runtime extern's signature. Once nothing creates these
+functions outside the registry, delete the `module.functions` middle tier from
+`runtime_extern`, leaving scope-lookup → factory.
+
+**How to verify.** (a) Grep for `ir.Function(` in the codegen package and confirm
+the only host-runtime externs created are inside `_build_extern_factories`.
+(b) Remove the linear-scan tier and confirm the full suite (including the file /
+READ / string tests) stays green. (c) `tests/test_lazy_externs.py` already pins
+the "only referenced externs are emitted" invariant; extend it with a guard that
+two references to a `_read_helper`-family extern resolve to the *same* `ir.Function`
+object.
+
+---
+
+## 2. `is_root_compiland` makes every PROGRAM *and* MODULE a strong owner of `@input`/`@output` [OPEN]
+
+**Where.** `codegen/__init__.py` — `is_root_compiland = not isinstance(ast,
+(InterfaceUnit, ImplementationUnit))`; consumed by
+`codegen/base.py:_register_predeclared_files`.
+
+**What.** The S4.1 fix makes the root compiland emit a *strong* definition of the
+`@input`/`@output` global singletons and makes UNIT compilands (interface /
+implementation) emit *external* declarations, so a linked program has exactly one
+owner. "Root" is currently "anything that is not an interface or implementation"
+— which is both `ProgramUnit` **and** `ModuleUnit`.
+
+**Why it matters.** The real link scenarios in the suite are PROGRAM + one or more
+UNITs, where exactly one root (the PROGRAM) defines the globals — no collision,
+and this is what let us drop `-Wl,--allow-multiple-definition`. But if a
+standalone `MODULE` were ever compiled to its own object and linked **alongside a
+PROGRAM**, both would be "root", both would emit strong `@input`/`@output`
+definitions, and the multiple-definition collision would return. Nothing exercises
+this today (modules are not separately linked into programs in the current tests),
+so it is a latent boundary, not an active bug.
+
+**Suggested resolution.** Decide the ownership rule deliberately rather than by the
+`not isinstance(...)` default. Options: (a) make *only* `ProgramUnit` a strong
+owner and have `ModuleUnit` declare-external like a UNIT (correct if a MODULE is
+never the program's entry point); or (b) keep MODULE as a root but add a
+link-time/compile-time check that forbids linking two strong owners. (a) is
+simpler and matches the "the PROGRAM owns the program-wide singletons" intent.
+
+**How to verify.** Add an integration test that compiles a `PROGRAM` and a
+separately-compiled `MODULE` that both touch `INPUT`/`OUTPUT`, links them, and
+asserts a clean link (no multiple-definition error) and correct run output. That
+test should fail under today's rule and pass after the ownership rule is tightened.

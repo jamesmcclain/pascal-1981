@@ -15,5 +15,5 @@ def test_parameterless_extern_function_identifier_emits_zero_arg_call():
 
     ir = compile_to_llvm(parse_source(src))
 
-    assert 'declare i16 @"prime_count"()' in ir
+    assert 'declare external i16 @"prime_count"()' in ir
     assert 'call i16 @"prime_count"()' in ir

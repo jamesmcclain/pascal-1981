@@ -17,20 +17,40 @@ Where a production carries no annotation, it inherits the status of the surround
    COMPILATION UNIT STRUCTURE                               [OBSERVED]
    ═══════════════════════════════════════════════════════════════════ *)
 
-compilation_unit =
-      program_unit
-    | module_unit
-    | interface_unit
-    | implementation_unit ;
+(* A source file may be preceded by zero or more interface_unit blocks that
+   were spliced in via $INCLUDE before the main compilation-unit keyword.
+   These are called "leading" or "spliced" interfaces.  They are collected
+   by the parser into the unit's `local_interfaces` list and are consulted
+   by the type checker and codegen when resolving USES imports -- BEFORE any
+   disk-based module search.  Disk lookup is the fallback when no spliced
+   interface matches the requested name.  The vintage pattern is:
 
+       (*$INCLUDE:'GRAPHI'*)       -- splices INTERFACE; UNIT GRAPHICS ...
+       (*$INCLUDE:'BASEPL'*)       -- splices INTERFACE; UNIT BASEPLOT ...
+       IMPLEMENTATION OF GRAPHICS;
+       USES BASEPLOT;              -- resolved from spliced BASEPL, not disk
+       ...
+
+   A standalone interface file (no following unit) is still legal and
+   returns the interface_unit directly as the parse result. *)
+
+compilation_unit =
+      { interface_unit }          (* zero or more leading spliced interfaces *)
+    ( program_unit
+    | module_unit
+    | interface_unit              (* standalone interface file *)
+    | implementation_unit ) ;
+
+(* Leading interface_unit blocks (if any) are parsed before the PROGRAM
+   keyword by the top-level compilation_unit rule above; they are not part
+   of the program_unit grammar itself.  USES clauses in the program body
+   resolve against local_interfaces first, then disk. *)
 program_unit =
-    [ include_directive ]
     "PROGRAM" identifier [ "(" identifier_list ")" ] ";"
     [ uses_clause ]
     block "." ;
 
 module_unit =
-    [ include_directive ]
     [ "DEVICE" ]                  (* DEVICE MODULE = device-dialect code (GPU); *)
     "MODULE" identifier ";"      (* see docs/ads-memory-spaces-design.md S1.2  *)
     [ uses_clause ]
@@ -63,7 +83,11 @@ implementation_unit =
     implementation_block "." ;
     (* DEVICE IMPLEMENTATION selects the device dialect. The contextual
        DEVICE prefix is recognized at compilation-unit start, immediately
-       before IMPLEMENTATION. *)
+       before IMPLEMENTATION.
+       The unit's `interface` field is populated from the spliced
+       interface_unit whose name matches `identifier` (if present); all
+       spliced interfaces are also available via `local_interfaces` for
+       USES resolution. *)
 
 
 (* ═══════════════════════════════════════════════════════════════════

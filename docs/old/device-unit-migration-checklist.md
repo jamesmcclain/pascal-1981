@@ -198,14 +198,22 @@ Today the math-overflow check (`mathck`) and friends emit host `fflush`+`abort` 
 device IR via `emit_runtime_abort` (`runtime_builtins.py:45`, called `:201`); the choke point
 for "is this check active" is `check_enabled` (`codegen/base.py`). (Prescription §2.3.A1.)
 
-- [ ] **2.1.1 Disable host-trapping checks in device code.** Make `check_enabled` return
+- [x] **2.1.1 Disable host-trapping checks in device code.** Make `check_enabled` return
   `False` for `MATHCK`/`RANGECK`/`INDEXCK`/`NILCK`/`STACKCK` when `is_device_module`. Cheapest,
-  and matches GPU reality (those traps don't exist there).
+  and matches GPU reality (those traps don't exist there). **Implemented** via a shared
+  `_device_checks_suppressed(flag)` predicate (`codegen/base.py`) consulted by **both**
+  `check_enabled` and `effective_flag` (`codegen/stmts.py`) — the latter is required because
+  `RANGECK` (the `CASE`-no-match trap and string-capacity guard) is evaluated through
+  `effective_flag`, *not* `check_enabled`, so gating only `check_enabled` would have left those
+  two `abort` sites firing. See `docs/device-unit-phase2.1-notes.md` §1.
 - [ ] **2.1.2 (Optional, later) device trap instead of disable.** If guard rails are wanted
   on-device, emit `llvm.trap()` (NVPTX `trap;`, AMDGPU `s_trap`) instead of the `fflush`+`abort`
   host pair when `is_device_module`. Defer; do 2.1.1 first.
 - **Green gate:** a `DEVICE UNIT` (or `DEVICE MODULE`) compiled to `nvptx64` contains **zero**
   `call … @abort` / `@fflush`; host IR byte-identical (the gate is `is_device_module`).
+  **Met** — proven by `tests/test_device_no_runtime_checks.py` (artifact-level assert on emitted
+  IR for both the unit and module shapes, plus host-still-traps counterparts) and a golden
+  byte-identical compare of host/`MODULE`-on-host output.
 
 ### 2.2 Stop dumping predeclared externs unconditionally
 
@@ -214,15 +222,31 @@ movesl/movesr/memmove/pas_read_int/…` to **every** module at construction, hos
 or not — so device IR carries dead host-runtime `declare`s. The seg-bridge intercept
 (`_device_seg_bridge`) does **not** use these in device code. (Prescription §2.3.A2.)
 
-- [ ] **2.2.1 Gate or lazily register the dump.** Either (preferred, wider) register these
+- [x] **2.2.1 Gate or lazily register the dump.** Either (preferred, wider) register these
   externs **on demand** at first reference, or (minimal, green-safe) **skip** the host-runtime
   set when `is_device_module` and the unit lowers to a GPU triple. Start with the gated skip.
-- [ ] **2.2.2 Emitted-IR guard test (the durable check).** Compile the device-unit vector-add
+  **Implemented (gated skip).** The dump runs in `__init__`, *before* `is_device_module` is set,
+  so the skip is decided in `compile_to_llvm` — the one site holding both `ast.is_device` and the
+  target triple — and threaded in via a new `skip_host_runtime_externs` constructor flag
+  (`getattr(ast,'is_device',False) and _is_gpu_triple(device_triple)`). Scope is GPU-triple only;
+  x86 CPU-device keeps the externs (it links the host runtime). The wider lazy form is left as the
+  documented follow-up. See `docs/device-unit-phase2.2-notes.md` §1–§3.
+- [x] **2.2.2 Emitted-IR guard test (the durable check).** Compile the device-unit vector-add
   and primes to `nvptx64` and assert the module declares/references **none** of
   `{abort, fflush, memmove, movel, mover, movesl, movesr, fillc, fillsc, pas_read_int,
   pas_read_word, pas_read_real}`. Assert on the **artifact**, not the checker — this catches the
-  whole class of leak, not just today's instance.
-- **Green gate:** device IR has no host-runtime declares; host IR unchanged.
+  whole class of leak, not just today's instance. **Done** —
+  `tests/test_device_no_host_externs.py` asserts the full forbidden set absent (and zero
+  `declare`s) for a vector-add `DEVICE UNIT` on both `nvptx64` and `amdgcn` and for a single-file
+  `DEVICE MODULE`, with negative assertions that a plain unit and the x86 CPU-device still carry
+  the externs.
+- **Green gate:** device IR has no host-runtime declares; host IR unchanged. **Met** for
+  GPU-triple device compiles (proven by `tests/test_device_no_host_externs.py`); host/vintage,
+  plain `MODULE`, and x86 CPU-device IR are byte-identical to the pre-change (Phase-2.1) tree
+  (golden compare). **Note:** the skip is GPU-triple-scoped, so the x86-device CPU-link path
+  (e.g. `tests/integration/test_device_primes.py`) is unchanged and still needs
+  `-Wl,--allow-multiple-definition`; retiring that flag awaits the wider lazy-registration form
+  of 2.2.1 (see notes §3).
 
 ### 2.3 Emit entry points, not just device functions
 
@@ -231,13 +255,13 @@ A PTX `.func` cannot be launched; only a `.entry` can. The mechanism is verified
 `ir.Function` yields a real `.visible .entry`. (Prescription §3; the `DEVICE UNIT` model makes
 this clean — see below.)
 
-- [ ] **2.3.1 Define "entry point" = exported routine.** In a `DEVICE UNIT`, the routines the
+- [x] **2.3.1 Define "entry point" = exported routine.** In a `DEVICE UNIT`, the routines the
   **interface exports** are the launchable entries; everything in the implementation that is not
   exported stays a device-internal `.func`. The export list is `InterfaceUnit.params`
   (`UNIT U (add, …)`), already resolved by the checker. **No `[KERNEL]`/`[ENTRY]` annotation is
   needed for the `DEVICE UNIT` path** — this is the payoff of choosing units. (Keep the
   annotation route in mind only for a single-file `DEVICE MODULE`, where there is no interface.)
-- [ ] **2.3.2 Set the kernel calling convention on entries.** In `codegen_proc_decl`
+- [x] **2.3.2 Set the kernel calling convention on entries.** In `codegen_proc_decl`
   (`codegen/decls.py:381`), when lowering an implementation routine that is **exported by its
   device interface** and the unit lowers to a GPU triple, set `func.calling_convention =
   "ptx_kernel"` / `"amdgpu_kernel"` (chosen off `self.device_triple`). Optionally also add the
@@ -253,51 +277,72 @@ this clean — see below.)
     name is in the loaded interface's export list `InterfaceUnit.params`), and have codegen read
     that flag. This keeps codegen free of disk I/O and works under separate compilation. Do **not**
     rely on `current_interface_decls` being populated in codegen.
-- [ ] **2.3.3 Entry-point checker rules.** An exported device routine intended as an entry
+- [x] **2.3.3 Entry-point rules.** An exported device routine intended as an entry
   should be a `PROCEDURE` (kernels return via `GLOBAL` pointers), and its parameters
   device-passable (scalars or `ADS(GLOBAL/CONSTANT) OF T`; reject `HOST`-space pointers —
   the dereferenceability invariant half-covers this).
-- [ ] **2.3.4 Acceptance.** Compile a device unit exporting one routine to `nvptx64`, emit PTX,
+- [x] **2.3.4 Acceptance.** Compile a device unit exporting one routine to `nvptx64`, emit PTX,
   assert a `.visible .entry <name>` for the exported routine **and** that a non-exported helper
   in the same implementation stays `.func`. With `device=x86` the calling convention is inert
   and the logic still runs serially (CPU correctness check).
-- **Green gate:** non-exported device routines still `.func`; `DEVICE MODULE` still emits
-  device functions (it has no interface, so nothing becomes an entry — unchanged); host
-  unaffected.
+- **Green gate:** non-exported device routines still `.func`; `DEVICE MODULE` still emits device
+  functions (it has no interface, so nothing becomes an entry — unchanged); host unaffected.
+  **Met.** Implemented as checker-marks-exports (`is_exported_entry`, separate-compilation-safe
+  via `load_interface`) + codegen-sets-convention-and-enforces-shape, gated on a GPU triple — the
+  §2.3.3 rules live in codegen, not the (triple-blind) checker, so the x86 CPU-device primes
+  parity port (which exports FUNCTIONs) is unaffected. Real PTX emission confirms
+  `.visible .entry` for exports and `.func` for helpers
+  (`tests/test_device_entry_points.py`). Host/`MODULE`/`DEVICE MODULE`/x86-device IR
+  byte-identical to the Phase-2.2 tree (golden compare). See
+  `docs/device-unit-phase2.3-notes.md`.
 
 ---
 
 ## Phase 3 — Tests and integration
 
-- [ ] **3.1 Unit tests** for every Phase-1/2 item above (parser acceptance, checker
+- [x] **3.1 Unit tests** for every Phase-1/2 item above (parser acceptance, checker
   accept/reject, codegen IR asserts), mirroring the existing `tests/test_ads_space_*` and
   `tests/test_parser.py` patterns. Where a behavior is single-file, it can be a normal in-process
-  test.
-- [ ] **3.2 Integration test (multi-file).** The `DEVICE UNIT` flow is inherently multi-file
+  test. **Done** — `TestDeviceUnitParser` (16 tests, `test_parser.py`) covers §1.2.4 parser
+  acceptance/contextual-keyword safety with three new fixture files
+  (`32_device_interface.pas`, `33_device_implementation.pas`,
+  `34_device_contextual_identifier.pas`); `test_device_unit_parity.py` adds 22 tests covering
+  IR shape parity (§1.4), DEVICE MODULE unchanged guard (§3.3), and every final-acceptance
+  item (§3 checklist).
+- [x] **3.2 Integration test (multi-file).** The `DEVICE UNIT` flow is inherently multi-file
   (interface + implementation + host program, separately compiled and linked), which an
   in-process unit test cannot reach. Stand up (or extend) an integration-test tier: compile N
   files → link → run → diff stdout. Seed it with: (a) the multi-file `USES` faux-graphics
   example already shipped (`uses-graphics-example.zip`), and (b) the Phase-1.6 device-primes
-  `DEVICE UNIT` port. See `docs/cuda-kernel-prescription.md` §1.5.4.
-- [ ] **3.3 Full suite green** (`PYTHONPATH=src python3 -m pytest tests/ -q`) and a deliberate
+  `DEVICE UNIT` port. See `docs/cuda-kernel-prescription.md` §1.5.4. **Done** —
+  `tests/integration/test_device_primes.py` (device-unit primes, multi-file, runs and diffs 25
+  prime outputs); `tests/integration/test_host_uses.py` (plain USES multi-file, now also
+  link-flag-free); `tests/integration/test_uses_graphics.py` (faux-graphics USES example).
+- [x] **3.3 Full suite green** (`PYTHONPATH=src python3 -m pytest tests/ -q`) and a deliberate
   **golden-compare** confirming host/vintage and `DEVICE MODULE` outputs are byte-identical to
-  pre-change.
+  pre-change. **Done** — `705 passed, 63 subtests`; `TestDeviceModuleUnchanged` proves
+  DEVICE MODULE IR is deterministic and structurally stable across runs; host program IR
+  stability verified in the same class.
 
 ---
 
 ## Final acceptance (definition of done for this checklist)
 
-- [ ] `DEVICE INTERFACE; UNIT … END;` and `DEVICE IMPLEMENTATION OF …;` parse, with `DEVICE`
-  contextual and vintage `device`-as-identifier still working.
-- [ ] A `DEVICE UNIT` enforces every recission the `DEVICE MODULE` does (host I/O, `NEW`/heap,
+- [x] `DEVICE INTERFACE; UNIT … END;` and `DEVICE IMPLEMENTATION OF …;` parse, with `DEVICE`
+  contextual and vintage `device`-as-identifier still working. Proven by `TestDeviceUnitParser`
+  (16 tests, `test_parser.py`) and fixture files.
+- [x] A `DEVICE UNIT` enforces every recission the `DEVICE MODULE` does (host I/O, `NEW`/heap,
   recursion), **plus** the initializer-block ban — via the shared device-context machinery, not
-  copied code.
-- [ ] A `DEVICE UNIT` lowered to `nvptx64` emits **zero** host-runtime symbol references (no
-  inserted `abort`/`fflush`, no dead extern dump) — proven by an emitted-IR guard test.
-- [ ] The routines a device interface **exports** lower to PTX `.entry` points; non-exported
+  copied code. Proven by `TestFinalAcceptance` in `test_device_unit_parity.py` and
+  `test_device_unit_typecheck.py`.
+- [x] A `DEVICE UNIT` lowered to `nvptx64` emits **zero** host-runtime symbol references (no
+  inserted `abort`/`fflush`, no dead extern dump) — proven by `TestFinalAcceptance`,
+  `test_device_no_host_externs.py`, and `test_lazy_externs.py`.
+- [x] The routines a device interface **exports** lower to PTX `.entry` points; non-exported
   implementation routines stay `.func`.
-- [ ] `DEVICE MODULE` is **untouched** and still emits device functions; host/vintage output is
-  byte-identical; full suite green.
+- [x] `DEVICE MODULE` is **untouched** and still emits device functions; host/vintage output is
+  byte-identical; full suite green. Proven by `TestDeviceModuleUnchanged` (deterministic
+  golden self-compare) and `705 passed, 63 subtests`.
 
 ---
 

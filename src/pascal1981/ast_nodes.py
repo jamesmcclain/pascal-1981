@@ -5,7 +5,7 @@ Each dataclass represents a construct in the Pascal grammar.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 
 
@@ -30,6 +30,9 @@ class ProgramUnit(ASTNode):
     params: List[str]  # parameter names
     uses: List[UseClause]
     block: Block
+    # Interface units spliced into this file via $INCLUDE before the PROGRAM
+    # keyword.  The type checker resolves USES against these before hitting disk.
+    local_interfaces: List['InterfaceUnit'] = field(default_factory=list)
 
 
 @dataclass
@@ -39,6 +42,9 @@ class ModuleUnit(ASTNode):
     decls: List[Declaration]
     # True for a `DEVICE MODULE` (device-dialect code); False for a plain MODULE.
     is_device: bool = False
+    # Interface units spliced into this file via $INCLUDE before the MODULE
+    # keyword.  The type checker resolves USES against these before hitting disk.
+    local_interfaces: List['InterfaceUnit'] = field(default_factory=list)
 
 
 @dataclass
@@ -73,6 +79,9 @@ class ImplementationUnit(ASTNode):
     # True for a `DEVICE IMPLEMENTATION` (device-dialect code); False for a plain IMPLEMENTATION.
     is_device: bool = False
     interface: Optional[InterfaceUnit] = None
+    # Interface units spliced into this file via $INCLUDE before the IMPLEMENTATION
+    # keyword.  The type checker resolves USES against these before hitting disk.
+    local_interfaces: List['InterfaceUnit'] = field(default_factory=list)
 
 
 # ============================================================================
@@ -133,6 +142,12 @@ class ProcDecl(ASTNode):
     attributes: List['Attribute']
     body: Optional[Block]  # None if EXTERN/FORWARD/EXTERNAL
     directive: Optional[str] = None  # 'FORWARD' | 'EXTERN' | 'EXTERNAL' when body is None
+    # Set by the type checker when this routine's name is in its DEVICE
+    # interface's export list (checklist S2.3.1): such routines are the
+    # launchable kernel entries.  Marked on the AST (not read from a loaded
+    # interface in codegen) so it survives separate compilation, where codegen
+    # never sees the interface (checklist S2.3.2 caveat).
+    is_exported_entry: bool = False
 
 
 @dataclass
@@ -143,6 +158,7 @@ class FuncDecl(ASTNode):
     attributes: List['Attribute']
     body: Optional[Block]  # None if EXTERN/FORWARD/EXTERNAL
     directive: Optional[str] = None  # 'FORWARD' | 'EXTERN' | 'EXTERNAL' when body is None
+    is_exported_entry: bool = False  # see ProcDecl.is_exported_entry
 
 
 @dataclass

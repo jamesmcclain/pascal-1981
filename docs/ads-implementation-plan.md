@@ -1,11 +1,13 @@
-# ADS Memory Spaces — Implementation Plan (sketch)
+# ADS Memory Spaces — Implementation Plan
 
 **Companion to** `ads-memory-spaces-design.md` (the design record). This is the *build*
 sequence: which files change, in what order, gated on what. It opens with the verified
 dialect/target seam.
 
-**Status:** sketch. Step 0 is **[VERIFIED]** against the tree (2026-06-17). Steps 1–5 are a
-proposed ordering, not yet ratified.
+**Status (2026-06-19):** Steps 0 – 5 are **complete**. The `DEVICE UNIT` extension (Phases 1–3
+of the migration checklist, now archived in `docs/old/`) is also complete. One planned step
+remains open: **Step 4b** (full `AdsExpr` / `coerce_arg` rewrite). See the bottom of the
+build log for current state. The suite stands at **705 passed, 63 subtests**.
 
 **Guiding principle — the faithful path stays green.** Every step is gated so that the
 default `vintage`/host build is byte-for-byte unchanged. Nothing below alters behavior until a
@@ -13,7 +15,7 @@ caller opts into the GPU feature *and* a GPU target. Each step is independently 
 
 ---
 
-## Step 0 — Dialect/target seam (verified, with one decision to make)
+## Step 0 — Dialect/target seam ✅ DONE
 
 **What's there (verified):**
 - `features.py`: `resolve_features(dialect, overrides) -> Dict[str,bool]`. Two dialects only:
@@ -76,7 +78,7 @@ host object + device object/PTX, bundled fatbinary-style (plan Step 4).
   *(Minor footgun: the AST `EnumType` uses `.values`; the type-system `EnumType` uses
   `.members`. Don't mix them.)*
 
-## Step 0.5 — Dialect resolution by module kind (the DEVICE-MODULE = extended−recissions rule)
+## Step 0.5 — Dialect resolution by module kind ✅ DONE
 
 **[DECISION — registered 2026-06-17, updated to module model]** The dialect is resolved per
 module, not from a global flag:
@@ -118,7 +120,7 @@ Validated empirically against 0.47.0 (bundled LLVM ≈21; 0.48 moves to LLVM 22)
 
 ---
 
-## Step 1 — `PointerType.space` + the `SPACE` enum (types only, no codegen)
+## Step 1 — `PointerType.space` + the `SPACE` enum ✅ DONE
 
 - `type_system.py`: add a `space` field to `PointerType` (default `HOST`/`None` for plain
   pointers). Extend `PointerType.equivalent_to` (`:263-267`) per design §5.1 — **ADS↔ADS
@@ -141,7 +143,7 @@ Validated empirically against 0.47.0 (bundled LLVM ≈21; 0.48 moves to LLVM 22)
 > the faithful/host path is unchanged (golden-compare codegen output where noted). Survey-first,
 > then edit.
 
-## Step 2 — Grammar + AST: `DEVICE MODULE`, `[SPACE(s)]`, `ADS(s) OF T` (parsed ungated)
+## Step 2 — Grammar + AST: `DEVICE MODULE`, `[SPACE(s)]`, `ADS(s) OF T` ✅ DONE
 
 **Corrections this step rests on (verified 2026-06-17):**
 - `parse_attribute_item` (`parser.py:382`) handles **bare keywords only**, and **`ORIGIN(constant)`
@@ -182,7 +184,7 @@ Validated empirically against 0.47.0 (bundled LLVM ≈21; 0.48 moves to LLVM 22)
 **Green gate:** full parser suite passes; **regression test**: a program using `device` and
 `space` as ordinary identifiers still parses (contextual-keyword safety).
 
-## Step 3 — Type checker: module-kind context, space binding, dereferenceability
+## Step 3 — Type checker: module-kind context, space binding, dereferenceability ✅ DONE
 
 **Edit sites (`type_checker.py`):**
 - `check_module_unit` (`:424`) / `check_program_unit` (`:400`): set `self.in_device_module`
@@ -212,7 +214,7 @@ Validated empirically against 0.47.0 (bundled LLVM ≈21; 0.48 moves to LLVM 22)
 **Green gate:** full typecheck suite passes; programs with no spaces and no device modules are
 unaffected.
 
-## Step 4 — Codegen: per-module triple, addrspace lowering, multi-target build
+## Step 4 — Codegen: per-module triple, addrspace lowering, multi-target build ✅ 4a DONE / ⏳ 4b OPEN
 
 **Survey-first:** the per-unit codegen dispatch (the codegen counterpart of `check_module_unit`)
 is *not* pinned here — re-survey how codegen iterates units before wiring the per-module triple.
@@ -242,7 +244,7 @@ is *not* pinned here — re-survey how codegen iterates units before wiring the 
 against current output). Device chain already **[VALIDATED 2026-06-17]**: `addrspace(k)` →
 space-specific PTX/GCN; §3.2 table locked. Wiring, not discovery.
 
-## Step 5 — `FILLSC`/`MOVESL`/`MOVESR` cross-space bridge (device modules)
+## Step 5 — `FILLSC`/`MOVESL`/`MOVESR` cross-space bridge ✅ DONE
 
 **Edit sites:**
 - `builtins_registry.py` (`:67/:70/:71`): host registration unchanged; in device modules relax the
@@ -290,8 +292,7 @@ wanted.
   `ld.local` for addrspace 1/3/4/5); AMDGPU confirms distinct spaces (`global_load`/`ds_read`/
   `buffer_load`). No `[VERIFY]` items remain in the design record's core path.
 
-With Step 0 fully settled and validated, the next concrete work is **Step 1** (add
-`PointerType.space` + register the `SPACE` enum behind the feature gate) — wiring, not discovery.
+**Open work: Step 4b.** See the build log entry below for the exact remaining scope.
 
 ---
 
@@ -449,3 +450,101 @@ installed.
 OpenCL-on-CPU development case. This is the only device target executable on this VM; the
 NVIDIA/AMD paths are code-generation-complete but require the stacks above to assemble, link,
 and launch.
+
+---
+
+## Build log continued — DEVICE UNIT extension + lazy-extern plan (2026-06-19)
+
+The original Steps 0–5 above covered `DEVICE MODULE` only. After Step 5 landed, a separate
+migration checklist extended the same machinery to `DEVICE UNIT` (an `INTERFACE` +
+`IMPLEMENTATION OF` pair). That checklist is now fully retired and archived at
+`docs/old/device-unit-migration-checklist.md`. Key implementation notes follow.
+
+**Phase 1 — DEVICE UNIT parity with DEVICE MODULE (commits on `device-code` branch):**
+- `InterfaceUnit.is_device` and `ImplementationUnit.is_device` added to the AST
+  (`ast_nodes.py`). `InterfaceUnit.has_init` added for the init-block ban.
+- Parser: `_at_device_interface` / `_at_device_implementation` contextual dispatch in
+  `parse_compilation_unit`; `DEVICE` stays a contextual keyword (vintage `device`-as-identifier
+  still parses). `parse_interface_unit(is_device=)` and
+  `parse_implementation_unit(is_device=)` threaded through.
+- Type checker: `_device_context()` context-manager extracted from `check_module_unit`; shared
+  by `check_interface_unit` and `check_implementation_unit`. Device-ness consistency check
+  (`impl.is_device == iface.is_device`) added. Init-block ban (`impl.init_body` / `iface.has_init`)
+  added as a checker-level recission alongside recursion / heap / host-I/O.
+- Codegen: `_enter_device_codegen()` / `finally` restore extracted from `codegen_module`;
+  applied to `codegen_interface` and `codegen_implementation` when `unit.is_device`.
+- `is_root_compiland` flag threads through `compile_to_llvm` / `CodegenBase.__init__` to decide
+  strong vs. external global definitions for `@input`/`@output` (see S4.1 below).
+
+**Phase 2.1 — No compiler-inserted runtime checks in device code:**
+- `_device_checks_suppressed(flag)` predicate in `codegen/base.py` consulted by *both*
+  `check_enabled` and `effective_flag` (`codegen/stmts.py`), so MATHCK/RANGECK/INDEXCK/NILCK/
+  STACKCK are all suppressed when `is_device_module`. The `effective_flag` gate is required
+  because the CASE-no-match trap and string-capacity guard go through that path, not `check_enabled`.
+
+**Phase 2.2 — Lazy extern registration (full form, the “lazy plan”):**
+  Replaces the old eager `_register_predeclared_externs` dump (which added ~40 `ir.Function`
+  objects to every module at construction, host or device) with:
+- `_build_extern_factories` — builds a dict of zero-arg lambdas at `__init__` time (no IR).
+- `runtime_extern(name)` accessor on `CodegenBase` — materialises and caches the
+  `ir.Function` on first reference; dead externs never appear in the IR.
+- 21 call sites across `strings.py`, `runtime_builtins.py`, `files.py`, `io_write_read.py`,
+  `exprs.py` migrated from `self.scope.lookup('X').llvm_value` → `self.runtime_extern('X')`.
+- `stmts.py` `codegen_proc_call_stmt` probes `_extern_factories` before the builtin-dispatch
+  block so FILLC/FILLSC/MOVEL/MOVER/MOVESL/MOVESR route through the general `else:`-dispatch
+  path (which applies `coerce_arg` for ADS struct reconciliation), exactly as the old eager path
+  did. This also surfaced and fixed a latent bug in `decls.py`: `directive='EXTERN'` was never
+  checked alongside `attributes` for `func.linkage = 'external'`; source-level `; extern;`
+  declarations now correctly emit `declare external`.
+
+**Phase 2.2 / S4.1 — INPUT/OUTPUT single-definition fix:**
+  `_register_predeclared_files` gains `is_root_compiland` (default `True`). A PROGRAM or
+  launchable MODULE emits `@input = global i8* null` (strong definition); any UNIT emits
+  `@input = external global i8*` (declare-only). Eliminates the multiple-definition collision
+  that previously required `-Wl,--allow-multiple-definition` in the primes integration test
+  (and `test_host_uses.py`). Both flags now removed.
+
+**Phase 2.3 — Exported device routines → PTX `.entry` (not just `.func`):**
+- Type checker marks `decl.is_exported_entry = True` on `ProcDecl` nodes whose names appear in
+  the loaded interface’s export list (separate-compilation-safe: loaded from disk by
+  `check_implementation_unit` / `load_interface`, not from `current_interface_decls` which is
+  absent under separate compilation).
+- `codegen_proc_decl` reads `is_exported_entry`: on a GPU triple sets
+  `func.calling_convention = 'ptx_kernel'` (NVPTX) / `'amdgpu_kernel'` (AMDGPU). Entry-shape
+  rules (must be PROCEDURE, params must be scalars or ADS(GLOBAL/CONSTANT)) enforced at codegen
+  time so the x86 CPU-device parity path is unaffected.
+
+**Phase 3 — Tests and integration (2026-06-19):**
+- `TestDeviceUnitParser` (16 tests, `test_parser.py`): parser acceptance for DEVICE
+  INTERFACE/IMPLEMENTATION; contextual-keyword safety; AST field assertions. Three new fixture
+  files: `32_device_interface.pas`, `33_device_implementation.pas`,
+  `34_device_contextual_identifier.pas`.
+- `test_device_unit_parity.py` (22 tests): IR shape parity (DEVICE UNIT ≡ DEVICE MODULE);
+  `TestDeviceModuleUnchanged` (deterministic golden self-compare); `TestFinalAcceptance`
+  (compact artifact-level coverage of all definition-of-done items).
+- Integration: `test_device_primes.py` (multi-file, compile ×3 → link → run → diff 25 primes,
+  no link flags); `test_host_uses.py` (plain USES multi-file, also now flag-free).
+- Suite: **705 passed, 63 subtests** on `device-code` branch.
+
+**Step 4b — remaining open work (still deferred):**
+
+With the lazy-plan work complete, the one concrete remaining gap is:
+
+1. **`AdsExpr` value form.** `ADS g` where `g` has `[SPACE(GLOBAL)]` still produces a
+   `{T addrspace(1)*, i16}` struct with seg=0, not a bare `T addrspace(1)*`. The type lower
+   (`llvm_type` for `ADS(GLOBAL) OF T` → `T addrspace(1)*`) is done (Step 4a), but the
+   *expression* form (`AdsExpr` in `exprs.py`) still emits the `{ptr, i16}` pair.
+2. **`coerce_arg` seg→flat rule.** Line 229 of `types_map.py` silently drops the segment when
+   passing a `{ptr,i16}` ADS value to a flat-pointer parameter. Design §6.3 says this should
+   become a type error (cross-space is a data move, not a cast). Currently marked
+   `# Step 4b / design S6.3` at line 238 (the addrspace-crossing guard for bare pointers is
+   already in place; the struct path is the remaining gap).
+3. **`[SPACE(s)]` variable dereference round-trip.** Once (1) and (2) are done, a full
+   `[SPACE(GLOBAL)] g: T; p := ADS g; p^` round-trip in a `DEVICE MODULE` will produce a
+   bare `addrspace(1)` load without the `{ptr,i16}` intermediary.
+
+   The FILLSC/MOVESL/MOVESR bridge (Step 5) works correctly today because `_device_seg_bridge`
+   constructs its addrspace loads/stores from the variable’s `[SPACE]` residence directly,
+   bypassing the `AdsExpr` value form — so device-kernel code is already correct and runnable.
+   Step 4b is a cleanup that makes the general pointer-dereference path consistent and removes
+   the last `{ptr, i16}` relics from device IR.

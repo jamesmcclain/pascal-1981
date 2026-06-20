@@ -32,3 +32,6 @@ $(BUILDDIR):
 
 clean:
 	rm -rf $(BUILDDIR)
+
+cleaner: clean
+	rm -f $(TARGET)

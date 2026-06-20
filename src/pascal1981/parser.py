@@ -50,15 +50,36 @@ class Parser:
 
     def parse(self) -> Union[ProgramUnit, ModuleUnit, InterfaceUnit, ImplementationUnit]:
         self.skip_include_directives()
-        interface: Optional[InterfaceUnit] = None
-        if self.current().kind == 'INTERFACE':
-            interface = self.parse_interface_unit()
+        # Collect *all* leading INTERFACE units that were spliced in via
+        # $INCLUDE before the main compilation unit.  A single implementation
+        # file may include its own interface header AND one or more dependency
+        # interface headers (e.g. GRAPHI + BASEPL before IMPLEMENTATION OF
+        # GRAPHICS).  Phase 2 extends the Phase 1 single-interface path to a
+        # loop so arbitrarily many headers are accepted.
+        interfaces: List[InterfaceUnit] = []
+        while self.current().kind == 'INTERFACE':
+            interfaces.append(self.parse_interface_unit())
             self.skip_include_directives()
             if self.current().kind == 'EOF':
-                return interface
+                # Standalone interface file: return it directly.  If somehow
+                # multiple bare interfaces were accumulated (unusual), return
+                # the first to preserve backward-compatible behaviour.
+                return interfaces[0]
         unit = self.parse_compilation_unit()
-        if interface is not None and isinstance(unit, ImplementationUnit):
-            unit.interface = interface
+        for iface in interfaces:
+            # For ImplementationUnit, attach the interface whose name matches
+            # the unit to unit.interface (for signature validation and
+            # device-entry marking).  Name-matching is correct here: with
+            # multiple spliced headers, the first one is not necessarily the
+            # unit's own interface.
+            if isinstance(unit, ImplementationUnit) and unit.interface is None:
+                if iface.name.upper() == unit.name.upper():
+                    unit.interface = iface
+            # All spliced interfaces go into local_interfaces on every unit
+            # type so the type checker and codegen can resolve USES without
+            # hitting disk (Phase 1 / Phase 2).
+            if hasattr(unit, 'local_interfaces'):
+                unit.local_interfaces.append(iface)
         self.skip_include_directives()
         self.expect('EOF')
         return unit

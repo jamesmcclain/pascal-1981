@@ -39,6 +39,9 @@ class StmtsMixin:
         """Return the effective boolean value of a runtime-check flag.
 
         Priority order:
+          0. device-code suppression of host-trapping checks (the RANGECK
+             CASE-no-match trap and string-capacity guard lower to a host
+             fflush+abort that does not exist on device — checklist S2.1.1).
           1. CLI force_flags (explicit --flag on/off override),
           2. the full metacommand state stamped onto the AST node by the
              parser (stmt.meta_flags),
@@ -46,6 +49,8 @@ class StmtsMixin:
           4. the manual's documented default for the flag (NOT a blanket
              True — e.g. ENTRY and INITCK default off).
         """
+        if self._device_checks_suppressed(flag):
+            return False
         if flag in self.force_flags:
             return self.force_flags[flag]
         meta = getattr(stmt, 'meta_flags', None)
@@ -214,6 +219,13 @@ class StmtsMixin:
             self._device_seg_bridge(lookup_name, stmt.args)
             return
         symbol = self.scope.lookup(lookup_name) or self.scope.lookup(stmt.name)
+        # Lazily materialise runtime externs (FILLC, FILLSC, MOVEL, MOVER,
+        # MOVESL, MOVESR, ...) so they flow through the general `else:` dispatch
+        # below and get coerce_arg for ADS-struct / pointer type reconciliation,
+        # exactly as when the old eager dump pre-registered them in scope.
+        if symbol is None and lookup_name.lower() in self._extern_factories:
+            self.runtime_extern(lookup_name.lower())  # materialise + cache in root scope
+            symbol = self.scope.lookup(lookup_name.lower())
         if not symbol or symbol.llvm_value is None:
             # Try built-in procedures
             if lookup_name == 'WRITELN':

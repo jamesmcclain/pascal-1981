@@ -15,7 +15,7 @@ from llvmlite.ir import IRBuilder
 
 from ..ast_nodes import *
 from ..parser import parse_file
-from .base import CodegenError, Scope
+from .base import CodegenError, Scope, _is_gpu_triple
 
 
 class DeclsMixin:
@@ -50,7 +50,7 @@ class DeclsMixin:
         """Codegen for PROGRAM unit."""
         # Import any modules referenced by USES before we codegen the body.
         for use_clause in unit.uses:
-            self.codegen_use_clause(use_clause)
+            self.codegen_use_clause(use_clause, local_interfaces=getattr(unit, 'local_interfaces', []))
 
         # Codegen all declarations
         for decl in unit.block.decls:
@@ -132,23 +132,35 @@ class DeclsMixin:
     # Declarations
     # ========================================================================
 
-    def codegen_use_clause(self, use_clause: UseClause) -> None:
+    def codegen_use_clause(self, use_clause: UseClause, local_interfaces=None) -> None:
         """Import declarations from a USES module as external symbols."""
-        module_path = None
-        import os
-        from pathlib import Path
-        search_dir = Path(self.source_file).parent if self.source_file else Path('.')
-        for candidate in (use_clause.name, use_clause.name.lower(), use_clause.name.upper()):
-            for suffix in ('', '.inc', '.pas'):
-                path = search_dir / f'{candidate}{suffix}'
-                if path.exists():
-                    module_path = str(path)
+        # Prefer an interface that was spliced into this file via $INCLUDE over
+        # a disk lookup — mirrors the type checker's local_interfaces path.
+        ast = None
+        if local_interfaces:
+            ast = next(
+                (i for i in local_interfaces
+                 if i.name.upper() == use_clause.name.upper()),
+                None,
+            )
+
+        if ast is None:
+            # Fall back to disk-based resolution (existing behaviour).
+            module_path = None
+            import os
+            from pathlib import Path
+            search_dir = Path(self.source_file).parent if self.source_file else Path('.')
+            for candidate in (use_clause.name, use_clause.name.lower(), use_clause.name.upper()):
+                for suffix in ('', '.inc', '.pas'):
+                    path = search_dir / f'{candidate}{suffix}'
+                    if path.exists():
+                        module_path = str(path)
+                        break
+                if module_path:
                     break
-            if module_path:
-                break
-        if not module_path:
-            return
-        ast = parse_file(module_path)
+            if not module_path:
+                return
+            ast = parse_file(module_path)
 
         # Build the exported routines in export order. For an INTERFACE UNIT the
         # export order is the unit's export list (UNIT G (BJUMP, WJUMP)); for a
@@ -419,6 +431,57 @@ class DeclsMixin:
 
                 self.scope.define(name, global_var, decl.type_expr)
 
+    def _param_device_passable(self, param: Param) -> bool:
+        """Whether a kernel-entry parameter can be passed to a device launch
+        (checklist S2.3.3).  Reference-mode params and host-space pointers lower
+        to addrspace-0 pointers a device entry cannot dereference; device data
+        must arrive by value (scalars) or as a non-HOST `ADS(space) OF T`.
+        """
+        if param.mode in {'VAR', 'VARS', 'CONST', 'CONSTS'}:
+            return False  # reference params are host-space (addrspace 0) pointers
+        t = param.type_expr
+        if isinstance(t, PointerType):
+            if t.flavor != 'ADS':
+                return False  # plain ^T heap / ADR: host-space pointer
+            if t.space is None:
+                return False  # ADS with unspecified space == HOST
+            try:
+                space_ord = self.eval_const_expr(t.space)
+            except Exception:
+                return True  # unfoldable: don't block a compile the checker passed
+            return bool(space_ord)  # 0 (HOST) -> not passable; GLOBAL/CONSTANT/... -> ok
+        return True  # value scalar / array / record
+
+    def _apply_kernel_entry(self, decl: Union[ProcDecl, FuncDecl], func: ir.Function) -> None:
+        """Make an exported device routine a launchable kernel entry
+        (checklist S2.3.1-S2.3.3).
+
+        Fires only when lowering device code to a real GPU triple and the
+        routine is flagged `is_exported_entry` by the checker.  In that case the
+        entry-shape rules bite (here, where a true `.entry` is formed and the
+        triple is known -- the triple-blind checker cannot enforce them without
+        rejecting the x86 CPU-device parity ports) and the kernel calling
+        convention is set, which is what turns a PTX `.func` into a `.visible
+        .entry`.  Inert on host, on x86 CPU-device, and for non-exported
+        routines -- so those stay byte-identical and `DEVICE MODULE` (no
+        interface, nothing exported) keeps emitting plain device functions.
+        """
+        if not (self.is_device_module and _is_gpu_triple(self.device_triple)):
+            return
+        if not getattr(decl, 'is_exported_entry', False):
+            return
+        # S2.3.3: a GPU entry cannot return a value -- it must be a PROCEDURE.
+        if isinstance(decl, FuncDecl):
+            raise CodegenError(
+                f"exported device routine '{decl.name}' must be a PROCEDURE to be a kernel entry: "
+                f"a GPU entry cannot return a value (return results via an ADS(GLOBAL) parameter)")
+        for param in decl.params:
+            if not self._param_device_passable(param):
+                raise CodegenError(
+                    f"kernel entry '{decl.name}' has a non-device-passable parameter: pass device "
+                    f"data by value or as ADS(GLOBAL)/ADS(CONSTANT) OF T, not a host-space pointer")
+        func.calling_convention = 'amdgpu_kernel' if self.device_triple.startswith('amdgcn') else 'ptx_kernel'
+
     def codegen_proc_decl(self, decl: ProcDecl) -> None:
         """Codegen for PROCEDURE declaration."""
         effective_decl = decl
@@ -445,8 +508,15 @@ class DeclsMixin:
         else:
             # Create function
             func = ir.Function(self.module, func_type, name=decl.name)
-        if attrs.intersection({'PUBLIC', 'EXTERN', 'EXTERNAL'}):
+        # Directive ('extern') and attributes ([PUBLIC]) both request external linkage.
+        # Previously the eager extern dump masked a missing `directive` check here:
+        # pre-registered externs already had linkage='external', so the condition
+        # being False was harmless.  Fixed now so source-level `; extern;` declarations
+        # always emit `declare external` IR regardless of pre-registration.
+        _directive = getattr(decl, 'directive', '') or ''
+        if attrs.intersection({'PUBLIC', 'EXTERN', 'EXTERNAL'}) or _directive.upper() in ('EXTERN', 'EXTERNAL', 'PUBLIC'):
             func.linkage = 'external'
+        self._apply_kernel_entry(decl, func)
         self.proc_param_modes[decl.name.lower()] = flat_modes
         self.scope.define(decl.name, func, None)
 
@@ -510,8 +580,10 @@ class DeclsMixin:
         # Create function
         func = ir.Function(self.module, func_type, name=decl.name)
         attrs = {attr.name.upper() for attr in getattr(decl, 'attributes', [])}
-        if attrs.intersection({'PUBLIC', 'EXTERN', 'EXTERNAL'}):
+        _directive = getattr(decl, 'directive', '') or ''
+        if attrs.intersection({'PUBLIC', 'EXTERN', 'EXTERNAL'}) or _directive.upper() in ('EXTERN', 'EXTERNAL', 'PUBLIC'):
             func.linkage = 'external'
+        self._apply_kernel_entry(decl, func)
         self.proc_param_modes[decl.name.lower()] = flat_modes
         self.scope.define(decl.name, func, decl.return_type)
 
