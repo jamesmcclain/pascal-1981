@@ -23,41 +23,19 @@ from .base import CodegenError
 class IoWriteReadMixin:
 
     def printf_func(self) -> ir.Function:
-        if 'printf' not in [f.name for f in self.module.functions]:
-            ty = ir.FunctionType(ir.IntType(32), [ir.PointerType(ir.IntType(8))], var_arg=True)
-            ir.Function(self.module, ty, name='printf')
-        return next(f for f in self.module.functions if f.name == 'printf')
+        return self.runtime_extern('printf')
 
     def _scanf_like_func(self, name: str, ret_ty=ir.IntType(32)) -> ir.Function:
-        for f in self.module.functions:
-            if f.name == name:
-                return f
-        fn_ty = ir.FunctionType(ret_ty, [ir.PointerType(ir.IntType(8))], var_arg=True)
-        return ir.Function(self.module, fn_ty, name=name)
+        return self.runtime_extern(name)
 
     def _read_helper(self, name: str, llvm_ptr_ty: ir.Type, extra: Optional[List[ir.Type]] = None) -> ir.Function:
-        # If a canonical factory exists, use it: preserves the correct full
-        # signature (e.g. pas_fread_int is (fcb_ptr, i32*)->i32, not (i32*)->i32).
-        # Previously this worked because _register_predeclared_externs pre-created
-        # the functions; now we must delegate explicitly.
-        if name in self._extern_factories:
-            return self.runtime_extern(name)
-        for f in self.module.functions:
-            if f.name == name:
-                return f
-        extra = extra or []
-        fn_ty = ir.FunctionType(ir.IntType(32), [llvm_ptr_ty] + extra)
-        fn = ir.Function(self.module, fn_ty, name=name)
-        fn.linkage = 'external'
-        return fn
+        # Canonical signatures live in CodegenBase._build_extern_factories.
+        # In particular, file reads include the leading FCB pointer while stdin
+        # reads do not; callers supply only the call arguments.
+        return self.runtime_extern(name)
 
     def _runtime_func(self, name: str, ret_ty: ir.Type, arg_tys: List[ir.Type]) -> ir.Function:
-        for f in self.module.functions:
-            if f.name == name:
-                return f
-        fn = ir.Function(self.module, ir.FunctionType(ret_ty, arg_tys), name=name)
-        fn.linkage = 'external'
-        return fn
+        return self.runtime_extern(name)
 
     def _pas_type(self, expr) -> Optional[object]:
         if isinstance(expr, (Identifier, Designator)):

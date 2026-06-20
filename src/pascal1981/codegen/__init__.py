@@ -58,10 +58,7 @@ class Codegen(CodegenBase, TypesMapMixin, ConstFoldMixin, RuntimeBuiltinsMixin, 
         return self.builder.gep(self._null_lstring_global, [zero, zero])
 
     def _declare_libm_func(self, name: str, ret_type: ir.Type, arg_types: List[ir.Type]) -> ir.Function:
-        if name not in [f.name for f in self.module.functions]:
-            fn_type = ir.FunctionType(ret_type, arg_types)
-            ir.Function(self.module, fn_type, name=name)
-        return next(f for f in self.module.functions if f.name == name)
+        return self.runtime_extern(name)
 
 
 def compile_to_llvm(

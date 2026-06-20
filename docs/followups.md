@@ -12,7 +12,7 @@ S2.2.1 full form + S4.1).
 
 ---
 
-## 1. `runtime_extern` has a dual function-creation path (and a linear-scan safety net) [OPEN]
+## 1. `runtime_extern` has a dual function-creation path (and a linear-scan safety net) [DONE]
 
 **Where.** `codegen/base.py` — `runtime_extern(name)` and `_build_extern_factories`;
 the bypassing creators are `io_write_read.py` (`_read_helper`) and the
@@ -34,20 +34,18 @@ creation path is a latent inconsistency: a future signature change to one of the
 (or vice-versa), and the two could silently drift. The linear scan is also a
 small smell that signals the migration to the registry was not completed.
 
-**Suggested resolution.** Route the remaining direct creators (`_read_helper`,
-the `pas_fread_*` canonical signatures, any libm/runtime helper that creates a
-named extern) through the factory registry so the registry is the single source
-of truth for every host-runtime extern's signature. Once nothing creates these
-functions outside the registry, delete the `module.functions` middle tier from
-`runtime_extern`, leaving scope-lookup → factory.
+**Resolution.** Done by `Centralize runtime extern creation`: the remaining
+host-runtime/libc/libm direct creators now route through `_build_extern_factories`
+and `runtime_extern()`. The old `module.functions` linear-scan safety net was
+removed. Runtime extern caching now uses a private cache rather than the Pascal
+symbol table, avoiding name collisions with predeclared identifiers such as
+`ABORT`.
 
-**How to verify.** (a) Grep for `ir.Function(` in the codegen package and confirm
-the only host-runtime externs created are inside `_build_extern_factories`.
-(b) Remove the linear-scan tier and confirm the full suite (including the file /
-READ / string tests) stays green. (c) `tests/test_lazy_externs.py` already pins
-the "only referenced externs are emitted" invariant; extend it with a guard that
-two references to a `_read_helper`-family extern resolve to the *same* `ir.Function`
-object.
+**How verified.** `rg "ir\\.Function\\(" src/pascal1981/codegen` now leaves
+only generated Pascal routines, device intrinsics, and the factory itself as
+direct creators. `tests/test_lazy_externs.py` includes private-cache,
+unknown-extern, string, libm, and runtime-check guards. Full suite passed:
+`768 passed, 63 subtests passed`.
 
 ---
 

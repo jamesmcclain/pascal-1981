@@ -247,13 +247,6 @@ class StmtsMixin:
             self._device_seg_bridge(lookup_name, stmt.args)
             return
         symbol = self.scope.lookup(lookup_name) or self.scope.lookup(stmt.name)
-        # Lazily materialise runtime externs (FILLC, FILLSC, MOVEL, MOVER,
-        # MOVESL, MOVESR, ...) so they flow through the general `else:` dispatch
-        # below and get coerce_arg for ADS-struct / pointer type reconciliation,
-        # exactly as when the old eager dump pre-registered them in scope.
-        if symbol is None and lookup_name.lower() in self._extern_factories:
-            self.runtime_extern(lookup_name.lower())  # materialise + cache in root scope
-            symbol = self.scope.lookup(lookup_name.lower())
         if not symbol or symbol.llvm_value is None:
             # Try built-in procedures
             if lookup_name == 'WRITELN':
@@ -285,6 +278,10 @@ class StmtsMixin:
                 self.builtin_pack(stmt.args)
             elif lookup_name == 'UNPACK':
                 self.builtin_unpack(stmt.args)
+            elif lookup_name == 'FILLC':
+                self.builtin_fillc(stmt.args)
+            elif lookup_name == 'FILLSC':
+                self.builtin_fillsc(stmt.args)
             elif lookup_name == 'MOVEL':
                 self.builtin_movel(stmt.args)
             elif lookup_name == 'MOVER':

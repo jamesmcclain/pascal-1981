@@ -34,11 +34,11 @@ from tests.support import parse_source
 # ---------------------------------------------------------------------------
 
 _HOST_RUNTIME_NAMES = (
-    'abort', 'fflush', 'memmove',
+    'abort', 'fflush', 'memcpy', 'memset', 'memmove', 'printf',
     'movel', 'mover', 'movesl', 'movesr', 'fillc', 'fillsc',
     'pas_read_int', 'pas_read_word', 'pas_read_real', 'pas_read_char',
-    'pas_read_lstring', 'pas_readln_skip',
-    'pas_write_fmt',
+    'pas_read_lstring', 'pas_read_string', 'pas_readln_skip',
+    'pas_write_fmt', 'pas_enum_write_token', 'pas_read_enum_name', 'pas_fread_enum_name', 'pabort',
     'pas_file_buffer', 'pas_file_touch_buffer',
     'pas_file_reset', 'pas_file_rewrite', 'pas_file_get', 'pas_file_put',
     'pas_file_close', 'pas_file_discard', 'pas_file_assign',
@@ -48,6 +48,7 @@ _HOST_RUNTIME_NAMES = (
     'pas_freadset', 'pas_fread_filename',
     'malloc', 'free',
     'positn', 'scaneq', 'scanne', 'encode_value', 'decode_value',
+    'sqrt', 'sin', 'cos', 'log', 'exp', 'atan',
 )
 
 
@@ -139,6 +140,43 @@ class TestZeroDeclareGuarantee(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # Property 2 — INPUT/OUTPUT single-definition (S4.1)
 # ---------------------------------------------------------------------------
+
+
+    def test_runtime_extern_uses_factory_cache_without_module_scan(self):
+        """Direct runtime_extern calls materialise once and return the cached object."""
+        from pascal1981.codegen import Codegen
+
+        cg = Codegen()
+        first = cg.runtime_extern('pas_read_int')
+        second = cg.runtime_extern('pas_read_int')
+        self.assertIs(first, second)
+        self.assertEqual([f.name for f in cg.module.functions].count('pas_read_int'), 1)
+
+    def test_unknown_runtime_extern_fails_clearly(self):
+        from pascal1981.codegen import Codegen
+        from pascal1981.codegen.base import CodegenError
+
+        cg = Codegen()
+        with self.assertRaisesRegex(CodegenError, "unknown runtime extern 'bogus_runtime'"):
+            cg.runtime_extern('bogus_runtime')
+
+    def test_string_assignment_materialises_memcpy_and_memset_lazily(self):
+        ir_text = _compile("PROGRAM P; VAR s: STRING(5); BEGIN s := 'ABCDE' END.")
+        runtime_declares = [n for n in _declares(ir_text) if n in _HOST_RUNTIME_NAMES]
+        self.assertIn('memcpy', runtime_declares)
+        self.assertIn('memset', runtime_declares)
+
+    def test_math_intrinsic_materialises_libm_lazily(self):
+        ir_text = _compile('PROGRAM P; VAR r: REAL; BEGIN r := SQRT(4.0) END.')
+        runtime_declares = [n for n in _declares(ir_text) if n in _HOST_RUNTIME_NAMES]
+        self.assertEqual(runtime_declares, ['sqrt'])
+
+    def test_runtime_check_materialises_abort_and_fflush_lazily(self):
+        ir_text = _compile('PROGRAM P; VAR a: ARRAY[1..2] OF INTEGER; i: INTEGER; BEGIN i := 3; a[i] := 1 END.')
+        runtime_declares = [n for n in _declares(ir_text) if n in _HOST_RUNTIME_NAMES]
+        self.assertIn('abort', runtime_declares)
+        self.assertIn('fflush', runtime_declares)
+
 
 class TestInputOutputOwnership(unittest.TestCase):
     """Root compiland owns INPUT/OUTPUT; units declare them externally."""

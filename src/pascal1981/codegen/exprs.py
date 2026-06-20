@@ -633,11 +633,7 @@ class ExprsMixin:
 
             libm_names = {'SQRT': 'sqrt', 'SIN': 'sin', 'COS': 'cos', 'LN': 'log', 'EXP': 'exp', 'ARCTAN': 'atan'}
             c_name = libm_names[lookup_name]
-            double_ty = ir.DoubleType()
-            try:
-                fn = self.module.get_global(c_name)
-            except KeyError:
-                fn = ir.Function(self.module, ir.FunctionType(double_ty, [double_ty]), name=c_name)
+            fn = self.runtime_extern(c_name)
             return self.builder.call(fn, [val])
         elif lookup_name == 'TRUNC':
             # REAL -> INTEGER: truncate toward zero (manual 11-7)
