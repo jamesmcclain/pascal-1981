@@ -161,12 +161,12 @@ and any wider launch-argument audit) remains deferred.
 
 ## Phase C.2 — Barriers / synchronization (§4.2) [required for SHARED]
 
-- [ ] **C.2.1 Register `SYNCTHREADS` as a device-only nullary procedure.**
+- [x] **C.2.1 Register `SYNCTHREADS` as a device-only nullary procedure.**
   Anchors: `builtins_registry.py` (register) + the Phase-0.2 use-site gate.
   **Green gate:** `SYNCTHREADS` parses/type-checks in a `DEVICE` body; rejected in
   host code.
 
-- [ ] **C.2.2 Codegen lowering.** Anchor: the procedure-builtin dispatch in
+- [x] **C.2.2 Codegen lowering.** Anchor: the procedure-builtin dispatch in
   `codegen/stmts.py:codegen_proc_call_stmt (~212)` (where `FILLSC`/`MOVESL` are
   already device-intercepted). Lower `SYNCTHREADS`:
   - **NVPTX** → `llvm.nvvm.barrier0` (a.k.a. `barrier.sync 0`).
@@ -211,6 +211,8 @@ repetitive. Tracked here only so it is not forgotten. No green gate (no work).
     intrinsic; `SYNCTHREADS` emits `llvm.nvvm.barrier0`; still zero host-runtime
     symbols (the Milestone-A invariant must survive).
   - `x86`: each read folds to its constant (`0`/`1`); `SYNCTHREADS` emits nothing.
+    This no-op is the CPU-device host implementation: a serial one-lane device has
+    no sibling lanes to wait for.
   - Normal host code using any of these is rejected with a device-only diagnostic;
     `DEVICE` code targeting `device=x86` accepts them and lowers them to the CPU-device constants.
 - [ ] **C.5.2 CPU-device correctness (the headline).** A **grid-stride vector-add**
@@ -219,7 +221,7 @@ repetitive. Tracked here only so it is not forgotten. No green gate (no work).
   This is the proof that the parallel model is correct independent of any GPU.
   **Progress:** the grid-stride vector-add half is now covered by
   `tests/integration/test_device_grid_stride.py`; the `SHARED`+`SYNCTHREADS`
-  half waits for C.2.
+  half is covered by `tests/integration/test_device_shared_syncthreads.py`.
 - [ ] **C.5.3 Definition-of-done (prescription §10, point 2 dependency).** With
   C.1/C.2 in place, the "vector-add kernel computes the right numeric result on the
   CPU device (no GPU needed)" smoke test (§10) becomes achievable; wire it as a

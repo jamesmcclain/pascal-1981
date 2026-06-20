@@ -31,7 +31,7 @@ from .ast_nodes import SetType as ASTSetType
 from .ast_nodes import SizeofExpr, Statement, StringLiteral
 from .ast_nodes import SubrangeType as ASTSubrangeType
 from .ast_nodes import (TypeDecl, UnaryOp, UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt, WriteArg)
-from .builtins_registry import DEVICE_INDEX_BUILTIN_FUNCTIONS, register_builtins
+from .builtins_registry import DEVICE_INDEX_BUILTIN_FUNCTIONS, DEVICE_SYNC_BUILTIN_PROCEDURES, register_builtins
 from .parser import parse_file
 from .symbol_table import SourceLocation, Symbol, SymbolTable
 from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, EnumType, FileType, FunctionType, LStringType,
@@ -1269,6 +1269,15 @@ class PascalTypeChecker(TypeChecker):
         is_builtin = sym is None or getattr(sym, 'is_builtin', False)
 
         if is_builtin:
+            if lookup_name in DEVICE_SYNC_BUILTIN_PROCEDURES:
+                argc = len(stmt.args) if stmt.args else 0
+                if not self.in_device_module:
+                    self.error(f"{lookup_name} is only available in DEVICE code", stmt)
+                    return
+                if argc != 0:
+                    self.error(f"Procedure '{lookup_name}' expects 0 arguments, got {argc}", stmt)
+                    return
+                return
             if lookup_name == 'PACK':
                 self._check_pack_args(stmt)
                 return

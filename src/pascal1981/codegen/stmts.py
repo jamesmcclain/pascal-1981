@@ -13,6 +13,7 @@ import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
 from ..ast_nodes import *
+from ..builtins_registry import DEVICE_SYNC_BUILTIN_PROCEDURES
 from .base import CodegenError, LoopContext, Scope
 
 
@@ -209,9 +210,34 @@ class StmtsMixin:
                 ptr = self.builder.bitcast(ptr, value.type.as_pointer())
             self.builder.store(value, ptr)
 
+    def codegen_device_sync_builtin(self, name: str) -> None:
+        """Lower DEVICE synchronization builtins.
+
+        For CPU-device execution the host is the device and execution is serial,
+        so SYNCTHREADS is a real host implementation: a no-op because there are
+        no sibling lanes to wait for.  GPU targets lower to backend barriers.
+        """
+        upper = name.upper()
+        if upper != 'SYNCTHREADS':
+            raise CodegenError(f'Unknown device synchronization builtin: {name}')
+        triple = self.device_triple or ''
+        if not (triple.startswith('nvptx') or triple.startswith('amdgcn')):
+            return
+        intrinsic_name = 'llvm.nvvm.barrier0' if triple.startswith('nvptx') else 'llvm.amdgcn.s.barrier'
+        try:
+            fn = self.module.get_global(intrinsic_name)
+        except KeyError:
+            fn = ir.Function(self.module, ir.FunctionType(ir.VoidType(), []), name=intrinsic_name)
+        self.builder.call(fn, [])
+
     def codegen_proc_call_stmt(self, stmt: ProcCallStmt) -> None:
         """Codegen for procedure call statement."""
         lookup_name = stmt.name.upper()
+        if self.is_device_module and lookup_name in DEVICE_SYNC_BUILTIN_PROCEDURES:
+            if stmt.args:
+                raise CodegenError(f'{lookup_name} expects 0 arguments')
+            self.codegen_device_sync_builtin(lookup_name)
+            return
         if self.is_device_module and lookup_name in {'FILLSC', 'MOVESL', 'MOVESR'}:
             # Step 5: inside a DEVICE MODULE these lower to addrspace-aware copy/
             # fill loops across the operands' concrete spaces -- not the vintage
