@@ -1,7 +1,7 @@
 # Differential discrepancies
 
 ## D-001 — `LOWER` / `UPPER` on `STRING(n)` and `LSTRING(n)` — remediated
-- **Status:** remediated in modern normal-code type checking and codegen; covered by `tests/test_codegen_strings_bounds.py::TestStringLowerUpperSemantics` `[OBSERVED]`
+- **Status:** remediated in modern normal-code type checking and codegen by `6188cfb Remediate string bound intrinsics`; covered by `tests/test_codegen_strings_bounds.py::TestStringLowerUpperSemantics` `[OBSERVED]`
 - **Probe:**
 
 ```pascal
@@ -26,7 +26,7 @@ BEGIN WRITELN(LOWER(s)); WRITELN(UPPER(s)) END.
 - **Severity:** semantic gap in super-array/string interaction; affects `LOWER` / `UPPER` usability on `STRING(n)` and `LSTRING(n)` values.
 
 ## D-002 — `NEW` long form on a `SUPER ARRAY` pointer referent — remediated
-- **Status:** remediated in modern normal-code type checking and codegen; covered by `tests/test_runtime_fixes.py::TestNewAllocationSize` `[OBSERVED]`
+- **Status:** remediated in modern normal-code type checking and codegen by `7c4842c Remediate super array NEW allocation`; covered by `tests/test_runtime_fixes.py::TestNewAllocationSize` `[OBSERVED]`
 - **Probe:**
 
 ```pascal

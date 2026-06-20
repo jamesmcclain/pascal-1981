@@ -19,6 +19,12 @@ Current discrepancies:
 1. `D-001`: `LOWER` / `UPPER` on `STRING(n)` and `LSTRING(n)`.
 2. `D-002`: long-form `NEW(p, upper_bound, ...)` for pointers to `SUPER ARRAY` referents.
 
+## Progress ledger
+
+- Phase 1 completed by `6188cfb Remediate string bound intrinsics`.
+- Phase 2 completed by `7c4842c Remediate super array NEW allocation`.
+- Phase 3 completed by the follow-up documentation commit that marks the fixed discrepancies with commit/test references and records the supported grammar subset.
+
 ## Phase 0 — Baseline preservation
 
 - Add regression tests that reproduce the exact observed probes from `docs/discrepancies.md` before changing implementation.
@@ -148,16 +154,16 @@ Acceptance:
 - `NEW(p, 10)` for pointer-to-super-array typechecks and codegens in normal code.
 - Existing `NEW(p)` behavior for ordinary pointers remains unchanged.
 
-## Phase 3 — Normal-code cleanup / documentation
+## Phase 3 — Normal-code cleanup / documentation — done
 
-- Mark D-001 and D-002 as remediated in `docs/discrepancies.md` once tests pass.
-- Preserve the observed vintage notes; add modern remediation commit/test references rather than deleting the discrepancy history.
-- Add grammar/design notes if long-form `NEW` semantics become part of the documented supported subset.
+- Mark D-001 and D-002 as remediated in `docs/discrepancies.md` once tests pass. `[DONE]`
+- Preserve the observed vintage notes; add modern remediation commit/test references rather than deleting the discrepancy history. `[DONE]`
+- Add grammar/design notes if long-form `NEW` semantics become part of the documented supported subset. `[DONE]`
 
 Acceptance:
 
-- Full test suite passes.
-- `docs/discrepancies.md` distinguishes historical discrepancy from current fixed status.
+- Full test suite passes. `[DONE before Phase 3 doc commit: 756 passed, 63 subtests passed]`
+- `docs/discrepancies.md` distinguishes historical discrepancy from current fixed status. `[DONE]`
 
 ## Phase 4 — DEVICE low-hanging fruit for D-001
 
