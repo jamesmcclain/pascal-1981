@@ -13,10 +13,11 @@ import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
 from ..ast_nodes import *
+from ..builtins_registry import DEVICE_INDEX_BUILTIN_FUNCTIONS
 from ..type_system import (INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, WORD_TYPE)
 from ..type_system import LStringType as ResolvedLStringType
 from ..type_system import StringType as ResolvedStringType
-from .base import CodegenError
+from .base import CodegenError, _is_gpu_triple
 
 
 class ExprsMixin:
@@ -113,6 +114,8 @@ class ExprsMixin:
                 return self._const_ir(key)
             if key == 'NULL':
                 return self.null_lstring_ptr()
+            if key in DEVICE_INDEX_BUILTIN_FUNCTIONS:
+                return self.codegen_device_index_builtin(key)
             if key in {'EOF', 'EOLN'}:
                 sym = self.scope.lookup('INPUT')
                 out_sym = self.scope.lookup('OUTPUT')
@@ -468,6 +471,10 @@ class ExprsMixin:
         """Codegen function call."""
         lookup_name = expr.name.upper()
 
+        if lookup_name in DEVICE_INDEX_BUILTIN_FUNCTIONS:
+            if expr.args:
+                raise CodegenError(f'{lookup_name} expects 0 arguments')
+            return self.codegen_device_index_builtin(lookup_name)
         if lookup_name in {'EOF', 'EOLN'}:
             if len(expr.args) == 0:
                 sym = self.scope.lookup('INPUT')
@@ -657,6 +664,46 @@ class ExprsMixin:
     # ========================================================================
     # Built-in Functions
     # ========================================================================
+
+    def codegen_device_index_builtin(self, name: str) -> ir.Value:
+        """Lower DEVICE thread/block index reads.
+
+        On the CPU-device stand-in, DEVICE code executes as a one-thread,
+        one-block grid.  On NVPTX, lower to the corresponding special-register
+        read intrinsic.  AMDGPU dimension plumbing is deferred; keep it
+        deterministic rather than inventing a half-wrong dispatch-ptr decode.
+        """
+        upper = name.upper()
+        if not _is_gpu_triple(self.device_triple):
+            value = 1 if upper.startswith(('BLOCKDIM_', 'GRIDDIM_')) else 0
+            return ir.Constant(ir.IntType(32), value)
+        if self.device_triple.startswith('nvptx'):
+            nvptx_map = {
+                'THREADIDX_X': 'llvm.nvvm.read.ptx.sreg.tid.x',
+                'THREADIDX_Y': 'llvm.nvvm.read.ptx.sreg.tid.y',
+                'THREADIDX_Z': 'llvm.nvvm.read.ptx.sreg.tid.z',
+                'BLOCKIDX_X': 'llvm.nvvm.read.ptx.sreg.ctaid.x',
+                'BLOCKIDX_Y': 'llvm.nvvm.read.ptx.sreg.ctaid.y',
+                'BLOCKIDX_Z': 'llvm.nvvm.read.ptx.sreg.ctaid.z',
+                'BLOCKDIM_X': 'llvm.nvvm.read.ptx.sreg.ntid.x',
+                'BLOCKDIM_Y': 'llvm.nvvm.read.ptx.sreg.ntid.y',
+                'BLOCKDIM_Z': 'llvm.nvvm.read.ptx.sreg.ntid.z',
+                'GRIDDIM_X': 'llvm.nvvm.read.ptx.sreg.nctaid.x',
+                'GRIDDIM_Y': 'llvm.nvvm.read.ptx.sreg.nctaid.y',
+                'GRIDDIM_Z': 'llvm.nvvm.read.ptx.sreg.nctaid.z',
+            }
+            intrinsic_name = nvptx_map[upper]
+            try:
+                fn = self.module.get_global(intrinsic_name)
+            except KeyError:
+                fn = ir.Function(self.module, ir.FunctionType(ir.IntType(32), []), name=intrinsic_name)
+            return self.builder.call(fn, [])
+        if self.device_triple.startswith('amdgcn'):
+            # C.1 keeps AMDGPU non-blocking; real grid/block dimension lowering
+            # needs dispatch-ptr reads and is tracked by the plan.
+            value = 1 if upper.startswith(('BLOCKDIM_', 'GRIDDIM_')) else 0
+            return ir.Constant(ir.IntType(32), value)
+        raise CodegenError(f'{upper}: unsupported device triple {self.device_triple}')
 
     def codegen_actual_arg(self, arg: Expression, mode: Optional[str]) -> ir.Value:
         if mode in {'VAR', 'VARS', 'CONST', 'CONSTS'}:

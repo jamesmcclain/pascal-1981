@@ -31,7 +31,7 @@ from .ast_nodes import SetType as ASTSetType
 from .ast_nodes import SizeofExpr, Statement, StringLiteral
 from .ast_nodes import SubrangeType as ASTSubrangeType
 from .ast_nodes import (TypeDecl, UnaryOp, UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt, WriteArg)
-from .builtins_registry import register_builtins
+from .builtins_registry import DEVICE_INDEX_BUILTIN_FUNCTIONS, register_builtins
 from .parser import parse_file
 from .symbol_table import SourceLocation, Symbol, SymbolTable
 from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, EnumType, FileType, FunctionType, LStringType,
@@ -2102,10 +2102,16 @@ class PascalTypeChecker(TypeChecker):
                         current_type = current_type.target_type
             return current_type
         elif isinstance(expr, Identifier):
+            lookup_name = expr.name.upper()
             sym = self.symbol_table.lookup(expr.name)
             if not sym:
                 self.error(f"Undefined variable: {expr.name}", expr)
                 return None
+            if lookup_name in DEVICE_INDEX_BUILTIN_FUNCTIONS:
+                if not self.in_device_module:
+                    self.error(f"{lookup_name} is only available in DEVICE code", expr)
+                    return None
+                return INTEGER32_TYPE
             if isinstance(sym.type, FunctionType) and not sym.type.params:
                 return sym.type.return_type
             return sym.type
@@ -2171,6 +2177,15 @@ class PascalTypeChecker(TypeChecker):
                     return sym.type.return_type
                 return None
 
+            if lookup_name in DEVICE_INDEX_BUILTIN_FUNCTIONS:
+                argc = len(expr.args) if expr.args else 0
+                if not self.in_device_module:
+                    self.error(f"{lookup_name} is only available in DEVICE code", expr)
+                    return None
+                if argc != 0:
+                    self.error(f"Function '{lookup_name}' expects 0 arguments, got {argc}", expr)
+                    return None
+                return INTEGER32_TYPE
             if lookup_name in {'EOF', 'EOLN'}:
                 argc = len(expr.args) if expr.args else 0
                 if argc > 1:
@@ -2532,7 +2547,7 @@ class PascalTypeChecker(TypeChecker):
             name = type_expr.name.upper()
             if name == 'INTEGER':
                 return INTEGER_TYPE
-            elif name == 'INTEGER32' and self.feature_enabled('wide-integers'):
+            elif name == 'INTEGER32' and (self.feature_enabled('wide-integers') or self.in_device_module):
                 return INTEGER32_TYPE
             elif name == 'INTEGER64' and self.feature_enabled('wide-integers'):
                 return INTEGER64_TYPE
