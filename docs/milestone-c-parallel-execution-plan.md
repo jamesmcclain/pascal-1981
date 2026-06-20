@@ -124,7 +124,7 @@ and any wider launch-argument audit) remains deferred.
   rejected with a device-only diagnostic; a `DEVICE` body calling it passes for
   both `device=x86` and GPU triples.
 
-- [ ] **C.1.3 Codegen lowering — GPU intrinsic vs CPU-device constant.**
+- [x] **C.1.3 Codegen lowering — GPU intrinsic vs CPU-device constant.**
   Anchors: the function-builtin dispatch in `codegen/exprs.py`
   (`codegen_expr_func_call`; re-grep), `codegen/base.py:_is_gpu_triple`, and the
   `_declare_libm_func` pattern (`codegen/__init__.py:~60`) for declaring an
@@ -144,7 +144,8 @@ and any wider launch-argument audit) remains deferred.
   milestone's headline correctness test).
   **Progress:** NVPTX special-register lowering and CPU-device constants are
   implemented and artifact-tested in `tests/test_device_index_intrinsics.py`;
-  the grid-stride run test remains for C.5.
+  CPU-device grid-stride vector-add is covered by
+  `tests/integration/test_device_grid_stride.py`.
 
 - [x] **C.1.4 Index-width implementation (the narrow part of §4.5).** The Phase
   0.3 decision is that the intrinsics return **`INTEGER32`** (already a scalar
@@ -216,6 +217,9 @@ repetitive. Tracked here only so it is not forgotten. No green gate (no work).
   `DEVICE UNIT` (and a `SHARED`-staging kernel using `SYNCTHREADS`) compiled to
   `device=x86`, linked, and **run**, producing the correct full-array result.
   This is the proof that the parallel model is correct independent of any GPU.
+  **Progress:** the grid-stride vector-add half is now covered by
+  `tests/integration/test_device_grid_stride.py`; the `SHARED`+`SYNCTHREADS`
+  half waits for C.2.
 - [ ] **C.5.3 Definition-of-done (prescription §10, point 2 dependency).** With
   C.1/C.2 in place, the "vector-add kernel computes the right numeric result on the
   CPU device (no GPU needed)" smoke test (§10) becomes achievable; wire it as a
