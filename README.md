@@ -134,6 +134,71 @@ Source-tree equivalent:
 PYTHONPATH=src python3 -m pascal1981 myprogram.pas | clang -x ir - runtime/build/libpascalrt.a -o myprogram
 ```
 
+## Device PTX artifact generation
+
+The compiler also has an early device-only path for Pascal `DEVICE UNIT` /
+`DEVICE IMPLEMENTATION` code targeting NVIDIA PTX.  This path is for inspecting
+or externally launching GPU kernel artifacts; it does **not** generate Pascal
+host-side CUDA orchestration yet.
+
+From a source checkout, compile a device implementation directly to PTX:
+
+```bash
+PYTHONPATH=src python3 -m pascal1981.compile_to_ptx \
+  examples/device_ptx/fill_indices/fill.pas \
+  examples/device_ptx/fill_indices/fill.ptx \
+  --emit-llvm examples/device_ptx/fill_indices/fill.ll \
+  --cpu sm_70
+```
+
+The source file is a `DEVICE IMPLEMENTATION OF` whose sibling extensionless file
+contains the `DEVICE INTERFACE`.  Exported procedures in the device interface are
+lowered as PTX kernel entries.  For example:
+
+```pascal
+DEVICE INTERFACE;
+UNIT FILL (fill_indices);
+PROCEDURE fill_indices(outp: ADS(GLOBAL) OF ARRAY [0..255] OF INTEGER32; n: INTEGER32);
+END;
+```
+
+```pascal
+DEVICE IMPLEMENTATION OF FILL;
+PROCEDURE fill_indices(outp: ADS(GLOBAL) OF ARRAY [0..255] OF INTEGER32; n: INTEGER32);
+VAR i: INTEGER32;
+BEGIN
+  i := THREADIDX_X + BLOCKIDX_X * BLOCKDIM_X;
+  IF i < n THEN
+    outp^[i] := i
+END;
+.
+```
+
+Inspect the artifact:
+
+```bash
+grep '\.visible .entry fill_indices' examples/device_ptx/fill_indices/fill.ptx
+grep '%tid.x' examples/device_ptx/fill_indices/fill.ptx
+grep 'st.global.u32' examples/device_ptx/fill_indices/fill.ptx
+```
+
+This requires `llvmlite`/LLVM with the NVPTX backend.  It does not require an
+NVIDIA device, CUDA driver, CUDA runtime, `nvcc`, or the Pascal runtime library.
+If NVIDIA tools are available, `ptxas` can provide a stronger validation step:
+
+```bash
+ptxas -arch=sm_70 -v -o fill.cubin examples/device_ptx/fill_indices/fill.ptx
+```
+
+To actually run the generated `.ptx`, use an external launcher first — PyCUDA or
+a small CUDA Driver API program — on a CUDA-capable machine.  See
+[`examples/device_ptx/fill_indices/README.md`](examples/device_ptx/fill_indices/README.md)
+and
+[`examples/device_ptx/fill_indices/RUNNING_PTX.md`](examples/device_ptx/fill_indices/RUNNING_PTX.md)
+for the detailed example and runtime test plan.  Pascal host-side operations such
+as device allocation, copy, launch, and synchronization are planned separately;
+this PTX path is the first artifact-level bridge.
+
 ## Architecture
 
 A clean, layered pipeline with clear separation of concerns:
