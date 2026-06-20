@@ -169,8 +169,9 @@ type_designator = identifier "(" constant ")" ;
 internal `ArrayType` with concrete bounds. The internal `type_system.ArrayType`
 does not currently carry a `super` flag or dynamic upper-bound metadata.
 
-[INFERRED] Therefore, parser/docs support exists, but complete IBM-style
-super-array semantics are not yet implemented in the semantic/codegen model.
+[INFERRED] Therefore, parser/docs support exists and some super-array-aware
+codegen paths now work, but full IBM-style conformant-array semantics are still
+not implemented in the semantic/codegen model.
 
 ### Why super arrays matter for Mandelbrot
 
@@ -210,7 +211,8 @@ compile-time maximum such as `ARRAY [0..1048575] OF INTEGER32`.
 
 [INFERRED] For CUDA/PTX substitution, `ADS(GLOBAL) OF SUPER ARRAY [lo..*] OF T`
 should initially lower as a raw address-space pointer to `T`, not as a fat
-descriptor and not with hidden upper-bound parameters.
+descriptor and not with hidden upper-bound parameters. This is an ABI choice for
+device kernels, not a statement that all super-array usage is unimplemented.
 
 Proposed initial rule:
 
@@ -460,7 +462,7 @@ Use increasingly strong evidence:
 | Gap | Basis | Notes |
 | --- | --- | --- |
 | Exact Mandelbrot ABI table | UNVERIFIED | Re-read CUDA/PyCUDA source before implementation. |
-| Super-array semantic/codegen model | OBSERVED/INFERRED | Parser/docs exist; internal type currently collapses open bound. |
+| Super-array semantic/codegen model | OBSERVED/INFERRED | Parser/docs exist; long-form `NEW` for one-dimensional super-array pointers and string-bound intrinsics now work, but full dynamic-bound metadata / conformant-array semantics are still pending. |
 | Raw `ADS(GLOBAL) OF SUPER ARRAY` pointer ABI | INFERRED | Proposed for CUDA compatibility; not currently proven. |
 | 2-D buffer-store artifact test | INFERRED | Builtins exist; dedicated test still needed. |
 | DEVICE `REAL` arithmetic audit | UNVERIFIED | Host `REAL` exists; Mandelbrot-class device path needs tests. |
@@ -472,7 +474,8 @@ Use increasingly strong evidence:
 
 [INFERRED] Use super arrays as the source-level spelling for open device buffers,
 but initially lower `ADS(GLOBAL) OF SUPER ARRAY` in DEVICE kernel parameters as a
-raw pointer to preserve CUDA/PyCUDA ABI compatibility.
+raw pointer to preserve CUDA/PyCUDA ABI compatibility. The remaining gap is
+metadata-aware conformant-array behavior, not basic super-array support.
 
 [INFERRED] Target `mandelbrot_f64` first, because Pascal `REAL` already maps to a
 double-precision concept and the CUDA example has an f64 kernel. This avoids
