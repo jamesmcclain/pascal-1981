@@ -182,11 +182,14 @@ and any wider launch-argument audit) remains deferred.
 
 ## Phase C.3 — Launch-bounds / signature contract (§4.3) [mostly note; defer body work]
 
-- [ ] **C.3.1 Confirm no new kernel-*body* syntax is required.** Per §4.3, grid
+- [x] **C.3.1 Confirm no new kernel-*body* syntax is required.** Per §4.3, grid
   and block geometry are supplied at **launch** (host side, Milestone D §5.4), not
   in the kernel. The kernel reads the C.1 intrinsics; that is the whole contract.
   This item is a recorded decision, not code. **Green gate:** the C.1 acceptance
   kernel needs nothing beyond C.1/C.2 — verified by it compiling and running.
+  Artifact coverage: `tests/test_device_launch_contract.py` compiles a
+  representative NVPTX kernel body using index reads plus `SYNCTHREADS`, asserts
+  the expected intrinsics, and asserts that launch-bounds metadata is absent.
 - [ ] **C.3.2 (Optional, deferrable) `maxntid`/`reqntid` launch-bounds metadata.**
   If/when a kernel wants the compiler to know its block size, emit NVPTX
   `nvvm.annotations` launch-bounds metadata on the entry. **Defer** until Milestone
