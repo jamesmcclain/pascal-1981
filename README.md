@@ -396,7 +396,7 @@ This is a **full reimplementation** of IBM Pascal 2.0. The goal is not a subset 
 
 **Reference:** The original compiler manual is [here](https://archive.org/details/ibm-pascal-compiler-aug-81) — this is the source of truth for dialect semantics and feature completeness.
 
-Dialect coverage is complete: the planned feature checklist has been worked through, and the remaining differential questions against the genuine 1981 compiler have been settled and recorded in [`docs/discrepancies.md`](docs/discrepancies.md). Behaviors that the vintage compiler does not have, but that this implementation offers as deliberate extensions, are gated behind opt-in feature flags (see `features.py` / `--list-features`) so the default build stays faithful to IBM Pascal 2.0. The formal grammar lives in [`docs/ebnf_grammar.md`](docs/ebnf_grammar.md), and the executed remediation plans are kept under [`docs/plans/`](docs/plans/) for the record.
+Dialect coverage is complete: the planned feature checklist has been worked through, and the remaining differential questions against the genuine 1981 compiler have been settled and archived under [`docs/old/`](docs/old/). Open follow-up seams are tracked in [`docs/followups.md`](docs/followups.md). Behaviors that the vintage compiler does not have, but that this implementation offers as deliberate extensions, are gated behind opt-in feature flags (see `features.py` / `--list-features`) so the default build stays faithful to IBM Pascal 2.0. The formal grammar lives in [`docs/ebnf_grammar.md`](docs/ebnf_grammar.md).
 
 The test suite is organized to run independently at each layer, so development can proceed without the full LLVM toolchain.
 
@@ -456,8 +456,8 @@ pascal-1981/
 └─ Documentation
    └── docs/
        ├── ebnf_grammar.md
-       ├── discrepancies.md
-       └── plans/
+       ├── followups.md
+       └── old/
 ```
 
 ## Testing

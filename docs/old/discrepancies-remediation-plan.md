@@ -24,7 +24,8 @@ Current discrepancies:
 - Phase 1 completed by `6188cfb Remediate string bound intrinsics`.
 - Phase 2 completed by `7c4842c Remediate super array NEW allocation`.
 - Phase 3 completed by `5dc7fee Document discrepancy remediation status`.
-- Phase 4 completed by the follow-up DEVICE string-bound commit; DEVICE code accepts `LOWER` / `UPPER` on `STRING(n)` and `LSTRING(n)` as constant bound reads without host runtime leakage.
+- Phase 4 completed by `fc97361 Add device string bound coverage`; DEVICE code accepts `LOWER` / `UPPER` on `STRING(n)` and `LSTRING(n)` as constant bound reads without host runtime leakage.
+- Phase 5 completed by the follow-up DEVICE heap-recission commit; DEVICE `NEW` / `DISPOSE`, including long-form super-array `NEW`, are rejected before codegen with a clear dynamic-allocation diagnostic.
 
 ## Phase 0 — Baseline preservation
 
@@ -184,17 +185,17 @@ Acceptance:
 - DEVICE code can use `LOWER(s)` / `UPPER(s)` on local or parameter `STRING(n)` / `LSTRING(n)` where those types are otherwise legal. `[DONE for local variables]`
 - No host runtime externs leak into device IR/PTX for the bounds-only case. `[DONE]`
 
-## Phase 5 — DEVICE low-hanging fruit for D-002
+## Phase 5 — DEVICE low-hanging fruit for D-002 — done
 
 Full heap allocation in DEVICE code is not low-hanging fruit. CUDA/ROCm device `malloc` semantics, allocator availability, address spaces, and lifetime rules are backend-specific and outside the current Milestone-C body-contract work.
 
 Low-hanging plan:
 
-- Keep ordinary `NEW` rejected or unsupported in DEVICE code if it currently depends on host `malloc`.
-- Improve diagnostics for `NEW` in DEVICE code if needed:
+- Keep ordinary `NEW` rejected or unsupported in DEVICE code if it currently depends on host `malloc`. `[DONE]`
+- Improve diagnostics for `NEW` in DEVICE code if needed: `[DONE]`
   - Make it explicit that heap allocation is unavailable in DEVICE code, rather than falling through to host runtime lowering.
-- Consider type-check-only acceptance for declarations involving `^SUPER ARRAY` if no allocation occurs.
-- Do not lower `NEW(p, upper)` to GPU allocator calls in the first DEVICE tranche.
+- Consider type-check-only acceptance for declarations involving `^SUPER ARRAY` if no allocation occurs. `[DONE: declarations remain accepted; allocation calls are rejected]`
+- Do not lower `NEW(p, upper)` to GPU allocator calls in the first DEVICE tranche. `[DONE]`
 
 Possible later DEVICE extension, not first pass:
 
@@ -203,8 +204,8 @@ Possible later DEVICE extension, not first pass:
 
 Acceptance:
 
-- DEVICE code does not accidentally emit host `malloc`/`free` for `NEW`.
-- Any unsupported `NEW` use in DEVICE code receives a clear diagnostic.
+- DEVICE code does not accidentally emit host `malloc`/`free` for `NEW`. `[DONE: rejected before codegen]`
+- Any unsupported `NEW` use in DEVICE code receives a clear diagnostic. `[DONE]`
 
 ## Suggested implementation order
 
