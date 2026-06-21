@@ -23,6 +23,21 @@ tier) is **complete**. Milestone C (parallel execution model) is **planned and r
 see the build sequence in `docs/milestone-c-parallel-execution-plan.md`. Milestones D (host
 orchestration) and E (AMDGPU stack) remain prescribed. Suite: **705 passed, 63 subtests**.
 
+**Update (2026-06, first GPU run via the external-launcher path):** A Pascal
+`DEVICE UNIT` kernel has now run on a real NVIDIA GPU. The `REAL32`/`REAL64` scalar
+types and a void-return fix for exported device entries landed (suite grew to 781
+passed with `clang` available), and the `examples/device_ptx/mandelbrot` kernels
+were emitted to PTX and dropped — unchanged — into the companion mandelbrot-gpu
+PyCUDA launcher, producing a correct image. See
+`docs/mandelbrot-ptx-substitution-plan.md` ("Hardware validation result"). Note
+this validates the **external-launcher** route (a Pascal-generated `.ptx` loaded
+by an existing host), **not** the Pascal-side host orchestration of §5 / Milestone
+D, which is still prescribed: §10 point (3) below — running a kernel through the
+*Pascal* `LAUNCH(...)` shim — therefore remains open. What is now proven is that
+the device-code half (entry points, the parallel-execution intrinsics of
+Milestone C, void-return ABI, and the scalar widths a real kernel needs) is
+hardware-correct end to end.
+
 ---
 
 ## 0. Where you actually are (verified baseline)

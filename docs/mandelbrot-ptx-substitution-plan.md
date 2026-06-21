@@ -29,6 +29,9 @@ Claims are tagged as:
 
 - `[OBSERVED]` directly observed in repository code, tests, docs, or the vintage
   manual text.
+- `[OBSERVED — hardware run]` observed by a maintainer running the artifact on a
+  real NVIDIA GPU, outside the repo's CI (which has no device). The strongest
+  grade for the launch/output rungs.
 - `[INFERRED]` a reasonable engineering conclusion from observed facts.
 - `[UNVERIFIED]` plausible but not yet checked in the current codebase or on a
   CUDA-capable machine.
@@ -466,16 +469,74 @@ Once ABI-compatible f32 or f64 PTX exists:
 
 ## Validation ladder
 
-Use increasingly strong evidence:
+Use increasingly strong evidence. All eight rungs are now satisfied — the first
+four in repository CI, and rungs 5-8 by a maintainer hardware run (NVIDIA GPU,
+CUDA 12.x; outside the repo's CI, which has no device):
 
-1. LLVM IR parses.
-2. NVPTX backend emits PTX.
-3. PTX contains `.visible .entry mandelbrot_*`.
-4. PTX contains expected special-register reads and global stores.
-5. `ptxas` accepts the PTX for the target SM architecture.
-6. PyCUDA/CUDA Driver API loads the module and resolves the symbol.
-7. Kernel launch completes without driver errors.
-8. Copied-back output matches a reference implementation.
+1. LLVM IR parses. **[OBSERVED]**
+2. NVPTX backend emits PTX. **[OBSERVED]**
+3. PTX contains `.visible .entry mandelbrot_*`. **[OBSERVED]**
+4. PTX contains expected special-register reads and global stores. **[OBSERVED]**
+5. `ptxas` accepts the PTX for the target SM architecture. **[OBSERVED — hardware run]**
+6. PyCUDA/CUDA Driver API loads the module and resolves the symbol. **[OBSERVED — hardware run]**
+7. Kernel launch completes without driver errors. **[OBSERVED — hardware run]**
+8. Copied-back output matches a reference implementation. **[OBSERVED — hardware run]**
+
+Rungs 1-4 are exercised by `tests/integration/test_device_mandelbrot_ptx.py`.
+Rungs 5-8 were satisfied by generating `mandelbrot.ptx` from the Pascal example,
+dropping it into the companion mandelbrot-gpu PyCUDA launcher unchanged, and
+producing a correct Mandelbrot image on a real GPU. See "Hardware validation
+result" below.
+
+## Hardware validation result
+
+[OBSERVED — hardware run, 2026-06] The Pascal-generated `mandelbrot.ptx`
+substituted for the `nvcc`-generated artifact with **no launcher change**: the
+existing `module_from_file(...).get_function("mandelbrot_f32" | "mandelbrot_f64")`
+plus positional launch resolved and ran both kernels, and the copied-back image
+matched the reference render.
+
+A `diff` of the two PTX files (`nvcc` 12.8 vs this toolchain) was reviewed. The
+key finding: **there is no ABI, symbol, parameter, layout, or semantic difference.**
+The entry signatures, parameter order, parameter widths, and the `.f32`/`.f64`
+split are identical. Everything that differs is below the ABI line — the two
+backends scheduling the same computation differently — which is exactly the
+latitude a PTX consumer allows. Observed differences, all benign:
+
+- **Header provenance.** `nvcc` stamps `.version 8.7` / NVVM banner; this
+  toolchain stamps `.version 7.1` / LLVM NVPTX banner. The older ISA level is
+  accepted by `ptxas` and the driver JIT and is, if anything, more portable.
+- **Pointer-parameter annotation.** This toolchain emits
+  `.param .u64 .ptr .global .align 1` where `nvcc` emits a bare `.param .u64`.
+  The annotated form is a strict superset (it tells `ptxas` the pointer targets
+  global memory). `.align 1` is conservative — `nvcc` would say `.align 4`,
+  knowing the buffer is `int`-aligned — so this is a missed alignment hint, not a
+  defect.
+- **Bounds-guard lowering (codegen quality).** `nvcc` hoists the
+  `(width > 1) ? (width-1) : 1.0` guard into a branchless `selp.f32`; this
+  toolchain lowers the source `IF` into real control flow (`bra`). Both are
+  correct; predication is the preferred GPU idiom because it avoids warp
+  divergence at the image edges. A peephole/lowering improvement, not a
+  correctness issue.
+- **FMA fusion (precision).** `nvcc` fuses `2*x*y + y0` into a single
+  `fma.rn.f32`; this toolchain emits a discrete multiply/add. An FMA carries more
+  intermediate precision, so the two kernels can differ in the last bit. The
+  image matched anyway, which means the escape-iteration counts were robust to
+  that difference for this render.
+- **Predicate shape.** `nvcc` uses `and.pred` of two `setp`s for the loop
+  continue test; this toolchain uses `or.pred` with an early-out branch — the
+  same control flow by De Morgan, mirrored.
+- **Two phantom globals.** This toolchain emits
+  `.extern .global .align 8 .b64 input;` and `... output;` — unreferenced
+  module-level globals leaked from the device compiland (a remnant of
+  INPUT/OUTPUT handling). `.extern` with no use generates no SASS and resolved to
+  nothing at launch; harmless, but worth cleaning up (tracked in
+  `docs/followups.md`).
+
+Net: a correct, ABI-faithful, hardware-validated drop-in. The remaining gap
+between this and `nvcc`'s output is codegen *quality* (predication, FMA fusion,
+alignment hints) and one cosmetic wart (the phantom globals) — none of it
+correctness, ABI, or layout.
 
 ## Current key gaps
 
@@ -489,7 +550,8 @@ Use increasingly strong evidence:
 | DEVICE `REAL`/`REAL32` arithmetic | OBSERVED | Both kernels compile; f32 proven single-precision, f64 double. |
 | `INTEGER32` to `REAL`/`REAL32` conversion | OBSERVED | Lowers automatically (`cvt.rn.f{32,64}.s32`). |
 | `REAL32` | OBSERVED | Implemented (LLVM `float`); `mandelbrot_f32` params are `.f32`. |
-| External runtime execution | UNVERIFIED | Requires NVIDIA driver/device outside current VM (the `@requires_gpu` rung). |
+| External runtime execution | OBSERVED — hardware run | Both kernels ran on a real NVIDIA GPU via the unchanged PyCUDA launcher; output matched the reference. The repo's own CI still has no device. |
+| Codegen quality vs `nvcc` | OBSERVED | Below-ABI-line differences only: branch-vs-predication on the bounds guard, discrete multiply/add vs `fma.rn`, conservative `.align 1`, and two phantom `.extern .global` leaks. Tracked in `docs/followups.md`; none affect correctness. |
 
 ## Recommendation
 
@@ -499,13 +561,22 @@ preserving CUDA/PyCUDA ABI compatibility. The remaining gap is metadata-aware
 conformant-array behavior (`UPPER` on a super-array parameter), not basic
 super-array support.
 
-[OBSERVED] Both `mandelbrot_f64` (Pascal `REAL64`) and `mandelbrot_f32` (Pascal
-`REAL32`) now emit ABI-correct, void-returning PTX entries from the example at
-`examples/device_ptx/mandelbrot/`.
+[OBSERVED — hardware run] Both `mandelbrot_f64` (Pascal `REAL64`) and
+`mandelbrot_f32` (Pascal `REAL32`) emit ABI-correct, void-returning PTX entries
+from the example at `examples/device_ptx/mandelbrot/`, and the generated
+`mandelbrot.ptx` has been run on a real NVIDIA GPU as a no-change drop-in for the
+`nvcc`-built artifact, producing a correct image. The Pascal-side PTX-substitution
+goal of this document is **met**.
 
-[PRESCRIBED] The remaining work is the last rung of the validation ladder:
-`ptxas`-accept the emitted `mandelbrot.ptx`, load it with the existing PyCUDA
-launcher, run both kernels on a real device, and diff the output against the
-CUDA-built reference. This needs an NVIDIA driver/device (the §8 container in
-`cuda-kernel-prescription.md`) and is out of reach in the current VM. The Pascal
-side of the substitution is complete.
+[PRESCRIBED] What remains is optional codegen-quality polish to close the
+below-ABI-line gap with `nvcc` (see "Hardware validation result" and
+`docs/followups.md`): predicating the bounds guard instead of branching, fusing
+the `2*x*y + y0` step into an `fma`, emitting a tighter pointer-parameter
+alignment hint, and dropping the phantom `.extern .global input/output` leaks.
+None of these affect correctness, ABI, or layout; they separate "runs correctly"
+from "indistinguishable from `nvcc`'s output."
+
+Note this is the *external-launcher* substitution path (a Pascal-generated `.ptx`
+loaded by an existing PyCUDA host). Pascal-side host orchestration —
+`DEVALLOC`/`DEVCOPYTO`/`LAUNCH` — remains a separate, still-prescribed milestone
+(see `docs/cuda-kernel-prescription.md` §5, Milestone D).
