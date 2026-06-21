@@ -1,5 +1,17 @@
 # Plan — Milestone C: the parallel execution model
 
+> **ARCHIVED (2026-06-21) — completed.** Milestone C is done: the thread/block
+> index intrinsics and `SYNCTHREADS` barrier are implemented and gated, and both
+> the grid-stride vector-add and the `SHARED`+`SYNCTHREADS` kernels emit the
+> correct NVPTX intrinsics with zero host-runtime symbols *and* run correctly on
+> the `x86` CPU device (`tests/test_device_index_intrinsics.py`,
+> `tests/test_device_syncthreads.py`,
+> `tests/integration/test_device_grid_stride.py`,
+> `tests/integration/test_device_shared_syncthreads.py`). The Definition of Done
+> below is met; only the explicitly *optional* C.3.2 `maxntid`/`reqntid`
+> launch-bounds metadata remains deferred. This plan is retained as the build
+> record; the live roadmap is `docs/cuda-kernel-prescription.md` (Milestones D/E).
+
 **Goal.** Give a `DEVICE` kernel the four things that turn it from "a slow serial
 function that happens to live on the GPU" into a viable parallel program: the
 **thread/block index intrinsics** to compute a per-thread global index, and a

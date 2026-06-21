@@ -19,9 +19,11 @@ get an actual GPU kernel to **launch, run, and return a result** on real hardwar
 
 **Progress summary (2026-06-19):** Milestones A (self-contained IR) and B (entry points) are
 **complete**. §1.5 (DEVICE UNIT foundation, USES fix, init-block rescission, integration-test
-tier) is **complete**. Milestone C (parallel execution model) is **planned and ready to start** —
-see the build sequence in `docs/milestone-c-parallel-execution-plan.md`. Milestones D (host
-orchestration) and E (AMDGPU stack) remain prescribed. Suite: **705 passed, 63 subtests**.
+tier) is **complete**. Milestone C (parallel execution model) is **complete** — the index
+intrinsics and `SYNCTHREADS` barrier are implemented, gated, and validated on the `x86` CPU
+device; the build record is archived at `docs/old/milestone-c-parallel-execution-plan.md`.
+Milestones D (host orchestration) and E (AMDGPU stack) remain prescribed. Suite: **798 passed,
+69 subtests**.
 
 **Update (2026-06, first GPU run via the external-launcher path):** A Pascal
 `DEVICE UNIT` kernel has now run on a real NVIDIA GPU. The `REAL32`/`REAL64` scalar
@@ -29,7 +31,7 @@ types and a void-return fix for exported device entries landed (suite grew to 78
 passed with `clang` available), and the `examples/device_ptx/mandelbrot` kernels
 were emitted to PTX and dropped — unchanged — into the companion mandelbrot-gpu
 PyCUDA launcher, producing a correct image. See
-`docs/mandelbrot-ptx-substitution-plan.md` ("Hardware validation result"). Note
+`docs/old/mandelbrot-ptx-substitution-plan.md` ("Hardware validation result"). Note
 this validates the **external-launcher** route (a Pascal-generated `.ptx` loaded
 by an existing host), **not** the Pascal-side host orchestration of §5 / Milestone
 D, which is still prescribed: §10 point (3) below — running a kernel through the
@@ -53,7 +55,7 @@ Reproduced on this VM with `llvmlite 0.47.0`, the bundled LLVM (≈21), and `cla
   becomes `load addrspace(3)` → `store addrspace(1)`. Feeding that IR through the bundled LLVM
   target machine (`sm_70`) produces **valid PTX**: `work_flags` in `.shared`, `prime_flags`
   in `.global`, a `ld.shared.u8` → `st.global.u8` copy. The space→instruction thesis holds.
-- **[VERIFIED] 607 tests pass** at original writing; suite is now **705 passed, 63 subtests**.
+- **[VERIFIED] 607 tests pass** at original writing; suite is now **798 passed, 69 subtests**.
 
 So the type system, the space lattice, and the addrspace lowering are genuinely finished and
 validated. What follows is everything *else* that a CUDA kernel needs, none of which the
@@ -272,7 +274,7 @@ There were two distinct leaks; both are now fixed:
   when wanted.
 
 **Green gate met:** device IR on nvptx64 has zero host-runtime symbol references; host/vintage
-IR is byte-identical; 705 passed, 63 subtests.
+IR is byte-identical; 798 passed, 69 subtests.
 
 ---
 
@@ -336,11 +338,13 @@ host IR byte-identical.
 
 ---
 
-## 4. Milestone C - the parallel execution model (what makes a kernel *viable*)
+## 4. Milestone C - the parallel execution model (what makes a kernel *viable*) — DONE
 
-> **Build sequence:** `docs/milestone-c-parallel-execution-plan.md` turns this section
-> into ordered, green-gated items (index intrinsics, `SYNCTHREADS`, the grid-stride
-> CPU-device correctness contract, the `INTEGER32` index-width decision).
+> **Build sequence (archived, completed):** `docs/old/milestone-c-parallel-execution-plan.md`
+> turned this section into ordered, green-gated items (index intrinsics, `SYNCTHREADS`, the
+> grid-stride CPU-device correctness contract, the `INTEGER32` index-width decision). All are
+> implemented and validated; only the optional `maxntid`/`reqntid` launch-bounds metadata
+> (C.3.2) remains deferred.
 
 **This is the §4 gap, and the direct answer to "what language extensions do I need for viable
 parallel kernels?"** A kernel with no thread indices is just a slow serial function that

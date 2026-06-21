@@ -311,8 +311,8 @@ orchestration/launch API and kernel marking are still deferred.
 
 - **Module kind picks the language rules.** A regular `MODULE` is host code. A
   `DEVICE MODULE` is device code: the extended dialect, minus a module-scoped
-  recission set (recursion, `NEW`/heap, host I/O, `GOTO`, dynamic set-range
-  construction), plus the address-space surface. The boundary is lexical, so "is
+  recission set (recursion, `NEW`/heap, host I/O, `GOTO` and its non-loop labels,
+  dynamic set-range construction), plus the address-space surface. The boundary is lexical, so "is
   this device code" needs no reachability analysis.
 - **Two target triples pick the lowering**, both defaulting to
   `x86_64-pc-linux-gnu` and independently overridable: `host` for `MODULE` code,

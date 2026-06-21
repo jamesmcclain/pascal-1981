@@ -65,3 +65,58 @@ kernel entry-point discussion.
 **How verified.** `tests/test_lazy_externs.py` now asserts that MODULEs declare
 `@input` / `@output` externally and that combining PROGRAM IR with separately
 compiled MODULE IR yields exactly one strong definition of each singleton.
+
+---
+
+## 3. Phantom `.extern .global input/output` in device PTX [DONE]
+
+*(Originally item 2 of `docs/followups.md`; archived here once shipped.)*
+
+**Resolution.** `compile_to_llvm` now derives `is_device_compiland` from the AST
+root's `is_device` flag and threads it through `Codegen` into `codegen/base.py`.
+The constructor only calls `_register_predeclared_files` for non-device
+compilands, so a `DEVICE` unit/module emits neither the `input`/`output` globals
+nor their scope entries. Host `PROGRAM` (strong definition) and host `MODULE`/
+`UNIT` (declare-only external) compilands are unchanged. This is the
+construction-time analogue of the lazy-extern suppression already used for
+host-runtime functions: device code never references the host streams, so they
+never appear. Verified: device IR/PTX (MODULE and UNIT, on the nvptx64/amdgcn GPU
+triples and the x86 CPU-device triple) carries no `input`/`output`; host paths
+keep theirs.
+
+**How to verify.** `tests/integration/test_device_mandelbrot_ptx.py::
+test_no_phantom_input_output_externs` asserts no `.extern .global ... input/
+output` in the emitted PTX (and no host-stream global in the IR).
+`tests/test_device_no_host_externs.py::TestDeviceNoPhantomInputOutput` adds the
+IR-level guard for device MODULE/UNIT across all three triples plus the host-path
+regression checks.
+
+The original analysis is preserved below for context.
+
+---
+
+### Original note
+
+**Where.** Device PTX emission for `DEVICE UNIT` compilands; the INPUT/OUTPUT
+single-definition handling (`codegen/base.py`, S4.1) and the lazy-extern path.
+
+**What.** The generated `mandelbrot.ptx` carries two unreferenced module-level
+globals — `.extern .global .align 8 .b64 input;` and `... output;` — that no
+kernel uses. They are a leak of the host INPUT/OUTPUT stream globals into a device
+compiland that has no host I/O.
+
+**Why it matters.** Harmless at runtime: an `.extern` with no use generates no
+SASS and resolved to nothing during the hardware launch (the kernel ran correctly
+with them present). But they are confusing in a device artifact — a reader of a
+Mandelbrot kernel rightly wonders what `input`/`output` are — and they are the one
+purely cosmetic difference from the `nvcc` output noted in the PTX diff
+(`docs/old/mandelbrot-ptx-substitution-plan.md`, "Hardware validation result").
+
+**Suggested resolution.** Suppress emission of the INPUT/OUTPUT (and any other
+host-stream) globals when the compiland is a `DEVICE` unit/module, the same way
+host-runtime externs are already suppressed there. Confirm zero unreferenced
+globals in device PTX.
+
+**How to verify.** Extend `tests/integration/test_device_mandelbrot_ptx.py` (or a
+device-no-host-externs guard test) to assert no `.extern .global` for `input` /
+`output` appears in the emitted PTX. Keep host INPUT/OUTPUT ownership unchanged.

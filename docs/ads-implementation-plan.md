@@ -4,10 +4,10 @@
 sequence: which files change, in what order, gated on what. It opens with the verified
 dialect/target seam.
 
-**Status (2026-06-19):** Steps 0 – 5 are **complete**. The `DEVICE UNIT` extension (Phases 1–3
+**Status (2026-06-21):** Steps 0 – 5 are **complete**. The `DEVICE UNIT` extension (Phases 1–3
 of the migration checklist, now archived in `docs/old/`) is also complete. One planned step
 remains open: **Step 4b** (full `AdsExpr` / `coerce_arg` rewrite). See the bottom of the
-build log for current state. The suite stands at **705 passed, 63 subtests**.
+build log for current state. The suite stands at **798 passed, 69 subtests**.
 
 **Guiding principle — the faithful path stays green.** Every step is gated so that the
 default `vintage`/host build is byte-for-byte unchanged. Nothing below alters behavior until a
