@@ -18,7 +18,8 @@ PROCEDURE WJUMP (X, Y: INTEGER);
 END;
 """
 
-_IMPLEMENTATION = """IMPLEMENTATION OF GRAPHICS;
+_IMPLEMENTATION = """(*$INCLUDE:'GRAPHI'*)
+IMPLEMENTATION OF GRAPHICS;
 PROCEDURE BJUMP (X, Y: INTEGER);
 BEGIN
   WRITELN('BJUMP ', X, ' ', Y)
@@ -31,7 +32,8 @@ BEGIN
 END.
 """
 
-_RENAMED_PROGRAM = """PROGRAM PLOTBOX (INPUT, OUTPUT);
+_RENAMED_PROGRAM = """(*$INCLUDE:'GRAPHI'*)
+PROGRAM PLOTBOX (INPUT, OUTPUT);
 USES GRAPHICS (MOVE, PLOT);
 BEGIN
   MOVE (0, 0);
@@ -40,7 +42,8 @@ BEGIN
 END.
 """
 
-_PLAIN_PROGRAM = """PROGRAM PLOTBOX (INPUT, OUTPUT);
+_PLAIN_PROGRAM = """(*$INCLUDE:'GRAPHI'*)
+PROGRAM PLOTBOX (INPUT, OUTPUT);
 USES GRAPHICS;
 BEGIN
   BJUMP (0, 0);
@@ -71,7 +74,7 @@ class TestUsesGraphicsIntegration(unittest.TestCase):
     def _run_case(self, main_source: str, exe_name: str):
         with temporary_pascal_project(
             {
-                'graphics.pas': _INTERFACE,
+                'GRAPHI': _INTERFACE,
                 'graphics_impl.pas': _IMPLEMENTATION,
                 'plotbox.pas': main_source,
             }

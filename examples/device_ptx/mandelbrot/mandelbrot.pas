@@ -8,6 +8,7 @@
   surrounding real width, so the f32 kernel stays pure f32 (the analog of CUDA's
   2.0f) without a stray double creeping in. }
 
+(*$INCLUDE:'mandelbrot.inc'*)
 DEVICE IMPLEMENTATION OF MANDELBROT;
 
 TYPE

@@ -19,7 +19,8 @@ FUNCTION checksum: INTEGER32;
 END;
 """
 
-_IMPLEMENTATION = """DEVICE IMPLEMENTATION OF vadd;
+_IMPLEMENTATION = """(*$INCLUDE:'vadd.inc'*)
+DEVICE IMPLEMENTATION OF vadd;
 CONST
   n = 16;
 VAR
@@ -65,7 +66,8 @@ END;
 .
 """
 
-_MAIN = """PROGRAM main(output);
+_MAIN = """(*$INCLUDE:'vadd.inc'*)
+PROGRAM main(output);
 USES vadd;
 BEGIN
   init_vectors;

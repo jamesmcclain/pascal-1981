@@ -12,7 +12,8 @@ FUNCTION checksum: INTEGER32;
 END;
 """
 
-_IMPLEMENTATION = """DEVICE IMPLEMENTATION OF sharedsync;
+_IMPLEMENTATION = """(*$INCLUDE:'sharedsync.inc'*)
+DEVICE IMPLEMENTATION OF sharedsync;
 CONST
   n = 8;
 VAR
@@ -53,7 +54,8 @@ END;
 .
 """
 
-_MAIN = """PROGRAM main(output);
+_MAIN = """(*$INCLUDE:'sharedsync.inc'*)
+PROGRAM main(output);
 USES sharedsync;
 BEGIN
   stage_values;

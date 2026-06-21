@@ -79,6 +79,7 @@ class TestDeviceImplementationCodegen(unittest.TestCase):
         "END;\n"
     )
     _IMPL = (
+        "(*$INCLUDE:'u'*)\n"
         "DEVICE IMPLEMENTATION OF U;\n"
         "VAR\n"
         "  [SPACE(GLOBAL)] g: CHAR;\n"

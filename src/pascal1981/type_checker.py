@@ -528,63 +528,34 @@ class PascalTypeChecker(TypeChecker):
 
     def check_program_unit(self, prog: ProgramUnit) -> None:
         """Type check a program unit."""
-        # Process USES clauses first
         if prog.uses:
-            # Get directory of source file for module resolution
-            source_dir = str(Path(self.source_file).parent) if self.source_file else None
             for use_clause in prog.uses:
-                # Prefer an interface that was spliced into this file via
-                # $INCLUDE over a disk lookup.  This lets a program include a
-                # shared header file and USES the unit it declares without
-                # requiring a separate on-disk interface file.
                 spliced = next(
                     (i for i in getattr(prog, 'local_interfaces', [])
                      if i.name.upper() == use_clause.name.upper()),
                     None,
                 )
-                if spliced is not None:
-                    self.import_symbols(spliced, use_clause)
+                if spliced is None:
+                    self.error(f"Module '{use_clause.name}' must be provided by a spliced INTERFACE header in the source file", None)
                     continue
-
-                # Fall back to disk-based resolution (existing behaviour).
-                module_path = self.resolve_module_path(use_clause.name, source_dir)
-                if module_path is None:
-                    self.error(f"Module '{use_clause.name}' not found", None)
-                    continue
-                interface = self.load_interface(module_path)
-                if interface is None:
-                    continue
-                self.import_symbols(interface, use_clause)
+                self.import_symbols(spliced, use_clause)
 
         # Now type-check the program block
         self.check_block(prog.block)
 
     def check_module_unit(self, mod: ModuleUnit) -> None:
         """Type check a module unit."""
-        # Process USES clauses first
         if mod.uses:
-            # Get directory of source file for module resolution
-            source_dir = str(Path(self.source_file).parent) if self.source_file else None
             for use_clause in mod.uses:
-                # Prefer a spliced (in-file) interface over a disk lookup.
                 spliced = next(
                     (i for i in getattr(mod, 'local_interfaces', [])
                      if i.name.upper() == use_clause.name.upper()),
                     None,
                 )
-                if spliced is not None:
-                    self.import_symbols(spliced, use_clause)
+                if spliced is None:
+                    self.error(f"Module '{use_clause.name}' must be provided by a spliced INTERFACE header in the source file", None)
                     continue
-
-                # Fall back to disk-based resolution (existing behaviour).
-                module_path = self.resolve_module_path(use_clause.name, source_dir)
-                if module_path is None:
-                    self.error(f"Module '{use_clause.name}' not found", None)
-                    continue
-                interface = self.load_interface(module_path)
-                if interface is None:
-                    continue
-                self.import_symbols(interface, use_clause)
+                self.import_symbols(spliced, use_clause)
 
         # A DEVICE MODULE switches into the device dialect (extended minus the
         # recission set, plus the address-space surface) and the two-worlds
@@ -597,18 +568,17 @@ class PascalTypeChecker(TypeChecker):
 
     def check_interface_unit(self, iface: InterfaceUnit) -> None:
         """Type check an interface unit."""
-        # Process USES clauses first
         if iface.uses:
-            source_dir = str(Path(self.source_file).parent) if self.source_file else None
             for use_clause in iface.uses:
-                module_path = self.resolve_module_path(use_clause.name, source_dir)
-                if module_path is None:
-                    self.error(f"Module '{use_clause.name}' not found", None)
+                spliced = next(
+                    (i for i in getattr(iface, 'local_interfaces', [])
+                     if i.name.upper() == use_clause.name.upper()),
+                    None,
+                )
+                if spliced is None:
+                    self.error(f"Module '{use_clause.name}' must be provided by a spliced INTERFACE header in the source file", None)
                     continue
-                interface = self.load_interface(module_path)
-                if interface is None:
-                    continue
-                self.import_symbols(interface, use_clause)
+                self.import_symbols(spliced, use_clause)
 
         with self._device_context(getattr(iface, 'is_device', False)):
             if getattr(iface, 'is_device', False) and getattr(iface, 'has_init', False):
@@ -639,14 +609,9 @@ class PascalTypeChecker(TypeChecker):
 
     def check_implementation_unit(self, impl: ImplementationUnit) -> None:
         """Type check an implementation unit and validate against its interface."""
-        source_dir = str(Path(self.source_file).parent) if self.source_file else None
         iface = impl.interface
         if iface is None:
-            iface_path = self.resolve_module_path(impl.name, source_dir)
-            if iface_path:
-                iface = self.load_interface(iface_path)
-            else:
-                self.error(f"Interface file for module '{impl.name}' not found", None)
+            self.error(f"IMPLEMENTATION OF {impl.name} must include its matching INTERFACE header before the implementation", None)
         if iface:
             if getattr(impl, 'is_device', False) != getattr(iface, 'is_device', False):
                 self.error("device-ness of implementation must match its interface", None)
@@ -656,25 +621,15 @@ class PascalTypeChecker(TypeChecker):
 
         if impl.uses:
             for use_clause in impl.uses:
-                # Prefer a spliced (in-file) interface over a disk lookup.
                 spliced = next(
                     (i for i in getattr(impl, 'local_interfaces', [])
                      if i.name.upper() == use_clause.name.upper()),
                     None,
                 )
-                if spliced is not None:
-                    self.import_symbols(spliced, use_clause)
+                if spliced is None:
+                    self.error(f"Module '{use_clause.name}' must be provided by a spliced INTERFACE header in the source file", None)
                     continue
-
-                # Fall back to disk-based resolution (existing behaviour).
-                module_path = self.resolve_module_path(use_clause.name, source_dir)
-                if module_path is None:
-                    self.error(f"Module '{use_clause.name}' not found", None)
-                    continue
-                loaded_iface = self.load_interface(module_path)
-                if loaded_iface is None:
-                    continue
-                self.import_symbols(loaded_iface, use_clause)
+                self.import_symbols(spliced, use_clause)
 
         old_iface = self.current_interface_decls
         self.current_interface_decls = {getattr(decl, 'name', '').lower(): decl for decl in (iface.decls if iface else []) if getattr(decl, 'name', None)}

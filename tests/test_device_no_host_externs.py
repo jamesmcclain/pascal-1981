@@ -75,6 +75,7 @@ _VADD_IFACE = (
     "END;\n"
 )
 _VADD_IMPL = (
+    "(*$INCLUDE:'vadd'*)\n"
     "DEVICE IMPLEMENTATION OF VADD;\n"
     "VAR [SPACE(GLOBAL)] a: ARRAY [1..256] OF INTEGER;\n"
     "    [SPACE(GLOBAL)] b: ARRAY [1..256] OF INTEGER;\n"
@@ -134,7 +135,7 @@ class TestLazyExternProperty(unittest.TestCase):
         # A plain host UNIT that does no I/O, string ops, or heap allocation
         # must emit zero host-runtime declares under lazy registration.
         host_iface = "INTERFACE;\nUNIT U (go);\nPROCEDURE go;\nEND;\n"
-        host_impl = "IMPLEMENTATION OF U;\nPROCEDURE go;\nBEGIN END;\n.\n"
+        host_impl = "(*$INCLUDE:'u'*)\nIMPLEMENTATION OF U;\nPROCEDURE go;\nBEGIN END;\n.\n"
         ir = _compile_unit(host_iface, host_impl)
         self.assertEqual(_present(ir), [],
                          f'dead host-runtime externs in plain unit with no I/O:\n{ir}')
@@ -147,7 +148,8 @@ class TestLazyExternProperty(unittest.TestCase):
         # from the host-runtime family.  This is the proof that lazy registration
         # is narrower than the old eager dump.
         host_iface = "INTERFACE;\nUNIT U (go);\nPROCEDURE go;\nEND;\n"
-        host_impl = ("IMPLEMENTATION OF U;\n"
+        host_impl = ("(*$INCLUDE:'u'*)\n"
+                    "IMPLEMENTATION OF U;\n"
                      "VAR a, b: ARRAY[1..4] OF CHAR;\n"
                      "PROCEDURE go;\nBEGIN MOVEL(ADR a, ADR b, WRD(4)) END;\n.\n")
         ir = _compile_unit(host_iface, host_impl)

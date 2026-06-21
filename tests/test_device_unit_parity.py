@@ -101,6 +101,7 @@ END;
 """
 
 _UNIT_IMPL = """\
+(*$INCLUDE:'m'*)
 DEVICE IMPLEMENTATION OF M;
 VAR
   [SPACE(GLOBAL)] g: ARRAY [1..4] OF CHAR;
@@ -229,7 +230,7 @@ class TestFinalAcceptance(unittest.TestCase):
         self.assertTrue(ast.is_device)
 
     def test_device_implementation_parses_and_is_device(self):
-        ast = parse_source("DEVICE IMPLEMENTATION OF U;\nPROCEDURE go;\nBEGIN END;\n.\n")
+        ast = parse_source("DEVICE INTERFACE;\nUNIT U (go);\nPROCEDURE go;\nEND;\nDEVICE IMPLEMENTATION OF U;\nPROCEDURE go;\nBEGIN END;\n.\n")
         from pascal1981.ast_nodes import ImplementationUnit
         self.assertIsInstance(ast, ImplementationUnit)
         self.assertTrue(ast.is_device)
@@ -244,7 +245,8 @@ class TestFinalAcceptance(unittest.TestCase):
         from tests.support import typecheck_module
         r = typecheck_module(
             iface_code="DEVICE INTERFACE;\nUNIT U (go);\nPROCEDURE go;\nEND;\n",
-            impl_code="DEVICE IMPLEMENTATION OF U;\nPROCEDURE go;\nBEGIN WRITELN('x') END;\n.\n",
+            impl_code="(*$INCLUDE:'u'*)\nDEVICE IMPLEMENTATION OF U;\nPROCEDURE go;\nBEGIN WRITELN('x') END;\n.\n",
+            module_name='U',
         )
         self.assertFalse(r.success)
         self.assertIn('host i/o', ' '.join(str(e) for e in r.errors).lower())
@@ -253,9 +255,11 @@ class TestFinalAcceptance(unittest.TestCase):
         from tests.support import typecheck_module
         r = typecheck_module(
             iface_code="DEVICE INTERFACE;\nUNIT U (go);\nPROCEDURE go;\nEND;\n",
-            impl_code=("DEVICE IMPLEMENTATION OF U;\n"
+            impl_code=("(*$INCLUDE:'u'*)\n"
+                       "DEVICE IMPLEMENTATION OF U;\n"
                        "TYPE p = ^INTEGER; VAR q: p;\n"
                        "PROCEDURE go; BEGIN NEW(q) END;\n.\n"),
+            module_name='U',
         )
         self.assertFalse(r.success)
         self.assertIn('dynamic allocation', ' '.join(str(e) for e in r.errors).lower())
@@ -264,7 +268,8 @@ class TestFinalAcceptance(unittest.TestCase):
         from tests.support import typecheck_module
         r = typecheck_module(
             iface_code="DEVICE INTERFACE;\nUNIT U (go);\nPROCEDURE go;\nEND;\n",
-            impl_code="DEVICE IMPLEMENTATION OF U;\nPROCEDURE go;\nBEGIN go END;\n.\n",
+            impl_code="(*$INCLUDE:'u'*)\nDEVICE IMPLEMENTATION OF U;\nPROCEDURE go;\nBEGIN go END;\n.\n",
+            module_name='U',
         )
         self.assertFalse(r.success)
         self.assertIn('recursion', ' '.join(str(e) for e in r.errors).lower())
@@ -273,7 +278,8 @@ class TestFinalAcceptance(unittest.TestCase):
         from tests.support import typecheck_module
         r = typecheck_module(
             iface_code="DEVICE INTERFACE;\nUNIT U (go);\nPROCEDURE go;\nEND;\n",
-            impl_code="DEVICE IMPLEMENTATION OF U;\nPROCEDURE go;\nBEGIN END;\nBEGIN END.\n",
+            impl_code="(*$INCLUDE:'u'*)\nDEVICE IMPLEMENTATION OF U;\nPROCEDURE go;\nBEGIN END;\nBEGIN END.\n",
+            module_name='U',
         )
         self.assertFalse(r.success)
         self.assertIn('initializer code is not available in a device unit',
@@ -284,7 +290,7 @@ class TestFinalAcceptance(unittest.TestCase):
     def test_device_unit_zero_host_runtime_nvptx(self):
         ir = _compile_unit(
             "DEVICE INTERFACE;\nUNIT U (go);\nPROCEDURE go;\nEND;\n",
-            "DEVICE IMPLEMENTATION OF U;\nPROCEDURE go;\nBEGIN END;\n.\n",
+            "(*$INCLUDE:'u'*)\nDEVICE IMPLEMENTATION OF U;\nPROCEDURE go;\nBEGIN END;\n.\n",
             device_triple='nvptx64-nvidia-cuda',
         )
         self.assertFalse(_has_runtime_extern(ir),
@@ -295,7 +301,7 @@ class TestFinalAcceptance(unittest.TestCase):
     def test_device_unit_no_abort_or_fflush_nvptx(self):
         ir = _compile_unit(
             "DEVICE INTERFACE;\nUNIT U (go);\nPROCEDURE go;\nEND;\n",
-            "DEVICE IMPLEMENTATION OF U;\nPROCEDURE go;\nBEGIN END;\n.\n",
+            "(*$INCLUDE:'u'*)\nDEVICE IMPLEMENTATION OF U;\nPROCEDURE go;\nBEGIN END;\n.\n",
             device_triple='nvptx64-nvidia-cuda',
         )
         self.assertNotIn('@"abort"', ir)
@@ -306,7 +312,8 @@ class TestFinalAcceptance(unittest.TestCase):
     def test_exported_routine_is_entry_non_exported_is_func(self):
         iface = ("DEVICE INTERFACE;\nUNIT U (kernel);\n"
                  "PROCEDURE kernel (n: INTEGER);\nEND;\n")
-        impl  = ("DEVICE IMPLEMENTATION OF U;\n"
+        impl  = ("(*$INCLUDE:'u'*)\n"
+                 "DEVICE IMPLEMENTATION OF U;\n"
                  "PROCEDURE helper;\nBEGIN END;\n"
                  "PROCEDURE kernel (n: INTEGER);\nBEGIN helper END;\n.\n")
         ir = _compile_unit(iface, impl, device_triple='nvptx64-nvidia-cuda')

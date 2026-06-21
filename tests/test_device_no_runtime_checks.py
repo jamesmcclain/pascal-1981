@@ -112,10 +112,10 @@ class TestDeviceUnitNoRuntimeChecks(unittest.TestCase):
     # parameter must be device-passable: a value scalar, not a VAR (host-space
     # pointer).  The body still exercises MATHCK/INDEXCK/RANGECK with value x.
     _IFACE = "DEVICE INTERFACE;\nUNIT U (go);\nPROCEDURE go (x: INTEGER);\nEND;\n"
-    _IMPL = "DEVICE IMPLEMENTATION OF U;\nPROCEDURE go (x: INTEGER);\n" + _BODY + ".\n"
+    _IMPL = "(*$INCLUDE:'u'*)\nDEVICE IMPLEMENTATION OF U;\nPROCEDURE go (x: INTEGER);\n" + _BODY + ".\n"
 
     _HOST_IFACE = "INTERFACE;\nUNIT U (go);\nPROCEDURE go (VAR x: INTEGER);\nEND;\n"
-    _HOST_IMPL = "IMPLEMENTATION OF U;\nPROCEDURE go (VAR x: INTEGER);\n" + _BODY + ".\n"
+    _HOST_IMPL = "(*$INCLUDE:'u'*)\nIMPLEMENTATION OF U;\nPROCEDURE go (VAR x: INTEGER);\n" + _BODY + ".\n"
 
     def test_device_unit_nvptx_has_no_host_traps(self):
         ir = _compile_unit(self._IFACE, self._IMPL, device_triple='nvptx64-nvidia-cuda')

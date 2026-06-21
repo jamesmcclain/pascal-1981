@@ -37,6 +37,7 @@ class DeviceHeapRecissionTests(unittest.TestCase):
     def test_device_implementation_rejects_super_array_long_form_new(self):
         iface = "DEVICE INTERFACE;\nUNIT U (go);\nPROCEDURE go;\nEND;\n"
         impl = (
+            "(*$INCLUDE:'u'*)\n"
             "DEVICE IMPLEMENTATION OF U;\n"
             "TYPE VECT = SUPER ARRAY [0..*] OF INTEGER;\n"
             "VAR q: ^VECT;\n"

@@ -797,7 +797,8 @@ BEGIN
 END;
 
 """
-        impl = """IMPLEMENTATION OF TEST;
+        impl = """(*$INCLUDE:'test'*)
+IMPLEMENTATION OF TEST;
 PROCEDURE Proc1(X: INTEGER);
 BEGIN
 END;
@@ -816,7 +817,8 @@ BEGIN
 END;
 
 """
-        impl = """IMPLEMENTATION OF TEST;
+        impl = """(*$INCLUDE:'test'*)
+IMPLEMENTATION OF TEST;
 FUNCTION Func1(X: INTEGER): INTEGER;
 BEGIN
   Func1 := X + 1
@@ -836,7 +838,8 @@ BEGIN
 END;
 
 """
-        impl = """IMPLEMENTATION OF TEST;
+        impl = """(*$INCLUDE:'test'*)
+IMPLEMENTATION OF TEST;
 PROCEDURE DoWork;
 BEGIN
 END;
@@ -859,7 +862,8 @@ BEGIN
 END;
 
 """
-        impl = """IMPLEMENTATION OF TEST;
+        impl = """(*$INCLUDE:'test'*)
+IMPLEMENTATION OF TEST;
 PROCEDURE Proc1;
 BEGIN
 END;
@@ -878,7 +882,8 @@ BEGIN
 END;
 
 """
-        impl = """IMPLEMENTATION OF TEST;
+        impl = """(*$INCLUDE:'test'*)
+IMPLEMENTATION OF TEST;
 PROCEDURE Proc1(X: INTEGER);
 BEGIN
 END;
@@ -897,7 +902,8 @@ BEGIN
 END;
 
 """
-        impl = """IMPLEMENTATION OF TEST;
+        impl = """(*$INCLUDE:'test'*)
+IMPLEMENTATION OF TEST;
 PROCEDURE Proc1(X: REAL);
 BEGIN
 END;
@@ -916,7 +922,8 @@ BEGIN
 END;
 
 """
-        impl = """IMPLEMENTATION OF TEST;
+        impl = """(*$INCLUDE:'test'*)
+IMPLEMENTATION OF TEST;
 FUNCTION Func1: REAL;
 BEGIN
   Func1 := 0.0
@@ -936,7 +943,8 @@ BEGIN
 END;
 
 """
-        prog = """PROGRAM Prog (OUTPUT);
+        prog = """(*$INCLUDE:'test'*)
+PROGRAM Prog (OUTPUT);
 USES TEST (Func1);
 BEGIN
 END.
@@ -953,7 +961,8 @@ BEGIN
 END;
 
 """
-        prog = """PROGRAM Prog (OUTPUT);
+        prog = """(*$INCLUDE:'test'*)
+PROGRAM Prog (OUTPUT);
 USES TEST;
 BEGIN
 END.
@@ -981,7 +990,8 @@ BEGIN
 END;
 
 """
-        prog = """PROGRAM Prog (OUTPUT);
+        prog = """(*$INCLUDE:'test'*)
+PROGRAM Prog (OUTPUT);
 USES TEST (PrivateFunc);
 BEGIN
 END.
@@ -1402,7 +1412,8 @@ class TestWideReals(unittest.TestCase):
         # Inside DEVICE code REAL32/REAL64 are available with no feature flag.
         iface = ("DEVICE INTERFACE;\nUNIT K (run);\n"
                  "PROCEDURE run(o: ADS(GLOBAL) OF ARRAY [0..0] OF INTEGER32; s: REAL32);\nEND;\n")
-        impl = ("DEVICE IMPLEMENTATION OF K;\n"
+        impl = ("(*$INCLUDE:'k'*)\n"
+                "DEVICE IMPLEMENTATION OF K;\n"
                 "PROCEDURE run(o: ADS(GLOBAL) OF ARRAY [0..0] OF INTEGER32; s: REAL32);\n"
                 "VAR t: REAL32;\nBEGIN t := s * 2; o^[0] := THREADIDX_X END;\n.\n")
         result = typecheck_module(iface_code=iface, impl_code=impl, module_name='K')

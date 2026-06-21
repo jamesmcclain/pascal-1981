@@ -66,6 +66,7 @@ _IFACE = (
     "END;\n"
 )
 _IMPL = (
+    "(*$INCLUDE:'vadd'*)\n"
     "DEVICE IMPLEMENTATION OF VADD;\n"
     "VAR [SPACE(GLOBAL)] a: ARRAY [1..256] OF INTEGER;\n"
     "PROCEDURE helper (k: INTEGER);\n"
@@ -141,10 +142,10 @@ class TestEntryShapeRules(unittest.TestCase):
     """S2.3.3 — rules bite on a GPU triple; inert (serial) on x86."""
 
     _FUNC_IFACE = "DEVICE INTERFACE;\nUNIT U (f);\nFUNCTION f: INTEGER;\nEND;\n"
-    _FUNC_IMPL = "DEVICE IMPLEMENTATION OF U;\nFUNCTION f: INTEGER;\nBEGIN f := 1; END;\n.\n"
+    _FUNC_IMPL = "(*$INCLUDE:'u'*)\nDEVICE IMPLEMENTATION OF U;\nFUNCTION f: INTEGER;\nBEGIN f := 1; END;\n.\n"
 
     _VARPARAM_IFACE = "DEVICE INTERFACE;\nUNIT U (p);\nPROCEDURE p (VAR x: INTEGER);\nEND;\n"
-    _VARPARAM_IMPL = "DEVICE IMPLEMENTATION OF U;\nPROCEDURE p (VAR x: INTEGER);\nBEGIN x := 1; END;\n.\n"
+    _VARPARAM_IMPL = "(*$INCLUDE:'u'*)\nDEVICE IMPLEMENTATION OF U;\nPROCEDURE p (VAR x: INTEGER);\nBEGIN x := 1; END;\n.\n"
 
     def test_exported_function_rejected_on_gpu(self):
         with self.assertRaises(CodegenError) as cm:
@@ -167,7 +168,7 @@ class TestEntryShapeRules(unittest.TestCase):
 
     def test_ads_global_param_is_passable_on_gpu(self):
         iface = "DEVICE INTERFACE;\nUNIT U (k);\nPROCEDURE k (p: ADS(GLOBAL) OF INTEGER);\nEND;\n"
-        impl = "DEVICE IMPLEMENTATION OF U;\nPROCEDURE k (p: ADS(GLOBAL) OF INTEGER);\nBEGIN END;\n.\n"
+        impl = "(*$INCLUDE:'u'*)\nDEVICE IMPLEMENTATION OF U;\nPROCEDURE k (p: ADS(GLOBAL) OF INTEGER);\nBEGIN END;\n.\n"
         _, ir = _compile_unit(iface, impl, device_triple='nvptx64-nvidia-cuda')
         self.assertTrue(_has_cc(ir, 'k', 'ptx_kernel'), ir)
 

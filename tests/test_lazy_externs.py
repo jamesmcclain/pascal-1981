@@ -117,7 +117,7 @@ class TestZeroDeclareGuarantee(unittest.TestCase):
     def test_empty_unit_zero_declares(self):
         """An empty unit implementation (no I/O, no heap) emits zero declares."""
         iface = 'INTERFACE;\nUNIT U (go);\nPROCEDURE go;\nEND;\n'
-        impl  = 'IMPLEMENTATION OF U;\nPROCEDURE go;\nBEGIN END;\n.\n'
+        impl  = "(*$INCLUDE:'u'*)\nIMPLEMENTATION OF U;\nPROCEDURE go;\nBEGIN END;\n.\n"
         ir_text = _compile_unit(iface, impl)
         found = [n for n in _declares(ir_text) if n in _HOST_RUNTIME_NAMES]
         self.assertEqual(found, [],
@@ -128,7 +128,8 @@ class TestZeroDeclareGuarantee(unittest.TestCase):
         emit exactly one host-runtime declare: movel.  The other ~39 entries
         must be absent."""
         iface = 'INTERFACE;\nUNIT U (go);\nPROCEDURE go;\nEND;\n'
-        impl  = ('IMPLEMENTATION OF U;\n'
+        impl  = ("(*$INCLUDE:'u'*)\n"
+                 'IMPLEMENTATION OF U;\n'
                  'VAR a, b: ARRAY[1..4] OF CHAR;\n'
                  'PROCEDURE go;\nBEGIN MOVEL(ADR a, ADR b, WRD(4)) END;\n.\n')
         ir_text = _compile_unit(iface, impl)
@@ -207,7 +208,7 @@ class TestInputOutputOwnership(unittest.TestCase):
         @input and @output, not strong definitions — the linker resolves them
         to the root compiland's copies (§4.1)."""
         iface = 'INTERFACE;\nUNIT U (go);\nPROCEDURE go;\nEND;\n'
-        impl  = 'IMPLEMENTATION OF U;\nPROCEDURE go;\nBEGIN END;\n.\n'
+        impl  = "(*$INCLUDE:'u'*)\nIMPLEMENTATION OF U;\nPROCEDURE go;\nBEGIN END;\n.\n"
         ir_text = _compile_unit(iface, impl)
         extern = _extern_globals(ir_text)
         self.assertIn('input',  extern, '@input should be external decl in UNIT')
@@ -221,7 +222,7 @@ class TestInputOutputOwnership(unittest.TestCase):
         """Linking a PROGRAM IR with a UNIT IR has one owner of @input/@output."""
         prog_ir = _compile('PROGRAM P; BEGIN END.')
         iface = 'INTERFACE;\nUNIT U (go);\nPROCEDURE go;\nEND;\n'
-        impl  = 'IMPLEMENTATION OF U;\nPROCEDURE go;\nBEGIN END;\n.\n'
+        impl  = "(*$INCLUDE:'u'*)\nIMPLEMENTATION OF U;\nPROCEDURE go;\nBEGIN END;\n.\n"
         unit_ir = _compile_unit(iface, impl)
 
         prog_strong = _strong_globals(prog_ir)
