@@ -34,21 +34,20 @@ def _compile(src, **kw):
 
 
 # A device module that stages GLOBAL -> SHARED then fills GLOBAL.
-_BRIDGE_SRC = (
-    "DEVICE MODULE M;\n"
-    "VAR\n"
-    "  [SPACE(GLOBAL)] g: CHAR;\n"
-    "  [SPACE(SHARED)] s: CHAR;\n"
-    "PROCEDURE go;\n"
-    "BEGIN\n"
-    "  MOVESL(ADS g, ADS s, WRD(1));\n"
-    "  FILLSC(ADS g, WRD(1), 'Z');\n"
-    "END;\n"
-    ".\n"
-)
+_BRIDGE_SRC = ("DEVICE MODULE M;\n"
+               "VAR\n"
+               "  [SPACE(GLOBAL)] g: CHAR;\n"
+               "  [SPACE(SHARED)] s: CHAR;\n"
+               "PROCEDURE go;\n"
+               "BEGIN\n"
+               "  MOVESL(ADS g, ADS s, WRD(1));\n"
+               "  FILLSC(ADS g, WRD(1), 'Z');\n"
+               "END;\n"
+               ".\n")
 
 
 class TestSegBridgeTypeChecking(unittest.TestCase):
+
     def test_cross_space_movesl_accepted_in_device_module(self):
         r = _check(_BRIDGE_SRC)
         self.assertTrue(r.success, r.errors)
@@ -69,6 +68,7 @@ class TestSegBridgeTypeChecking(unittest.TestCase):
 
 
 class TestSegBridgeGpuLowering(unittest.TestCase):
+
     def test_movesl_loads_src_space_stores_dst_space(self):
         ir = _compile(_BRIDGE_SRC, device_triple='nvptx64-nvidia-cuda')
         body = ir.split('@"go"', 1)[1]
@@ -92,6 +92,7 @@ class TestSegBridgeGpuLowering(unittest.TestCase):
 
 
 class TestSegBridgeCpuDevice(unittest.TestCase):
+
     def test_x86_device_collapses_to_addrspace_zero(self):
         ir = _compile(_BRIDGE_SRC)  # device triple defaults to x86
         self.assertEqual(re.findall(r'addrspace\((\d+)\)', ir), [])
@@ -114,8 +115,7 @@ class TestSegBridgeCpuDevice(unittest.TestCase):
                 f.write("extern char g, s;\nvoid go(void);\n"
                         "int main(void){g='A';s='?';go();"
                         "return (g=='Z'&&s=='A')?0:1;}\n")
-            r = subprocess.run(["clang", ll, c, "-o", exe],
-                               capture_output=True, text=True)
+            r = subprocess.run(["clang", ll, c, "-o", exe], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
             run = subprocess.run([exe])
             # MOVESL copies g('A')->s, FILLSC sets g='Z'  =>  g=Z, s=A.
@@ -126,6 +126,7 @@ class TestSegBridgeCpuDevice(unittest.TestCase):
 
 
 class TestHostBridgeUnchanged(unittest.TestCase):
+
     def test_host_movesl_still_extern_call(self):
         src = ("PROGRAM P; VAR buf: ARRAY[1..8] OF CHAR;\n"
                "PROCEDURE movesl (src, dst: ADSMEM; len: WORD); extern;\n"

@@ -537,6 +537,7 @@ class TestWriteDoubleColon(unittest.TestCase):
 # (Checklist §1.2.4)
 # ---------------------------------------------------------------------------
 
+
 class TestDeviceUnitParser(unittest.TestCase):
     """Parser acceptance tests for the DEVICE UNIT surface syntax.
 
@@ -550,80 +551,64 @@ class TestDeviceUnitParser(unittest.TestCase):
     # ------------------------------------------------------------------ #
 
     def test_device_interface_sets_is_device(self):
-        ast = parse_source(
-            "DEVICE INTERFACE;\n"
-            "UNIT U (go);\n"
-            "PROCEDURE go;\n"
-            "END;\n"
-        )
+        ast = parse_source("DEVICE INTERFACE;\n"
+                           "UNIT U (go);\n"
+                           "PROCEDURE go;\n"
+                           "END;\n")
         from pascal1981.ast_nodes import InterfaceUnit
         self.assertIsInstance(ast, InterfaceUnit)
-        self.assertTrue(ast.is_device,
-                        "DEVICE INTERFACE must set InterfaceUnit.is_device = True")
+        self.assertTrue(ast.is_device, "DEVICE INTERFACE must set InterfaceUnit.is_device = True")
 
     def test_plain_interface_is_device_false(self):
-        ast = parse_source(
-            "INTERFACE;\n"
-            "UNIT U (go);\n"
-            "PROCEDURE go;\n"
-            "END;\n"
-        )
+        ast = parse_source("INTERFACE;\n"
+                           "UNIT U (go);\n"
+                           "PROCEDURE go;\n"
+                           "END;\n")
         from pascal1981.ast_nodes import InterfaceUnit
         self.assertIsInstance(ast, InterfaceUnit)
-        self.assertFalse(ast.is_device,
-                         "plain INTERFACE must leave InterfaceUnit.is_device = False")
+        self.assertFalse(ast.is_device, "plain INTERFACE must leave InterfaceUnit.is_device = False")
 
     def test_device_implementation_sets_is_device(self):
-        ast = parse_source(
-            "DEVICE INTERFACE;\n"
-            "UNIT U (go);\n"
-            "PROCEDURE go;\n"
-            "END;\n"
-            "DEVICE IMPLEMENTATION OF U;\n"
-            "PROCEDURE go;\n"
-            "BEGIN END;\n"
-            ".\n"
-        )
+        ast = parse_source("DEVICE INTERFACE;\n"
+                           "UNIT U (go);\n"
+                           "PROCEDURE go;\n"
+                           "END;\n"
+                           "DEVICE IMPLEMENTATION OF U;\n"
+                           "PROCEDURE go;\n"
+                           "BEGIN END;\n"
+                           ".\n")
         from pascal1981.ast_nodes import ImplementationUnit
         self.assertIsInstance(ast, ImplementationUnit)
-        self.assertTrue(ast.is_device,
-                        "DEVICE IMPLEMENTATION must set ImplementationUnit.is_device = True")
+        self.assertTrue(ast.is_device, "DEVICE IMPLEMENTATION must set ImplementationUnit.is_device = True")
 
     def test_plain_implementation_is_device_false(self):
-        ast = parse_source(
-            "INTERFACE;\n"
-            "UNIT U (go);\n"
-            "PROCEDURE go;\n"
-            "END;\n"
-            "IMPLEMENTATION OF U;\n"
-            "PROCEDURE go;\n"
-            "BEGIN END;\n"
-            ".\n"
-        )
+        ast = parse_source("INTERFACE;\n"
+                           "UNIT U (go);\n"
+                           "PROCEDURE go;\n"
+                           "END;\n"
+                           "IMPLEMENTATION OF U;\n"
+                           "PROCEDURE go;\n"
+                           "BEGIN END;\n"
+                           ".\n")
         from pascal1981.ast_nodes import ImplementationUnit
         self.assertIsInstance(ast, ImplementationUnit)
-        self.assertFalse(ast.is_device,
-                         "plain IMPLEMENTATION must leave ImplementationUnit.is_device = False")
+        self.assertFalse(ast.is_device, "plain IMPLEMENTATION must leave ImplementationUnit.is_device = False")
 
     def test_device_module_sets_is_device(self):
         """Regression: the existing DEVICE MODULE path is unaffected."""
-        ast = parse_source(
-            "DEVICE MODULE M;\n"
-            "PROCEDURE go;\n"
-            "BEGIN END;\n"
-            ".\n"
-        )
+        ast = parse_source("DEVICE MODULE M;\n"
+                           "PROCEDURE go;\n"
+                           "BEGIN END;\n"
+                           ".\n")
         from pascal1981.ast_nodes import ModuleUnit
         self.assertIsInstance(ast, ModuleUnit)
         self.assertTrue(ast.is_device)
 
     def test_plain_module_is_device_false(self):
-        ast = parse_source(
-            "MODULE M;\n"
-            "PROCEDURE go;\n"
-            "BEGIN END;\n"
-            ".\n"
-        )
+        ast = parse_source("MODULE M;\n"
+                           "PROCEDURE go;\n"
+                           "BEGIN END;\n"
+                           ".\n")
         from pascal1981.ast_nodes import ModuleUnit
         self.assertFalse(ast.is_device)
 
@@ -635,29 +620,23 @@ class TestDeviceUnitParser(unittest.TestCase):
         """'device' must still be usable as an ordinary identifier in
         host/vintage code.  The contextual-keyword guarantee is the same
         one the existing DEVICE MODULE relies on."""
-        ast = parse_source(
-            "PROGRAM P;\n"
-            "VAR device: INTEGER;\n"
-            "BEGIN device := 7 END.\n"
-        )
+        ast = parse_source("PROGRAM P;\n"
+                           "VAR device: INTEGER;\n"
+                           "BEGIN device := 7 END.\n")
         self.assertIsNotNone(ast)
 
     def test_device_as_type_name_identifier(self):
-        ast = parse_source(
-            "PROGRAM P;\n"
-            "TYPE device = INTEGER;\n"
-            "VAR x: device;\n"
-            "BEGIN x := 1 END.\n"
-        )
+        ast = parse_source("PROGRAM P;\n"
+                           "TYPE device = INTEGER;\n"
+                           "VAR x: device;\n"
+                           "BEGIN x := 1 END.\n")
         self.assertIsNotNone(ast)
 
     def test_device_as_procedure_name_identifier(self):
-        ast = parse_source(
-            "PROGRAM P;\n"
-            "PROCEDURE device;\n"
-            "BEGIN END;\n"
-            "BEGIN device END.\n"
-        )
+        ast = parse_source("PROGRAM P;\n"
+                           "PROCEDURE device;\n"
+                           "BEGIN END;\n"
+                           "BEGIN device END.\n")
         self.assertIsNotNone(ast)
 
     # ------------------------------------------------------------------ #
@@ -665,51 +644,43 @@ class TestDeviceUnitParser(unittest.TestCase):
     # ------------------------------------------------------------------ #
 
     def test_device_interface_exports_are_parsed(self):
-        ast = parse_source(
-            "DEVICE INTERFACE;\n"
-            "UNIT KERN (add, mul);\n"
-            "PROCEDURE add (n: INTEGER);\n"
-            "PROCEDURE mul (n: INTEGER);\n"
-            "END;\n"
-        )
+        ast = parse_source("DEVICE INTERFACE;\n"
+                           "UNIT KERN (add, mul);\n"
+                           "PROCEDURE add (n: INTEGER);\n"
+                           "PROCEDURE mul (n: INTEGER);\n"
+                           "END;\n")
         from pascal1981.ast_nodes import InterfaceUnit
         self.assertIsInstance(ast, InterfaceUnit)
         self.assertEqual(set(ast.params), {'add', 'mul'})
 
     def test_device_implementation_module_name_parsed(self):
-        ast = parse_source(
-            "DEVICE INTERFACE;\n"
-            "UNIT KERN (add, mul);\n"
-            "PROCEDURE add (n: INTEGER);\n"
-            "PROCEDURE mul (n: INTEGER);\n"
-            "END;\n"
-            "DEVICE IMPLEMENTATION OF KERN;\n"
-            "PROCEDURE add (n: INTEGER);\n"
-            "BEGIN END;\n"
-            "PROCEDURE mul (n: INTEGER);\n"
-            "BEGIN END;\n"
-            ".\n"
-        )
+        ast = parse_source("DEVICE INTERFACE;\n"
+                           "UNIT KERN (add, mul);\n"
+                           "PROCEDURE add (n: INTEGER);\n"
+                           "PROCEDURE mul (n: INTEGER);\n"
+                           "END;\n"
+                           "DEVICE IMPLEMENTATION OF KERN;\n"
+                           "PROCEDURE add (n: INTEGER);\n"
+                           "BEGIN END;\n"
+                           "PROCEDURE mul (n: INTEGER);\n"
+                           "BEGIN END;\n"
+                           ".\n")
         from pascal1981.ast_nodes import ImplementationUnit
         self.assertIsInstance(ast, ImplementationUnit)
         self.assertEqual(ast.name.upper(), 'KERN')
 
     def test_device_interface_has_init_false_when_no_begin(self):
-        ast = parse_source(
-            "DEVICE INTERFACE;\n"
-            "UNIT U;\n"
-            "END;\n"
-        )
+        ast = parse_source("DEVICE INTERFACE;\n"
+                           "UNIT U;\n"
+                           "END;\n")
         self.assertFalse(ast.has_init)
 
     def test_device_interface_has_init_true_when_begin_present(self):
         """Parser records has_init=True; the type checker later rejects it."""
-        ast = parse_source(
-            "DEVICE INTERFACE;\n"
-            "UNIT U;\n"
-            "BEGIN\n"
-            "END;\n"
-        )
+        ast = parse_source("DEVICE INTERFACE;\n"
+                           "UNIT U;\n"
+                           "BEGIN\n"
+                           "END;\n")
         self.assertTrue(ast.has_init)
 
     # ------------------------------------------------------------------ #
@@ -718,8 +689,7 @@ class TestDeviceUnitParser(unittest.TestCase):
 
     def test_fixture_device_interface_parses(self):
         from pathlib import Path
-        src = (Path(__file__).parent / "fixtures" / "parser" / "should_pass" /
-               "32_device_interface.pas").read_text()
+        src = (Path(__file__).parent / "fixtures" / "parser" / "should_pass" / "32_device_interface.pas").read_text()
         ast = parse_source(src)
         from pascal1981.ast_nodes import InterfaceUnit
         self.assertIsInstance(ast, InterfaceUnit)
@@ -727,8 +697,7 @@ class TestDeviceUnitParser(unittest.TestCase):
 
     def test_fixture_device_implementation_parses(self):
         from pathlib import Path
-        src = (Path(__file__).parent / "fixtures" / "parser" / "should_pass" /
-               "33_device_implementation.pas").read_text()
+        src = (Path(__file__).parent / "fixtures" / "parser" / "should_pass" / "33_device_implementation.pas").read_text()
         ast = parse_source(src)
         from pascal1981.ast_nodes import ImplementationUnit
         self.assertIsInstance(ast, ImplementationUnit)
@@ -736,7 +705,6 @@ class TestDeviceUnitParser(unittest.TestCase):
 
     def test_fixture_device_contextual_identifier_parses(self):
         from pathlib import Path
-        src = (Path(__file__).parent / "fixtures" / "parser" / "should_pass" /
-               "34_device_contextual_identifier.pas").read_text()
+        src = (Path(__file__).parent / "fixtures" / "parser" / "should_pass" / "34_device_contextual_identifier.pas").read_text()
         ast = parse_source(src)
         self.assertIsNotNone(ast)

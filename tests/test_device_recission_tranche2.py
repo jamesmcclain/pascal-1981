@@ -19,6 +19,7 @@ def _err(src):
 
 
 class TestGotoRecission(unittest.TestCase):
+
     def test_goto_banned_in_device_module(self):
         src = "DEVICE MODULE M;\nPROCEDURE go;\nBEGIN\n  GOTO 1;\nEND;\n.\n"
         self.assertIn('goto', _err(src))
@@ -64,7 +65,10 @@ class TestLabeledStatementRecission(unittest.TestCase):
     def test_bare_label_banned_in_device_implementation_unit(self):
         # The ban follows in_device_module, so it covers UNIT forms, not just
         # the single-file DEVICE MODULE the older comment named.
-        import os, shutil, tempfile
+        import os
+        import shutil
+        import tempfile
+
         from pascal1981.parser import parse_file
         tmp = tempfile.mkdtemp()
         try:
@@ -82,6 +86,7 @@ class TestLabeledStatementRecission(unittest.TestCase):
 
 
 class TestDynamicSetRangeRecission(unittest.TestCase):
+
     def test_dynamic_range_banned_in_device_module(self):
         src = ("DEVICE MODULE M;\nVAR s: SET OF CHAR; x: CHAR;\n"
                "PROCEDURE go;\nBEGIN s := ['A'..x]; END;\n.\n")

@@ -137,14 +137,11 @@ class DeclsMixin:
         ast = None
         if local_interfaces:
             ast = next(
-                (i for i in local_interfaces
-                 if i.name.upper() == use_clause.name.upper()),
+                (i for i in local_interfaces if i.name.upper() == use_clause.name.upper()),
                 None,
             )
         if ast is None:
-            raise CodegenError(
-                f"Module '{use_clause.name}' must be provided by a spliced INTERFACE header in the source file"
-            )
+            raise CodegenError(f"Module '{use_clause.name}' must be provided by a spliced INTERFACE header in the source file")
 
         # Build the exported routines in export order. For an INTERFACE UNIT the
         # export order is the unit's export list (UNIT G (BJUMP, WJUMP)); for a
@@ -155,8 +152,7 @@ class DeclsMixin:
             paired = list(zip(getattr(ast, 'params', []), getattr(ast, 'decls', [])))
             export_routines = [(n, d) for (n, d) in paired if isinstance(d, (ProcDecl, FuncDecl))]
         else:
-            export_routines = [(d.name, d) for d in getattr(ast, 'decls', [])
-                               if isinstance(d, (ProcDecl, FuncDecl)) and getattr(d, 'name', None)]
+            export_routines = [(d.name, d) for d in getattr(ast, 'decls', []) if isinstance(d, (ProcDecl, FuncDecl)) and getattr(d, 'name', None)]
 
         # A renaming USES (e.g. `USES GRAPHICS (MOVE, PLOT)`) binds the imports
         # positionally onto the exports; a plain USES imports each under its own
@@ -399,8 +395,7 @@ class DeclsMixin:
                 gv_name = name if not self.builder else f'{prefix}.{name}'
 
                 # Create global variable with the aggregate type
-                global_var = ir.GlobalVariable(self.module, llvm_type, name=gv_name,
-                                               addrspace=residence_as)
+                global_var = ir.GlobalVariable(self.module, llvm_type, name=gv_name, addrspace=residence_as)
 
                 if is_str:
                     if is_lstring:
@@ -444,9 +439,7 @@ class DeclsMixin:
         this is False, so the serial parity path keeps the vintage
         i32-returning procedure shape byte-identical.
         """
-        return (self.is_device_module and _is_gpu_triple(self.device_triple)
-                and getattr(decl, 'is_exported_entry', False)
-                and isinstance(decl, ProcDecl))
+        return (self.is_device_module and _is_gpu_triple(self.device_triple) and getattr(decl, 'is_exported_entry', False) and isinstance(decl, ProcDecl))
 
     def _apply_kernel_entry(self, decl: Union[ProcDecl, FuncDecl], func: ir.Function) -> None:
         """Make an exported device routine a launchable kernel entry
@@ -468,14 +461,12 @@ class DeclsMixin:
             return
         # A GPU entry cannot return a value -- it must be a PROCEDURE.
         if isinstance(decl, FuncDecl):
-            raise CodegenError(
-                f"exported device routine '{decl.name}' must be a PROCEDURE to be a kernel entry: "
-                f"a GPU entry cannot return a value (return results via an ADS(GLOBAL) parameter)")
+            raise CodegenError(f"exported device routine '{decl.name}' must be a PROCEDURE to be a kernel entry: "
+                               f"a GPU entry cannot return a value (return results via an ADS(GLOBAL) parameter)")
         for param in decl.params:
             if not self._param_device_passable(param):
-                raise CodegenError(
-                    f"kernel entry '{decl.name}' has a non-device-passable parameter: pass device "
-                    f"data by value or as ADS(GLOBAL)/ADS(CONSTANT) OF T, not a host-space pointer")
+                raise CodegenError(f"kernel entry '{decl.name}' has a non-device-passable parameter: pass device "
+                                   f"data by value or as ADS(GLOBAL)/ADS(CONSTANT) OF T, not a host-space pointer")
         func.calling_convention = 'amdgpu_kernel' if self.device_triple.startswith('amdgcn') else 'ptx_kernel'
 
     def codegen_proc_decl(self, decl: ProcDecl) -> None:

@@ -24,9 +24,9 @@ def _addrspaces(ir):
 
 
 class TestDeviceTriple(unittest.TestCase):
+
     def test_device_module_uses_device_triple(self):
-        ir = _compile("DEVICE MODULE M; VAR g: ADS(GLOBAL) OF INTEGER; .",
-                      device_triple='nvptx64-nvidia-cuda')
+        ir = _compile("DEVICE MODULE M; VAR g: ADS(GLOBAL) OF INTEGER; .", device_triple='nvptx64-nvidia-cuda')
         self.assertIn('target triple = "nvptx64-nvidia-cuda"', ir)
 
     def test_plain_module_keeps_host_triple(self):
@@ -34,25 +34,22 @@ class TestDeviceTriple(unittest.TestCase):
         self.assertIn('target triple = "x86_64-pc-linux-gnu"', ir)
 
     def test_host_triple_override_drives_host_units(self):
-        ir = _compile("PROGRAM P; VAR x: INTEGER; BEGIN x := 1 END.",
-                      host_triple='aarch64-unknown-linux-gnu')
+        ir = _compile("PROGRAM P; VAR x: INTEGER; BEGIN x := 1 END.", host_triple='aarch64-unknown-linux-gnu')
         self.assertIn('target triple = "aarch64-unknown-linux-gnu"', ir)
 
     def test_host_and_device_triples_are_independent(self):
         # A DEVICE MODULE uses the device triple regardless of the host triple.
-        ir = _compile("DEVICE MODULE M; VAR g: ADS(GLOBAL) OF INTEGER; .",
-                      host_triple='aarch64-unknown-linux-gnu',
-                      device_triple='nvptx64-nvidia-cuda')
+        ir = _compile("DEVICE MODULE M; VAR g: ADS(GLOBAL) OF INTEGER; .", host_triple='aarch64-unknown-linux-gnu', device_triple='nvptx64-nvidia-cuda')
         self.assertIn('target triple = "nvptx64-nvidia-cuda"', ir)
 
 
 class TestAddrspaceLowering(unittest.TestCase):
+
     def test_space_table_on_gpu_triple(self):
         # GLOBAL=1, SHARED=3, CONSTANT=4, LOCAL=5 (design S3.2).
-        ir = _compile(
-            "DEVICE MODULE M; VAR g: ADS(GLOBAL) OF INTEGER; s: ADS(SHARED) OF INTEGER;"
-            " c: ADS(CONSTANT) OF INTEGER; l: ADS(LOCAL) OF INTEGER; .",
-            device_triple='nvptx64-nvidia-cuda')
+        ir = _compile("DEVICE MODULE M; VAR g: ADS(GLOBAL) OF INTEGER; s: ADS(SHARED) OF INTEGER;"
+                      " c: ADS(CONSTANT) OF INTEGER; l: ADS(LOCAL) OF INTEGER; .",
+                      device_triple='nvptx64-nvidia-cuda')
         self.assertEqual(_addrspaces(ir), [1, 3, 4, 5])
 
     def test_x86_device_collapses_to_addrspace_zero(self):
@@ -61,6 +58,7 @@ class TestAddrspaceLowering(unittest.TestCase):
 
 
 class TestHostUnchanged(unittest.TestCase):
+
     def test_host_program_has_no_addrspaces(self):
         ir = _compile("PROGRAM P; VAR x: INTEGER; BEGIN x := 1 END.")
         self.assertEqual(_addrspaces(ir), [])

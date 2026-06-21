@@ -20,6 +20,7 @@ def _ok(src):
 
 
 class TestForwardCompletion(unittest.TestCase):
+
     def test_simple_forward_reference(self):
         src = ("MODULE M;\n"
                "PROCEDURE later; FORWARD;\n"
@@ -60,6 +61,7 @@ class TestForwardCompletion(unittest.TestCase):
 
 
 class TestDirectivesUnchanged(unittest.TestCase):
+
     def test_extern_then_body_still_errors(self):
         # EXTERN is not a forward declaration: defining a body for it is still a
         # redeclaration.
@@ -91,6 +93,7 @@ class TestDirectivesUnchanged(unittest.TestCase):
 
 
 class TestForwardInDeviceModule(unittest.TestCase):
+
     def test_forward_mutual_recursion_banned_in_device_module(self):
         # With FORWARD working, the device recursion recission is now reachable
         # via the forward path (not only via nested procedures).

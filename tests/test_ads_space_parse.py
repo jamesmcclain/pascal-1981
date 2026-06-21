@@ -4,9 +4,7 @@ DEVICE MODULE, [SPACE(s)] attribute, ADS(s) OF T -- parsed ungated.
 """
 import unittest
 
-from pascal1981.ast_nodes import (Attribute, ImplementationUnit, InterfaceUnit,
-                                   ModuleUnit, PointerType, TypeDecl, VarDecl,
-                                   Identifier)
+from pascal1981.ast_nodes import (Attribute, Identifier, ImplementationUnit, InterfaceUnit, ModuleUnit, PointerType, TypeDecl, VarDecl)
 from tests.support import parse_source
 
 
@@ -15,6 +13,7 @@ def _module(body_decls: str, header: str = "MODULE Foo;") -> ModuleUnit:
 
 
 class TestDeviceModule(unittest.TestCase):
+
     def test_device_module_flag(self):
         unit = parse_source("DEVICE MODULE Foo;\n.")
         self.assertIsInstance(unit, ModuleUnit)
@@ -31,6 +30,7 @@ class TestDeviceModule(unittest.TestCase):
 
 
 class TestUnitAstFlags(unittest.TestCase):
+
     def test_device_interface_flag(self):
         unit = parse_source("DEVICE INTERFACE;\nUNIT U (f);\nCONST K = 1;\nEND;\n")
         self.assertIsInstance(unit, InterfaceUnit)
@@ -73,6 +73,7 @@ class TestUnitAstFlags(unittest.TestCase):
 
 
 class TestSpaceAttribute(unittest.TestCase):
+
     def test_space_residence_attribute(self):
         unit = _module("VAR [SPACE(GLOBAL)] g: REAL;")
         vardecl = next(d for d in unit.decls if isinstance(d, VarDecl))
@@ -91,6 +92,7 @@ class TestSpaceAttribute(unittest.TestCase):
 
 
 class TestAdsPointeeSpace(unittest.TestCase):
+
     def test_ads_with_space(self):
         unit = _module("TYPE p = ADS(GLOBAL) OF REAL;")
         tdecl = next(d for d in unit.decls if isinstance(d, TypeDecl))

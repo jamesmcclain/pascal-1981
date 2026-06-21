@@ -10,7 +10,6 @@ import unittest
 
 from tests.support import build_and_run_pascal_project, requires_exe
 
-
 _INTERFACE = """DEVICE INTERFACE;
 UNIT vadd (init_vectors, add_vectors, checksum);
 PROCEDURE init_vectors;
@@ -79,6 +78,7 @@ END.
 
 @requires_exe
 class TestDeviceGridStrideIntegration(unittest.TestCase):
+
     def test_cpu_device_grid_stride_vector_add_covers_full_array(self):
         rc, out, err = build_and_run_pascal_project(
             files={

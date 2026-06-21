@@ -28,7 +28,8 @@ _FEATURES: Dict[str, Feature] = {
     Feature(
         name='wide-reals',
         default=False,
-        help='Enable extension REAL32 (32-bit float) and REAL64 (a 64-bit synonym for REAL) types in host code. In DEVICE code these are always available, independent of this flag.',
+        help=
+        'Enable extension REAL32 (32-bit float) and REAL64 (a 64-bit synonym for REAL) types in host code. In DEVICE code these are always available, independent of this flag.',
     ),
     'symbolic-enum-io':
     Feature(

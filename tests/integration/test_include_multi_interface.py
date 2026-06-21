@@ -46,12 +46,7 @@ import os
 import subprocess
 import unittest
 
-from tests.support import (
-    compile_pascal_project,
-    link_pascal_project,
-    requires_exe,
-    temporary_pascal_project,
-)
+from tests.support import (compile_pascal_project, link_pascal_project, requires_exe, temporary_pascal_project)
 
 # ---------------------------------------------------------------------------
 # Shared header files (include files — never compiled independently)
@@ -138,19 +133,21 @@ _EXPECTED_PLAIN = [
     "BJUMP 0 0",
 ]
 
-
 # ---------------------------------------------------------------------------
 # AST-level tests (no LLVM / clang required)
 # ---------------------------------------------------------------------------
+
 
 class TestMultiInterfaceParser(unittest.TestCase):
     """Parser correctly accumulates multiple leading interfaces."""
 
     def _parse_impl(self, source: str, headers: dict):
         """Parse a source string in a temp project directory with given headers."""
+        import shutil
+        import tempfile
+
         from pascal1981.lexer import lex_file
         from pascal1981.parser import Parser
-        import tempfile, shutil
 
         tmpdir = tempfile.mkdtemp()
         try:
@@ -168,35 +165,33 @@ class TestMultiInterfaceParser(unittest.TestCase):
     def test_two_leading_interfaces_parse_without_error(self):
         """A file with two spliced interfaces before IMPLEMENTATION parses cleanly."""
         from pascal1981.ast_nodes import ImplementationUnit
-        unit = self._parse_impl(_GRAPHICS_IMPL,
-                                {'GRAPHI': _GRAPHICS_HEADER, 'BASEPL': _BASEPLOT_HEADER})
+        unit = self._parse_impl(_GRAPHICS_IMPL, {'GRAPHI': _GRAPHICS_HEADER, 'BASEPL': _BASEPLOT_HEADER})
         self.assertIsInstance(unit, ImplementationUnit)
 
     def test_unit_interface_assigned_by_name_match(self):
         """unit.interface is the GRAPHICS interface, not the BASEPLOT interface."""
-        unit = self._parse_impl(_GRAPHICS_IMPL,
-                                {'GRAPHI': _GRAPHICS_HEADER, 'BASEPL': _BASEPLOT_HEADER})
+        unit = self._parse_impl(_GRAPHICS_IMPL, {'GRAPHI': _GRAPHICS_HEADER, 'BASEPL': _BASEPLOT_HEADER})
         self.assertIsNotNone(unit.interface)
         self.assertEqual(unit.interface.name.upper(), 'GRAPHICS')
 
     def test_both_interfaces_in_local_interfaces(self):
         """Both GRAPHICS and BASEPLOT appear in unit.local_interfaces."""
-        unit = self._parse_impl(_GRAPHICS_IMPL,
-                                {'GRAPHI': _GRAPHICS_HEADER, 'BASEPL': _BASEPLOT_HEADER})
+        unit = self._parse_impl(_GRAPHICS_IMPL, {'GRAPHI': _GRAPHICS_HEADER, 'BASEPL': _BASEPLOT_HEADER})
         names = {i.name.upper() for i in unit.local_interfaces}
         self.assertIn('GRAPHICS', names)
         self.assertIn('BASEPLOT', names)
 
     def test_local_interfaces_length(self):
         """Exactly two interfaces are collected."""
-        unit = self._parse_impl(_GRAPHICS_IMPL,
-                                {'GRAPHI': _GRAPHICS_HEADER, 'BASEPL': _BASEPLOT_HEADER})
+        unit = self._parse_impl(_GRAPHICS_IMPL, {'GRAPHI': _GRAPHICS_HEADER, 'BASEPL': _BASEPLOT_HEADER})
         self.assertEqual(len(unit.local_interfaces), 2)
 
     def test_single_interface_standalone_file_still_works(self):
         """A file containing only an INTERFACE unit returns that interface (regression)."""
+        import shutil
+        import tempfile
+
         from pascal1981.ast_nodes import InterfaceUnit
-        import tempfile, shutil
         from pascal1981.lexer import lex_file
         from pascal1981.parser import Parser
 
@@ -217,20 +212,21 @@ class TestMultiInterfaceParser(unittest.TestCase):
 # Type-checker level (no LLVM / clang required)
 # ---------------------------------------------------------------------------
 
+
 class TestMultiInterfaceTypeCheck(unittest.TestCase):
     """Type checker resolves USES against the second spliced interface."""
 
     def _typecheck_impl(self):
+        import shutil
+        import tempfile
+
         from pascal1981.lexer import lex_file
         from pascal1981.parser import Parser
         from pascal1981.type_checker import PascalTypeChecker
-        import tempfile, shutil
 
         tmpdir = tempfile.mkdtemp()
         try:
-            for name, content in [('GRAPHI', _GRAPHICS_HEADER),
-                                   ('BASEPL', _BASEPLOT_HEADER),
-                                   ('impl.pas', _GRAPHICS_IMPL)]:
+            for name, content in [('GRAPHI', _GRAPHICS_HEADER), ('BASEPL', _BASEPLOT_HEADER), ('impl.pas', _GRAPHICS_IMPL)]:
                 with open(os.path.join(tmpdir, name), 'w') as f:
                     f.write(content)
             src_path = os.path.join(tmpdir, 'impl.pas')
@@ -244,26 +240,25 @@ class TestMultiInterfaceTypeCheck(unittest.TestCase):
     def test_implementation_uses_baseplot_from_spliced_interface(self):
         """USES BASEPLOT in the implementation resolves from local_interfaces, not disk."""
         result = self._typecheck_impl()
-        self.assertTrue(result.success,
-                        msg=f"Type check failed: {[e.message for e in result.errors]}")
+        self.assertTrue(result.success, msg=f"Type check failed: {[e.message for e in result.errors]}")
 
     def test_no_disk_baseplot_file_required(self):
         """Type check passes even though no BASEPLOT or BASEPL file exists on disk."""
         # This is already guaranteed by test_implementation_uses_baseplot_from_spliced_interface
         # since the temp directory never has a BASEPLOT file — only the include
         # files GRAPHI and BASEPL.  This explicit test documents the intent.
+        import shutil
+        import tempfile
+
         from pascal1981.lexer import lex_file
         from pascal1981.parser import Parser
         from pascal1981.type_checker import PascalTypeChecker
-        import tempfile, shutil
 
         tmpdir = tempfile.mkdtemp()
         try:
             # Write ONLY the include files + impl source.  Deliberately no
             # 'BASEPLOT', 'baseplot', 'BASEPLOT.pas', etc.
-            for name, content in [('GRAPHI', _GRAPHICS_HEADER),
-                                   ('BASEPL', _BASEPLOT_HEADER),
-                                   ('impl.pas', _GRAPHICS_IMPL)]:
+            for name, content in [('GRAPHI', _GRAPHICS_HEADER), ('BASEPL', _BASEPLOT_HEADER), ('impl.pas', _GRAPHICS_IMPL)]:
                 with open(os.path.join(tmpdir, name), 'w') as f:
                     f.write(content)
             disk_files = os.listdir(tmpdir)
@@ -278,13 +273,13 @@ class TestMultiInterfaceTypeCheck(unittest.TestCase):
         finally:
             shutil.rmtree(tmpdir)
 
-        self.assertTrue(result.success,
-                        msg=f"Expected success without disk BASEPLOT: {[e.message for e in result.errors]}")
+        self.assertTrue(result.success, msg=f"Expected success without disk BASEPLOT: {[e.message for e in result.errors]}")
 
 
 # ---------------------------------------------------------------------------
 # Full build-and-run tests (require llvmlite + clang)
 # ---------------------------------------------------------------------------
+
 
 @requires_exe
 class TestMultiInterfaceBuildAndRun(unittest.TestCase):

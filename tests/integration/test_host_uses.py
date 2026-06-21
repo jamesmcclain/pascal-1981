@@ -49,6 +49,7 @@ _EXPECTED = ["42", "42"]
 
 @requires_exe
 class TestHostUsesIntegration(unittest.TestCase):
+
     def test_plain_interface_implementation_builds_and_runs_via_uses(self):
         rc, out, err = build_and_run_pascal_project(
             files={

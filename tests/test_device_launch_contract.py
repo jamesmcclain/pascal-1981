@@ -8,8 +8,7 @@ with the future host-launch surface.
 import unittest
 
 from pascal1981.codegen import compile_to_llvm
-from tests.support import parse_source, typecheck_source, requires_llvm
-
+from tests.support import parse_source, requires_llvm, typecheck_source
 
 _KERNEL_BODY_CONTRACT_SRC = """
 DEVICE MODULE M;
@@ -44,6 +43,7 @@ END;
 
 @requires_llvm
 class TestDeviceLaunchContract(unittest.TestCase):
+
     def test_nvptx_kernel_body_needs_only_index_reads_and_barrier(self):
         result = typecheck_source(_KERNEL_BODY_CONTRACT_SRC)
         self.assertTrue(result.success, result.errors)
@@ -54,11 +54,11 @@ class TestDeviceLaunchContract(unittest.TestCase):
         )
 
         for name in [
-            'llvm.nvvm.read.ptx.sreg.tid.x',
-            'llvm.nvvm.read.ptx.sreg.ctaid.x',
-            'llvm.nvvm.read.ptx.sreg.ntid.x',
-            'llvm.nvvm.read.ptx.sreg.nctaid.x',
-            'llvm.nvvm.barrier0',
+                'llvm.nvvm.read.ptx.sreg.tid.x',
+                'llvm.nvvm.read.ptx.sreg.ctaid.x',
+                'llvm.nvvm.read.ptx.sreg.ntid.x',
+                'llvm.nvvm.read.ptx.sreg.nctaid.x',
+                'llvm.nvvm.barrier0',
         ]:
             self.assertIn(name, ir)
 

@@ -59,23 +59,19 @@ def _emit_ptx(ir_text, triple='nvptx64-nvidia-cuda'):
 
 
 # A device unit exporting one PROCEDURE; a second routine is NOT exported.
-_IFACE = (
-    "DEVICE INTERFACE;\n"
-    "UNIT VADD (vecadd);\n"
-    "PROCEDURE vecadd (n: INTEGER);\n"
-    "END;\n"
-)
-_IMPL = (
-    "(*$INCLUDE:'vadd'*)\n"
-    "DEVICE IMPLEMENTATION OF VADD;\n"
-    "VAR [SPACE(GLOBAL)] a: ARRAY [1..256] OF INTEGER;\n"
-    "PROCEDURE helper (k: INTEGER);\n"
-    "BEGIN a[k] := k; END;\n"
-    "PROCEDURE vecadd (n: INTEGER);\n"
-    "VAR i: INTEGER;\n"
-    "BEGIN FOR i := 1 TO n DO helper(i); END;\n"
-    ".\n"
-)
+_IFACE = ("DEVICE INTERFACE;\n"
+          "UNIT VADD (vecadd);\n"
+          "PROCEDURE vecadd (n: INTEGER);\n"
+          "END;\n")
+_IMPL = ("(*$INCLUDE:'vadd'*)\n"
+         "DEVICE IMPLEMENTATION OF VADD;\n"
+         "VAR [SPACE(GLOBAL)] a: ARRAY [1..256] OF INTEGER;\n"
+         "PROCEDURE helper (k: INTEGER);\n"
+         "BEGIN a[k] := k; END;\n"
+         "PROCEDURE vecadd (n: INTEGER);\n"
+         "VAR i: INTEGER;\n"
+         "BEGIN FOR i := 1 TO n DO helper(i); END;\n"
+         ".\n")
 
 
 def _has_cc(ir_text, name, cc):
@@ -88,6 +84,7 @@ def _defined_plain(ir_text, name):
 
 
 class TestEntryPointEmission(unittest.TestCase):
+
     def test_exported_proc_is_ptx_kernel_helper_is_func(self):
         _, ir = _compile_unit(_IFACE, _IMPL, module_name='VADD', device_triple='nvptx64-nvidia-cuda')
         self.assertTrue(_has_cc(ir, 'vecadd', 'ptx_kernel'), ir)
@@ -120,17 +117,16 @@ class TestEntryPointEmission(unittest.TestCase):
 
 
 class TestDeviceModuleHasNoEntries(unittest.TestCase):
+
     def test_device_module_emits_only_funcs(self):
         # A DEVICE MODULE has no interface, so nothing is exported and nothing
         # becomes an entry -- it keeps emitting plain device functions even on a
         # GPU triple (green gate: DEVICE MODULE behavior unchanged).
-        src = (
-            "DEVICE MODULE M;\n"
-            "PROCEDURE go (n: INTEGER);\n"
-            "VAR i: INTEGER;\n"
-            "BEGIN FOR i := 1 TO n DO ; END;\n"
-            ".\n"
-        )
+        src = ("DEVICE MODULE M;\n"
+               "PROCEDURE go (n: INTEGER);\n"
+               "VAR i: INTEGER;\n"
+               "BEGIN FOR i := 1 TO n DO ; END;\n"
+               ".\n")
         ast = parse_source(src)
         r = PascalTypeChecker().check(ast)
         assert r.success, r.errors
@@ -174,6 +170,7 @@ class TestEntryShapeRules(unittest.TestCase):
 
 
 class TestCheckerMarksExportsUnderSeparateCompilation(unittest.TestCase):
+
     def test_only_exported_routines_are_flagged(self):
         # Compile the implementation *alone* (interface only on disk): the
         # checker loads the interface and flags exports on the impl AST, which

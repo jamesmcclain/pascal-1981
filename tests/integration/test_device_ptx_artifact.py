@@ -10,6 +10,7 @@ from tests.support import requires_llvm
 
 @requires_llvm
 class TestDevicePtxArtifactIntegration(unittest.TestCase):
+
     def test_fill_indices_example_emits_inspectable_ptx(self):
         repo = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         example_dir = os.path.join(repo, 'examples', 'device_ptx', 'fill_indices')
@@ -29,7 +30,9 @@ class TestDevicePtxArtifactIntegration(unittest.TestCase):
                     'sm_70',
                 ],
                 cwd=example_dir,
-                env={**os.environ, 'PYTHONPATH': os.path.join(repo, 'src')},
+                env={
+                    **os.environ, 'PYTHONPATH': os.path.join(repo, 'src')
+                },
                 capture_output=True,
                 text=True,
             )

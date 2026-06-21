@@ -5,13 +5,7 @@ import re
 import subprocess
 import unittest
 
-from tests.support import (
-    build_and_run_pascal_project,
-    compile_pascal_project,
-    link_pascal_project,
-    requires_exe,
-    temporary_pascal_project,
-)
+from tests.support import (build_and_run_pascal_project, compile_pascal_project, link_pascal_project, requires_exe, temporary_pascal_project)
 
 
 def _strong_globals(ir_text):
@@ -48,6 +42,7 @@ END.
 
 @requires_exe
 class TestRuntimeExternLinkageIntegration(unittest.TestCase):
+
     def test_program_and_separate_module_link_with_single_file_owner(self):
         """A separately compiled MODULE may touch INPUT without owning @input."""
         rc, out, err = build_and_run_pascal_project(
@@ -89,8 +84,8 @@ class TestRuntimeExternLinkageIntegration(unittest.TestCase):
     def test_program_module_ir_has_one_strong_input_output_owner(self):
         """Project-level artifact check for PROGRAM-owned file globals."""
         with temporary_pascal_project({
-            'helper.pas': _MODULE_READS_INPUT,
-            'main.pas': _PROGRAM_WRITES_OUTPUT,
+                'helper.pas': _MODULE_READS_INPUT,
+                'main.pas': _PROGRAM_WRITES_OUTPUT,
         }) as project_dir:
             compile_pascal_project(
                 project_dir,

@@ -32,17 +32,15 @@ _HOST_TRAP_SYMS = ('abort', 'fflush')
 #   y := x * x          -> MATHCK (integer overflow)
 #   a[x] := y           -> INDEXCK (array bounds)
 #   CASE y .. END       -> RANGECK (no-match trap, no OTHERWISE)
-_BODY = (
-    "VAR y: INTEGER; a: ARRAY [1..4] OF INTEGER;\n"
-    "BEGIN\n"
-    "  y := x * x;\n"
-    "  a[x] := y;\n"
-    "  CASE y OF\n"
-    "    1: y := 1;\n"
-    "    2: y := 2;\n"
-    "  END;\n"
-    "END;\n"
-)
+_BODY = ("VAR y: INTEGER; a: ARRAY [1..4] OF INTEGER;\n"
+         "BEGIN\n"
+         "  y := x * x;\n"
+         "  a[x] := y;\n"
+         "  CASE y OF\n"
+         "    1: y := 1;\n"
+         "    2: y := 2;\n"
+         "  END;\n"
+         "END;\n")
 
 
 def _refs(ir_text, sym):

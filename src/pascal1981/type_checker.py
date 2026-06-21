@@ -31,11 +31,12 @@ from .ast_nodes import SetType as ASTSetType
 from .ast_nodes import SizeofExpr, Statement, StringLiteral
 from .ast_nodes import SubrangeType as ASTSubrangeType
 from .ast_nodes import (TypeDecl, UnaryOp, UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt, WriteArg)
-from .builtins_registry import DEVICE_INDEX_BUILTIN_FUNCTIONS, DEVICE_SYNC_BUILTIN_PROCEDURES, register_builtins
+from .builtins_registry import (DEVICE_INDEX_BUILTIN_FUNCTIONS, DEVICE_SYNC_BUILTIN_PROCEDURES, register_builtins)
 from .parser import parse_file
 from .symbol_table import SourceLocation, Symbol, SymbolTable
-from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL32_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, EnumType, FileType, FunctionType, LStringType,
-                          PointerType, ProcedureType, RecordType, SetType, StringType, Type, binary_op_result_type, can_assign, is_fixed_char_array, unary_op_result_type)
+from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL32_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, EnumType, FileType, FunctionType,
+                          LStringType, PointerType, ProcedureType, RecordType, SetType, StringType, Type, binary_op_result_type, can_assign, is_fixed_char_array,
+                          unary_op_result_type)
 
 
 @dataclass
@@ -142,9 +143,20 @@ class PascalTypeChecker(TypeChecker):
     # structured, allocation-free, host-I/O-free SIMT code.
     _DEVICE_BANNED_HEAP = {'NEW', 'DISPOSE'}
     _DEVICE_BANNED_IO = {
-        'WRITE', 'WRITELN', 'READ', 'READLN', 'PAGE',
-        'RESET', 'REWRITE', 'GET', 'PUT', 'CLOSE', 'DISCARD',
-        'ASSIGN', 'READFN', 'READSET',
+        'WRITE',
+        'WRITELN',
+        'READ',
+        'READLN',
+        'PAGE',
+        'RESET',
+        'REWRITE',
+        'GET',
+        'PUT',
+        'CLOSE',
+        'DISCARD',
+        'ASSIGN',
+        'READFN',
+        'READSET',
     }
 
     def _check_device_recission(self, name: Optional[str], node) -> None:
@@ -198,9 +210,8 @@ class PascalTypeChecker(TypeChecker):
         for caller, edges in graph.items():
             if reaches_self(caller):
                 node = edges[0][1] if edges else None
-                self.error(
-                    f"recursion is not available in device code "
-                    f"(routine '{caller}' is part of a call cycle)", node)
+                self.error(f"recursion is not available in device code "
+                           f"(routine '{caller}' is part of a call cycle)", node)
 
     @contextmanager
     def _device_context(self, active: bool):
@@ -531,8 +542,7 @@ class PascalTypeChecker(TypeChecker):
         if prog.uses:
             for use_clause in prog.uses:
                 spliced = next(
-                    (i for i in getattr(prog, 'local_interfaces', [])
-                     if i.name.upper() == use_clause.name.upper()),
+                    (i for i in getattr(prog, 'local_interfaces', []) if i.name.upper() == use_clause.name.upper()),
                     None,
                 )
                 if spliced is None:
@@ -548,8 +558,7 @@ class PascalTypeChecker(TypeChecker):
         if mod.uses:
             for use_clause in mod.uses:
                 spliced = next(
-                    (i for i in getattr(mod, 'local_interfaces', [])
-                     if i.name.upper() == use_clause.name.upper()),
+                    (i for i in getattr(mod, 'local_interfaces', []) if i.name.upper() == use_clause.name.upper()),
                     None,
                 )
                 if spliced is None:
@@ -571,8 +580,7 @@ class PascalTypeChecker(TypeChecker):
         if iface.uses:
             for use_clause in iface.uses:
                 spliced = next(
-                    (i for i in getattr(iface, 'local_interfaces', [])
-                     if i.name.upper() == use_clause.name.upper()),
+                    (i for i in getattr(iface, 'local_interfaces', []) if i.name.upper() == use_clause.name.upper()),
                     None,
                 )
                 if spliced is None:
@@ -622,8 +630,7 @@ class PascalTypeChecker(TypeChecker):
         if impl.uses:
             for use_clause in impl.uses:
                 spliced = next(
-                    (i for i in getattr(impl, 'local_interfaces', [])
-                     if i.name.upper() == use_clause.name.upper()),
+                    (i for i in getattr(impl, 'local_interfaces', []) if i.name.upper() == use_clause.name.upper()),
                     None,
                 )
                 if spliced is None:
@@ -785,8 +792,7 @@ class PascalTypeChecker(TypeChecker):
             placeholder = RecordType(decl.name, {})
             self.symbol_table.define(
                 decl.name,
-                Symbol(name=decl.name, type=placeholder, kind='type',
-                       location=self.get_node_location(decl), is_mutable=False),
+                Symbol(name=decl.name, type=placeholder, kind='type', location=self.get_node_location(decl), is_mutable=False),
             )
             self._predeclared_types.add(decl.name.upper())
 
@@ -1370,7 +1376,7 @@ class PascalTypeChecker(TypeChecker):
         if len(stmt.args) != 3:
             self.error(f"Procedure '{stmt.name}' expects 3 arguments, got {len(stmt.args)}", stmt)
             return
-        ptr_positions = (0,) if name == 'FILLSC' else (0, 1)
+        ptr_positions = (0, ) if name == 'FILLSC' else (0, 1)
         for i in ptr_positions:
             arg_type = self.infer_expression_type(stmt.args[i])
             if not isinstance(arg_type, PointerType) or arg_type.flavor != 'ADS':
@@ -1539,9 +1545,9 @@ class PascalTypeChecker(TypeChecker):
         # ordinal by default and symbolic under -f symbolic-enum-io; BOOLEAN is
         # always name-based on output.
         wide = (type(INTEGER32_TYPE), type(INTEGER64_TYPE)) if self.feature_enabled('wide-integers') else ()
-        wide_real = (type(REAL32_TYPE),) if (self.feature_enabled('wide-reals') or self.in_device_module) else ()
-        return isinstance(
-            t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), EnumType, StringType, LStringType) + wide + wide_real) or is_fixed_char_array(t)
+        wide_real = (type(REAL32_TYPE), ) if (self.feature_enabled('wide-reals') or self.in_device_module) else ()
+        return isinstance(t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), EnumType, StringType, LStringType) + wide +
+                          wide_real) or is_fixed_char_array(t)
 
     def _is_readable_type(self, t: Type) -> bool:
         # READ remains narrower than WRITE: BOOLEAN input is unsupported, but

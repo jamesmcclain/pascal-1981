@@ -27,32 +27,24 @@ class TestRecursiveTypecheck(unittest.TestCase):
     """Forward / self references resolve to real records, not ^CHAR."""
 
     def test_forward_ref_pointer_type(self):
-        result = typecheck_source(
-            "PROGRAM P; TYPE np = ^node; node = RECORD data: INTEGER; next: np END; "
-            "VAR p: np; BEGIN NEW(p); p^.data := 1 END."
-        )
+        result = typecheck_source("PROGRAM P; TYPE np = ^node; node = RECORD data: INTEGER; next: np END; "
+                                  "VAR p: np; BEGIN NEW(p); p^.data := 1 END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_inline_self_ref_record(self):
-        result = typecheck_source(
-            "PROGRAM P; TYPE node = RECORD data: INTEGER; next: ^node END; "
-            "VAR p: ^node; BEGIN NEW(p); p^.data := 1 END."
-        )
+        result = typecheck_source("PROGRAM P; TYPE node = RECORD data: INTEGER; next: ^node END; "
+                                  "VAR p: ^node; BEGIN NEW(p); p^.data := 1 END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_pointer_compared_to_nil(self):
         """A typed record pointer can be compared against NIL (WHILE p <> NIL)."""
-        result = typecheck_source(
-            "PROGRAM P; TYPE np = ^node; node = RECORD data: INTEGER; next: np END; "
-            "VAR p: np; BEGIN p := NIL; IF p <> NIL THEN WRITELN(1) END."
-        )
+        result = typecheck_source("PROGRAM P; TYPE np = ^node; node = RECORD data: INTEGER; next: np END; "
+                                  "VAR p: np; BEGIN p := NIL; IF p <> NIL THEN WRITELN(1) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_two_pointers_compared(self):
-        result = typecheck_source(
-            "PROGRAM P; TYPE np = ^node; node = RECORD data: INTEGER; next: np END; "
-            "VAR a, b: np; BEGIN IF a = b THEN WRITELN(1) END."
-        )
+        result = typecheck_source("PROGRAM P; TYPE np = ^node; node = RECORD data: INTEGER; next: np END; "
+                                  "VAR a, b: np; BEGIN IF a = b THEN WRITELN(1) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
 
@@ -62,10 +54,8 @@ class TestRecursiveIR(unittest.TestCase):
     recursion in codegen)."""
 
     def test_self_ref_record_builds(self):
-        ir = compile_to_ir(
-            "PROGRAM P; TYPE np = ^node; node = RECORD data: INTEGER; next: np END; "
-            "VAR p: np; BEGIN NEW(p) END."
-        )
+        ir = compile_to_ir("PROGRAM P; TYPE np = ^node; node = RECORD data: INTEGER; next: np END; "
+                           "VAR p: np; BEGIN NEW(p) END.")
         # The record is emitted as a named identified struct, and its self-link
         # is a pointer to that same struct.
         self.assertIn("%\"NODE\" = type {", ir)

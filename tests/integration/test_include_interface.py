@@ -48,12 +48,7 @@ File layout rules
 import subprocess
 import unittest
 
-from tests.support import (
-    compile_pascal_project,
-    link_pascal_project,
-    requires_exe,
-    temporary_pascal_project,
-)
+from tests.support import (compile_pascal_project, link_pascal_project, requires_exe, temporary_pascal_project)
 
 # ---------------------------------------------------------------------------
 # Shared header (the include file — never compiled independently)
@@ -220,9 +215,11 @@ USES NOSUCHMODULE;
 BEGIN
 END.
 """
+        import os
+        import tempfile
+
         from pascal1981.parser import parse_file
         from pascal1981.type_checker import PascalTypeChecker
-        import os, tempfile
 
         with temporary_pascal_project({'GRAPHI': _GRAPHICS_HEADER, 'p.pas': bad_prog}) as d:
             path = os.path.join(d, 'p.pas')

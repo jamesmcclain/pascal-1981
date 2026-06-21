@@ -143,6 +143,7 @@ class IoWriteReadMixin:
                 continue
 
             if isinstance(pas_ty, type(REAL_TYPE)) or str(val.type) in {'double', 'float'}:
+
                 def _to_printf_double(v):
                     # printf's %E/%f variadic slot is a C double. Widen any
                     # narrower real or integer correctly: f32 via fpext, an
@@ -152,6 +153,7 @@ class IoWriteReadMixin:
                     if isinstance(v.type, ir.IntType):
                         return self.builder.sitofp(v, ir.DoubleType())
                     return v
+
                 if width is None and precision is None:
                     fmt_parts.append('%14.7E')
                     printf_args.append(_to_printf_double(val))
@@ -333,11 +335,10 @@ class IoWriteReadMixin:
         set_val = self.codegen_expr(set_expr)
         set_slot = self.builder.alloca(self.set_llvm_type(), name='readset_set')
         self.builder.store(set_val, set_slot)
-        self.builder.call(
-            self.runtime_extern('pas_freadset'),
-            [file_fcb, self.builder.bitcast(dest_ptr,
-                                            ir.IntType(8).as_pointer()),
-             ir.Constant(ir.IntType(32), max_len), set_slot])
+        self.builder.call(self.runtime_extern('pas_freadset'),
+                          [file_fcb, self.builder.bitcast(dest_ptr,
+                                                          ir.IntType(8).as_pointer()),
+                           ir.Constant(ir.IntType(32), max_len), set_slot])
 
     def builtin_readfn(self, args):
         file_fcb = self._default_input_fcb()

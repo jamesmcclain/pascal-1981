@@ -248,8 +248,7 @@ class TypesMapMixin:
             # differing addrspace here means something slipped through -- fail loudly
             # rather than emit illegal IR.
             if getattr(vt, 'addrspace', 0) != getattr(target_type, 'addrspace', 0):
-                raise CodegenError(
-                    "cannot implicitly cross address spaces when passing an argument")
+                raise CodegenError("cannot implicitly cross address spaces when passing an argument")
             return self.builder.bitcast(value, target_type)
         if isinstance(target_type, ir.IntType) and isinstance(vt, ir.IntType):
             if vt.width > target_type.width:

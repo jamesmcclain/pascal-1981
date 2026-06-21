@@ -101,8 +101,7 @@ class TestNewAllocationSize(unittest.TestCase):
                "VAR p: ^VECT; BEGIN NEW(p) END.")
         result = typecheck_source(src)
         self.assertFalse(result.success)
-        self.assertIn("NEW: super array allocation requires upper bound arguments",
-                      [e.message for e in result.errors])
+        self.assertIn("NEW: super array allocation requires upper bound arguments", [e.message for e in result.errors])
 
     def test_new_long_form_non_super_array_rejected(self):
         """Do not treat long-form NEW as a generic pointer allocation spelling."""

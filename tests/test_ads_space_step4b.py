@@ -26,20 +26,19 @@ def _compile(src, **kw):
 
 
 # Producing an ADS value into a matching ADS(s) slot inside a device routine.
-_VALUE_SRC = (
-    "DEVICE MODULE M;\n"
-    "VAR\n"
-    "  [SPACE(GLOBAL)] g: INTEGER;\n"
-    "  p: ADS(GLOBAL) OF INTEGER;\n"
-    "PROCEDURE go;\n"
-    "BEGIN\n"
-    "  p := ADS g;\n"
-    "END;\n"
-    ".\n"
-)
+_VALUE_SRC = ("DEVICE MODULE M;\n"
+              "VAR\n"
+              "  [SPACE(GLOBAL)] g: INTEGER;\n"
+              "  p: ADS(GLOBAL) OF INTEGER;\n"
+              "PROCEDURE go;\n"
+              "BEGIN\n"
+              "  p := ADS g;\n"
+              "END;\n"
+              ".\n")
 
 
 class TestAdsValueLowering(unittest.TestCase):
+
     def test_residence_global_is_placed_in_addrspace(self):
         ir = _compile(_VALUE_SRC, device_triple='nvptx64-nvidia-cuda')
         # g carries [SPACE(GLOBAL)] -> it must be an addrspace(1) global.
@@ -70,6 +69,7 @@ class TestAdsValueLowering(unittest.TestCase):
 
 
 class TestFirstRecissionTranche(unittest.TestCase):
+
     def _err(self, src):
         r = _check(src)
         self.assertFalse(r.success)

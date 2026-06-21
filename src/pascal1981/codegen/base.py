@@ -91,7 +91,15 @@ class CodegenBase:
     Initializes module state, builder, scope, and shared constants/tables.
     """
 
-    def __init__(self, verbose: bool = False, source_file: Optional[str] = None, force_flags: Optional[Dict[str, bool]] = None, features: Optional[Dict[str, bool]] = None, device_triple: str = "x86_64-pc-linux-gnu", host_triple: str = "x86_64-pc-linux-gnu", is_root_compiland: bool = True, is_device_compiland: bool = False):
+    def __init__(self,
+                 verbose: bool = False,
+                 source_file: Optional[str] = None,
+                 force_flags: Optional[Dict[str, bool]] = None,
+                 features: Optional[Dict[str, bool]] = None,
+                 device_triple: str = "x86_64-pc-linux-gnu",
+                 host_triple: str = "x86_64-pc-linux-gnu",
+                 is_root_compiland: bool = True,
+                 is_device_compiland: bool = False):
         # Each compilation gets its own LLVM context. Identified struct types
         # (used for named records, so self-referential linked-list nodes can
         # build) are interned by name *within a context*; the default global
@@ -302,15 +310,15 @@ class CodegenBase:
         """
         m = self.module  # captured by all factories
         # Shared type shorthands.
-        i8p  = ir.IntType(8).as_pointer()
-        i8   = ir.IntType(8)
-        i16  = ir.IntType(16)
-        i32  = ir.IntType(32)
-        i64  = ir.IntType(64)
-        f64  = ir.DoubleType()
+        i8p = ir.IntType(8).as_pointer()
+        i8 = ir.IntType(8)
+        i16 = ir.IntType(16)
+        i32 = ir.IntType(32)
+        i64 = ir.IntType(64)
+        f64 = ir.DoubleType()
         void = ir.VoidType()
-        ads_ty  = ir.LiteralStructType([i8p, i16])
-        fcb_ty  = self.file_fcb_type()
+        ads_ty = ir.LiteralStructType([i8p, i16])
+        fcb_ty = self.file_fcb_type()
         fcb_ptr = fcb_ty.as_pointer()
         set_ptr = ir.ArrayType(i64, 4).as_pointer()
 
@@ -326,65 +334,65 @@ class CodegenBase:
 
         self._extern_factories: Dict[str, Any] = {
             # ---- fill family -----------------------------------------------
-            'fillc':  _mk('fillc',  ir.FunctionType(i32, [i8p, i16, i8])),
+            'fillc': _mk('fillc', ir.FunctionType(i32, [i8p, i16, i8])),
             'fillsc': _mk('fillsc', ir.FunctionType(i32, [ads_ty, i16, i8])),
             # ---- move family -----------------------------------------------
-            'movel':  _mk('movel',  ir.FunctionType(i32, [i8p, i8p, i16])),
-            'mover':  _mk('mover',  ir.FunctionType(i32, [i8p, i8p, i16])),
+            'movel': _mk('movel', ir.FunctionType(i32, [i8p, i8p, i16])),
+            'mover': _mk('mover', ir.FunctionType(i32, [i8p, i8p, i16])),
             'movesl': _mk('movesl', ir.FunctionType(i32, [ads_ty, ads_ty, i16])),
             'movesr': _mk('movesr', ir.FunctionType(i32, [ads_ty, ads_ty, i16])),
             # ---- libc / libm -----------------------------------------------
             'printf': _mk('printf', ir.FunctionType(i32, [i8p], var_arg=True)),
-            'memcpy':  _mk('memcpy',  ir.FunctionType(i8p,  [i8p, i8p, i64])),
-            'memset':  _mk('memset',  ir.FunctionType(i8p,  [i8p, i32, i64])),
+            'memcpy': _mk('memcpy', ir.FunctionType(i8p, [i8p, i8p, i64])),
+            'memset': _mk('memset', ir.FunctionType(i8p, [i8p, i32, i64])),
             'memmove': _mk('memmove', ir.FunctionType(void, [i8p, i8p, i64])),
-            'malloc':  _mk('malloc',  ir.FunctionType(i8p,  [i64])),
-            'free':    _mk('free',    ir.FunctionType(void, [i8p])),
-            'abort':   _mk('abort',   ir.FunctionType(void, [])),
-            'fflush':  _mk('fflush',  ir.FunctionType(i32, [i8p])),
-            'sqrt':    _mk('sqrt',    ir.FunctionType(f64, [f64])),
-            'sin':     _mk('sin',     ir.FunctionType(f64, [f64])),
-            'cos':     _mk('cos',     ir.FunctionType(f64, [f64])),
-            'log':     _mk('log',     ir.FunctionType(f64, [f64])),
-            'exp':     _mk('exp',     ir.FunctionType(f64, [f64])),
-            'atan':    _mk('atan',    ir.FunctionType(f64, [f64])),
+            'malloc': _mk('malloc', ir.FunctionType(i8p, [i64])),
+            'free': _mk('free', ir.FunctionType(void, [i8p])),
+            'abort': _mk('abort', ir.FunctionType(void, [])),
+            'fflush': _mk('fflush', ir.FunctionType(i32, [i8p])),
+            'sqrt': _mk('sqrt', ir.FunctionType(f64, [f64])),
+            'sin': _mk('sin', ir.FunctionType(f64, [f64])),
+            'cos': _mk('cos', ir.FunctionType(f64, [f64])),
+            'log': _mk('log', ir.FunctionType(f64, [f64])),
+            'exp': _mk('exp', ir.FunctionType(f64, [f64])),
+            'atan': _mk('atan', ir.FunctionType(f64, [f64])),
             # ---- string helpers --------------------------------------------
-            'positn':       _mk('positn',       ir.FunctionType(i32, [i8p, i32, i8p, i32])),
-            'scaneq':       _mk('scaneq',       ir.FunctionType(i32, [i32, i8, i8p, i32, i32, i32])),
-            'scanne':       _mk('scanne',       ir.FunctionType(i32, [i32, i8, i8p, i32, i32, i32])),
+            'positn': _mk('positn', ir.FunctionType(i32, [i8p, i32, i8p, i32])),
+            'scaneq': _mk('scaneq', ir.FunctionType(i32, [i32, i8, i8p, i32, i32, i32])),
+            'scanne': _mk('scanne', ir.FunctionType(i32, [i32, i8, i8p, i32, i32, i32])),
             'encode_value': _mk('encode_value', ir.FunctionType(i32, [i8p, i32, i8p, i32, i32, i32, i32])),
             'decode_value': _mk('decode_value', ir.FunctionType(i32, [i8p, i32, i8p, i32, i32, i32, i32])),
             # ---- stdin read family -----------------------------------------
-            'pas_read_int':    _mk('pas_read_int',    ir.FunctionType(i32,  [i32.as_pointer()])),
-            'pas_read_word':   _mk('pas_read_word',   ir.FunctionType(i32,  [i16.as_pointer()])),
-            'pas_read_real':   _mk('pas_read_real',   ir.FunctionType(i32,  [f64.as_pointer()])),
-            'pas_read_char':   _mk('pas_read_char',   ir.FunctionType(i32,  [i8p])),
-            'pas_read_lstring':_mk('pas_read_lstring',ir.FunctionType(i32,  [i8p, i32])),
-            'pas_read_string': _mk('pas_read_string', ir.FunctionType(i32,  [i8p, i32])),
+            'pas_read_int': _mk('pas_read_int', ir.FunctionType(i32, [i32.as_pointer()])),
+            'pas_read_word': _mk('pas_read_word', ir.FunctionType(i32, [i16.as_pointer()])),
+            'pas_read_real': _mk('pas_read_real', ir.FunctionType(i32, [f64.as_pointer()])),
+            'pas_read_char': _mk('pas_read_char', ir.FunctionType(i32, [i8p])),
+            'pas_read_lstring': _mk('pas_read_lstring', ir.FunctionType(i32, [i8p, i32])),
+            'pas_read_string': _mk('pas_read_string', ir.FunctionType(i32, [i8p, i32])),
             'pas_readln_skip': _mk('pas_readln_skip', ir.FunctionType(void, [])),
             # ---- file-based read family ------------------------------------
-            'pas_fread_int':    _mk('pas_fread_int',    ir.FunctionType(i32,  [fcb_ptr, i32.as_pointer()])),
-            'pas_fread_word':   _mk('pas_fread_word',   ir.FunctionType(i32,  [fcb_ptr, i16.as_pointer()])),
-            'pas_fread_real':   _mk('pas_fread_real',   ir.FunctionType(i32,  [fcb_ptr, f64.as_pointer()])),
-            'pas_fread_char':   _mk('pas_fread_char',   ir.FunctionType(i32,  [fcb_ptr, i8p])),
-            'pas_fread_lstring':_mk('pas_fread_lstring',ir.FunctionType(i32,  [fcb_ptr, i8p, i32])),
-            'pas_fread_string': _mk('pas_fread_string', ir.FunctionType(i32,  [fcb_ptr, i8p, i32])),
+            'pas_fread_int': _mk('pas_fread_int', ir.FunctionType(i32, [fcb_ptr, i32.as_pointer()])),
+            'pas_fread_word': _mk('pas_fread_word', ir.FunctionType(i32, [fcb_ptr, i16.as_pointer()])),
+            'pas_fread_real': _mk('pas_fread_real', ir.FunctionType(i32, [fcb_ptr, f64.as_pointer()])),
+            'pas_fread_char': _mk('pas_fread_char', ir.FunctionType(i32, [fcb_ptr, i8p])),
+            'pas_fread_lstring': _mk('pas_fread_lstring', ir.FunctionType(i32, [fcb_ptr, i8p, i32])),
+            'pas_fread_string': _mk('pas_fread_string', ir.FunctionType(i32, [fcb_ptr, i8p, i32])),
             'pas_freadln_skip': _mk('pas_freadln_skip', ir.FunctionType(void, [fcb_ptr])),
-            'pas_freadset':     _mk('pas_freadset',     ir.FunctionType(void, [fcb_ptr, i8p, i32, set_ptr])),
-            'pas_fread_filename':_mk('pas_fread_filename', ir.FunctionType(void, [fcb_ptr, fcb_ptr])),
+            'pas_freadset': _mk('pas_freadset', ir.FunctionType(void, [fcb_ptr, i8p, i32, set_ptr])),
+            'pas_fread_filename': _mk('pas_fread_filename', ir.FunctionType(void, [fcb_ptr, fcb_ptr])),
             # ---- file control ----------------------------------------------
-            'pas_file_buffer':       _mk('pas_file_buffer',       ir.FunctionType(i8p,  [fcb_ptr])),
+            'pas_file_buffer': _mk('pas_file_buffer', ir.FunctionType(i8p, [fcb_ptr])),
             'pas_file_touch_buffer': _mk('pas_file_touch_buffer', ir.FunctionType(void, [fcb_ptr])),
-            'pas_file_reset':        _mk('pas_file_reset',        ir.FunctionType(void, [fcb_ptr])),
-            'pas_file_rewrite':      _mk('pas_file_rewrite',      ir.FunctionType(void, [fcb_ptr])),
-            'pas_file_get':          _mk('pas_file_get',          ir.FunctionType(void, [fcb_ptr])),
-            'pas_file_put':          _mk('pas_file_put',          ir.FunctionType(void, [fcb_ptr])),
-            'pas_file_close':        _mk('pas_file_close',        ir.FunctionType(void, [fcb_ptr])),
-            'pas_file_discard':      _mk('pas_file_discard',      ir.FunctionType(void, [fcb_ptr])),
-            'pas_file_assign':       _mk('pas_file_assign',       ir.FunctionType(void, [fcb_ptr, i8p, i32])),
-            'pas_file_attach_std':   _mk('pas_file_attach_std',   ir.FunctionType(void, [fcb_ptr, fcb_ptr])),
-            'pas_file_eof':          _mk('pas_file_eof',          ir.FunctionType(i32,  [fcb_ptr])),
-            'pas_file_eoln':         _mk('pas_file_eoln',         ir.FunctionType(i32,  [fcb_ptr])),
+            'pas_file_reset': _mk('pas_file_reset', ir.FunctionType(void, [fcb_ptr])),
+            'pas_file_rewrite': _mk('pas_file_rewrite', ir.FunctionType(void, [fcb_ptr])),
+            'pas_file_get': _mk('pas_file_get', ir.FunctionType(void, [fcb_ptr])),
+            'pas_file_put': _mk('pas_file_put', ir.FunctionType(void, [fcb_ptr])),
+            'pas_file_close': _mk('pas_file_close', ir.FunctionType(void, [fcb_ptr])),
+            'pas_file_discard': _mk('pas_file_discard', ir.FunctionType(void, [fcb_ptr])),
+            'pas_file_assign': _mk('pas_file_assign', ir.FunctionType(void, [fcb_ptr, i8p, i32])),
+            'pas_file_attach_std': _mk('pas_file_attach_std', ir.FunctionType(void, [fcb_ptr, fcb_ptr])),
+            'pas_file_eof': _mk('pas_file_eof', ir.FunctionType(i32, [fcb_ptr])),
+            'pas_file_eoln': _mk('pas_file_eoln', ir.FunctionType(i32, [fcb_ptr])),
             # ---- write / enum helpers -------------------------------------
             'pas_write_fmt': _mk('pas_write_fmt', ir.FunctionType(i32, [fcb_ptr, i8p], var_arg=True)),
             'pas_enum_write_token': _mk('pas_enum_write_token', ir.FunctionType(i8p, [i32, i8p.as_pointer(), i32])),
