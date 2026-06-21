@@ -51,13 +51,13 @@ class TestUnitAstFlags(unittest.TestCase):
         self.assertTrue(unit.has_init)
 
     def test_device_implementation_flag(self):
-        unit = parse_source("DEVICE IMPLEMENTATION OF U;\nBEGIN\nEND.\n")
+        unit = parse_source("DEVICE INTERFACE;\nUNIT U;\nEND;\nDEVICE IMPLEMENTATION OF U;\nBEGIN\nEND.\n")
         self.assertIsInstance(unit, ImplementationUnit)
         self.assertTrue(unit.is_device)
         self.assertIsNotNone(unit.init_body)
 
     def test_plain_implementation_defaults_not_device(self):
-        unit = parse_source("IMPLEMENTATION OF U;\nBEGIN\nEND.\n")
+        unit = parse_source("INTERFACE;\nUNIT U;\nEND;\nIMPLEMENTATION OF U;\nBEGIN\nEND.\n")
         self.assertIsInstance(unit, ImplementationUnit)
         self.assertFalse(unit.is_device)
         self.assertIsNotNone(unit.init_body)
@@ -68,7 +68,7 @@ class TestUnitAstFlags(unittest.TestCase):
         self.assertFalse(unit.is_device)
 
     def test_device_identifier_still_parses_in_plain_implementation(self):
-        unit = parse_source("IMPLEMENTATION OF U;\nVAR device: INTEGER;\n.\n")
+        unit = parse_source("INTERFACE;\nUNIT U;\nEND;\nIMPLEMENTATION OF U;\nVAR device: INTEGER;\n.\n")
         self.assertIsInstance(unit, ImplementationUnit)
         self.assertFalse(unit.is_device)
 

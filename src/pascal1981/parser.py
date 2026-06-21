@@ -57,8 +57,12 @@ class Parser:
         # GRAPHICS).  Phase 2 extends the Phase 1 single-interface path to a
         # loop so arbitrarily many headers are accepted.
         interfaces: List[InterfaceUnit] = []
-        while self.current().kind == 'INTERFACE':
-            interfaces.append(self.parse_interface_unit())
+        while self.current().kind == 'INTERFACE' or self._at_device_prefix('INTERFACE'):
+            if self._at_device_prefix('INTERFACE'):
+                self.pos += 1  # consume DEVICE
+                interfaces.append(self.parse_interface_unit(is_device=True))
+            else:
+                interfaces.append(self.parse_interface_unit())
             self.skip_include_directives()
             if self.current().kind == 'EOF':
                 # Standalone interface file: return it directly.  If somehow
@@ -76,10 +80,12 @@ class Parser:
                 if iface.name.upper() == unit.name.upper():
                     unit.interface = iface
             # All spliced interfaces go into local_interfaces on every unit
-            # type so the type checker and codegen can resolve USES without
-            # hitting disk (Phase 1 / Phase 2).
+            # type so the type checker and codegen can resolve USES from the
+            # spliced headers that actually appear in the source file.
             if hasattr(unit, 'local_interfaces'):
                 unit.local_interfaces.append(iface)
+        if isinstance(unit, ImplementationUnit) and unit.interface is None:
+            self.error(f"IMPLEMENTATION OF {unit.name} must include its matching INTERFACE header before the implementation")
         self.skip_include_directives()
         self.expect('EOF')
         return unit

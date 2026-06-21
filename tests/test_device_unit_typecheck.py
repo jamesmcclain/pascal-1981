@@ -50,6 +50,7 @@ class TestDeviceImplementationRecissions(unittest.TestCase):
 
     def test_host_io_banned_in_device_implementation(self):
         src = (
+            "(*$INCLUDE:'u'*)\n"
             "DEVICE IMPLEMENTATION OF U;\n"
             "PROCEDURE go; BEGIN WRITELN('hi'); END;\n"
             "PROCEDURE loop; BEGIN END;\n"
@@ -62,6 +63,7 @@ class TestDeviceImplementationRecissions(unittest.TestCase):
 
     def test_new_banned_in_device_implementation(self):
         src = (
+            "(*$INCLUDE:'u'*)\n"
             "DEVICE IMPLEMENTATION OF U;\n"
             "TYPE pt = ^INTEGER;\n"
             "VAR q: pt;\n"
@@ -76,6 +78,7 @@ class TestDeviceImplementationRecissions(unittest.TestCase):
 
     def test_recursion_banned_in_device_implementation(self):
         src = (
+            "(*$INCLUDE:'u'*)\n"
             "DEVICE IMPLEMENTATION OF U;\n"
             "PROCEDURE go; BEGIN END;\n"
             "PROCEDURE loop; BEGIN loop; END;\n"
@@ -95,6 +98,7 @@ class TestDeviceImplementationRecissions(unittest.TestCase):
             "END;\n"
         )
         src = (
+            "(*$INCLUDE:'u'*)\n"
             "IMPLEMENTATION OF U;\n"
             "TYPE pt = ^INTEGER;\n"
             "VAR q: pt;\n"
@@ -134,6 +138,7 @@ class TestDeviceUnitInitializerBan(unittest.TestCase):
             "END;\n"
         )
         impl = (
+            "(*$INCLUDE:'test'*)\n"
             "DEVICE IMPLEMENTATION OF TEST;\n"
             "PROCEDURE go;\n"
             "BEGIN\n"
@@ -153,6 +158,7 @@ class TestDeviceUnitInitializerBan(unittest.TestCase):
             "END;\n"
         )
         impl = (
+            "(*$INCLUDE:'test'*)\n"
             "IMPLEMENTATION OF TEST;\n"
             "PROCEDURE go;\n"
             "BEGIN\n"
@@ -173,6 +179,7 @@ class TestDeviceUnitConsistency(unittest.TestCase):
             "END;\n"
         )
         impl = (
+            "(*$INCLUDE:'test'*)\n"
             "DEVICE IMPLEMENTATION OF TEST;\n"
             "PROCEDURE go;\n"
             "BEGIN\n"
@@ -191,6 +198,7 @@ class TestDeviceUnitConsistency(unittest.TestCase):
             "END;\n"
         )
         impl = (
+            "(*$INCLUDE:'test'*)\n"
             "IMPLEMENTATION OF TEST;\n"
             "PROCEDURE go;\n"
             "BEGIN\n"

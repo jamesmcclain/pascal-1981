@@ -575,6 +575,10 @@ class TestDeviceUnitParser(unittest.TestCase):
 
     def test_device_implementation_sets_is_device(self):
         ast = parse_source(
+            "DEVICE INTERFACE;\n"
+            "UNIT U (go);\n"
+            "PROCEDURE go;\n"
+            "END;\n"
             "DEVICE IMPLEMENTATION OF U;\n"
             "PROCEDURE go;\n"
             "BEGIN END;\n"
@@ -587,6 +591,10 @@ class TestDeviceUnitParser(unittest.TestCase):
 
     def test_plain_implementation_is_device_false(self):
         ast = parse_source(
+            "INTERFACE;\n"
+            "UNIT U (go);\n"
+            "PROCEDURE go;\n"
+            "END;\n"
             "IMPLEMENTATION OF U;\n"
             "PROCEDURE go;\n"
             "BEGIN END;\n"
@@ -670,6 +678,11 @@ class TestDeviceUnitParser(unittest.TestCase):
 
     def test_device_implementation_module_name_parsed(self):
         ast = parse_source(
+            "DEVICE INTERFACE;\n"
+            "UNIT KERN (add, mul);\n"
+            "PROCEDURE add (n: INTEGER);\n"
+            "PROCEDURE mul (n: INTEGER);\n"
+            "END;\n"
             "DEVICE IMPLEMENTATION OF KERN;\n"
             "PROCEDURE add (n: INTEGER);\n"
             "BEGIN END;\n"

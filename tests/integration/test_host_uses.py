@@ -12,7 +12,8 @@ FUNCTION twice(x: INTEGER): INTEGER;
 END;
 """
 
-_IMPLEMENTATION = """IMPLEMENTATION OF mathbox;
+_IMPLEMENTATION = """(*$INCLUDE:'mathbox.inc'*)
+IMPLEMENTATION OF mathbox;
 VAR
   bias: INTEGER;
 
@@ -33,7 +34,8 @@ END;
 .
 """
 
-_MAIN = """PROGRAM main(output);
+_MAIN = """(*$INCLUDE:'mathbox.inc'*)
+PROGRAM main(output);
 USES mathbox;
 BEGIN
   seed;

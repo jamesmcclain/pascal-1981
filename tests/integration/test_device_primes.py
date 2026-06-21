@@ -12,7 +12,8 @@ FUNCTION nth_prime(n: INTEGER): INTEGER;
 END;
 """
 
-_IMPLEMENTATION = """DEVICE IMPLEMENTATION OF kernel;
+_IMPLEMENTATION = """(*$INCLUDE:'kernel.inc'*)
+DEVICE IMPLEMENTATION OF kernel;
 CONST
   limit = 100;
 VAR
@@ -71,7 +72,8 @@ END;
 .
 """
 
-_MAIN = """PROGRAM main(output);
+_MAIN = """(*$INCLUDE:'kernel.inc'*)
+PROGRAM main(output);
 USES kernel;
 VAR
   i, count: INTEGER;
