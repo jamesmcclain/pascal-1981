@@ -91,7 +91,7 @@ class CodegenBase:
     Initializes module state, builder, scope, and shared constants/tables.
     """
 
-    def __init__(self, verbose: bool = False, source_file: Optional[str] = None, force_flags: Optional[Dict[str, bool]] = None, features: Optional[Dict[str, bool]] = None, device_triple: str = "x86_64-pc-linux-gnu", host_triple: str = "x86_64-pc-linux-gnu", is_root_compiland: bool = True):
+    def __init__(self, verbose: bool = False, source_file: Optional[str] = None, force_flags: Optional[Dict[str, bool]] = None, features: Optional[Dict[str, bool]] = None, device_triple: str = "x86_64-pc-linux-gnu", host_triple: str = "x86_64-pc-linux-gnu", is_root_compiland: bool = True, is_device_compiland: bool = False):
         # Each compilation gets its own LLVM context. Identified struct types
         # (used for named records, so self-referential linked-list nodes can
         # build) are interned by name *within a context*; the default global
@@ -113,6 +113,15 @@ class CodegenBase:
         # Historical name: now means "currently lowering device code" once
         # DEVICE UNIT codegen is wired. Host/vintage codegen stays unchanged.
         self.is_device_module = False
+        # Whether the top-level compiland being lowered is a DEVICE unit/module.
+        # Unlike is_device_module (which toggles on/off as lowering enters and
+        # leaves device routines), this is fixed for the whole compilation and
+        # is known at construction time from the AST root's `is_device` flag.
+        # It gates one-time, module-level emission decisions made in __init__
+        # (e.g. the predeclared INPUT/OUTPUT host-stream globals) before any
+        # routine-level device context has been established. See followups.md
+        # item 2 (phantom `.extern .global input/output` in device PTX).
+        self.is_device_compiland = is_device_compiland
         self.builder: Optional[IRBuilder] = None
         self.scope = Scope()  # global scope
         self._root_scope = self.scope  # fixed reference; self.scope moves during function lowering
@@ -179,8 +188,13 @@ class CodegenBase:
         self._build_extern_factories()
         # INPUT/OUTPUT: only PROGRAM owns the strong definition; MODULE and
         # UNIT compilands emit declare-only (external global) so the linker
-        # resolves to the single copy in the program root (S4.1).
-        self._register_predeclared_files(is_root_compiland)
+        # resolves to the single copy in the program root (S4.1).  DEVICE
+        # compilands have no host I/O, so these host-stream globals are
+        # suppressed entirely there -- emitting them leaked two unreferenced
+        # `.extern .global ... input/output` lines into device PTX
+        # (followups.md item 2).
+        if not self.is_device_compiland:
+            self._register_predeclared_files(is_root_compiland)
 
     def _log(self, msg: str) -> None:
         """Emit a diagnostic line to stderr when verbose mode is on."""
@@ -264,6 +278,11 @@ class CodegenBase:
         PROGRAM definition. This prevents multiple-definition collisions when
         linking a host program with one or more compiled library objects
         (checklist S4.1).
+
+        Not called for DEVICE compilands: device code has no host I/O, so these
+        host-stream globals would be dead `.extern .global` declarations in the
+        emitted PTX (followups.md item 2). The caller in __init__ gates this on
+        is_device_compiland.
         """
         text_type = FileType(NamedType('CHAR', None), structure='ASCII')
         for name in ('INPUT', 'OUTPUT'):

@@ -110,6 +110,20 @@ class TestDeviceMandelbrotPtxSubstitution(unittest.TestCase):
                 self.assertIn(sreg, blk)
             self.assertIn('st.global.u32', blk)
 
+    def test_no_phantom_input_output_externs(self):
+        # followups.md item 2: a DEVICE compiland has no host I/O, so the
+        # predeclared INPUT/OUTPUT host-stream globals must not appear in the
+        # device artifact.  They used to leak in as two dead module-level
+        # declarations -- the one purely cosmetic difference from the nvcc PTX.
+        ptx, ll = self._emit()
+        for name in ('input', 'output'):
+            self.assertNotRegex(
+                ptx, r'\.extern\s+\.global[^\n]*\b' + name + r'\b',
+                f'phantom `.extern .global ... {name}` leaked into device PTX')
+            self.assertNotRegex(
+                ll, r'@"?' + name + r'"?\s*=\s*[^\n]*\bglobal\b',
+                f'phantom @{name} host-stream global leaked into device IR')
+
 
 if __name__ == '__main__':
     unittest.main()

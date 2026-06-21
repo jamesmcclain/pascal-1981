@@ -128,6 +128,56 @@ class TestDeviceModuleNoHostExterns(unittest.TestCase):
         self.assertEqual(_present(ir), [], ir)
 
 
+def _io_globals(ir_text):
+    """Return the predeclared host-stream globals (input/output) that appear as
+    module-level global definitions/declarations in the IR.  Matches the
+    `@"input" = ... global ...` / `@"output" = ... global ...` shape only, so a
+    same-named local or parameter elsewhere would not be mistaken for a leak."""
+    found = []
+    for name in ('input', 'output'):
+        if re.search(r'@"?' + name + r'"?\s*=\s*[^\n]*\bglobal\b', ir_text):
+            found.append(name)
+    return found
+
+
+class TestDeviceNoPhantomInputOutput(unittest.TestCase):
+    """followups.md item 2: the predeclared INPUT/OUTPUT host-stream globals
+    must not be emitted in DEVICE compilands.  They are unreferenced there (a
+    device kernel has no host I/O) and used to leak two dead
+    `.extern .global ... input/output` lines into the device PTX."""
+
+    def test_device_module_has_no_input_output_globals(self):
+        for triple in _GPU_TRIPLES + ('x86_64-pc-linux-gnu',):
+            with self.subTest(triple=triple):
+                ir = _compile(_VADD_MODULE, device_triple=triple)
+                self.assertEqual(
+                    _io_globals(ir), [],
+                    f'phantom input/output globals leaked into {triple} device IR\n{ir}')
+
+    def test_device_unit_has_no_input_output_globals(self):
+        for triple in _GPU_TRIPLES + ('x86_64-pc-linux-gnu',):
+            with self.subTest(triple=triple):
+                ir = _compile_unit(_VADD_IFACE, _VADD_IMPL, module_name='VADD', device_triple=triple)
+                self.assertEqual(
+                    _io_globals(ir), [],
+                    f'phantom input/output globals leaked into {triple} device unit IR\n{ir}')
+
+    def test_host_program_still_defines_input_output(self):
+        # Regression guard: the host owner keeps the strong definitions (S4.1);
+        # the device suppression must not touch the host path.
+        ir = _compile("PROGRAM P;\nBEGIN\n WRITELN('hi');\nEND.\n")
+        self.assertEqual(_io_globals(ir), ['input', 'output'],
+                         f'host PROGRAM lost its input/output globals\n{ir}')
+
+    def test_host_module_still_declares_input_output(self):
+        # A plain host MODULE keeps the declare-only externals (linker resolves
+        # them to the PROGRAM root).  Only DEVICE compilands suppress them.
+        ir = _compile_unit("INTERFACE;\nUNIT U (go);\nPROCEDURE go;\nEND;\n",
+                           "(*$INCLUDE:'u'*)\nIMPLEMENTATION OF U;\nPROCEDURE go;\nBEGIN END;\n.\n")
+        self.assertEqual(_io_globals(ir), ['input', 'output'],
+                         f'host MODULE lost its input/output declarations\n{ir}')
+
+
 class TestLazyExternProperty(unittest.TestCase):
     """Lazy registration: externs appear IFF codegen references them."""
 
