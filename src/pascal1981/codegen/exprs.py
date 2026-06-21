@@ -14,7 +14,7 @@ from llvmlite.ir import IRBuilder
 
 from ..ast_nodes import *
 from ..builtins_registry import DEVICE_INDEX_BUILTIN_FUNCTIONS
-from ..type_system import (INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, WORD_TYPE)
+from ..type_system import (INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL32_TYPE, WORD_TYPE)
 from ..type_system import LStringType as ResolvedLStringType
 from ..type_system import StringType as ResolvedStringType
 from .base import CodegenError, _is_gpu_triple
@@ -33,6 +33,11 @@ class ExprsMixin:
                 return ir.Constant(ir.IntType(32), expr.value)
             return ir.Constant(ir.IntType(16), expr.value)
         elif isinstance(expr, RealLiteral):
+            # The type checker tags the literal REAL32 when it sits in a
+            # single-precision context (the C ``f``-suffix analog); otherwise
+            # it is a 64-bit REAL constant.
+            if getattr(expr, 'resolved_type', None) is REAL32_TYPE:
+                return ir.Constant(ir.FloatType(), expr.value)
             return ir.Constant(ir.DoubleType(), expr.value)
         elif isinstance(expr, CharLiteral):
             # Convert char to int
@@ -391,14 +396,36 @@ class ExprsMixin:
             if right.type.width < target.width:
                 right = self._extend_int_for_pascal_expr(right, target, expr.right)
 
-        # SLASH is always real division in Pascal (7/2 = 3.5), so force double
-        # even when both operands are integer-typed.
-        is_real = (isinstance(left.type, ir.DoubleType) or isinstance(right.type, ir.DoubleType) or expr.op == 'SLASH')
+        # SLASH is always real division in Pascal (7/2 = 3.5), so it forces a
+        # floating result even when both operands are integer-typed. Real
+        # operands may be REAL32 (float) or REAL (double); when both widths are
+        # present the operation widens to double, matching C's float-op-double.
+        _floats = (ir.FloatType, ir.DoubleType)
+        is_real = (isinstance(left.type, _floats) or isinstance(right.type, _floats) or expr.op == 'SLASH')
         if is_real:
-            if isinstance(left.type, ir.IntType):
-                left = self.builder.sitofp(left, ir.DoubleType())
-            if isinstance(right.type, ir.IntType):
-                right = self.builder.sitofp(right, ir.DoubleType())
+            # Choose the common floating width. A double anywhere wins; else a
+            # float operand keeps the op in float (REAL32 stays single
+            # precision, including float/float division); a bare SLASH on two
+            # integers has no float operand and divides as REAL (double),
+            # preserving the vintage `7/2 = 3.5` rule.
+            if isinstance(left.type, ir.DoubleType) or isinstance(right.type, ir.DoubleType):
+                common = ir.DoubleType()
+            elif isinstance(left.type, ir.FloatType) or isinstance(right.type, ir.FloatType):
+                common = ir.FloatType()
+            else:
+                common = ir.DoubleType()
+
+            def _to_common(v):
+                if isinstance(v.type, ir.IntType):
+                    return self.builder.sitofp(v, common)
+                if isinstance(v.type, ir.FloatType) and isinstance(common, ir.DoubleType):
+                    return self.builder.fpext(v, common)
+                if isinstance(v.type, ir.DoubleType) and isinstance(common, ir.FloatType):
+                    return self.builder.fptrunc(v, common)
+                return v
+
+            left = _to_common(left)
+            right = _to_common(right)
 
         if expr.op == 'PLUS':
             return self.builder.fadd(left, right) if is_real else self._mathck_arith('add', left, right, signed=not self._expr_is_unsigned_word(expr))
@@ -444,6 +471,8 @@ class ExprsMixin:
         if expr.op == 'MINUS':
             if isinstance(operand.type, ir.DoubleType):
                 return self.builder.fsub(ir.Constant(ir.DoubleType(), 0.0), operand)
+            if isinstance(operand.type, ir.FloatType):
+                return self.builder.fsub(ir.Constant(ir.FloatType(), 0.0), operand)
             return self.builder.neg(operand)
         elif expr.op == 'NOT':
             # Logical NOT: invert the boolean

@@ -151,9 +151,12 @@ PYTHONPATH=src python3 -m pascal1981.compile_to_ptx \
   --cpu sm_70
 ```
 
-The source file is a `DEVICE IMPLEMENTATION OF` whose sibling extensionless file
-contains the `DEVICE INTERFACE`.  Exported procedures in the device interface are
-lowered as PTX kernel entries.  For example:
+The source file is a `DEVICE IMPLEMENTATION OF` whose sibling interface file
+contains the `DEVICE INTERFACE`.  By convention in this repository the interface
+file carries a `.inc` extension (the compiler does not require it — interface
+resolution also accepts an extensionless sibling or a `.pas` file).  Exported
+procedures in the device interface are lowered as PTX kernel entries.  For
+example:
 
 ```pascal
 DEVICE INTERFACE;
@@ -238,6 +241,7 @@ This compiler implements the full IBM Pascal 2.0 language, including all semanti
 - `INTEGER32` / `INTEGER64` (opt-in extension types enabled with `-f wide-integers`; also enables `MAXINT32` and `MAXINT64`)
 - `BOOLEAN` (one byte; stored as `i8` so address-of / `sizeof` / fills are byte-consistent)
 - `REAL` (64-bit float; constants, division, unary minus, and mixed arithmetic are codegen-hardened, and the default `WRITE` format matches the manual's 14-wide exponential, e.g. `WRITE(123.456)` prints ` 1.2345600E+02`)
+- `REAL32` / `REAL64` (opt-in extension real types enabled with `-f wide-reals`; `REAL32` is a 32-bit float lowering to LLVM `float`, `REAL64` is a 64-bit synonym for `REAL`. Always available inside `DEVICE` code regardless of the flag — `REAL32` is what gives device kernels true `.f32` parameter ABI.)
 - `WORD` (16-bit unsigned)
 - `CHAR` (8-bit)
 - `ARRAY[low..high] OF type` — bounds may be constant expressions, including named `CONST`s

@@ -67,12 +67,12 @@ class TestDeviceSharedSyncthreadsIntegration(unittest.TestCase):
     def test_cpu_device_shared_staging_with_syncthreads_runs_serially(self):
         rc, out, err = build_and_run_pascal_project(
             files={
-                'sharedsync': _INTERFACE,
+                'sharedsync.inc': _INTERFACE,
                 'sharedsync.pas': _IMPLEMENTATION,
                 'main.pas': _MAIN,
             },
             compile_pairs=[
-                ('sharedsync', 'sharedsync-interface.ll'),
+                ('sharedsync.inc', 'sharedsync-interface.ll'),
                 ('sharedsync.pas', 'sharedsync.ll'),
                 ('main.pas', 'main.ll'),
             ],

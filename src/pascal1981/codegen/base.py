@@ -76,6 +76,8 @@ _SCALAR_SIZES = {
     'INTEGER32': 4,
     'INTEGER64': 8,
     'REAL': 8,
+    'REAL64': 8,
+    'REAL32': 4,
     'WORD': 2,
     'CHAR': 1,
     'BOOLEAN': 1,  # vintage Pascal BOOLEAN is one byte

@@ -80,12 +80,12 @@ class TestDeviceGridStrideIntegration(unittest.TestCase):
     def test_cpu_device_grid_stride_vector_add_covers_full_array(self):
         rc, out, err = build_and_run_pascal_project(
             files={
-                'vadd': _INTERFACE,
+                'vadd.inc': _INTERFACE,
                 'vadd.pas': _IMPLEMENTATION,
                 'main.pas': _MAIN,
             },
             compile_pairs=[
-                ('vadd', 'vadd-interface.ll'),
+                ('vadd.inc', 'vadd-interface.ll'),
                 ('vadd.pas', 'vadd.ll'),
                 ('main.pas', 'main.ll'),
             ],

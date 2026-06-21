@@ -1343,3 +1343,67 @@ class TestValueInitializers(unittest.TestCase):
         result = typecheck_source("PROGRAM P; TYPE NAME = PACKED ARRAY[1..10] OF CHAR; VAR s: NAME; VALUE s := 'Mr'; BEGIN END.")
         self.assertFalse(result.success)
         self.assertIn("Cannot initialize", " ".join(str(e) for e in result.errors))
+
+
+class TestWideReals(unittest.TestCase):
+    """REAL32 (32-bit float) and REAL64 (64-bit synonym for REAL) extension types.
+
+    Gated behind -f wide-reals in host code (always available in DEVICE code).
+    """
+
+    from pascal1981.features import resolve_features
+    _WR = resolve_features('vintage', ['wide-reals'])
+
+    def test_real32_real64_rejected_without_flag(self):
+        result = typecheck_source("PROGRAM P; VAR a: REAL32; BEGIN END.")
+        self.assertFalse(result.success)
+
+    def test_real32_real64_accepted_with_flag(self):
+        result = typecheck_source(
+            "PROGRAM P; VAR a: REAL32; b: REAL64; BEGIN a := 1.5; b := 2.5 END.",
+            features=self._WR)
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_integer_widens_into_real32(self):
+        # INTEGER-family -> REAL32 assignment is allowed (like INTEGER -> REAL).
+        result = typecheck_source(
+            "PROGRAM P; VAR a: REAL32; i: INTEGER; BEGIN i := 3; a := i END.",
+            features=self._WR)
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_real32_widens_into_real(self):
+        result = typecheck_source(
+            "PROGRAM P; VAR a: REAL32; r: REAL; BEGIN a := 1.0; r := a END.",
+            features=self._WR)
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_real_does_not_implicitly_narrow_to_real32(self):
+        # A REAL (double) variable may not be implicitly narrowed to REAL32.
+        result = typecheck_source(
+            "PROGRAM P; VAR a: REAL32; r: REAL; BEGIN r := 1.0; a := r END.",
+            features=self._WR)
+        self.assertFalse(result.success)
+
+    def test_real32_arithmetic_and_comparison(self):
+        result = typecheck_source(
+            "PROGRAM P; VAR a, b: REAL32; ok: BOOLEAN; "
+            "BEGIN a := 1.0; b := 2.0; a := a * b + 1; ok := (a * a) <= 4.0 END.",
+            features=self._WR)
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_real64_is_a_synonym_for_real(self):
+        # REAL64 and REAL are interchangeable.
+        result = typecheck_source(
+            "PROGRAM P; VAR a: REAL64; r: REAL; BEGIN a := 1.0; r := a; a := r END.",
+            features=self._WR)
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
+
+    def test_real32_available_in_device_code_without_flag(self):
+        # Inside DEVICE code REAL32/REAL64 are available with no feature flag.
+        iface = ("DEVICE INTERFACE;\nUNIT K (run);\n"
+                 "PROCEDURE run(o: ADS(GLOBAL) OF ARRAY [0..0] OF INTEGER32; s: REAL32);\nEND;\n")
+        impl = ("DEVICE IMPLEMENTATION OF K;\n"
+                "PROCEDURE run(o: ADS(GLOBAL) OF ARRAY [0..0] OF INTEGER32; s: REAL32);\n"
+                "VAR t: REAL32;\nBEGIN t := s * 2; o^[0] := THREADIDX_X END;\n.\n")
+        result = typecheck_module(iface_code=iface, impl_code=impl, module_name='K')
+        self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))

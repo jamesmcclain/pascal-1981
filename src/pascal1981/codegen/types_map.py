@@ -41,6 +41,10 @@ class TypesMapMixin:
                 return ir.IntType(8)
             elif type_expr.name == 'REAL':
                 return ir.DoubleType()
+            elif type_expr.name == 'REAL64':
+                return ir.DoubleType()
+            elif type_expr.name == 'REAL32':
+                return ir.FloatType()
             elif type_expr.name == 'ADRMEM':
                 return ir.PointerType(ir.IntType(8))  # pointer/address
             elif type_expr.name == 'ADSMEM':
@@ -75,6 +79,10 @@ class TypesMapMixin:
                 return ir.IntType(16)
             elif name_up == 'REAL':
                 return ir.DoubleType()
+            elif name_up == 'REAL64':
+                return ir.DoubleType()
+            elif name_up == 'REAL32':
+                return ir.FloatType()
             elif name_up == 'CHAR':
                 return ir.IntType(8)
             elif name_up == 'TEXT':
@@ -248,10 +256,18 @@ class TypesMapMixin:
                 return self.builder.trunc(value, target_type)
             elif vt.width < target_type.width:
                 return self.builder.zext(value, target_type)
-        if isinstance(target_type, ir.DoubleType) and isinstance(vt, ir.IntType):
+        _floats = (ir.FloatType, ir.DoubleType)
+        # Integer -> floating (REAL/REAL32): sitofp into the target float width.
+        if isinstance(target_type, _floats) and isinstance(vt, ir.IntType):
             return self.builder.sitofp(value, target_type)
-        if isinstance(target_type, ir.IntType) and isinstance(vt, ir.DoubleType):
+        # Floating -> integer: fptosi.
+        if isinstance(target_type, ir.IntType) and isinstance(vt, _floats):
             return self.builder.fptosi(value, target_type)
+        # Floating width adjustment: REAL32 (float) <-> REAL/REAL64 (double).
+        if isinstance(target_type, _floats) and isinstance(vt, _floats) and type(target_type) is not type(vt):
+            if isinstance(target_type, ir.DoubleType):
+                return self.builder.fpext(value, target_type)
+            return self.builder.fptrunc(value, target_type)
         return value
 
     def to_bool(self, cond: ir.Value) -> ir.Value:

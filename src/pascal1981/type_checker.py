@@ -34,7 +34,7 @@ from .ast_nodes import (TypeDecl, UnaryOp, UpperExpr, UseClause, ValueDecl, VarD
 from .builtins_registry import DEVICE_INDEX_BUILTIN_FUNCTIONS, DEVICE_SYNC_BUILTIN_PROCEDURES, register_builtins
 from .parser import parse_file
 from .symbol_table import SourceLocation, Symbol, SymbolTable
-from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, EnumType, FileType, FunctionType, LStringType,
+from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL32_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, EnumType, FileType, FunctionType, LStringType,
                           PointerType, ProcedureType, RecordType, SetType, StringType, Type, binary_op_result_type, can_assign, is_fixed_char_array, unary_op_result_type)
 
 
@@ -1570,8 +1570,9 @@ class PascalTypeChecker(TypeChecker):
         # ordinal by default and symbolic under -f symbolic-enum-io; BOOLEAN is
         # always name-based on output.
         wide = (type(INTEGER32_TYPE), type(INTEGER64_TYPE)) if self.feature_enabled('wide-integers') else ()
+        wide_real = (type(REAL32_TYPE),) if (self.feature_enabled('wide-reals') or self.in_device_module) else ()
         return isinstance(
-            t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), EnumType, StringType, LStringType) + wide) or is_fixed_char_array(t)
+            t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), EnumType, StringType, LStringType) + wide + wide_real) or is_fixed_char_array(t)
 
     def _is_readable_type(self, t: Type) -> bool:
         # READ remains narrower than WRITE: BOOLEAN input is unsupported, but
@@ -1992,7 +1993,12 @@ class PascalTypeChecker(TypeChecker):
             setattr(expr, 'resolved_type', resolved)
             return resolved
         elif isinstance(expr, RealLiteral):
-            return REAL_TYPE
+            # A real literal adopts a REAL32 context (the analog of a C ``f``
+            # suffix), so ``x := 0.0`` and ``x*x <= 4.0`` stay single-precision
+            # when x is REAL32. Otherwise it is REAL (f64).
+            resolved = REAL32_TYPE if context_type is REAL32_TYPE else REAL_TYPE
+            setattr(expr, 'resolved_type', resolved)
+            return resolved
         elif isinstance(expr, BoolLiteral):
             return BOOLEAN_TYPE
         elif isinstance(expr, CharLiteral):
@@ -2170,6 +2176,13 @@ class PascalTypeChecker(TypeChecker):
             literal_context = context_type if context_type in (INTEGER_TYPE, WORD_TYPE, INTEGER32_TYPE, INTEGER64_TYPE) else None
             left_context = literal_context if isinstance(expr.left, (IntLiteral, UnaryOp)) else None
             right_context = literal_context if isinstance(expr.right, (IntLiteral, UnaryOp)) else None
+            # A REAL32 result context flows into real-literal operands so that a
+            # nested literal (e.g. the 0.5 in ``a*0.5``) stays single-precision.
+            if context_type is REAL32_TYPE:
+                if isinstance(expr.left, RealLiteral):
+                    left_context = REAL32_TYPE
+                if isinstance(expr.right, RealLiteral):
+                    right_context = REAL32_TYPE
 
             # Empty set constructors are context-dependent. For binary set
             # operators/comparisons, infer the non-empty side first and use it
@@ -2183,6 +2196,14 @@ class PascalTypeChecker(TypeChecker):
             else:
                 left_type = self.infer_expression_type(expr.left, left_context)
                 right_type = self.infer_expression_type(expr.right, right_context)
+                # If exactly one side is REAL32 and the other is a bare real
+                # literal that defaulted to REAL, re-resolve the literal as
+                # REAL32 so e.g. ``r32 <= 4.0`` compares in single precision
+                # rather than promoting the REAL32 side to double.
+                if left_type is REAL32_TYPE and right_type is REAL_TYPE and isinstance(expr.right, RealLiteral):
+                    right_type = self.infer_expression_type(expr.right, REAL32_TYPE)
+                elif right_type is REAL32_TYPE and left_type is REAL_TYPE and isinstance(expr.left, RealLiteral):
+                    left_type = self.infer_expression_type(expr.left, REAL32_TYPE)
             if left_type and right_type:
                 result = binary_op_result_type(left_type, expr.op, right_type)
                 if result is None:
@@ -2618,6 +2639,11 @@ class PascalTypeChecker(TypeChecker):
                 return BOOLEAN_TYPE
             elif name == 'REAL':
                 return REAL_TYPE
+            elif name == 'REAL64' and (self.feature_enabled('wide-reals') or self.in_device_module):
+                # REAL64 is a 64-bit synonym for REAL.
+                return REAL_TYPE
+            elif name == 'REAL32' and (self.feature_enabled('wide-reals') or self.in_device_module):
+                return REAL32_TYPE
             elif name == 'WORD':
                 return WORD_TYPE
             elif name == 'CHAR':

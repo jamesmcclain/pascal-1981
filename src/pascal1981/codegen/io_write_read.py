@@ -143,12 +143,21 @@ class IoWriteReadMixin:
                 continue
 
             if isinstance(pas_ty, type(REAL_TYPE)) or str(val.type) in {'double', 'float'}:
+                def _to_printf_double(v):
+                    # printf's %E/%f variadic slot is a C double. Widen any
+                    # narrower real or integer correctly: f32 via fpext, an
+                    # integer via sitofp, a double passes through.
+                    if isinstance(v.type, ir.FloatType):
+                        return self.builder.fpext(v, ir.DoubleType())
+                    if isinstance(v.type, ir.IntType):
+                        return self.builder.sitofp(v, ir.DoubleType())
+                    return v
                 if width is None and precision is None:
                     fmt_parts.append('%14.7E')
-                    printf_args.append(self.builder.sitofp(val, ir.DoubleType()) if str(val.type) != 'double' else val)
+                    printf_args.append(_to_printf_double(val))
                 elif width is not None and precision is None:
                     fmt_parts.append('%*E')
-                    printf_args.extend([self.coerce_printf_int(self.codegen_expr(width)), self.builder.sitofp(val, ir.DoubleType()) if str(val.type) != 'double' else val])
+                    printf_args.extend([self.coerce_printf_int(self.codegen_expr(width)), _to_printf_double(val)])
                 else:
                     fmt_parts.append('%*.*f')
                     printf_args.extend([
@@ -156,7 +165,7 @@ class IoWriteReadMixin:
                         # (vintage D-002 output: '        123.46' for ::2).
                         self.coerce_printf_int(self.codegen_expr(width)) if width is not None else ir.Constant(ir.IntType(32), 14),
                         self.coerce_printf_int(self.codegen_expr(precision)) if precision is not None else ir.Constant(ir.IntType(32), 0),
-                        self.builder.sitofp(val, ir.DoubleType()) if str(val.type) != 'double' else val
+                        _to_printf_double(val)
                     ])
                 continue
 

@@ -74,31 +74,60 @@ them, including `device=x86` CPU-device lowering.
 
 ## Observed Mandelbrot external contract
 
-[OBSERVED] Prior inspection of `~/dixie-scratch-area/mandelbrot/mandelbrot.cu`
+[OBSERVED] Inspection of `mandelbrot.cu` (the companion mandelbrot-gpu repo)
 found CUDA C kernels named:
 
 ```c
-extern "C" __global__ void mandelbrot_f32(...)
-extern "C" __global__ void mandelbrot_f64(...)
+extern "C" __global__
+void mandelbrot_f32(int* output, int width, int height, int max_iter,
+                    float  x_min, float  x_max, float  y_min, float  y_max);
+extern "C" __global__
+void mandelbrot_f64(int* output, int width, int height, int max_iter,
+                    double x_min, double x_max, double y_min, double y_max);
 ```
 
-[OBSERVED] Prior inspection of `mandelbrot_cuda.py` found the PyCUDA pattern:
+[OBSERVED] Inspection of `mandelbrot_cuda.py` found the PyCUDA pattern:
 
 ```python
 mod = cuda.module_from_file("mandelbrot.ptx")
-kernel = mod.get_function("mandelbrot_f32")
-kernel(..., block=(16, 16, 1), grid=(blocks_x, blocks_y, 1))
+kernel = mod.get_function("mandelbrot_f32")   # or mandelbrot_f64
+kernel(output_gpu, np.int32(WIDTH), np.int32(HEIGHT), np.int32(max_iter),
+       real_dtype(x_min), real_dtype(x_max), real_dtype(y_min), real_dtype(y_max),
+       block=(16, 16, 1), grid=(blocks_x, blocks_y, 1))
 ```
 
 [OBSERVED] The CUDA kernels use two-dimensional CUDA indexing via `threadIdx.x/y`,
 `blockIdx.x/y`, and `blockDim.x/y`, write to an `int*` output buffer, and use
 width/height bounds checks.
 
-[UNVERIFIED] The exact current CUDA kernel parameter order and scalar types should
-be re-read from `mandelbrot.cu` immediately before implementing a Pascal
-replacement. The likely shape is an output pointer, image dimensions, coordinate
-bounds, and `max_iter`, but the exact ABI must be copied from the source, not
-from memory.
+[OBSERVED] **The exact ABI, re-read from source (correcting an earlier guess in
+this document).** PyCUDA packs arguments *positionally*, so the order and widths
+must match exactly:
+
+| # | name | C type | PTX param |
+| - | ---- | ------ | --------- |
+| 0 | `output` | `int*` | `.u64 .ptr .global` |
+| 1 | `width` | `int` | `.u32` |
+| 2 | `height` | `int` | `.u32` |
+| 3 | `max_iter` | `int` | `.u32` |
+| 4 | `x_min` | `float`/`double` | `.f32`/`.f64` |
+| 5 | `x_max` | `float`/`double` | `.f32`/`.f64` |
+| 6 | `y_min` | `float`/`double` | `.f32`/`.f64` |
+| 7 | `y_max` | `float`/`double` | `.f32`/`.f64` |
+
+Note `max_iter` is the **fourth** parameter and the four coordinate bounds come
+**last** — not the order this document originally sketched. The pixel-to-plane
+mapping in the CUDA source is also specific and must be copied for output parity:
+
+```c
+float width_denom  = (width  > 1) ? (float)(width  - 1) : 1.0f;
+float height_denom = (height > 1) ? (float)(height - 1) : 1.0f;
+float x0 = x_min + (x_max - x_min) * (float)px / width_denom;
+float y0 = y_min + (y_max - y_min) * (float)py / height_denom;
+```
+
+i.e. the denominator is `width-1`/`height-1` (guarded against the 1-pixel case),
+not `width`/`height`.
 
 ## What no-change substitution requires
 
@@ -115,12 +144,22 @@ site, the Pascal-generated PTX must match:
 7. Launch geometry assumptions: currently `block=(16,16,1)` and computed 2-D
    grid dimensions.
 
-[INFERRED] Symbol matching is likely low risk because exported Pascal device-unit
-procedures already lower to visible PTX entries using the exported procedure name.
+[OBSERVED] Symbol matching holds: exported Pascal device-unit procedures lower to
+`.visible .entry <name>` using the exported procedure name, so `get_function`
+resolves them.
 
-[INFERRED] Scalar-width matching is the major risk for `mandelbrot_f32`, because
-Pascal currently has `REAL` as a double-precision type, while true f32 ABI parity
-requires a 32-bit floating type such as `REAL32`.
+[OBSERVED] Scalar-width matching is resolved by `REAL32` (Stage 4): `mandelbrot_f32`
+parameters are `.f32` and `mandelbrot_f64` parameters are `.f64`.
+
+[OBSERVED] **The load-bearing fix: kernel entries must return void.** Every device
+`PROCEDURE` previously lowered to an `i32`-returning function (a harmless vintage
+internal convention), which on a GPU triple produced a PTX entry with a
+`func_retval0` slot and a `st.param.b32 [func_retval0]`. `cuLaunchKernel` provides
+no return slot, so that is an ABI mismatch — a kernel `__global__` must be `void`.
+Exported device-unit entries on a GPU triple now lower to `define ptx_kernel void`
+with no return slot (the x86 CPU-device parity path keeps the i32 shape, so it
+stays byte-identical). The existing codegen rule that a kernel entry must be a
+`PROCEDURE` (not a value-returning `FUNCTION`) remains, GPU-triple-gated.
 
 ## Super arrays and the output-buffer problem
 
@@ -248,83 +287,72 @@ This is a pragmatic split:
 
 ## Candidate Pascal Mandelbrot shape
 
-Target double-precision first:
+**Status: implemented.** A working DEVICE UNIT lives at
+`examples/device_ptx/mandelbrot/` (`mandelbrot.inc` interface + `mandelbrot.pas`
+implementation) and is exercised by
+`tests/integration/test_device_mandelbrot_ptx.py`. Both `mandelbrot_f32` and
+`mandelbrot_f64` are emitted, with the exact CUDA parameter ABI above, as
+void-returning `.visible .entry` kernels.
+
+The interface (note the parameter order matches the CUDA ABI table, and the f32
+kernel uses the new `REAL32` type so its parameters lower to `.f32`):
 
 ```pascal
+DEVICE INTERFACE;
+UNIT MANDELBROT (mandelbrot_f32, mandelbrot_f64);
+
 TYPE
   PIXELS = SUPER ARRAY [0..*] OF INTEGER32;
 
-DEVICE INTERFACE;
-UNIT MANDELBROT (mandelbrot_f64);
-
 PROCEDURE mandelbrot_f64(
-  outp: ADS(GLOBAL) OF PIXELS;
+  output: ADS(GLOBAL) OF PIXELS;
   width: INTEGER32;
   height: INTEGER32;
-  xmin: REAL;
-  xmax: REAL;
-  ymin: REAL;
-  ymax: REAL;
-  max_iter: INTEGER32
-);
-
+  max_iter: INTEGER32;
+  x_min: REAL64;
+  x_max: REAL64;
+  y_min: REAL64;
+  y_max: REAL64);
+{ ... and mandelbrot_f32 with REAL32 coordinate parameters ... }
 END;
 ```
 
-Implementation sketch:
+Implementation sketch (the f64 body; the f32 body is identical but typed REAL32,
+and uses an integer `2` in `2 * x * y` so the doubling stays single precision):
 
 ```pascal
-DEVICE IMPLEMENTATION OF MANDELBROT;
-
-PROCEDURE mandelbrot_f64(
-  outp: ADS(GLOBAL) OF PIXELS;
-  width: INTEGER32;
-  height: INTEGER32;
-  xmin: REAL;
-  xmax: REAL;
-  ymin: REAL;
-  ymax: REAL;
-  max_iter: INTEGER32
-);
+PROCEDURE mandelbrot_f64( {...same signature...} );
 VAR
-  px, py, idx: INTEGER32;
-  iter: INTEGER32;
-  x0, y0, x, y, xtemp, dx, dy: REAL;
+  px, py, idx, iteration: INTEGER32;
+  wd, hd, x0, y0, x, y, xtemp: REAL64;
 BEGIN
   px := THREADIDX_X + BLOCKIDX_X * BLOCKDIM_X;
   py := THREADIDX_Y + BLOCKIDX_Y * BLOCKDIM_Y;
-
   IF (px < width) AND (py < height) THEN
   BEGIN
-    idx := py * width + px;
-
-    dx := (xmax - xmin) / width;
-    dy := (ymax - ymin) / height;
-
-    x0 := xmin + px * dx;
-    y0 := ymin + py * dy;
-
-    x := 0.0;
-    y := 0.0;
-    iter := 0;
-
-    WHILE ((x * x + y * y) <= 4.0) AND (iter < max_iter) DO
+    IF width  > 1 THEN wd := width  - 1 ELSE wd := 1;   { (width-1) denom }
+    IF height > 1 THEN hd := height - 1 ELSE hd := 1;
+    x0 := x_min + (x_max - x_min) * px / wd;
+    y0 := y_min + (y_max - y_min) * py / hd;
+    x := 0.0; y := 0.0; iteration := 0;
+    WHILE ((x * x + y * y) <= 4.0) AND (iteration < max_iter) DO
     BEGIN
       xtemp := x * x - y * y + x0;
       y := 2.0 * x * y + y0;
       x := xtemp;
-      iter := iter + 1
+      iteration := iteration + 1
     END;
-
-    outp^[idx] := iter
+    idx := py * width + px;
+    output^[idx] := iteration
   END
 END;
 .
 ```
 
-[UNVERIFIED] This sketch may need syntax/coercion adjustments. In particular,
-`INTEGER32` to `REAL` conversion in DEVICE code must be tested, and explicit
-conversion syntax may be needed if mixed arithmetic does not currently lower.
+[OBSERVED] `INTEGER32` to `REAL`/`REAL32` conversion in DEVICE arithmetic works:
+the coordinate calculation lowers `(float)px`-style conversions automatically
+(`cvt.rn.f64.s32` / `cvt.rn.f32.s32` in PTX), so no explicit conversion syntax is
+needed.
 
 ## Recommended staged implementation plan
 
@@ -393,44 +421,36 @@ Minimum needed for Mandelbrot:
 - keep host/vintage behavior unchanged unless full super-array semantics are
   intentionally implemented.
 
-### Stage 3: prove `REAL` device arithmetic with f64 Mandelbrot
+### Stage 3: prove `REAL` device arithmetic with f64 Mandelbrot [DONE]
 
-Target `mandelbrot_f64` first, using Pascal `REAL`.
-
-Required artifact tests:
-
-- `REAL` parameters in a PTX kernel entry;
-- real add/sub/mul/div;
-- real comparison;
-- `WHILE` loop;
-- `INTEGER32` loop counter;
-- `INTEGER32` to `REAL` conversion or explicit conversion;
-- global `INTEGER32` store.
+`mandelbrot_f64` (Pascal `REAL64`/`REAL`) compiles to a void NVPTX `.visible
+.entry` with the CUDA-matching ABI; real add/sub/mul/div, real comparison, the
+`WHILE` loop, the `INTEGER32` loop counter, `INTEGER32`-to-`REAL` conversion, and
+the global `INTEGER32` store are all present and single-module.
 
 External launcher can either use an existing f64 path or make small changes to
 select `mandelbrot_f64` and pass `np.float64` values.
 
-### Stage 4: add `REAL32` for true f32 substitution
+### Stage 4: add `REAL32` for true f32 substitution [DONE]
 
-True no-change replacement for `mandelbrot_f32` likely requires a Pascal
-32-bit-float type:
+`REAL32` (LLVM `float`) and `REAL64` (a 64-bit synonym for `REAL`) now exist.
+In DEVICE code they are always available; in host code they are gated behind the
+`wide-reals` feature flag (parallel to `wide-integers`). Implemented:
 
-```pascal
-REAL32
-```
+- type registration and type checking (`Real32Type`; `REAL64` resolves to the
+  existing `REAL` singleton);
+- LLVM lowering of `REAL32` to `float`, `REAL64`/`REAL` to `double`;
+- real constants and coercions: integer-family widens into `REAL32`; `REAL32`
+  widens into `REAL` (C-like `float op double -> double`); a real literal adopts
+  a `REAL32` context (the `f`-suffix analog) so single-precision kernels stay in
+  f32; `REAL -> REAL32` is **not** implicit (no silent narrowing);
+- arithmetic and comparisons, including float/float division staying in float;
+- `REAL32` is writable (WRITE widens it to double for output);
+- PTX parameter ABI proven `.f32` for `mandelbrot_f32` and the kernel body proven
+  single-precision (no `.f64` ops leak in).
 
-Likely work:
-
-- type registration and type checking;
-- LLVM lowering to `float`;
-- real constants/coercions involving `REAL32`;
-- arithmetic and comparisons;
-- PTX parameter ABI tests proving `.f32`-style behavior;
-- conversion rules between `INTEGER32`, `REAL32`, and `REAL`.
-
-Until this exists, do not label a Pascal kernel `mandelbrot_f32` if its floating
-parameters are actually double-width. That would create an ABI mismatch with the
-existing PyCUDA call site.
+`mandelbrot_f32` is therefore labelled correctly: its floating parameters are
+genuinely 32-bit, so there is no ABI mismatch with the existing PyCUDA call site.
 
 ### Stage 5: no-change substitution attempt
 
@@ -461,25 +481,31 @@ Use increasingly strong evidence:
 
 | Gap | Basis | Notes |
 | --- | --- | --- |
-| Exact Mandelbrot ABI table | UNVERIFIED | Re-read CUDA/PyCUDA source before implementation. |
-| Super-array semantic/codegen model | OBSERVED/INFERRED | Parser/docs exist; long-form `NEW` for one-dimensional super-array pointers and string-bound intrinsics now work, but full dynamic-bound metadata / conformant-array semantics are still pending. |
-| Raw `ADS(GLOBAL) OF SUPER ARRAY` pointer ABI | INFERRED | Proposed for CUDA compatibility; not currently proven. |
-| 2-D buffer-store artifact test | INFERRED | Builtins exist; dedicated test still needed. |
-| DEVICE `REAL` arithmetic audit | UNVERIFIED | Host `REAL` exists; Mandelbrot-class device path needs tests. |
-| `INTEGER32` to `REAL` conversion | UNVERIFIED | Needed for coordinate calculation. |
-| `REAL32` | OBSERVED/INFERRED | Needed for true `mandelbrot_f32` ABI parity; not established now. |
-| External runtime execution | UNVERIFIED | Requires NVIDIA driver/device outside current VM. |
+| Exact Mandelbrot ABI table | OBSERVED | Re-read from `mandelbrot.cu` / `mandelbrot_cuda.py`; table recorded above. |
+| Kernel entries return void | OBSERVED | Fixed: exported device entries lower to `ptx_kernel void`, no `func_retval`. |
+| Super-array semantic/codegen model | OBSERVED/INFERRED | `ADS(GLOBAL) OF SUPER ARRAY` indexing works for the device pointer ABI; full dynamic-bound metadata / conformant-array semantics still pending. |
+| Raw `ADS(GLOBAL) OF SUPER ARRAY` pointer ABI | OBSERVED | Lowers to a raw `.u64 .ptr .global`; proven by the mandelbrot example. |
+| 2-D buffer-store artifact test | OBSERVED | `tests/integration/test_device_mandelbrot_ptx.py` asserts 2-D indexing + `st.global.u32`. |
+| DEVICE `REAL`/`REAL32` arithmetic | OBSERVED | Both kernels compile; f32 proven single-precision, f64 double. |
+| `INTEGER32` to `REAL`/`REAL32` conversion | OBSERVED | Lowers automatically (`cvt.rn.f{32,64}.s32`). |
+| `REAL32` | OBSERVED | Implemented (LLVM `float`); `mandelbrot_f32` params are `.f32`. |
+| External runtime execution | UNVERIFIED | Requires NVIDIA driver/device outside current VM (the `@requires_gpu` rung). |
 
 ## Recommendation
 
-[INFERRED] Use super arrays as the source-level spelling for open device buffers,
-but initially lower `ADS(GLOBAL) OF SUPER ARRAY` in DEVICE kernel parameters as a
-raw pointer to preserve CUDA/PyCUDA ABI compatibility. The remaining gap is
-metadata-aware conformant-array behavior, not basic super-array support.
+[OBSERVED] Super arrays are the source-level spelling for open device buffers, and
+`ADS(GLOBAL) OF SUPER ARRAY` in DEVICE kernel parameters lowers as a raw pointer,
+preserving CUDA/PyCUDA ABI compatibility. The remaining gap is metadata-aware
+conformant-array behavior (`UPPER` on a super-array parameter), not basic
+super-array support.
 
-[INFERRED] Target `mandelbrot_f64` first, because Pascal `REAL` already maps to a
-double-precision concept and the CUDA example has an f64 kernel. This avoids
-forcing `REAL32` design before the rest of the PTX substitution path is proven.
+[OBSERVED] Both `mandelbrot_f64` (Pascal `REAL64`) and `mandelbrot_f32` (Pascal
+`REAL32`) now emit ABI-correct, void-returning PTX entries from the example at
+`examples/device_ptx/mandelbrot/`.
 
-[INFERRED] After f64 runtime proof, add `REAL32` and pursue true no-change
-`mandelbrot_f32` substitution.
+[PRESCRIBED] The remaining work is the last rung of the validation ladder:
+`ptxas`-accept the emitted `mandelbrot.ptx`, load it with the existing PyCUDA
+launcher, run both kernels on a real device, and diff the output against the
+CUDA-built reference. This needs an NVIDIA driver/device (the §8 container in
+`cuda-kernel-prescription.md`) and is out of reach in the current VM. The Pascal
+side of the substitution is complete.

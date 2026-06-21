@@ -24,7 +24,7 @@ has an NVPTX backend.
 ## Files
 
 ```text
-fill       # DEVICE INTERFACE; declares the exported kernel entry
+fill.inc   # DEVICE INTERFACE; declares the exported kernel entry
 fill.pas   # DEVICE IMPLEMENTATION OF FILL; contains the kernel body
 README.md  # this document
 RUNNING_PTX.md  # detailed external-launch test plan

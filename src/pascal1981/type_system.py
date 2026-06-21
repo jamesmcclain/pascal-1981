@@ -65,13 +65,33 @@ class BooleanType(Type):
 
 
 class RealType(Type):
-    """The REAL type (floating point)."""
+    """The REAL type (64-bit floating point).
+
+    ``REAL64`` is an accepted spelling of this same type (a synonym), so there
+    is no separate Real64Type: REAL64 resolves to this singleton.
+    """
 
     def __str__(self) -> str:
         return "REAL"
 
     def equivalent_to(self, other: Type) -> bool:
         return isinstance(other, RealType)
+
+
+class Real32Type(Type):
+    """The REAL32 extension type (32-bit floating point, LLVM ``float``).
+
+    Distinct from ``REAL``/``REAL64`` (64-bit). REAL32 is the single-precision
+    type needed for true ``mandelbrot_f32``-style device kernels whose PTX
+    parameters must be ``.f32``. Mixed REAL32/REAL arithmetic widens to REAL,
+    matching the C rule that ``float op double`` promotes to ``double``.
+    """
+
+    def __str__(self) -> str:
+        return "REAL32"
+
+    def equivalent_to(self, other: Type) -> bool:
+        return isinstance(other, Real32Type)
 
 
 class WordType(Type):
@@ -332,6 +352,7 @@ INTEGER32_TYPE = Integer32Type()
 INTEGER64_TYPE = Integer64Type()
 BOOLEAN_TYPE = BooleanType()
 REAL_TYPE = RealType()
+REAL32_TYPE = Real32Type()
 WORD_TYPE = WordType()
 CHAR_TYPE = CharType()
 
@@ -365,6 +386,14 @@ def can_assign(from_type: Type, to_type: Type) -> bool:
     if from_type.equivalent_to(to_type):
         return True
     if isinstance(from_type, IntegerType) and isinstance(to_type, RealType):
+        return True
+    # Integer family widens into REAL32 (single-precision), mirroring the
+    # INTEGER->REAL widening above. REAL32 in turn widens into REAL (f32->f64),
+    # but the reverse (REAL->REAL32) is a narrowing and is NOT implicit; write
+    # REAL32 literals/values in a REAL32 context instead.
+    if isinstance(from_type, (IntegerType, Integer32Type, Integer64Type, WordType)) and isinstance(to_type, Real32Type):
+        return True
+    if isinstance(from_type, Real32Type) and isinstance(to_type, RealType):
         return True
     if isinstance(from_type, IntegerType) and isinstance(to_type, WordType):
         return True
@@ -434,6 +463,25 @@ def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optiona
             return BOOLEAN_TYPE
         if op in ('EQ', 'NEQ'):
             return BOOLEAN_TYPE
+
+    # REAL32 (single-precision) arithmetic and mixing.
+    #   REAL32 op REAL32        -> REAL32
+    #   REAL32 op {int family}  -> REAL32   (the integer widens to f32)
+    #   REAL32 op REAL/REAL64   -> REAL     (f32 widens to f64, C-like)
+    REAL_ARITH = ('PLUS', 'MINUS', 'MUL', 'SLASH')
+    if isinstance(left_type, Real32Type) or isinstance(right_type, Real32Type):
+        other_ok_int = (IntegerType, Integer32Type, Integer64Type, WordType)
+        l_is32, r_is32 = isinstance(left_type, Real32Type), isinstance(right_type, Real32Type)
+        l_is64, r_is64 = isinstance(left_type, RealType), isinstance(right_type, RealType)
+        l_int, r_int = isinstance(left_type, other_ok_int), isinstance(right_type, other_ok_int)
+        # Determine if this is a valid REAL32-involving real operation.
+        both_real_ish = (l_is32 or l_is64 or l_int) and (r_is32 or r_is64 or r_int)
+        if both_real_ish:
+            widen_to_64 = l_is64 or r_is64
+            if op in REAL_ARITH:
+                return REAL_TYPE if widen_to_64 else REAL32_TYPE
+            if op in COMPARE:
+                return BOOLEAN_TYPE
 
     # Real arithmetic
     if isinstance(left_type, RealType) and isinstance(right_type, RealType):
@@ -517,6 +565,8 @@ def unary_op_result_type(operand_type: Type, op: str) -> Optional[Type]:
             return operand_type
         if isinstance(operand_type, RealType):
             return REAL_TYPE
+        if isinstance(operand_type, Real32Type):
+            return REAL32_TYPE
         if isinstance(operand_type, WordType):
             return WORD_TYPE
 

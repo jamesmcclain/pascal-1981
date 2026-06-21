@@ -138,10 +138,17 @@ class StmtsMixin:
                     value = self.builder.trunc(value, target_type)
                 elif target_type.width > value.type.width:
                     value = self._extend_int_for_pascal_expr(value, target_type, stmt.expr)
-            elif isinstance(target_type, ir.DoubleType) and isinstance(value.type, ir.IntType):
+            elif isinstance(target_type, (ir.FloatType, ir.DoubleType)) and isinstance(value.type, ir.IntType):
                 value = self.builder.sitofp(value, target_type)
-            elif isinstance(target_type, ir.IntType) and isinstance(value.type, ir.DoubleType):
+            elif isinstance(target_type, ir.IntType) and isinstance(value.type, (ir.FloatType, ir.DoubleType)):
                 value = self.builder.fptosi(value, target_type)
+            elif isinstance(target_type, ir.DoubleType) and isinstance(value.type, ir.FloatType):
+                # REAL32 value into a REAL slot: widen f32 -> f64.
+                value = self.builder.fpext(value, target_type)
+            elif isinstance(target_type, ir.FloatType) and isinstance(value.type, ir.DoubleType):
+                # REAL value into a REAL32 slot: narrow f64 -> f32 (e.g. a bare
+                # ``0.0`` literal stored into a REAL32 variable).
+                value = self.builder.fptrunc(value, target_type)
             elif isinstance(target_type, ir.PointerType) and isinstance(value.type, ir.PointerType):
                 if isinstance(stmt.expr, NilLiteral):
                     value = ir.Constant(target_type, None)
@@ -508,7 +515,11 @@ class StmtsMixin:
 
     def codegen_return_stmt(self, stmt: ReturnStmt) -> None:
         """Codegen for RETURN statement."""
-        self.builder.ret(ir.Constant(ir.IntType(32), 0))
+        ret_t = self.current_function.function_type.return_type
+        if isinstance(ret_t, ir.VoidType):
+            self.builder.ret_void()
+        else:
+            self.builder.ret(ir.Constant(ir.IntType(32), 0))
 
     def codegen_break_stmt(self, stmt: BreakStmt) -> None:
         ctx = self.resolve_loop_context(stmt.label)
