@@ -31,10 +31,10 @@ from .ast_nodes import SetType as ASTSetType
 from .ast_nodes import SizeofExpr, Statement, StringLiteral
 from .ast_nodes import SubrangeType as ASTSubrangeType
 from .ast_nodes import (TypeDecl, UnaryOp, UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt, WriteArg)
-from .builtins_registry import register_builtins
+from .builtins_registry import DEVICE_INDEX_BUILTIN_FUNCTIONS, DEVICE_SYNC_BUILTIN_PROCEDURES, register_builtins
 from .parser import parse_file
 from .symbol_table import SourceLocation, Symbol, SymbolTable
-from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, EnumType, FileType, FunctionType, LStringType,
+from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL32_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, EnumType, FileType, FunctionType, LStringType,
                           PointerType, ProcedureType, RecordType, SetType, StringType, Type, binary_op_result_type, can_assign, is_fixed_char_array, unary_op_result_type)
 
 
@@ -786,6 +786,7 @@ class PascalTypeChecker(TypeChecker):
 
             # Create symbol
             symbol = Symbol(name=name, type=var_type, kind='var', location=self.get_node_location(decl), is_mutable=not readonly, space=residence)
+            setattr(symbol, 'type_expr', decl.type_expr)
             self.symbol_table.define(name, symbol)
 
     def check_const_decl(self, decl: ConstDecl) -> None:
@@ -871,7 +872,9 @@ class PascalTypeChecker(TypeChecker):
             for member in resolved_type.members:
                 self.symbol_table.define(member, Symbol(name=member, type=resolved_type, kind='const', location=self.get_node_location(decl), is_mutable=False))
 
-        self.symbol_table.define(decl.name, Symbol(name=decl.name, type=resolved_type, kind='type', location=self.get_node_location(decl), is_mutable=False))
+        symbol = Symbol(name=decl.name, type=resolved_type, kind='type', location=self.get_node_location(decl), is_mutable=False)
+        setattr(symbol, 'type_expr', decl.type_expr)
+        self.symbol_table.define(decl.name, symbol)
 
     def check_func_decl(self, decl: FuncDecl) -> None:
         """Type check a function declaration."""
@@ -1269,6 +1272,15 @@ class PascalTypeChecker(TypeChecker):
         is_builtin = sym is None or getattr(sym, 'is_builtin', False)
 
         if is_builtin:
+            if lookup_name in DEVICE_SYNC_BUILTIN_PROCEDURES:
+                argc = len(stmt.args) if stmt.args else 0
+                if not self.in_device_module:
+                    self.error(f"{lookup_name} is only available in DEVICE code", stmt)
+                    return
+                if argc != 0:
+                    self.error(f"Procedure '{lookup_name}' expects 0 arguments, got {argc}", stmt)
+                    return
+                return
             if lookup_name == 'PACK':
                 self._check_pack_args(stmt)
                 return
@@ -1558,8 +1570,9 @@ class PascalTypeChecker(TypeChecker):
         # ordinal by default and symbolic under -f symbolic-enum-io; BOOLEAN is
         # always name-based on output.
         wide = (type(INTEGER32_TYPE), type(INTEGER64_TYPE)) if self.feature_enabled('wide-integers') else ()
+        wide_real = (type(REAL32_TYPE),) if (self.feature_enabled('wide-reals') or self.in_device_module) else ()
         return isinstance(
-            t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), EnumType, StringType, LStringType) + wide) or is_fixed_char_array(t)
+            t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), EnumType, StringType, LStringType) + wide + wide_real) or is_fixed_char_array(t)
 
     def _is_readable_type(self, t: Type) -> bool:
         # READ remains narrower than WRITE: BOOLEAN input is unsupported, but
@@ -1855,10 +1868,26 @@ class PascalTypeChecker(TypeChecker):
             self.error("POSITN: second argument must be STRING or LSTRING", stmt)
             return
 
+    def _resolve_ast_type_alias(self, type_expr):
+        seen = set()
+        while isinstance(type_expr, NamedType):
+            key = type_expr.name.upper()
+            sym = self.symbol_table.lookup(type_expr.name) or self.symbol_table.lookup(key)
+            aliased = getattr(sym, 'type_expr', None) if sym and sym.kind == 'type' else None
+            if aliased is None or key in seen:
+                break
+            seen.add(key)
+            type_expr = aliased
+        return type_expr
+
+    def _is_super_array_type_expr(self, type_expr) -> bool:
+        type_expr = self._resolve_ast_type_alias(type_expr)
+        return isinstance(type_expr, ASTArrayType) and bool(getattr(type_expr, 'super', False))
+
     def _check_new_args(self, stmt: ProcCallStmt) -> None:
-        """Type check NEW(VAR P: ^T)."""
-        if len(stmt.args) != 1:
-            self.error(f"NEW expects 1 argument, got {len(stmt.args)}", stmt)
+        """Type check NEW(VAR P: ^T) and long-form NEW for super arrays."""
+        if len(stmt.args) < 1:
+            self.error(f"NEW expects at least 1 argument, got {len(stmt.args)}", stmt)
             return
         arg = stmt.args[0]
         if not isinstance(arg, (Identifier, Designator)):
@@ -1873,6 +1902,29 @@ class PascalTypeChecker(TypeChecker):
             return
         if not sym.is_mutable:
             self.error("NEW: argument must be mutable (VAR parameter)", stmt)
+            return
+
+        type_expr = getattr(sym, 'type_expr', None)
+        ptr_expr = self._resolve_ast_type_alias(type_expr)
+        pointee_expr = ptr_expr.base if isinstance(ptr_expr, ASTPointerType) else None
+        is_super_array = self._is_super_array_type_expr(pointee_expr) if pointee_expr is not None else False
+
+        if len(stmt.args) == 1:
+            if is_super_array:
+                self.error("NEW: super array allocation requires upper bound arguments", stmt)
+            return
+
+        if not is_super_array:
+            self.error(f"NEW expects 1 argument, got {len(stmt.args)}", stmt)
+            return
+
+        # Current implementation supports the observed one-dimensional SUPER ARRAY form.
+        if len(stmt.args) != 2:
+            self.error(f"NEW: super array allocation expects 1 upper bound, got {len(stmt.args) - 1}", stmt)
+            return
+        bound_type = self.infer_expression_type(stmt.args[1], INTEGER_TYPE)
+        if bound_type and not can_assign(bound_type, INTEGER_TYPE):
+            self.error(f"NEW: super array upper bound must be INTEGER, got {bound_type}", stmt)
             return
 
     def _check_dispose_args(self, stmt: ProcCallStmt) -> None:
@@ -1941,7 +1993,12 @@ class PascalTypeChecker(TypeChecker):
             setattr(expr, 'resolved_type', resolved)
             return resolved
         elif isinstance(expr, RealLiteral):
-            return REAL_TYPE
+            # A real literal adopts a REAL32 context (the analog of a C ``f``
+            # suffix), so ``x := 0.0`` and ``x*x <= 4.0`` stay single-precision
+            # when x is REAL32. Otherwise it is REAL (f64).
+            resolved = REAL32_TYPE if context_type is REAL32_TYPE else REAL_TYPE
+            setattr(expr, 'resolved_type', resolved)
+            return resolved
         elif isinstance(expr, BoolLiteral):
             return BOOLEAN_TYPE
         elif isinstance(expr, CharLiteral):
@@ -2028,7 +2085,7 @@ class PascalTypeChecker(TypeChecker):
                 self.error(f"Undefined variable: {expr.name}", expr)
                 return None
             ty = sym.type
-            if isinstance(ty, ArrayType):
+            if isinstance(ty, (ArrayType, StringType, LStringType)):
                 return INTEGER_TYPE
             self.error(f"Function '{type(expr).__name__[:-4].upper()}' expects an array variable", expr)
             return None
@@ -2059,7 +2116,7 @@ class PascalTypeChecker(TypeChecker):
                         if selector.index_or_field:
                             index_type = self.infer_expression_type(selector.index_or_field)
                             expected = current_type.effective_index_type
-                            if index_type and not index_type.equivalent_to(expected):
+                            if index_type and not self._valid_array_index_type(index_type, expected):
                                 self.error(f"Array index must be {expected}, got {index_type}", expr)
                         current_type = current_type.element_type
                     elif selector.kind == 'FIELD':
@@ -2102,10 +2159,16 @@ class PascalTypeChecker(TypeChecker):
                         current_type = current_type.target_type
             return current_type
         elif isinstance(expr, Identifier):
+            lookup_name = expr.name.upper()
             sym = self.symbol_table.lookup(expr.name)
             if not sym:
                 self.error(f"Undefined variable: {expr.name}", expr)
                 return None
+            if lookup_name in DEVICE_INDEX_BUILTIN_FUNCTIONS:
+                if not self.in_device_module:
+                    self.error(f"{lookup_name} is only available in DEVICE code", expr)
+                    return None
+                return INTEGER32_TYPE
             if isinstance(sym.type, FunctionType) and not sym.type.params:
                 return sym.type.return_type
             return sym.type
@@ -2113,6 +2176,13 @@ class PascalTypeChecker(TypeChecker):
             literal_context = context_type if context_type in (INTEGER_TYPE, WORD_TYPE, INTEGER32_TYPE, INTEGER64_TYPE) else None
             left_context = literal_context if isinstance(expr.left, (IntLiteral, UnaryOp)) else None
             right_context = literal_context if isinstance(expr.right, (IntLiteral, UnaryOp)) else None
+            # A REAL32 result context flows into real-literal operands so that a
+            # nested literal (e.g. the 0.5 in ``a*0.5``) stays single-precision.
+            if context_type is REAL32_TYPE:
+                if isinstance(expr.left, RealLiteral):
+                    left_context = REAL32_TYPE
+                if isinstance(expr.right, RealLiteral):
+                    right_context = REAL32_TYPE
 
             # Empty set constructors are context-dependent. For binary set
             # operators/comparisons, infer the non-empty side first and use it
@@ -2126,6 +2196,14 @@ class PascalTypeChecker(TypeChecker):
             else:
                 left_type = self.infer_expression_type(expr.left, left_context)
                 right_type = self.infer_expression_type(expr.right, right_context)
+                # If exactly one side is REAL32 and the other is a bare real
+                # literal that defaulted to REAL, re-resolve the literal as
+                # REAL32 so e.g. ``r32 <= 4.0`` compares in single precision
+                # rather than promoting the REAL32 side to double.
+                if left_type is REAL32_TYPE and right_type is REAL_TYPE and isinstance(expr.right, RealLiteral):
+                    right_type = self.infer_expression_type(expr.right, REAL32_TYPE)
+                elif right_type is REAL32_TYPE and left_type is REAL_TYPE and isinstance(expr.left, RealLiteral):
+                    left_type = self.infer_expression_type(expr.left, REAL32_TYPE)
             if left_type and right_type:
                 result = binary_op_result_type(left_type, expr.op, right_type)
                 if result is None:
@@ -2171,6 +2249,15 @@ class PascalTypeChecker(TypeChecker):
                     return sym.type.return_type
                 return None
 
+            if lookup_name in DEVICE_INDEX_BUILTIN_FUNCTIONS:
+                argc = len(expr.args) if expr.args else 0
+                if not self.in_device_module:
+                    self.error(f"{lookup_name} is only available in DEVICE code", expr)
+                    return None
+                if argc != 0:
+                    self.error(f"Function '{lookup_name}' expects 0 arguments, got {argc}", expr)
+                    return None
+                return INTEGER32_TYPE
             if lookup_name in {'EOF', 'EOLN'}:
                 argc = len(expr.args) if expr.args else 0
                 if argc > 1:
@@ -2407,6 +2494,18 @@ class PascalTypeChecker(TypeChecker):
             return None
         return SetConstructor([sel.index_or_field for sel in designator.selectors], designator.name)
 
+    def _valid_array_index_type(self, index_type: Optional[Type], expected: Type) -> bool:
+        """Return whether ``index_type`` is valid for an array selector.
+
+        DEVICE code uses INTEGER32 thread/block indices.  Permit those as array
+        indices in DEVICE source while preserving vintage host behaviour.
+        """
+        if index_type is None:
+            return False
+        if index_type.equivalent_to(expected):
+            return True
+        return self.in_device_module and index_type.equivalent_to(INTEGER32_TYPE) and expected.equivalent_to(INTEGER_TYPE)
+
     def infer_designator_type(self, designator: Designator) -> Optional[Type]:
         """Infer the type of a designator (with selectors for array/record access)."""
         typed_set = self._designator_as_typed_set_constructor(designator)
@@ -2440,7 +2539,7 @@ class PascalTypeChecker(TypeChecker):
                     if selector.index_or_field:
                         index_type = self.infer_expression_type(selector.index_or_field)
                         expected = current_type.effective_index_type
-                        if index_type and not index_type.equivalent_to(expected):
+                        if index_type and not self._valid_array_index_type(index_type, expected):
                             self.error(f"Array index must be {expected}, got {index_type}", designator)
                     current_type = current_type.element_type
 
@@ -2532,7 +2631,7 @@ class PascalTypeChecker(TypeChecker):
             name = type_expr.name.upper()
             if name == 'INTEGER':
                 return INTEGER_TYPE
-            elif name == 'INTEGER32' and self.feature_enabled('wide-integers'):
+            elif name == 'INTEGER32' and (self.feature_enabled('wide-integers') or self.in_device_module):
                 return INTEGER32_TYPE
             elif name == 'INTEGER64' and self.feature_enabled('wide-integers'):
                 return INTEGER64_TYPE
@@ -2540,6 +2639,11 @@ class PascalTypeChecker(TypeChecker):
                 return BOOLEAN_TYPE
             elif name == 'REAL':
                 return REAL_TYPE
+            elif name == 'REAL64' and (self.feature_enabled('wide-reals') or self.in_device_module):
+                # REAL64 is a 64-bit synonym for REAL.
+                return REAL_TYPE
+            elif name == 'REAL32' and (self.feature_enabled('wide-reals') or self.in_device_module):
+                return REAL32_TYPE
             elif name == 'WORD':
                 return WORD_TYPE
             elif name == 'CHAR':

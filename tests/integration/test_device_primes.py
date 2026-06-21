@@ -95,12 +95,12 @@ class TestDevicePrimesIntegration(unittest.TestCase):
     def test_device_unit_primes_builds_and_runs_via_uses(self):
         rc, out, err = build_and_run_pascal_project(
             files={
-                'kernel': _INTERFACE,
+                'kernel.inc': _INTERFACE,
                 'kernel.pas': _IMPLEMENTATION,
                 'main.pas': _MAIN,
             },
             compile_pairs=[
-                ('kernel', 'kernel-interface.ll'),
+                ('kernel.inc', 'kernel-interface.ll'),
                 ('kernel.pas', 'kernel.ll'),
                 ('main.pas', 'main.ll'),
             ],

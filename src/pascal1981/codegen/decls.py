@@ -452,6 +452,18 @@ class DeclsMixin:
             return bool(space_ord)  # 0 (HOST) -> not passable; GLOBAL/CONSTANT/... -> ok
         return True  # value scalar / array / record
 
+    def _is_kernel_entry(self, decl: Union[ProcDecl, FuncDecl]) -> bool:
+        """True when `decl` lowers to a real launchable GPU `.entry`.
+
+        Matches the gate in `_apply_kernel_entry`: a device compiland, a GPU
+        device triple, and a routine the interface exports. On x86 (CPU-device)
+        this is False, so the serial parity path keeps the vintage
+        i32-returning procedure shape byte-identical.
+        """
+        return (self.is_device_module and _is_gpu_triple(self.device_triple)
+                and getattr(decl, 'is_exported_entry', False)
+                and isinstance(decl, ProcDecl))
+
     def _apply_kernel_entry(self, decl: Union[ProcDecl, FuncDecl], func: ir.Function) -> None:
         """Make an exported device routine a launchable kernel entry
         (checklist S2.3.1-S2.3.3).
@@ -497,7 +509,13 @@ class DeclsMixin:
             for _ in param.names:
                 param_types.append(param_type)
                 flat_modes.append(param.mode)
-        func_type = ir.FunctionType(ir.IntType(32), param_types)
+        # A launchable GPU kernel entry must return void: the host launcher
+        # (cuLaunchKernel) provides no return slot, so an i32-returning entry is
+        # an ABI mismatch. Everywhere else, procedures keep the vintage
+        # i32-returning shape (a harmless internal convention).
+        kernel_entry = self._is_kernel_entry(decl)
+        ret_ll = ir.VoidType() if kernel_entry else ir.IntType(32)
+        func_type = ir.FunctionType(ret_ll, param_types)
 
         attrs = {attr.name.upper() for attr in getattr(decl, 'attributes', [])}
         existing = self.scope.lookup(decl.name)
@@ -552,7 +570,10 @@ class DeclsMixin:
 
         # Default return
         if not self.builder.block.is_terminated:
-            self.builder.ret(ir.Constant(ir.IntType(32), 0))
+            if isinstance(ret_ll, ir.VoidType):
+                self.builder.ret_void()
+            else:
+                self.builder.ret(ir.Constant(ir.IntType(32), 0))
 
         # Restore context
         self.builder = prev_builder
@@ -612,7 +633,7 @@ class DeclsMixin:
         # Allocate space for return value
         return_alloca = self.builder.alloca(return_type, name='return_value')
         self.scope.define(decl.name, return_alloca, decl.return_type)
-        self.builder.store(ir.Constant(return_type, 0.0) if isinstance(return_type, ir.DoubleType) else ir.Constant(return_type, 0), return_alloca)
+        self.builder.store(ir.Constant(return_type, 0.0) if isinstance(return_type, (ir.FloatType, ir.DoubleType)) else ir.Constant(return_type, 0), return_alloca)
 
         # Codegen body
         for inner_decl in decl.body.decls:

@@ -20,27 +20,14 @@ class RuntimeBuiltinsMixin:
     """Mixin for runtime_builtins functionality."""
 
     def memcpy_func(self) -> ir.Function:
-        for func in self.module.functions:
-            if func.name == 'memcpy':
-                return func
-        memcpy_type = ir.FunctionType(ir.PointerType(ir.IntType(8)), [ir.PointerType(ir.IntType(8)), ir.PointerType(ir.IntType(8)), ir.IntType(64)])
-        return ir.Function(self.module, memcpy_type, name='memcpy')
+        return self.runtime_extern('memcpy')
 
     def memset_func(self) -> ir.Function:
-        for func in self.module.functions:
-            if func.name == 'memset':
-                return func
-        memset_type = ir.FunctionType(ir.PointerType(ir.IntType(8)), [ir.PointerType(ir.IntType(8)), ir.IntType(32), ir.IntType(64)])
-        return ir.Function(self.module, memset_type, name='memset')
+        return self.runtime_extern('memset')
 
     def runtime_error_func(self) -> ir.Function:
         """Declare or fetch a runtime error handler (calls abort)."""
-        for func in self.module.functions:
-            if func.name == 'abort':
-                return func
-        # abort() takes no arguments and returns never (noreturn), but we declare void
-        abort_type = ir.FunctionType(ir.VoidType(), [])
-        return ir.Function(self.module, abort_type, name='abort')
+        return self.runtime_extern('abort')
 
     def emit_runtime_abort(self) -> None:
         """Flush host stdio, then call the runtime error handler.
@@ -49,22 +36,19 @@ class RuntimeBuiltinsMixin:
         modern backend uses libc abort() for generated runtime checks, so flush
         all C streams first to avoid losing buffered stdout on captured runs.
         """
-        fflush_type = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer()])
-        fflush = self.module.globals.get('fflush')
-        if fflush is None:
-            fflush = ir.Function(self.module, fflush_type, name='fflush')
+        fflush = self.runtime_extern('fflush')
         self.builder.call(fflush, [ir.Constant(ir.IntType(8).as_pointer(), None)])
         self.builder.call(self.runtime_error_func(), [])
 
     def pascal_abort_func(self) -> ir.Function:
         """Declare or fetch the ABORT runtime: void pabort(i8* msg, i32 len, i16 code, i16 status)."""
-        for func in self.module.functions:
-            if func.name == 'pabort':
-                return func
-        fn_type = ir.FunctionType(ir.VoidType(), [ir.PointerType(ir.IntType(8)), ir.IntType(32), ir.IntType(16), ir.IntType(16)])
-        fn = ir.Function(self.module, fn_type, name='pabort')
-        fn.linkage = 'external'
-        return fn
+        return self.runtime_extern('pabort')
+
+    def builtin_fillc(self, args: List[Expression]) -> None:
+        self._runtime_fillmove('FILLC', args)
+
+    def builtin_fillsc(self, args: List[Expression]) -> None:
+        self._runtime_fillmove('FILLSC', args)
 
     def builtin_movel(self, args: List[Expression]) -> None:
         self._runtime_fillmove('MOVEL', args)
@@ -79,8 +63,8 @@ class RuntimeBuiltinsMixin:
         self._runtime_fillmove('MOVESR', args)
 
     def builtin_new(self, args: List[Expression]) -> None:
-        if len(args) != 1:
-            raise CodegenError(f'NEW expects 1 argument, got {len(args)}')
+        if len(args) < 1:
+            raise CodegenError(f'NEW expects at least 1 argument, got {len(args)}')
         target = args[0]
         if isinstance(target, Identifier):
             target = Designator(target.name, [])
@@ -92,26 +76,46 @@ class RuntimeBuiltinsMixin:
         if not sym or not isinstance(ptr_type, PointerType):
             raise CodegenError('NEW requires a pointer variable')
         pointee = getattr(ptr_type, 'target_type', None) or getattr(ptr_type, 'base', None)
+        resolved_pointee = self.resolve_type_alias(pointee)
         alloc_ty = self.llvm_type(pointee)
-        # Size the heap block from the pointee's real byte size. The module
-        # carries an empty target datalayout, so DataLayout.get_type_alloc_size()
-        # silently fell back to a hard-coded 8 here and under-allocated for any
-        # pointee larger than 8 bytes (e.g. a multi-field RECORD), corrupting the
-        # heap on the first full write. get_type_size() resolves array bounds and
-        # record layouts the same way SIZEOF does.
-        alloc_size = 0
-        try:
-            alloc_size = self.get_type_size(self.resolve_type_alias(pointee))
-        except Exception:
-            alloc_size = 0
-        if alloc_size <= 0 and getattr(self.module, 'data_layout', None):
+
+        if len(args) > 1:
+            if not (isinstance(resolved_pointee, ArrayType) and getattr(resolved_pointee, 'super', False)):
+                raise CodegenError(f'NEW expects 1 argument, got {len(args)}')
+            if len(args) != 2:
+                raise CodegenError(f'NEW super array allocation expects 1 upper bound, got {len(args) - 1}')
+            lower = self.eval_const_expr(resolved_pointee.index_range.low)
+            elem_size = self.get_type_size(resolved_pointee.element_type)
+            upper_val = self.codegen_expr(args[1])
+            if isinstance(upper_val.type, ir.IntType) and upper_val.type.width < 64:
+                upper64 = self.builder.sext(upper_val, ir.IntType(64))
+            elif isinstance(upper_val.type, ir.IntType) and upper_val.type.width > 64:
+                upper64 = self.builder.trunc(upper_val, ir.IntType(64))
+            else:
+                upper64 = upper_val
+            count = self.builder.sub(upper64, ir.Constant(ir.IntType(64), lower - 1))
+            alloc_size = self.builder.mul(count, ir.Constant(ir.IntType(64), elem_size))
+        else:
+            # Size the heap block from the pointee's real byte size. The module
+            # carries an empty target datalayout, so DataLayout.get_type_alloc_size()
+            # silently fell back to a hard-coded 8 here and under-allocated for any
+            # pointee larger than 8 bytes (e.g. a multi-field RECORD), corrupting the
+            # heap on the first full write. get_type_size() resolves array bounds and
+            # record layouts the same way SIZEOF does.
+            alloc_size_int = 0
             try:
-                alloc_size = self.module.data_layout.get_type_alloc_size(alloc_ty)
+                alloc_size_int = self.get_type_size(resolved_pointee)
             except Exception:
-                alloc_size = 0
-        if alloc_size <= 0:
-            alloc_size = 8
-        raw = self.builder.call(self.runtime_extern('malloc'), [ir.Constant(ir.IntType(64), alloc_size)])
+                alloc_size_int = 0
+            if alloc_size_int <= 0 and getattr(self.module, 'data_layout', None):
+                try:
+                    alloc_size_int = self.module.data_layout.get_type_alloc_size(alloc_ty)
+                except Exception:
+                    alloc_size_int = 0
+            if alloc_size_int <= 0:
+                alloc_size_int = 8
+            alloc_size = ir.Constant(ir.IntType(64), alloc_size_int)
+        raw = self.builder.call(self.runtime_extern('malloc'), [alloc_size])
         casted = self.builder.bitcast(raw, self.llvm_type(sym.type_expr))
         self.builder.store(casted, ptr_addr)
 
@@ -298,10 +302,11 @@ class RuntimeBuiltinsMixin:
         self.builder.position_at_end(end_block)
 
     def _runtime_fillmove(self, name: str, args: List[Expression]) -> None:
-        src = self.codegen_expr(args[0])
-        dst = self.codegen_expr(args[1])
-        length = self.codegen_expr(args[2])
-        self.builder.call(self.runtime_extern(name.lower()), [src, dst, length])
+        fn = self.runtime_extern(name.lower())
+        values = [self.codegen_expr(arg) for arg in args]
+        coerced = [self.coerce_arg(value, target)
+                   for value, target in zip(values, fn.function_type.args)]
+        self.builder.call(fn, coerced)
 
     def _as_i8_space_ptr(self, ptr: ir.Value) -> ir.Value:
         """Reinterpret a (possibly addrspace-qualified) pointer as i8* in the

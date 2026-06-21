@@ -23,6 +23,21 @@ tier) is **complete**. Milestone C (parallel execution model) is **planned and r
 see the build sequence in `docs/milestone-c-parallel-execution-plan.md`. Milestones D (host
 orchestration) and E (AMDGPU stack) remain prescribed. Suite: **705 passed, 63 subtests**.
 
+**Update (2026-06, first GPU run via the external-launcher path):** A Pascal
+`DEVICE UNIT` kernel has now run on a real NVIDIA GPU. The `REAL32`/`REAL64` scalar
+types and a void-return fix for exported device entries landed (suite grew to 781
+passed with `clang` available), and the `examples/device_ptx/mandelbrot` kernels
+were emitted to PTX and dropped — unchanged — into the companion mandelbrot-gpu
+PyCUDA launcher, producing a correct image. See
+`docs/mandelbrot-ptx-substitution-plan.md` ("Hardware validation result"). Note
+this validates the **external-launcher** route (a Pascal-generated `.ptx` loaded
+by an existing host), **not** the Pascal-side host orchestration of §5 / Milestone
+D, which is still prescribed: §10 point (3) below — running a kernel through the
+*Pascal* `LAUNCH(...)` shim — therefore remains open. What is now proven is that
+the device-code half (entry points, the parallel-execution intrinsics of
+Milestone C, void-return ABI, and the scalar widths a real kernel needs) is
+hardware-correct end to end.
+
 ---
 
 ## 0. Where you actually are (verified baseline)
@@ -50,7 +65,7 @@ The four findings that gate a real kernel, each expanded below:
 |---|-----|--------|
 | §2 | Device IR is **not self-contained** | **[DONE]** — Milestones A1–A3 complete (Phase 2.1 + 2.2 lazy plan) |
 | §3 | There are **no entry points**, only device functions | **[DONE]** — Milestone B complete (Phase 2.3) |
-| §4 | **No parallel execution model** | [PRESCRIBED] — open |
+| §4 | **No parallel execution model** | **[DONE]** — Milestone C complete: index reads, `SYNCTHREADS`, no new body launch syntax, CPU-device correctness tests |
 | §5 | **No host orchestration** | [PRESCRIBED] — open |
 | §6 | **AMDGPU back end crashes** (bonus, ROCm-only) | [PRESCRIBED] — open |
 
@@ -332,7 +347,7 @@ parallel kernels?"** A kernel with no thread indices is just a slow serial funct
 happens to live on the GPU. Viable kernels need four things. None exist today; all are listed
 as out-of-scope in the design's §9.
 
-### 4.1 Thread/block index intrinsics [PRESCRIBED - required]
+### 4.1 Thread/block index intrinsics [DONE]
 
 The minimum viable set, as predeclared builtins registered only inside a `DEVICE MODULE`
 (`register_builtins` already feature-gates; add a device-kind gate). Map each to the NVPTX
@@ -350,14 +365,14 @@ index `i = threadIdx.x + blockIdx.x*blockDim.x` is built from. **[DEFAULT]** Exp
 the flat names above (and/or a small `THREADIDX.X` record-ish sugar later); start with the
 12-16 scalar reads, they are trivial and unlock every 1-D/2-D kernel.
 
-### 4.2 Barriers / synchronization [PRESCRIBED - required for anything using SHARED]
+### 4.2 Barriers / synchronization [DONE]
 
 `SYNCTHREADS` → `llvm.nvvm.barrier0` (NVPTX) / `llvm.amdgcn.s.barrier` (AMDGPU). Without it,
 any kernel that stages through `[SPACE(SHARED)]` memory (exactly the pattern your sieve bridge
 demonstrates) is racy. Register as a device-only builtin procedure. Add memory-fence variants
 (`THREADFENCE`) later if needed.
 
-### 4.3 The launch-bounds / signature contract [PRESCRIBED]
+### 4.3 The launch-bounds / signature contract [DONE]
 
 A kernel's grid/block geometry is supplied **at launch** (host side, §5), not in the kernel
 body. The kernel just reads the intrinsics. So no new *kernel-body* syntax is needed beyond
@@ -371,7 +386,7 @@ body. The kernel just reads the intrinsics. So no new *kernel-body* syntax is ne
 Vector-add and the sieve are fine writing the index expression by hand. Build it once you have
 two or three real kernels and the pattern is obvious.
 
-### 4.5 Width reconsideration [PRESCRIBED - flag, decide later]
+### 4.5 Width reconsideration [DONE for index intrinsics; broader scalar widening deferred]
 
 The dialect's `INTEGER` is 16-bit and `REAL` is f64. On GPUs: indices want 32/64-bit (a 16-bit
 thread index caps you at 65 535 threads - fine for vector-add-100, wrong in general), and f64
@@ -585,9 +600,12 @@ A committed, reproducible test that:
    `.func`, and **zero** host-runtime symbol references (the §2 denylist)~~ **[DONE]**
    `tests/test_device_entry_points.py` + `tests/test_device_no_host_externs.py` cover this
    in full; PTX `.visible .entry` assertion included where the NVPTX target is available.
-2. runs the same kernel through the **CPU-device** orchestration end-to-end and checks the
-   numeric result (no GPU needed - runs in CI on this VM) - **[PRESCRIBED]**: requires §4
-   (thread-index intrinsics + `SYNCTHREADS`) and §5 (host orchestration shim);
+2. runs the same kernel through the **CPU-device** body path end-to-end and checks the
+   numeric result (no GPU needed - runs in CI on this VM) - **[DONE for Milestone C]**:
+   `tests/integration/test_device_grid_stride.py` compiles a `DEVICE UNIT` grid-stride
+   vector-add, links it with a host `PROGRAM`, runs it on `device=x86`, and checks the
+   numeric result. The future §5 host launch/orchestration shim remains prescribed for the
+   CUDA-style `LAUNCH(...)` surface; this test proves the kernel body contract now works;
 3. *(gated on `@requires_gpu`)* runs the kernel through the **CUDA** shim in the container and
    checks the same result against a real device - **[PRESCRIBED]**: requires §5 CUDA shim
    and §8 container setup.

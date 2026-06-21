@@ -9,10 +9,10 @@ Two orthogonal properties verified here:
    extern is structurally impossible" invariant.
 
 2. **INPUT/OUTPUT single-definition property (§4.1)**
-   PROGRAM / launchable MODULE is the root compiland: it owns the strong global
-   definitions @input and @output.  Any UNIT (interface + implementation) emits
-   external declarations only.  When both modules are linked, exactly one strong
-   definition of each exists.
+   PROGRAM is the root compiland: it owns the strong global definitions @input
+   and @output. MODULE and UNIT compilands emit external declarations only.
+   When library objects are linked with a PROGRAM, exactly one strong definition
+   of each exists.
 """
 
 import os
@@ -34,11 +34,11 @@ from tests.support import parse_source
 # ---------------------------------------------------------------------------
 
 _HOST_RUNTIME_NAMES = (
-    'abort', 'fflush', 'memmove',
+    'abort', 'fflush', 'memcpy', 'memset', 'memmove', 'printf',
     'movel', 'mover', 'movesl', 'movesr', 'fillc', 'fillsc',
     'pas_read_int', 'pas_read_word', 'pas_read_real', 'pas_read_char',
-    'pas_read_lstring', 'pas_readln_skip',
-    'pas_write_fmt',
+    'pas_read_lstring', 'pas_read_string', 'pas_readln_skip',
+    'pas_write_fmt', 'pas_enum_write_token', 'pas_read_enum_name', 'pas_fread_enum_name', 'pabort',
     'pas_file_buffer', 'pas_file_touch_buffer',
     'pas_file_reset', 'pas_file_rewrite', 'pas_file_get', 'pas_file_put',
     'pas_file_close', 'pas_file_discard', 'pas_file_assign',
@@ -48,6 +48,7 @@ _HOST_RUNTIME_NAMES = (
     'pas_freadset', 'pas_fread_filename',
     'malloc', 'free',
     'positn', 'scaneq', 'scanne', 'encode_value', 'decode_value',
+    'sqrt', 'sin', 'cos', 'log', 'exp', 'atan',
 )
 
 
@@ -140,8 +141,45 @@ class TestZeroDeclareGuarantee(unittest.TestCase):
 # Property 2 — INPUT/OUTPUT single-definition (S4.1)
 # ---------------------------------------------------------------------------
 
+
+    def test_runtime_extern_uses_factory_cache_without_module_scan(self):
+        """Direct runtime_extern calls materialise once and return the cached object."""
+        from pascal1981.codegen import Codegen
+
+        cg = Codegen()
+        first = cg.runtime_extern('pas_read_int')
+        second = cg.runtime_extern('pas_read_int')
+        self.assertIs(first, second)
+        self.assertEqual([f.name for f in cg.module.functions].count('pas_read_int'), 1)
+
+    def test_unknown_runtime_extern_fails_clearly(self):
+        from pascal1981.codegen import Codegen
+        from pascal1981.codegen.base import CodegenError
+
+        cg = Codegen()
+        with self.assertRaisesRegex(CodegenError, "unknown runtime extern 'bogus_runtime'"):
+            cg.runtime_extern('bogus_runtime')
+
+    def test_string_assignment_materialises_memcpy_and_memset_lazily(self):
+        ir_text = _compile("PROGRAM P; VAR s: STRING(5); BEGIN s := 'ABCDE' END.")
+        runtime_declares = [n for n in _declares(ir_text) if n in _HOST_RUNTIME_NAMES]
+        self.assertIn('memcpy', runtime_declares)
+        self.assertIn('memset', runtime_declares)
+
+    def test_math_intrinsic_materialises_libm_lazily(self):
+        ir_text = _compile('PROGRAM P; VAR r: REAL; BEGIN r := SQRT(4.0) END.')
+        runtime_declares = [n for n in _declares(ir_text) if n in _HOST_RUNTIME_NAMES]
+        self.assertEqual(runtime_declares, ['sqrt'])
+
+    def test_runtime_check_materialises_abort_and_fflush_lazily(self):
+        ir_text = _compile('PROGRAM P; VAR a: ARRAY[1..2] OF INTEGER; i: INTEGER; BEGIN i := 3; a[i] := 1 END.')
+        runtime_declares = [n for n in _declares(ir_text) if n in _HOST_RUNTIME_NAMES]
+        self.assertIn('abort', runtime_declares)
+        self.assertIn('fflush', runtime_declares)
+
+
 class TestInputOutputOwnership(unittest.TestCase):
-    """Root compiland owns INPUT/OUTPUT; units declare them externally."""
+    """PROGRAM owns INPUT/OUTPUT; MODULE/UNIT declare them externally."""
 
     def test_program_owns_input_output(self):
         """A PROGRAM emits strong global definitions for @input and @output."""
@@ -154,12 +192,15 @@ class TestInputOutputOwnership(unittest.TestCase):
         self.assertNotIn('input',  extern)
         self.assertNotIn('output', extern)
 
-    def test_module_owns_input_output(self):
-        """A MODULE (launchable root) also emits strong definitions."""
+    def test_module_declares_input_output_externally(self):
+        """A MODULE is library-like and does not own process-wide files."""
         ir_text = _compile('MODULE M; .')
+        extern = _extern_globals(ir_text)
+        self.assertIn('input',  extern, '@input should be external decl in MODULE')
+        self.assertIn('output', extern, '@output should be external decl in MODULE')
         strong = _strong_globals(ir_text)
-        self.assertIn('input',  strong, '@input should be a strong def in MODULE')
-        self.assertIn('output', strong, '@output should be a strong def in MODULE')
+        self.assertNotIn('input',  strong)
+        self.assertNotIn('output', strong)
 
     def test_unit_declares_input_output_externally(self):
         """A UNIT (interface + implementation) emits external declarations for
@@ -177,13 +218,7 @@ class TestInputOutputOwnership(unittest.TestCase):
         self.assertNotIn('output', strong)
 
     def test_no_multiple_strong_defs_when_linking_program_and_unit(self):
-        """After lazy registration + Option-1 ownership, linking a PROGRAM IR
-        with a UNIT IR produces exactly one strong definition of @input and
-        @output combined (no multiple-definition collision).
-
-        We verify at the IR level: program has strong defs, unit has extern
-        decls, so the union has exactly one strong definition each.
-        """
+        """Linking a PROGRAM IR with a UNIT IR has one owner of @input/@output."""
         prog_ir = _compile('PROGRAM P; BEGIN END.')
         iface = 'INTERFACE;\nUNIT U (go);\nPROCEDURE go;\nEND;\n'
         impl  = 'IMPLEMENTATION OF U;\nPROCEDURE go;\nBEGIN END;\n.\n'
@@ -202,6 +237,23 @@ class TestInputOutputOwnership(unittest.TestCase):
         # Unit references them via external decl
         self.assertIn('input',  unit_extern)
         self.assertIn('output', unit_extern)
+
+    def test_no_multiple_strong_defs_when_linking_program_and_module(self):
+        """PROGRAM + separately compiled MODULE must not both define files."""
+        prog_ir = _compile('PROGRAM P; BEGIN END.')
+        module_ir = _compile('MODULE M; VAR x: INTEGER; .')
+
+        prog_strong = _strong_globals(prog_ir)
+        module_strong = _strong_globals(module_ir)
+        module_extern = _extern_globals(module_ir)
+        combined_strong = prog_strong + module_strong
+
+        self.assertEqual(combined_strong.count('input'), 1)
+        self.assertEqual(combined_strong.count('output'), 1)
+        self.assertNotIn('input', module_strong)
+        self.assertNotIn('output', module_strong)
+        self.assertIn('input', module_extern)
+        self.assertIn('output', module_extern)
 
 
 if __name__ == '__main__':

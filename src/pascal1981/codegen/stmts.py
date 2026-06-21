@@ -13,6 +13,7 @@ import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
 from ..ast_nodes import *
+from ..builtins_registry import DEVICE_SYNC_BUILTIN_PROCEDURES
 from .base import CodegenError, LoopContext, Scope
 
 
@@ -116,8 +117,10 @@ class StmtsMixin:
         if not symbol:
             raise CodegenError(f'Undefined variable: {target_name}')
 
-        # Can't assign to parameters (passed by value)
-        if symbol.is_parameter:
+        # Can't assign to parameters themselves (passed by value), but assigning
+        # through a pointer parameter designator such as p^[i] is a store to the
+        # pointee, not a rebinding of the parameter value.
+        if symbol.is_parameter and not stmt.target.selectors:
             raise CodegenError(f'Cannot assign to parameter: {target_name}')
 
         # Check if the target is a string type
@@ -135,10 +138,17 @@ class StmtsMixin:
                     value = self.builder.trunc(value, target_type)
                 elif target_type.width > value.type.width:
                     value = self._extend_int_for_pascal_expr(value, target_type, stmt.expr)
-            elif isinstance(target_type, ir.DoubleType) and isinstance(value.type, ir.IntType):
+            elif isinstance(target_type, (ir.FloatType, ir.DoubleType)) and isinstance(value.type, ir.IntType):
                 value = self.builder.sitofp(value, target_type)
-            elif isinstance(target_type, ir.IntType) and isinstance(value.type, ir.DoubleType):
+            elif isinstance(target_type, ir.IntType) and isinstance(value.type, (ir.FloatType, ir.DoubleType)):
                 value = self.builder.fptosi(value, target_type)
+            elif isinstance(target_type, ir.DoubleType) and isinstance(value.type, ir.FloatType):
+                # REAL32 value into a REAL slot: widen f32 -> f64.
+                value = self.builder.fpext(value, target_type)
+            elif isinstance(target_type, ir.FloatType) and isinstance(value.type, ir.DoubleType):
+                # REAL value into a REAL32 slot: narrow f64 -> f32 (e.g. a bare
+                # ``0.0`` literal stored into a REAL32 variable).
+                value = self.builder.fptrunc(value, target_type)
             elif isinstance(target_type, ir.PointerType) and isinstance(value.type, ir.PointerType):
                 if isinstance(stmt.expr, NilLiteral):
                     value = ir.Constant(target_type, None)
@@ -209,9 +219,34 @@ class StmtsMixin:
                 ptr = self.builder.bitcast(ptr, value.type.as_pointer())
             self.builder.store(value, ptr)
 
+    def codegen_device_sync_builtin(self, name: str) -> None:
+        """Lower DEVICE synchronization builtins.
+
+        For CPU-device execution the host is the device and execution is serial,
+        so SYNCTHREADS is a real host implementation: a no-op because there are
+        no sibling lanes to wait for.  GPU targets lower to backend barriers.
+        """
+        upper = name.upper()
+        if upper != 'SYNCTHREADS':
+            raise CodegenError(f'Unknown device synchronization builtin: {name}')
+        triple = self.device_triple or ''
+        if not (triple.startswith('nvptx') or triple.startswith('amdgcn')):
+            return
+        intrinsic_name = 'llvm.nvvm.barrier0' if triple.startswith('nvptx') else 'llvm.amdgcn.s.barrier'
+        try:
+            fn = self.module.get_global(intrinsic_name)
+        except KeyError:
+            fn = ir.Function(self.module, ir.FunctionType(ir.VoidType(), []), name=intrinsic_name)
+        self.builder.call(fn, [])
+
     def codegen_proc_call_stmt(self, stmt: ProcCallStmt) -> None:
         """Codegen for procedure call statement."""
         lookup_name = stmt.name.upper()
+        if self.is_device_module and lookup_name in DEVICE_SYNC_BUILTIN_PROCEDURES:
+            if stmt.args:
+                raise CodegenError(f'{lookup_name} expects 0 arguments')
+            self.codegen_device_sync_builtin(lookup_name)
+            return
         if self.is_device_module and lookup_name in {'FILLSC', 'MOVESL', 'MOVESR'}:
             # Step 5: inside a DEVICE MODULE these lower to addrspace-aware copy/
             # fill loops across the operands' concrete spaces -- not the vintage
@@ -219,13 +254,6 @@ class StmtsMixin:
             self._device_seg_bridge(lookup_name, stmt.args)
             return
         symbol = self.scope.lookup(lookup_name) or self.scope.lookup(stmt.name)
-        # Lazily materialise runtime externs (FILLC, FILLSC, MOVEL, MOVER,
-        # MOVESL, MOVESR, ...) so they flow through the general `else:` dispatch
-        # below and get coerce_arg for ADS-struct / pointer type reconciliation,
-        # exactly as when the old eager dump pre-registered them in scope.
-        if symbol is None and lookup_name.lower() in self._extern_factories:
-            self.runtime_extern(lookup_name.lower())  # materialise + cache in root scope
-            symbol = self.scope.lookup(lookup_name.lower())
         if not symbol or symbol.llvm_value is None:
             # Try built-in procedures
             if lookup_name == 'WRITELN':
@@ -257,6 +285,10 @@ class StmtsMixin:
                 self.builtin_pack(stmt.args)
             elif lookup_name == 'UNPACK':
                 self.builtin_unpack(stmt.args)
+            elif lookup_name == 'FILLC':
+                self.builtin_fillc(stmt.args)
+            elif lookup_name == 'FILLSC':
+                self.builtin_fillsc(stmt.args)
             elif lookup_name == 'MOVEL':
                 self.builtin_movel(stmt.args)
             elif lookup_name == 'MOVER':
@@ -483,7 +515,11 @@ class StmtsMixin:
 
     def codegen_return_stmt(self, stmt: ReturnStmt) -> None:
         """Codegen for RETURN statement."""
-        self.builder.ret(ir.Constant(ir.IntType(32), 0))
+        ret_t = self.current_function.function_type.return_type
+        if isinstance(ret_t, ir.VoidType):
+            self.builder.ret_void()
+        else:
+            self.builder.ret(ir.Constant(ir.IntType(32), 0))
 
     def codegen_break_stmt(self, stmt: BreakStmt) -> None:
         ctx = self.resolve_loop_context(stmt.label)

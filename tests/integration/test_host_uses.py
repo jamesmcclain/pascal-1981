@@ -50,12 +50,12 @@ class TestHostUsesIntegration(unittest.TestCase):
     def test_plain_interface_implementation_builds_and_runs_via_uses(self):
         rc, out, err = build_and_run_pascal_project(
             files={
-                'mathbox': _INTERFACE,
+                'mathbox.inc': _INTERFACE,
                 'mathbox.pas': _IMPLEMENTATION,
                 'main.pas': _MAIN,
             },
             compile_pairs=[
-                ('mathbox', 'mathbox-interface.ll'),
+                ('mathbox.inc', 'mathbox-interface.ll'),
                 ('mathbox.pas', 'mathbox.ll'),
                 ('main.pas', 'main.ll'),
             ],

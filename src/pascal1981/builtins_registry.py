@@ -10,14 +10,23 @@ from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYP
                           ProcedureType, RecordType, StringType)
 
 # Lists of all built-in function and procedure names
+DEVICE_INDEX_BUILTIN_FUNCTIONS = {
+    'THREADIDX_X', 'THREADIDX_Y', 'THREADIDX_Z',
+    'BLOCKIDX_X', 'BLOCKIDX_Y', 'BLOCKIDX_Z',
+    'BLOCKDIM_X', 'BLOCKDIM_Y', 'BLOCKDIM_Z',
+    'GRIDDIM_X', 'GRIDDIM_Y', 'GRIDDIM_Z',
+}
+
 BUILTIN_FUNCTIONS = {
     'ABS', 'SQR', 'SQRT', 'SIN', 'COS', 'LN', 'EXP', 'ARCTAN', 'CHR', 'ORD', 'ODD', 'SUCC', 'PRED', 'HIBYTE', 'LOBYTE', 'WRD', 'BYWORD', 'TRUNC', 'ROUND', 'FLOAT', 'SCANEQ',
-    'SCANNE', 'ENCODE', 'DECODE', 'EOF', 'EOLN'
+    'SCANNE', 'ENCODE', 'DECODE', 'EOF', 'EOLN', *DEVICE_INDEX_BUILTIN_FUNCTIONS
 }
+
+DEVICE_SYNC_BUILTIN_PROCEDURES = {'SYNCTHREADS'}
 
 BUILTIN_PROCEDURES = {
     'WRITE', 'WRITELN', 'READ', 'READLN', 'RESET', 'REWRITE', 'GET', 'PUT', 'ASSIGN', 'CLOSE', 'DISCARD', 'READFN', 'READSET', 'CONCAT', 'COPYLST', 'COPYSTR', 'INSERT', 'DELETE',
-    'POSITN', 'PACK', 'UNPACK', 'NEW', 'DISPOSE', 'FILLC', 'FILLSC', 'MOVEL', 'MOVER', 'MOVESL', 'MOVESR', 'ABORT'
+    'POSITN', 'PACK', 'UNPACK', 'NEW', 'DISPOSE', 'FILLC', 'FILLSC', 'MOVEL', 'MOVER', 'MOVESL', 'MOVESR', 'ABORT', *DEVICE_SYNC_BUILTIN_PROCEDURES
 }
 
 
@@ -71,6 +80,18 @@ def register_builtins(symbol_table, features=None) -> None:
     define_builtin('MOVESR', ProcedureType('MOVESR', [('src', ADSMEM), ('dst', ADSMEM), ('len', WORD_TYPE)]), 'procedure')
     # ABORT(CONST STRING, WORD, WORD): error message, error code, STATUS word.
     define_builtin('ABORT', ProcedureType('ABORT', [('msg', StringType(255)), ('code', WORD_TYPE), ('status', WORD_TYPE)]), 'procedure')
+
+    # Device synchronization procedures.  Registered globally because the registry
+    # runs before compiland device-ness is known; the type checker rejects use
+    # outside DEVICE source code.
+    for _name in sorted(DEVICE_SYNC_BUILTIN_PROCEDURES):
+        define_builtin(_name, ProcedureType(_name, []), 'procedure')
+
+    # Device parallel-index functions.  Registered globally because the registry
+    # runs before compiland device-ness is known; the type checker rejects use
+    # outside DEVICE source code.
+    for _name in sorted(DEVICE_INDEX_BUILTIN_FUNCTIONS):
+        define_builtin(_name, FunctionType(_name, [], INTEGER32_TYPE), 'function')
 
     # Constants
     define_builtin('MAXINT', INTEGER_TYPE, 'const')

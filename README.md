@@ -134,6 +134,74 @@ Source-tree equivalent:
 PYTHONPATH=src python3 -m pascal1981 myprogram.pas | clang -x ir - runtime/build/libpascalrt.a -o myprogram
 ```
 
+## Device PTX artifact generation
+
+The compiler also has an early device-only path for Pascal `DEVICE UNIT` /
+`DEVICE IMPLEMENTATION` code targeting NVIDIA PTX.  This path is for inspecting
+or externally launching GPU kernel artifacts; it does **not** generate Pascal
+host-side CUDA orchestration yet.
+
+From a source checkout, compile a device implementation directly to PTX:
+
+```bash
+PYTHONPATH=src python3 -m pascal1981.compile_to_ptx \
+  examples/device_ptx/fill_indices/fill.pas \
+  examples/device_ptx/fill_indices/fill.ptx \
+  --emit-llvm examples/device_ptx/fill_indices/fill.ll \
+  --cpu sm_70
+```
+
+The source file is a `DEVICE IMPLEMENTATION OF` whose sibling interface file
+contains the `DEVICE INTERFACE`.  By convention in this repository the interface
+file carries a `.inc` extension (the compiler does not require it — interface
+resolution also accepts an extensionless sibling or a `.pas` file).  Exported
+procedures in the device interface are lowered as PTX kernel entries.  For
+example:
+
+```pascal
+DEVICE INTERFACE;
+UNIT FILL (fill_indices);
+PROCEDURE fill_indices(outp: ADS(GLOBAL) OF ARRAY [0..255] OF INTEGER32; n: INTEGER32);
+END;
+```
+
+```pascal
+DEVICE IMPLEMENTATION OF FILL;
+PROCEDURE fill_indices(outp: ADS(GLOBAL) OF ARRAY [0..255] OF INTEGER32; n: INTEGER32);
+VAR i: INTEGER32;
+BEGIN
+  i := THREADIDX_X + BLOCKIDX_X * BLOCKDIM_X;
+  IF i < n THEN
+    outp^[i] := i
+END;
+.
+```
+
+Inspect the artifact:
+
+```bash
+grep '\.visible .entry fill_indices' examples/device_ptx/fill_indices/fill.ptx
+grep '%tid.x' examples/device_ptx/fill_indices/fill.ptx
+grep 'st.global.u32' examples/device_ptx/fill_indices/fill.ptx
+```
+
+This requires `llvmlite`/LLVM with the NVPTX backend.  It does not require an
+NVIDIA device, CUDA driver, CUDA runtime, `nvcc`, or the Pascal runtime library.
+If NVIDIA tools are available, `ptxas` can provide a stronger validation step:
+
+```bash
+ptxas -arch=sm_70 -v -o fill.cubin examples/device_ptx/fill_indices/fill.ptx
+```
+
+To actually run the generated `.ptx`, use an external launcher first — PyCUDA or
+a small CUDA Driver API program — on a CUDA-capable machine.  See
+[`examples/device_ptx/fill_indices/README.md`](examples/device_ptx/fill_indices/README.md)
+and
+[`examples/device_ptx/fill_indices/RUNNING_PTX.md`](examples/device_ptx/fill_indices/RUNNING_PTX.md)
+for the detailed example and runtime test plan.  Pascal host-side operations such
+as device allocation, copy, launch, and synchronization are planned separately;
+this PTX path is the first artifact-level bridge.
+
 ## Architecture
 
 A clean, layered pipeline with clear separation of concerns:
@@ -173,6 +241,7 @@ This compiler implements the full IBM Pascal 2.0 language, including all semanti
 - `INTEGER32` / `INTEGER64` (opt-in extension types enabled with `-f wide-integers`; also enables `MAXINT32` and `MAXINT64`)
 - `BOOLEAN` (one byte; stored as `i8` so address-of / `sizeof` / fills are byte-consistent)
 - `REAL` (64-bit float; constants, division, unary minus, and mixed arithmetic are codegen-hardened, and the default `WRITE` format matches the manual's 14-wide exponential, e.g. `WRITE(123.456)` prints ` 1.2345600E+02`)
+- `REAL32` / `REAL64` (opt-in extension real types enabled with `-f wide-reals`; `REAL32` is a 32-bit float lowering to LLVM `float`, `REAL64` is a 64-bit synonym for `REAL`. Always available inside `DEVICE` code regardless of the flag — `REAL32` is what gives device kernels true `.f32` parameter ABI.)
 - `WORD` (16-bit unsigned)
 - `CHAR` (8-bit)
 - `ARRAY[low..high] OF type` — bounds may be constant expressions, including named `CONST`s
@@ -331,7 +400,7 @@ This is a **full reimplementation** of IBM Pascal 2.0. The goal is not a subset 
 
 **Reference:** The original compiler manual is [here](https://archive.org/details/ibm-pascal-compiler-aug-81) — this is the source of truth for dialect semantics and feature completeness.
 
-Dialect coverage is complete: the planned feature checklist has been worked through, and the remaining differential questions against the genuine 1981 compiler have been settled and recorded in [`docs/discrepancies.md`](docs/discrepancies.md). Behaviors that the vintage compiler does not have, but that this implementation offers as deliberate extensions, are gated behind opt-in feature flags (see `features.py` / `--list-features`) so the default build stays faithful to IBM Pascal 2.0. The formal grammar lives in [`docs/ebnf_grammar.md`](docs/ebnf_grammar.md), and the executed remediation plans are kept under [`docs/plans/`](docs/plans/) for the record.
+Dialect coverage is complete: the planned feature checklist has been worked through, and the remaining differential questions against the genuine 1981 compiler have been settled and archived under [`docs/old/`](docs/old/). Open follow-up seams are tracked in [`docs/followups.md`](docs/followups.md). Behaviors that the vintage compiler does not have, but that this implementation offers as deliberate extensions, are gated behind opt-in feature flags (see `features.py` / `--list-features`) so the default build stays faithful to IBM Pascal 2.0. The formal grammar lives in [`docs/ebnf_grammar.md`](docs/ebnf_grammar.md).
 
 The test suite is organized to run independently at each layer, so development can proceed without the full LLVM toolchain.
 
@@ -391,8 +460,8 @@ pascal-1981/
 └─ Documentation
    └── docs/
        ├── ebnf_grammar.md
-       ├── discrepancies.md
-       └── plans/
+       ├── followups.md
+       └── old/
 ```
 
 ## Testing

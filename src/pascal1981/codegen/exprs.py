@@ -13,10 +13,11 @@ import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
 from ..ast_nodes import *
-from ..type_system import (INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, WORD_TYPE)
+from ..builtins_registry import DEVICE_INDEX_BUILTIN_FUNCTIONS
+from ..type_system import (INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL32_TYPE, WORD_TYPE)
 from ..type_system import LStringType as ResolvedLStringType
 from ..type_system import StringType as ResolvedStringType
-from .base import CodegenError
+from .base import CodegenError, _is_gpu_triple
 
 
 class ExprsMixin:
@@ -32,6 +33,11 @@ class ExprsMixin:
                 return ir.Constant(ir.IntType(32), expr.value)
             return ir.Constant(ir.IntType(16), expr.value)
         elif isinstance(expr, RealLiteral):
+            # The type checker tags the literal REAL32 when it sits in a
+            # single-precision context (the C ``f``-suffix analog); otherwise
+            # it is a 64-bit REAL constant.
+            if getattr(expr, 'resolved_type', None) is REAL32_TYPE:
+                return ir.Constant(ir.FloatType(), expr.value)
             return ir.Constant(ir.DoubleType(), expr.value)
         elif isinstance(expr, CharLiteral):
             # Convert char to int
@@ -93,8 +99,21 @@ class ExprsMixin:
             symbol = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
             if not symbol or symbol.type_expr is None:
                 raise CodegenError(f'Undefined variable: {expr.name}')
-            ty = symbol.type_expr
-            if hasattr(ty, 'index_range'):
+            ty = self.resolve_type_alias(symbol.type_expr)
+            if isinstance(ty, NamedType) and ty.name.upper() in {'STRING', 'LSTRING'}:
+                max_len = int(ty.param) if isinstance(ty.param, int) else 256
+                lower = 1 if ty.name.upper() == 'STRING' else 0
+                upper = max_len
+            elif isinstance(ty, ResolvedStringType):
+                lower = 1
+                upper = ty.max_len
+            elif isinstance(ty, ResolvedLStringType):
+                lower = 0
+                upper = ty.max_len
+            elif isinstance(ty, LStringType):
+                lower = 0
+                upper = ty.max_len
+            elif hasattr(ty, 'index_range'):
                 lower = self.eval_const_expr(ty.index_range.low)
                 upper = None if ty.index_range.high is None else self.eval_const_expr(ty.index_range.high)
             elif hasattr(ty, 'lower_bound') and hasattr(ty, 'upper_bound'):
@@ -113,6 +132,8 @@ class ExprsMixin:
                 return self._const_ir(key)
             if key == 'NULL':
                 return self.null_lstring_ptr()
+            if key in DEVICE_INDEX_BUILTIN_FUNCTIONS:
+                return self.codegen_device_index_builtin(key)
             if key in {'EOF', 'EOLN'}:
                 sym = self.scope.lookup('INPUT')
                 out_sym = self.scope.lookup('OUTPUT')
@@ -375,14 +396,36 @@ class ExprsMixin:
             if right.type.width < target.width:
                 right = self._extend_int_for_pascal_expr(right, target, expr.right)
 
-        # SLASH is always real division in Pascal (7/2 = 3.5), so force double
-        # even when both operands are integer-typed.
-        is_real = (isinstance(left.type, ir.DoubleType) or isinstance(right.type, ir.DoubleType) or expr.op == 'SLASH')
+        # SLASH is always real division in Pascal (7/2 = 3.5), so it forces a
+        # floating result even when both operands are integer-typed. Real
+        # operands may be REAL32 (float) or REAL (double); when both widths are
+        # present the operation widens to double, matching C's float-op-double.
+        _floats = (ir.FloatType, ir.DoubleType)
+        is_real = (isinstance(left.type, _floats) or isinstance(right.type, _floats) or expr.op == 'SLASH')
         if is_real:
-            if isinstance(left.type, ir.IntType):
-                left = self.builder.sitofp(left, ir.DoubleType())
-            if isinstance(right.type, ir.IntType):
-                right = self.builder.sitofp(right, ir.DoubleType())
+            # Choose the common floating width. A double anywhere wins; else a
+            # float operand keeps the op in float (REAL32 stays single
+            # precision, including float/float division); a bare SLASH on two
+            # integers has no float operand and divides as REAL (double),
+            # preserving the vintage `7/2 = 3.5` rule.
+            if isinstance(left.type, ir.DoubleType) or isinstance(right.type, ir.DoubleType):
+                common = ir.DoubleType()
+            elif isinstance(left.type, ir.FloatType) or isinstance(right.type, ir.FloatType):
+                common = ir.FloatType()
+            else:
+                common = ir.DoubleType()
+
+            def _to_common(v):
+                if isinstance(v.type, ir.IntType):
+                    return self.builder.sitofp(v, common)
+                if isinstance(v.type, ir.FloatType) and isinstance(common, ir.DoubleType):
+                    return self.builder.fpext(v, common)
+                if isinstance(v.type, ir.DoubleType) and isinstance(common, ir.FloatType):
+                    return self.builder.fptrunc(v, common)
+                return v
+
+            left = _to_common(left)
+            right = _to_common(right)
 
         if expr.op == 'PLUS':
             return self.builder.fadd(left, right) if is_real else self._mathck_arith('add', left, right, signed=not self._expr_is_unsigned_word(expr))
@@ -428,6 +471,8 @@ class ExprsMixin:
         if expr.op == 'MINUS':
             if isinstance(operand.type, ir.DoubleType):
                 return self.builder.fsub(ir.Constant(ir.DoubleType(), 0.0), operand)
+            if isinstance(operand.type, ir.FloatType):
+                return self.builder.fsub(ir.Constant(ir.FloatType(), 0.0), operand)
             return self.builder.neg(operand)
         elif expr.op == 'NOT':
             # Logical NOT: invert the boolean
@@ -468,6 +513,10 @@ class ExprsMixin:
         """Codegen function call."""
         lookup_name = expr.name.upper()
 
+        if lookup_name in DEVICE_INDEX_BUILTIN_FUNCTIONS:
+            if expr.args:
+                raise CodegenError(f'{lookup_name} expects 0 arguments')
+            return self.codegen_device_index_builtin(lookup_name)
         if lookup_name in {'EOF', 'EOLN'}:
             if len(expr.args) == 0:
                 sym = self.scope.lookup('INPUT')
@@ -613,11 +662,7 @@ class ExprsMixin:
 
             libm_names = {'SQRT': 'sqrt', 'SIN': 'sin', 'COS': 'cos', 'LN': 'log', 'EXP': 'exp', 'ARCTAN': 'atan'}
             c_name = libm_names[lookup_name]
-            double_ty = ir.DoubleType()
-            try:
-                fn = self.module.get_global(c_name)
-            except KeyError:
-                fn = ir.Function(self.module, ir.FunctionType(double_ty, [double_ty]), name=c_name)
+            fn = self.runtime_extern(c_name)
             return self.builder.call(fn, [val])
         elif lookup_name == 'TRUNC':
             # REAL -> INTEGER: truncate toward zero (manual 11-7)
@@ -657,6 +702,46 @@ class ExprsMixin:
     # ========================================================================
     # Built-in Functions
     # ========================================================================
+
+    def codegen_device_index_builtin(self, name: str) -> ir.Value:
+        """Lower DEVICE thread/block index reads.
+
+        On the CPU-device stand-in, DEVICE code executes as a one-thread,
+        one-block grid.  On NVPTX, lower to the corresponding special-register
+        read intrinsic.  AMDGPU dimension plumbing is deferred; keep it
+        deterministic rather than inventing a half-wrong dispatch-ptr decode.
+        """
+        upper = name.upper()
+        if not _is_gpu_triple(self.device_triple):
+            value = 1 if upper.startswith(('BLOCKDIM_', 'GRIDDIM_')) else 0
+            return ir.Constant(ir.IntType(32), value)
+        if self.device_triple.startswith('nvptx'):
+            nvptx_map = {
+                'THREADIDX_X': 'llvm.nvvm.read.ptx.sreg.tid.x',
+                'THREADIDX_Y': 'llvm.nvvm.read.ptx.sreg.tid.y',
+                'THREADIDX_Z': 'llvm.nvvm.read.ptx.sreg.tid.z',
+                'BLOCKIDX_X': 'llvm.nvvm.read.ptx.sreg.ctaid.x',
+                'BLOCKIDX_Y': 'llvm.nvvm.read.ptx.sreg.ctaid.y',
+                'BLOCKIDX_Z': 'llvm.nvvm.read.ptx.sreg.ctaid.z',
+                'BLOCKDIM_X': 'llvm.nvvm.read.ptx.sreg.ntid.x',
+                'BLOCKDIM_Y': 'llvm.nvvm.read.ptx.sreg.ntid.y',
+                'BLOCKDIM_Z': 'llvm.nvvm.read.ptx.sreg.ntid.z',
+                'GRIDDIM_X': 'llvm.nvvm.read.ptx.sreg.nctaid.x',
+                'GRIDDIM_Y': 'llvm.nvvm.read.ptx.sreg.nctaid.y',
+                'GRIDDIM_Z': 'llvm.nvvm.read.ptx.sreg.nctaid.z',
+            }
+            intrinsic_name = nvptx_map[upper]
+            try:
+                fn = self.module.get_global(intrinsic_name)
+            except KeyError:
+                fn = ir.Function(self.module, ir.FunctionType(ir.IntType(32), []), name=intrinsic_name)
+            return self.builder.call(fn, [])
+        if self.device_triple.startswith('amdgcn'):
+            # C.1 keeps AMDGPU non-blocking; real grid/block dimension lowering
+            # needs dispatch-ptr reads and is tracked by the plan.
+            value = 1 if upper.startswith(('BLOCKDIM_', 'GRIDDIM_')) else 0
+            return ir.Constant(ir.IntType(32), value)
+        raise CodegenError(f'{upper}: unsupported device triple {self.device_triple}')
 
     def codegen_actual_arg(self, arg: Expression, mode: Optional[str]) -> ir.Value:
         if mode in {'VAR', 'VARS', 'CONST', 'CONSTS'}:

@@ -58,10 +58,7 @@ class Codegen(CodegenBase, TypesMapMixin, ConstFoldMixin, RuntimeBuiltinsMixin, 
         return self.builder.gep(self._null_lstring_global, [zero, zero])
 
     def _declare_libm_func(self, name: str, ret_type: ir.Type, arg_types: List[ir.Type]) -> ir.Function:
-        if name not in [f.name for f in self.module.functions]:
-            fn_type = ir.FunctionType(ret_type, arg_types)
-            ir.Function(self.module, fn_type, name=name)
-        return next(f for f in self.module.functions if f.name == name)
+        return self.runtime_extern(name)
 
 
 def compile_to_llvm(
@@ -81,10 +78,10 @@ def compile_to_llvm(
         merged['RANGECK'] = force_rangeck
     if force_flags:
         merged.update(force_flags)
-    # Checklist S4.1: only the root compiland (PROGRAM or launchable MODULE)
-    # emits a strong definition of @input/@output; a UNIT emits external
-    # declarations so the linker finds exactly one definition per program.
-    is_root_compiland = not isinstance(ast, (InterfaceUnit, ImplementationUnit))
+    # Checklist S4.1: only PROGRAM owns the process-wide @input/@output
+    # definitions. MODULE and UNIT compilands are library-like objects and emit
+    # external declarations so linking them with a PROGRAM cannot collide.
+    is_root_compiland = isinstance(ast, ProgramUnit)
     codegen = Codegen(verbose=verbose, source_file=source_file, force_flags=merged or None, features=features, device_triple=device_triple, host_triple=host_triple, is_root_compiland=is_root_compiland)
     module = codegen.codegen(ast)
     return str(module)

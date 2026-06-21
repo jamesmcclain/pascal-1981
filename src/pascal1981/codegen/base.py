@@ -76,6 +76,8 @@ _SCALAR_SIZES = {
     'INTEGER32': 4,
     'INTEGER64': 8,
     'REAL': 8,
+    'REAL64': 8,
+    'REAL32': 4,
     'WORD': 2,
     'CHAR': 1,
     'BOOLEAN': 1,  # vintage Pascal BOOLEAN is one byte
@@ -168,15 +170,16 @@ class CodegenBase:
         # (INDEXCK, MATHCK, NILCK) read it via check_enabled().
         self._stmt_meta: Optional[Dict[str, bool]] = None
         # Lazy extern registration (checklist S2.2.1 full/lazy form): build a
-        # factory registry now (cheap — no IR emitted), materialise each extern
+        # private cache/registry now (cheap — no IR emitted), materialise each extern
         # the first time codegen actually references it via runtime_extern().
         # Dead externs (never referenced) never appear in the module IR at all,
         # making "no dead host-runtime declare" hold for every triple — not just
         # GPU device targets.  The old gated-skip scaffolding is removed.
+        self._runtime_extern_cache: Dict[str, ir.Function] = {}
         self._build_extern_factories()
-        # INPUT/OUTPUT: root compiland (PROGRAM / MODULE) owns the strong
-        # definition; a UNIT emits declare-only (external global) so the linker
-        # resolves to the single copy in the root (S4.1).
+        # INPUT/OUTPUT: only PROGRAM owns the strong definition; MODULE and
+        # UNIT compilands emit declare-only (external global) so the linker
+        # resolves to the single copy in the program root (S4.1).
         self._register_predeclared_files(is_root_compiland)
 
     def _log(self, msg: str) -> None:
@@ -255,12 +258,12 @@ class CodegenBase:
     def _register_predeclared_files(self, is_root_compiland: bool = True) -> None:
         """Declare INPUT and OUTPUT as predeclared TEXT file handles.
 
-        Root compilands (PROGRAM / launchable MODULE) emit a strong global
-        definition — the single owner of these program-wide singletons.
-        Non-root compilands (UNIT interface / implementation) emit an external
-        declaration only; the linker resolves their reference to the root's
-        definition.  This prevents multiple-definition collisions when linking
-        a host program with one or more compiled units (checklist S4.1).
+        PROGRAM compilands emit a strong global definition — the single owner
+        of these program-wide singletons. MODULE and UNIT compilands emit an
+        external declaration only; the linker resolves their reference to the
+        PROGRAM definition. This prevents multiple-definition collisions when
+        linking a host program with one or more compiled library objects
+        (checklist S4.1).
         """
         text_type = FileType(NamedType('CHAR', None), structure='ASCII')
         for name in ('INPUT', 'OUTPUT'):
@@ -312,10 +315,21 @@ class CodegenBase:
             'mover':  _mk('mover',  ir.FunctionType(i32, [i8p, i8p, i16])),
             'movesl': _mk('movesl', ir.FunctionType(i32, [ads_ty, ads_ty, i16])),
             'movesr': _mk('movesr', ir.FunctionType(i32, [ads_ty, ads_ty, i16])),
-            # ---- memory ----------------------------------------------------
+            # ---- libc / libm -----------------------------------------------
+            'printf': _mk('printf', ir.FunctionType(i32, [i8p], var_arg=True)),
+            'memcpy':  _mk('memcpy',  ir.FunctionType(i8p,  [i8p, i8p, i64])),
+            'memset':  _mk('memset',  ir.FunctionType(i8p,  [i8p, i32, i64])),
             'memmove': _mk('memmove', ir.FunctionType(void, [i8p, i8p, i64])),
             'malloc':  _mk('malloc',  ir.FunctionType(i8p,  [i64])),
             'free':    _mk('free',    ir.FunctionType(void, [i8p])),
+            'abort':   _mk('abort',   ir.FunctionType(void, [])),
+            'fflush':  _mk('fflush',  ir.FunctionType(i32, [i8p])),
+            'sqrt':    _mk('sqrt',    ir.FunctionType(f64, [f64])),
+            'sin':     _mk('sin',     ir.FunctionType(f64, [f64])),
+            'cos':     _mk('cos',     ir.FunctionType(f64, [f64])),
+            'log':     _mk('log',     ir.FunctionType(f64, [f64])),
+            'exp':     _mk('exp',     ir.FunctionType(f64, [f64])),
+            'atan':    _mk('atan',    ir.FunctionType(f64, [f64])),
             # ---- string helpers --------------------------------------------
             'positn':       _mk('positn',       ir.FunctionType(i32, [i8p, i32, i8p, i32])),
             'scaneq':       _mk('scaneq',       ir.FunctionType(i32, [i32, i8, i8p, i32, i32, i32])),
@@ -328,6 +342,7 @@ class CodegenBase:
             'pas_read_real':   _mk('pas_read_real',   ir.FunctionType(i32,  [f64.as_pointer()])),
             'pas_read_char':   _mk('pas_read_char',   ir.FunctionType(i32,  [i8p])),
             'pas_read_lstring':_mk('pas_read_lstring',ir.FunctionType(i32,  [i8p, i32])),
+            'pas_read_string': _mk('pas_read_string', ir.FunctionType(i32,  [i8p, i32])),
             'pas_readln_skip': _mk('pas_readln_skip', ir.FunctionType(void, [])),
             # ---- file-based read family ------------------------------------
             'pas_fread_int':    _mk('pas_fread_int',    ir.FunctionType(i32,  [fcb_ptr, i32.as_pointer()])),
@@ -352,31 +367,34 @@ class CodegenBase:
             'pas_file_attach_std':   _mk('pas_file_attach_std',   ir.FunctionType(void, [fcb_ptr, fcb_ptr])),
             'pas_file_eof':          _mk('pas_file_eof',          ir.FunctionType(i32,  [fcb_ptr])),
             'pas_file_eoln':         _mk('pas_file_eoln',         ir.FunctionType(i32,  [fcb_ptr])),
-            # ---- write -----------------------------------------------------
+            # ---- write / enum helpers -------------------------------------
             'pas_write_fmt': _mk('pas_write_fmt', ir.FunctionType(i32, [fcb_ptr, i8p], var_arg=True)),
+            'pas_enum_write_token': _mk('pas_enum_write_token', ir.FunctionType(i8p, [i32, i8p.as_pointer(), i32])),
+            'pas_read_enum_name': _mk('pas_read_enum_name', ir.FunctionType(i32, [i32.as_pointer(), i8p.as_pointer(), i32])),
+            'pas_fread_enum_name': _mk('pas_fread_enum_name', ir.FunctionType(i32, [fcb_ptr, i32.as_pointer(), i8p.as_pointer(), i32])),
+            'pabort': _mk('pabort', ir.FunctionType(void, [i8p, i32, i16, i16])),
         }
 
     def runtime_extern(self, name: str) -> ir.Function:
         """Return the ir.Function for a named host-runtime extern, materialising
         it on first reference (lazy registration).
 
-        - Checks scope first (O(log n), covers the common second-reference case).
-        - Falls back to a module.functions scan as a safety net for functions
-          already created by _read_helper / _runtime_func (which bypass scope).
+        - Checks a private runtime cache first (covers the common second-reference case).
         - Creates from the factory registry on the first true reference, then
-          caches the result in the root scope so all future calls hit path 1.
+          caches the result outside the Pascal symbol table so runtime names
+          cannot collide with predeclared identifiers such as ABORT.
+        - Unknown extern names fail clearly instead of silently inventing a
+          second declaration path.
         """
-        sym = self.scope.lookup(name)
-        if sym is not None:
-            return sym.llvm_value
-        # Safety net: created by _read_helper/_runtime_func without going through scope
-        for f in self.module.functions:
-            if f.name == name:
-                self._root_scope.define(name, f, None)
-                return f
-        # First reference: materialise from factory
-        fn = self._extern_factories[name]()
-        self._root_scope.define(name, fn, None)
+        cached = self._runtime_extern_cache.get(name)
+        if cached is not None:
+            return cached
+        try:
+            factory = self._extern_factories[name]
+        except KeyError as exc:
+            raise CodegenError(f"unknown runtime extern '{name}'") from exc
+        fn = factory()
+        self._runtime_extern_cache[name] = fn
         return fn
 
     def file_fcb_type(self) -> ir.Type:

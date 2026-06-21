@@ -346,6 +346,12 @@ proc_call  = identifier [ "(" expression_list ")" ]
 write_arg_list = write_arg { "," write_arg } ;
 write_arg      = expression [ ":" expression [ ":" expression ] ] ;
 
+(* [OBSERVED] NEW supports the ordinary short form `NEW(p)` for non-super-array
+   pointer referents. [OBSERVED] For a one-dimensional `SUPER ARRAY` pointer
+   referent, normal host code supports long-form `NEW(p, upper_bound)` and
+   rejects short-form `NEW(p)`. Variant-record long-form NEW is not implied by
+   this note. DEVICE code keeps heap allocation rescinded. *)
+
 
 (* ═══════════════════════════════════════════════════════════════════
    EXPRESSIONS
@@ -366,7 +372,7 @@ factor =
     | "ADR" identifier                        (* 16-bit near offset of identifier *)
     | "ADS" identifier                        (* segmented address; pointee space inferred from operand's residence (HOST outside a DEVICE MODULE) *)
     | "SIZEOF" "(" ( identifier | type ) ")"  (* byte size of identifier or type  *)
-    | "UPPER" "(" identifier ")"              (* upper bound of super array        *)
+    | ( "LOWER" | "UPPER" ) "(" identifier ")" (* array/super-array/string bound *)
     | set_constructor ;
 
 (* [OBSERVED] A designator is an identifier followed by zero or more
