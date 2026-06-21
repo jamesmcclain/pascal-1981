@@ -988,16 +988,30 @@ class PascalTypeChecker(TypeChecker):
         elif isinstance(stmt, ReturnStmt):
             self.check_return_stmt(stmt)
         elif isinstance(stmt, LabelStmt):
+            # A labeled statement is GOTO machinery unless the label sits
+            # directly on a loop, where it instead names a BREAK/CYCLE target
+            # (structured, reducible, GPU-friendly). In device code GOTO is
+            # rescinded, so a label on anything *other* than a loop can only be
+            # a dead GOTO landing pad -- reject it for consistency with the GOTO
+            # ban below. Loop labels stay legal so labeled BREAK/CYCLE keeps
+            # working on device. (Matches codegen_label_stmt's loop predicate.)
+            if self.in_device_module and not isinstance(stmt.stmt, (ForStmt, WhileStmt, RepeatStmt)):
+                self.error("a labeled statement is not available in device code "
+                           "unless the label is on a loop (for BREAK/CYCLE)", stmt)
             self.check_statement(stmt.stmt)
         elif isinstance(stmt, WithStmt):
             self.check_with_stmt(stmt)
         elif isinstance(stmt, GotoStmt):
-            # Recission (2nd tranche): GOTO is rejected inside a DEVICE MODULE.
-            # SIMT loop-structurizer backends need structured, reducible control
-            # flow. This bans ALL goto -- a conservative superset of the stated
-            # "nonlocal/irreducible" intent, since the checker has no label-scope
-            # table or CFG reducibility analysis to draw a finer line. Outside a
-            # device module GOTO keeps its existing (unchecked) behavior.
+            # Recission (2nd tranche): GOTO is rejected in any DEVICE compiland
+            # (DEVICE MODULE / DEVICE INTERFACE / DEVICE IMPLEMENTATION -- all
+            # set in_device_module via _device_context). SIMT loop-structurizer
+            # backends need structured, reducible control flow. This bans ALL
+            # goto -- a conservative superset of the stated "nonlocal/irreducible"
+            # intent, since the checker has no label-scope table or CFG
+            # reducibility analysis to draw a finer line. The companion LabelStmt
+            # rule above rejects the non-loop labels such a goto would target, so
+            # the two together leave no orphan GOTO machinery on device. Outside
+            # a device compiland GOTO keeps its existing (unchecked) behavior.
             if self.in_device_module:
                 self.error("GOTO is not available in device code", stmt)
 
