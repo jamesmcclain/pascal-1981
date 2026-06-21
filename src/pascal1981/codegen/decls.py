@@ -219,7 +219,7 @@ class DeclsMixin:
             for ordinal, member in enumerate(decl.type_expr.values):
                 self.constants[member.upper()] = ordinal
                 # Remember which enum each member belongs to so WRITE can print
-                # the symbolic name of a bare member literal (checklist 9.8).
+                # the symbolic name of a bare member literal.
                 self.enum_member_names[member.upper()] = list(decl.type_expr.values)
 
     def _decode_string_literal(self, expr: StringLiteral) -> str:
@@ -417,7 +417,7 @@ class DeclsMixin:
 
     def _param_device_passable(self, param: Param) -> bool:
         """Whether a kernel-entry parameter can be passed to a device launch
-        (checklist S2.3.3).  Reference-mode params and host-space pointers lower
+       .  Reference-mode params and host-space pointers lower
         to addrspace-0 pointers a device entry cannot dereference; device data
         must arrive by value (scalars) or as a non-HOST `ADS(space) OF T`.
         """
@@ -450,7 +450,7 @@ class DeclsMixin:
 
     def _apply_kernel_entry(self, decl: Union[ProcDecl, FuncDecl], func: ir.Function) -> None:
         """Make an exported device routine a launchable kernel entry
-        (checklist S2.3.1-S2.3.3).
+       .
 
         Fires only when lowering device code to a real GPU triple and the
         routine is flagged `is_exported_entry` by the checker.  In that case the
@@ -466,7 +466,7 @@ class DeclsMixin:
             return
         if not getattr(decl, 'is_exported_entry', False):
             return
-        # S2.3.3: a GPU entry cannot return a value -- it must be a PROCEDURE.
+        # A GPU entry cannot return a value -- it must be a PROCEDURE.
         if isinstance(decl, FuncDecl):
             raise CodegenError(
                 f"exported device routine '{decl.name}' must be a PROCEDURE to be a kernel entry: "

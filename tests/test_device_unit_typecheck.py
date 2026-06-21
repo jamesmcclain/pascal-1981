@@ -1,4 +1,4 @@
-"""DEVICE UNIT type-checker parity tests for Phase 1.3.
+"""DEVICE UNIT type-checker parity tests.
 
 These prove that DEVICE INTERFACE / DEVICE IMPLEMENTATION reuse the same
 checker-level device context as DEVICE MODULE.

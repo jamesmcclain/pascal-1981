@@ -42,7 +42,7 @@ class StmtsMixin:
         Priority order:
           0. device-code suppression of host-trapping checks (the RANGECK
              CASE-no-match trap and string-capacity guard lower to a host
-             fflush+abort that does not exist on device — checklist S2.1.1).
+             fflush+abort that does not exist on device).
           1. CLI force_flags (explicit --flag on/off override),
           2. the full metacommand state stamped onto the AST node by the
              parser (stmt.meta_flags),
@@ -248,7 +248,7 @@ class StmtsMixin:
             self.codegen_device_sync_builtin(lookup_name)
             return
         if self.is_device_module and lookup_name in {'FILLSC', 'MOVESL', 'MOVESR'}:
-            # Step 5: inside a DEVICE MODULE these lower to addrspace-aware copy/
+            # Inside a DEVICE MODULE these lower to addrspace-aware copy/
             # fill loops across the operands' concrete spaces -- not the vintage
             # extern call with the {ptr, i16} segmented ABI (which host code keeps).
             self._device_seg_bridge(lookup_name, stmt.args)

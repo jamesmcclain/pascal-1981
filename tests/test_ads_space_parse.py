@@ -1,7 +1,6 @@
-"""Step 2 of the ADS memory-spaces work: grammar + AST.
+"""ADS memory-spaces: grammar + AST.
 
 DEVICE MODULE, [SPACE(s)] attribute, ADS(s) OF T -- parsed ungated.
-See docs/ads-implementation-plan.md Step 2.
 """
 import unittest
 

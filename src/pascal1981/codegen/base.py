@@ -64,7 +64,7 @@ def _is_gpu_triple(triple: str) -> bool:
     """True for real GPU target triples (NVPTX / AMDGPU).
 
     Single source of truth shared by addrspace lowering (_space_addrspace) and
-    the device host-runtime-extern skip (checklist S2.2.1).  The x86 CPU-device
+    the device host-runtime-extern skip.  The x86 CPU-device
     triple is deliberately *not* a GPU triple: there address spaces collapse to
     0 and device code still links the host runtime, so its externs stay (the
     green-safe boundary)."""
@@ -143,7 +143,7 @@ class CodegenBase:
             'DIRECT': 2,
             # SPACE enum ordinals. Builtin enums do not auto-seed codegen's
             # constants (only the checker symbol table gets them), so they are
-            # hand-seeded here alongside MAXINT (plan Step 0/Step 1), otherwise
+            # hand-seeded here alongside MAXINT, otherwise
             # ADS(GLOBAL) type-checks but fails to fold. Inert outside device code.
             'HOST': 0,
             'GLOBAL': 1,
@@ -164,7 +164,7 @@ class CodegenBase:
         # GOTO can target a label that appears either earlier (backward) or
         # later (forward) in the source.  Reset/restored per function body.
         self.label_blocks: Dict[Union[int, str], ir.Block] = {}
-        # Enum support (checklist 9.8): map each enum member (UPPER) to the full
+        # Enum support: map each enum member (UPPER) to the full
         # ordered member-name list of its enum so WRITE can print the symbolic
         # name of a bare member literal; cache the per-enum `[n x i8*]` name
         # tables so each enum emits its name strings only once.
@@ -178,7 +178,7 @@ class CodegenBase:
         # lowered (set by codegen_stmt).  Expression-level runtime checks
         # (INDEXCK, MATHCK, NILCK) read it via check_enabled().
         self._stmt_meta: Optional[Dict[str, bool]] = None
-        # Lazy extern registration (checklist S2.2.1 full/lazy form): build a
+        # Lazy extern registration: build a
         # private cache/registry now (cheap — no IR emitted), materialise each extern
         # the first time codegen actually references it via runtime_extern().
         # Dead externs (never referenced) never appear in the module IR at all,
@@ -188,7 +188,7 @@ class CodegenBase:
         self._build_extern_factories()
         # INPUT/OUTPUT: only PROGRAM owns the strong definition; MODULE and
         # UNIT compilands emit declare-only (external global) so the linker
-        # resolves to the single copy in the program root (S4.1).  DEVICE
+        # resolves to the single copy in the program root.  DEVICE
         # compilands have no host I/O, so these host-stream globals are
         # suppressed entirely there -- emitting them leaked two unreferenced
         # `.extern .global ... input/output` lines into device PTX
@@ -209,7 +209,7 @@ class CodegenBase:
     def _space_addrspace(self, space_ord: Optional[int]) -> int:
         """Map a SPACE ordinal to its LLVM addrspace for the device triple.
 
-        GPU triples use the validated S3.2 table (GLOBAL=1, SHARED=3,
+        GPU triples use the validated address-space table (GLOBAL=1, SHARED=3,
         CONSTANT=4, LOCAL=5); HOST and the x86 CPU-device collapse to 0.
         """
         if not space_ord:  # None or 0 (HOST)
@@ -221,8 +221,8 @@ class CodegenBase:
     # Runtime-check flags whose failure path lowers to a *host* trap
     # (fflush+abort, via emit_runtime_abort / _emit_case_no_match_trap /
     # _guard_string_capacity).  In device code those host symbols don't exist,
-    # so the checks are suppressed wholesale (checklist S2.1.1; prescription
-    # S2.3.A1).  INITCK is deliberately excluded: it zero-initializes rather
+    # so the checks are suppressed wholesale.  INITCK is deliberately excluded:
+    # it zero-initializes rather
     # than trapping, so it is harmless — and arguably desirable — on device.
     _HOST_TRAPPING_CHECKS = frozenset({'MATHCK', 'RANGECK', 'INDEXCK', 'NILCK', 'STACKCK'})
 
@@ -235,7 +235,7 @@ class CodegenBase:
         effective_flag for statement-level RANGECK).  Fires only under
         is_device_module, so host/vintage and DEVICE-MODULE-on-host lowering
         stay byte-identical; on a GPU triple it is what makes device IR carry
-        zero abort/fflush (checklist S2.1 green gate).  A future S2.1.2 could
+        zero abort/fflush.  A future on-device trap could
         swap the elision here for an on-device llvm.trap() instead.
         """
         return self.is_device_module and flag in self._HOST_TRAPPING_CHECKS
@@ -276,8 +276,7 @@ class CodegenBase:
         of these program-wide singletons. MODULE and UNIT compilands emit an
         external declaration only; the linker resolves their reference to the
         PROGRAM definition. This prevents multiple-definition collisions when
-        linking a host program with one or more compiled library objects
-        (checklist S4.1).
+        linking a host program with one or more compiled library objects.
 
         Not called for DEVICE compilands: device code has no host I/O, so these
         host-stream globals would be dead `.extern .global` declarations in the

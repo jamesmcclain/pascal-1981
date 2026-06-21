@@ -1,6 +1,6 @@
-"""Step 1 of the ADS memory-spaces work: PointerType.space + the SPACE enum.
+"""ADS memory-spaces: PointerType.space + the SPACE enum.
 
-Types only, no IR. See docs/ads-implementation-plan.md Step 1.
+Types only, no IR.
 """
 from pascal1981.type_system import PointerType, REAL_TYPE, EnumType
 from pascal1981.builtins_registry import register_builtins

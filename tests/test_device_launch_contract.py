@@ -1,6 +1,6 @@
-"""Milestone C.3: kernel-body launch geometry contract.
+"""Kernel-body launch geometry contract.
 
-Grid/block geometry is not declared in the kernel body in Milestone C.  The body
+Grid/block geometry is not declared in the kernel body.  The body
 contract is just the C.1 index reads plus C.2 synchronization; launch shape stays
 with the future host-launch surface.
 """
@@ -63,7 +63,7 @@ class TestDeviceLaunchContract(unittest.TestCase):
             self.assertIn(name, ir)
 
         # C.3 deliberately does not invent kernel-body launch-shape syntax or
-        # launch-bounds metadata.  That information belongs to Milestone D's host
+        # launch-bounds metadata.  That information belongs to the host-side launch
         # launch surface.
         self.assertNotIn('nvvm.annotations', ir)
         self.assertNotIn('maxntid', ir)

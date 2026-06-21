@@ -63,7 +63,7 @@ class TestHostUsesIntegration(unittest.TestCase):
             ],
             link_ir_relpaths=['mathbox.ll', 'main.ll'],
             exe_name='host-uses',
-            link_flags=[],  # INPUT/OUTPUT ownership fix (S4.1) eliminates the collision
+            link_flags=[],  # INPUT/OUTPUT ownership fix eliminates the collision
         )
         self.assertEqual(rc, 0, msg=err)
         self.assertEqual([line.strip() for line in out.splitlines() if line.strip()], _EXPECTED)

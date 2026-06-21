@@ -1,7 +1,7 @@
-"""Step 3 of the ADS memory-spaces work: type-checker semantics.
+"""ADS memory-spaces: type-checker semantics.
 
 Module-kind context, space folding/residence, ADS<->ADS identity, and the
-dereferenceability invariant. See docs/ads-implementation-plan.md Step 3.
+dereferenceability invariant.
 """
 import unittest
 

@@ -1,4 +1,4 @@
-"""Checklist S2.2.1 (full/lazy form) — no dead host-runtime externs in any IR.
+"""No dead host-runtime externs in any IR.
 
 The lazy registration scheme (replacing the old eager dump) ensures that a
 runtime extern only appears in the emitted module when codegen actually
@@ -7,8 +7,8 @@ for *every* compile path (host, GPU device, x86 CPU-device).
 
 These are artifact-level guards: they compile to LLVM IR and assert on the
 emitted module's symbol references, catching the whole class of leak rather
-than one symbol.  The forbidden set is the union named by the checklist green
-gate (S2.2.2) and the S2.1 trap pair.
+than one symbol.  The forbidden set is the union of the host-runtime externs and the
+host-trap (abort/fflush) pair.
 """
 
 import os
@@ -23,7 +23,7 @@ from pascal1981.type_checker import PascalTypeChecker
 from tests.support import parse_source
 
 # The full set that must never appear in device IR lowered to a GPU triple:
-# the S2.2.2 host-runtime externs plus the S2.1 host-trap pair.
+# the host-runtime externs plus the host-trap pair.
 _FORBIDDEN = (
     'abort', 'fflush', 'memmove',
     'movel', 'mover', 'movesl', 'movesr', 'fillc', 'fillsc',
@@ -65,7 +65,7 @@ def _compile_unit(iface_src, impl_src, module_name='U', **kw):
         shutil.rmtree(tmpdir)
 
 
-# A device unit doing vector-add over two GLOBAL arrays (the checklist's
+# A device unit doing vector-add over two GLOBAL arrays (the
 # canonical example), plus a MOVESL seg-bridge use so the segmented externs
 # would definitely be dumped under the old behavior.
 _VADD_IFACE = (
@@ -163,7 +163,7 @@ class TestDeviceNoPhantomInputOutput(unittest.TestCase):
                     f'phantom input/output globals leaked into {triple} device unit IR\n{ir}')
 
     def test_host_program_still_defines_input_output(self):
-        # Regression guard: the host owner keeps the strong definitions (S4.1);
+        # Regression guard: the host owner keeps the strong definitions;
         # the device suppression must not touch the host path.
         ir = _compile("PROGRAM P;\nBEGIN\n WRITELN('hi');\nEND.\n")
         self.assertEqual(_io_globals(ir), ['input', 'output'],

@@ -450,7 +450,7 @@ class TestMetacommandSkipRegressions(unittest.TestCase):
         return [t.value for t in Lexer(src).tokenize() if t.kind == 'IDENTIFIER']
 
     def test_duplicate_else_resumes_at_second_else_like_vintage_d003(self):
-        """D-003: a second depth-1 $ELSE while skipping a true branch's
+        """A second depth-1 $ELSE while skipping a true branch's
         else-body terminates the skip; source after that second $ELSE leaks
         back into tokenization, matching the observed vintage behavior."""
         names = self._identifiers('PROGRAM P; BEGIN {$IF 1 $THEN} GOOD '
@@ -505,7 +505,7 @@ class TestForceFlagDefaults(unittest.TestCase):
 
 
 class TestWriteDoubleColon(unittest.TestCase):
-    """P::N WRITE formatting (manual 12-17; discrepancy D-002)."""
+    """P::N WRITE formatting (manual 12-17)."""
 
     def test_double_colon_parses(self):
         from tests.support import parse_source
@@ -533,7 +533,7 @@ class TestWriteDoubleColon(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Phase 3.1 — parser acceptance tests for DEVICE INTERFACE / DEVICE IMPLEMENTATION
+# Parser acceptance tests for DEVICE INTERFACE / DEVICE IMPLEMENTATION
 # (Checklist §1.2.4)
 # ---------------------------------------------------------------------------
 

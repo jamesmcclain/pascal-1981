@@ -1,7 +1,7 @@
-"""Second recission tranche for DEVICE MODULEs: GOTO and dynamic set-range
+"""Device-code recissions for DEVICE compilands: GOTO and dynamic set-range
 construction. The set *core* (constant ranges, union/intersect/membership,
 dynamic singletons) stays -- only a set range with a non-constant bound, which
-needs a runtime loop, is rejected. See docs/ads-implementation-plan.md Step 0.5.
+needs a runtime loop, is rejected.
 """
 import unittest
 

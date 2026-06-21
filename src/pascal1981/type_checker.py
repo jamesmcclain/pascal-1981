@@ -137,9 +137,9 @@ class PascalTypeChecker(TypeChecker):
         elif space != 0 and not self.in_device_module:
             self.error("cannot dereference a device-space pointer outside device code", node)
 
-    # First recission tranche enforced as module-scoped checker bans inside a
-    # DEVICE MODULE (implementation plan Step 0.5; design S1.2/S9). The set is
-    # NOT frozen -- this is the owner-approved first tranche only.
+    # Device-code recissions enforced as module-scoped checker bans inside a
+    # DEVICE compiland (design S1.2/S9): constructs that cannot lower to
+    # structured, allocation-free, host-I/O-free SIMT code.
     _DEVICE_BANNED_HEAP = {'NEW', 'DISPOSE'}
     _DEVICE_BANNED_IO = {
         'WRITE', 'WRITELN', 'READ', 'READLN', 'PAGE',
@@ -590,13 +590,13 @@ class PascalTypeChecker(TypeChecker):
 
     def _mark_exported_entries(self, impl: ImplementationUnit, iface: Any) -> None:
         """Flag each device-implementation routine whose name the interface
-        exports (checklist S2.3.1).  In a DEVICE UNIT the interface's export
+        exports.  In a DEVICE UNIT the interface's export
         list (`InterfaceUnit.params`) *is* the set of launchable kernel entries;
         everything else stays a device-internal routine.
 
         Marking happens here, on the implementation AST, precisely because the
         checker loads the interface from disk (`load_interface`) even under
-        separate compilation, whereas codegen never sees it (S2.3.2 caveat).
+        separate compilation, whereas codegen never sees it.
         Codegen then reads the flag rather than re-deriving the export list.
         """
         export_names = {n.lower() for n in getattr(iface, 'params', []) or []}
@@ -1002,7 +1002,7 @@ class PascalTypeChecker(TypeChecker):
         elif isinstance(stmt, WithStmt):
             self.check_with_stmt(stmt)
         elif isinstance(stmt, GotoStmt):
-            # Recission (2nd tranche): GOTO is rejected in any DEVICE compiland
+            # Device-code recission: GOTO is rejected in any DEVICE compiland
             # (DEVICE MODULE / DEVICE INTERFACE / DEVICE IMPLEMENTATION -- all
             # set in_device_module via _device_context). SIMT loop-structurizer
             # backends need structured, reducible control flow. This bans ALL
@@ -1063,7 +1063,7 @@ class PascalTypeChecker(TypeChecker):
     def _is_ordinal_type(self, t) -> bool:
         """Ordinal types are the ones valid as FOR control variables, CASE
         selectors, and SUCC/PRED/ORD operands: INTEGER, WORD, CHAR, BOOLEAN and
-        any enumerated type (checklist 9.8)."""
+        any enumerated type."""
         return isinstance(t, EnumType) or t in (INTEGER_TYPE, WORD_TYPE, CHAR_TYPE, BOOLEAN_TYPE)
 
     def check_for_stmt(self, stmt: ForStmt) -> None:
@@ -1128,7 +1128,7 @@ class PascalTypeChecker(TypeChecker):
 
         The selector must be an ordinal value and each case label (or range
         endpoint) must be compatible with it — this is what makes `CASE c OF
-        Red: ...` over an enum a checked construct (checklist 9.8). The check is
+        Red: ...` over an enum a checked construct. The check is
         deliberately lenient: it stays silent when a type can't be inferred, and
         accepts compatibility in either direction so INTEGER/WORD/CHAR literal
         labels are not falsely rejected against a related selector type.
@@ -1275,7 +1275,7 @@ class PascalTypeChecker(TypeChecker):
                 self._check_readset_args(stmt)
                 return
             elif lookup_name in {'FILLSC', 'MOVESL', 'MOVESR'} and self.in_device_module:
-                # Step 5: inside a DEVICE MODULE the segmented bridge builtins are
+                # Inside a DEVICE MODULE the segmented bridge builtins are
                 # the one sanctioned cross-space op (design S5.4) -- their two
                 # ADSMEM params may carry *different* concrete spaces, so the
                 # equal-space identity rule (which the generic arg check would
@@ -1357,7 +1357,7 @@ class PascalTypeChecker(TypeChecker):
             self.error(f"Argument 1 type mismatch: {name} expects a file variable, got {arg_type}", stmt)
 
     def _check_seg_bridge_args(self, stmt: ProcCallStmt, name: str) -> None:
-        """Step 5: type-check FILLSC/MOVESL/MOVESR inside a DEVICE MODULE.
+        """Type-check FILLSC/MOVESL/MOVESR inside a DEVICE MODULE.
 
         FILLSC(loc: ADSMEM; len: WORD; val: CHAR);
         MOVESL/MOVESR(src, dst: ADSMEM; len: WORD).
@@ -2006,7 +2006,7 @@ class PascalTypeChecker(TypeChecker):
                     if not low_type.equivalent_to(high_type):
                         self.error(f"Set range bounds must have the same ordinal type, got {low_type} and {high_type}", el)
                         return None
-                    # Recission (2nd tranche): a set range with a non-constant bound
+                    # Device-code recission: a set range with a non-constant bound
                     # ('A'..x) needs a runtime loop to set the bits -- banned in a
                     # DEVICE MODULE. The static bitvector core (constant ranges,
                     # union/intersect/membership) stays; a dynamic *singleton* [x]
@@ -2279,7 +2279,7 @@ class PascalTypeChecker(TypeChecker):
                 if arg_type is None:
                     return None
                 # SUCC/PRED are defined on any ordinal type and yield the same
-                # type (checklist 9.8: enums included).
+                # type (enums included).
                 if isinstance(arg_type, EnumType) or arg_type in (INTEGER_TYPE, WORD_TYPE, CHAR_TYPE, BOOLEAN_TYPE):
                     return arg_type
                 self.error(f"Argument 1 type mismatch: {lookup_name} expects an ordinal type, got {arg_type}", expr)
@@ -2292,7 +2292,7 @@ class PascalTypeChecker(TypeChecker):
                 if arg_type is None:
                     return None
                 # ORD maps any ordinal value to its INTEGER ordinal position
-                # (checklist 9.8: enums included).
+                # (enums included).
                 if isinstance(arg_type, EnumType) or arg_type in (INTEGER_TYPE, WORD_TYPE, CHAR_TYPE, BOOLEAN_TYPE):
                     return INTEGER_TYPE
                 self.error(f"Argument 1 type mismatch: ORD expects an ordinal type, got {arg_type}", expr)

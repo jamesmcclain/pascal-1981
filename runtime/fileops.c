@@ -95,7 +95,7 @@ static void checked_buffer(struct pas_file_fcb *f)
         die("file runtime: null buffer");
 }
 
-/* DOS CR/LF translation (checklist 8.4 deferral, now closed): vintage
+/* DOS CR/LF translation: vintage
  * PC-DOS TEXT files mark line ends with "\r\n".  On input, a "\r\n" pair
  * is folded into a single '\n' line marker so EOLN/READLN/F^ semantics
  * match the manual on DOS-produced files; a bare '\r' (not followed by
@@ -678,8 +678,7 @@ int pas_fread_string(struct pas_file_fcb *f, uint8_t * buf, int cap)
      * line marker (which stays the current component, like the LSTRING
      * reader); the remainder of the destination is blank-padded.  Unlike
      * LSTRING, reading stops once the destination is full — the rest of the
-     * line is left unconsumed for subsequent READs.  [INFERRED] semantics;
-     * see checklist note. */
+     * line is left unconsumed for subsequent READs.  [INFERRED] semantics. */
     FILE *h = stream_for(f, 0);
     int ch, n = 0;
     while (n < cap && (ch = fcb_next_char(f, h)) != EOF && ch != '\n') {

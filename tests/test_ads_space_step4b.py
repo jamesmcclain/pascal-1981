@@ -1,10 +1,10 @@
-"""Step 4b (ADS-value lowering + residence storage) and the first recission
-tranche (heap, host I/O, direct recursion) for DEVICE MODULEs.
+"""ADS-value lowering + residence storage, plus the device-code recissions
+(heap, host I/O, direct recursion) for DEVICE compilands.
 
-These cover the gaps left after Step 4a: the earlier suite checked ADS *type*
+These cover the ADS *value* gaps: the earlier suite checked ADS *type*
 lowering but never ADS *value* production, which silently miscompiled
 (`ADS x` produced a {ptr,i16} pair stored through a punning bitcast over an
-addrspace(1) slot). See docs/ads-implementation-plan.md Steps 0.5 and 4.
+addrspace(1) slot).
 """
 import re
 import unittest

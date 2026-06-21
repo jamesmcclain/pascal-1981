@@ -13,11 +13,11 @@ Design constraints
 * Only the files that are genuine compilation units (PROGRAM, IMPLEMENTATION
   OF …, UNIT) appear in ``compile_pairs``.
 
-Phase 0 scope
+Scope
 -------------
 Only the working case is covered here.  The not-yet-working case (splicing a
 full INTERFACE unit block before a PROGRAM or IMPLEMENTATION compilation unit)
-is addressed in Phase 1/2 and will have its own tests added then.
+is addressed by the spliced-interface tests.
 """
 
 import os

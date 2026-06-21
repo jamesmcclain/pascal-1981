@@ -1,4 +1,4 @@
-"""Checklist S2.2.1 (full/lazy form) + S4.1 — new artifact-level guards.
+"""Lazy host-runtime externs + INPUT/OUTPUT ownership — artifact-level guards.
 
 Two orthogonal properties verified here:
 
@@ -139,7 +139,7 @@ class TestZeroDeclareGuarantee(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Property 2 — INPUT/OUTPUT single-definition (S4.1)
+# Property 2 — INPUT/OUTPUT single-definition
 # ---------------------------------------------------------------------------
 
 

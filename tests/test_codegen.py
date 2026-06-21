@@ -473,7 +473,7 @@ class TestCodegenBuildRun(unittest.TestCase):
         self.assertIn("42", stdout)
 
     def test_duplicate_else_runtime_matches_vintage_d003(self):
-        """D-003: duplicate $ELSE in a true branch resumes at the second else."""
+        """Duplicate $ELSE in a true branch resumes at the second else."""
         src = """PROGRAM P;
 BEGIN
   {$IF 1 $THEN}
@@ -1565,7 +1565,7 @@ END."""
 
 
 class TestEnumCodegen(unittest.TestCase):
-    """First-class enum support (checklist 9.8): SUCC/PRED, CASE, FOR, WRITE."""
+    """First-class enum support: SUCC/PRED, CASE, FOR, WRITE."""
 
     ENUM = "TYPE Color = (Red, Green, Blue);"
 
@@ -2082,7 +2082,7 @@ class TestAbortRuntime(unittest.TestCase):
 
 
 class TestWriteDoubleColonCodegen(unittest.TestCase):
-    """P::N lowering (discrepancy D-002): default 14-char field, fixed point."""
+    """P::N lowering: default 14-char field, fixed point."""
 
     def test_double_colon_real_uses_fixed_point_with_default_width(self):
         src = "PROGRAM P; VAR x: REAL; BEGIN x := 123.456; WRITELN(x::2) END."
@@ -2103,7 +2103,7 @@ class TestStringCapacityGatesRespectRangeck(unittest.TestCase):
     """7.7 follow-on: the string-intrinsic capacity gates must honor the
     per-statement $RANGECK state and the CLI force override.
 
-    (The §9.5 checklist note claiming these were 'unconditional' was stale:
+    (An earlier note claiming these were 'unconditional' was stale:
     statement-level wiring via effective_rangeck already exists. These tests
     pin the behavior so it cannot silently regress.)
 

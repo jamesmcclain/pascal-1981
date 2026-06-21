@@ -1,4 +1,4 @@
-"""Integration tests for multiple $INCLUDE-spliced INTERFACE units (Phase 2).
+"""Integration tests for multiple $INCLUDE-spliced INTERFACE units.
 
 These tests verify the case where a single source file splices in *more than
 one* INTERFACE header before its main compilation unit.  The canonical example
@@ -11,21 +11,21 @@ own interface header AND the interface header of a module it depends on:
     USES BASEPLOT;
     ...
 
-Prior to Phase 2 the parser accepted exactly one leading interface unit.  When
+The parser originally accepted exactly one leading interface unit.  When
 a second INTERFACE keyword appeared after the first was parsed, the parser
 called parse_compilation_unit(), which consumed it as if it were a standalone
 unit and then choked on the following IMPLEMENTATION keyword with:
 
     ParserError: expected EOF, got IMPLEMENTATION
 
-Phase 2 changes
+Multi-interface changes
 ---------------
 * ``parser.parse()`` now loops over leading INTERFACE units instead of
   handling at most one.
 * ``unit.interface`` is assigned by *name match* (the interface whose name
   equals the implementation unit name), not blindly to the first header.
 * All spliced interfaces are placed in ``unit.local_interfaces`` regardless,
-  so Phase 1's USES-from-local-interfaces resolution applies to all of them.
+  so the USES-from-local-interfaces resolution applies to all of them.
 
 What is NOT covered here
 -------------------------
@@ -36,7 +36,7 @@ tests below keep implementation bodies self-contained (WRITELN only) so that
 the codegen path remains unchanged while the parser, type-checker, and
 full build are exercised.
 
-File layout rules (same as Phase 0 / Phase 1)
+File layout rules
 ----------------------------------------------
 * Include files are **never** listed in ``compile_pairs``.
 * Only genuine compilation units are compiled.
@@ -97,7 +97,7 @@ END.
 """
 
 # ---------------------------------------------------------------------------
-# Program: splices only the GRAPHICS header (single-interface, Phase 1 path).
+# Program: splices only the GRAPHICS header (single-interface path).
 # ---------------------------------------------------------------------------
 
 _RENAMED_PROGRAM = """\
@@ -297,7 +297,7 @@ class TestMultiInterfaceBuildAndRun(unittest.TestCase):
             'BASEPL': _BASEPLOT_HEADER,
             # Implementation splices TWO headers.
             'graphics_impl.pas': _GRAPHICS_IMPL,
-            # Program splices only the GRAPHICS header (Phase 1 path).
+            # Program splices only the GRAPHICS header (single-interface path).
             'plotbox.pas': main_source,
             # Deliberately absent from disk: no GRAPHICS, GRAPHICS.pas,
             # BASEPLOT, or BASEPLOT.pas files.

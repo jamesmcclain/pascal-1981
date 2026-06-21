@@ -89,7 +89,7 @@ class TestNewAllocationSize(unittest.TestCase):
         self.assertIn('call i8* @"malloc"(i64 2)', ir)
 
     def test_new_long_form_super_array_typechecks(self):
-        """D-002: long-form NEW supplies the upper bound for a super array."""
+        """Long-form NEW supplies the upper bound for a super array."""
         src = ("PROGRAM P; TYPE VECT = SUPER ARRAY [0..*] OF INTEGER; "
                "VAR p: ^VECT; BEGIN NEW(p, 10) END.")
         result = typecheck_source(src)
@@ -334,7 +334,7 @@ class TestFileBufferModel(unittest.TestCase):
             self.assertEqual(out, "eol\nR\n")
             self.assertEqual(path.read_text(), "R\n")
 
-    # ---- Phase 1 regressions: formatted readers must honor the FCB's ----
+    # ---- Formatted-reader regressions: readers must honor the FCB's ----
     # ---- current-component buffer (RESET's implicit GET was being lost) ----
 
     def test_fread_after_reset_reads_first_component(self):
@@ -403,7 +403,7 @@ class TestFileBufferModel(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertEqual(out, "HI\neol\n")
 
-    # ---- Phase 2 regressions: writes in inspection/closed mode must abort ----
+    # ---- Write-mode regressions: writes in inspection/closed mode must abort ----
     # ---- (previously stream_for silently flipped modes and clobbered bytes) ----
 
     def test_write_in_inspection_mode_aborts_and_preserves_file(self):
@@ -449,7 +449,7 @@ class TestFileBufferModel(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertEqual(out, "Q\n")
 
-    # ---- Phase 4 regression: bad ASSIGN fails at ASSIGN, not a later fopen ----
+    # ---- ASSIGN regression: bad ASSIGN fails at ASSIGN, not a later fopen ----
 
     def test_assign_empty_name_aborts_immediately(self):
         """ASSIGN(f, '') (empty after blank-trimming, and not the CHR(0)

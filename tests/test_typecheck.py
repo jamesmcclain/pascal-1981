@@ -1100,7 +1100,7 @@ BEGIN x := 1.0; w := BYWORD(x, 0); END."""
 
 
 class TestEnumValidation(unittest.TestCase):
-    """First-class enum type-checking (checklist 9.8)."""
+    """First-class enum type-checking."""
 
     ENUM = "TYPE Color = (Red, Green, Blue);"
 

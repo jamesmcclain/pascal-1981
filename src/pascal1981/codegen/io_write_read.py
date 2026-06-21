@@ -162,7 +162,7 @@ class IoWriteReadMixin:
                     fmt_parts.append('%*.*f')
                     printf_args.extend([
                         # P::N — width omitted means the default 14-char field
-                        # (vintage D-002 output: '        123.46' for ::2).
+                        # (vintage output: '        123.46' for ::2).
                         self.coerce_printf_int(self.codegen_expr(width)) if width is not None else ir.Constant(ir.IntType(32), 14),
                         self.coerce_printf_int(self.codegen_expr(precision)) if precision is not None else ir.Constant(ir.IntType(32), 0),
                         _to_printf_double(val)

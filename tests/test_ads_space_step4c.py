@@ -1,4 +1,4 @@
-"""Closes the two follow-ups left after Step 4b:
+"""Closes two remaining ADS-value follow-ups:
 
   1. Mutual/indirect recursion in a DEVICE MODULE (call-graph cycle), not just
      direct self-calls.

@@ -1,5 +1,5 @@
-"""Step 5 of the ADS memory-spaces work: the FILLSC/MOVESL/MOVESR cross-space
-bridge inside a DEVICE MODULE (design S5.4; implementation-plan Step 5).
+"""The FILLSC/MOVESL/MOVESR cross-space
+bridge inside a DEVICE MODULE (design S5.4).
 
 Inside a DEVICE MODULE these three segmented builtins become genuine
 cross-space data movement: their two ADSMEM operands may name *different*

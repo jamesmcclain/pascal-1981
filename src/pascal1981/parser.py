@@ -54,7 +54,7 @@ class Parser:
         # $INCLUDE before the main compilation unit.  A single implementation
         # file may include its own interface header AND one or more dependency
         # interface headers (e.g. GRAPHI + BASEPL before IMPLEMENTATION OF
-        # GRAPHICS).  Phase 2 extends the Phase 1 single-interface path to a
+        # GRAPHICS).  This extends the single-interface path to a
         # loop so arbitrarily many headers are accepted.
         interfaces: List[InterfaceUnit] = []
         while self.current().kind == 'INTERFACE' or self._at_device_prefix('INTERFACE'):
@@ -576,7 +576,7 @@ class Parser:
             if self.current().kind == 'COLON':
                 # P::N (manual 12-17): width M omitted — "same as passing
                 # MAXINT", i.e. the type's default width is used.  Vintage
-                # compiler accepts this; see discrepancy D-002.
+                # compiler accepts this.
                 self.match('COLON')
                 precision = self.parse_expression()
             else:

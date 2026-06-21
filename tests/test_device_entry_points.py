@@ -1,10 +1,10 @@
-"""Checklist S2.3 — exported device routines lower to launchable entry points.
+"""Exported device routines lower to launchable entry points.
 
 In a DEVICE UNIT the interface's export list *is* the set of launchable
 kernels: an exported routine gets the GPU kernel calling convention
 (`ptx_kernel` / `amdgpu_kernel`), which PTX renders as a `.visible .entry`;
 non-exported implementation routines stay device-internal `.func`s.  The
-entry-shape rules (S2.3.3) bite only where a real GPU entry is formed — at
+entry-shape rules bite only where a real GPU entry is formed — at
 codegen on a GPU triple — so the x86 CPU-device parity ports are unaffected.
 
 Assertions are at the artifact level: the emitted IR's calling convention and,
@@ -139,7 +139,7 @@ class TestDeviceModuleHasNoEntries(unittest.TestCase):
 
 
 class TestEntryShapeRules(unittest.TestCase):
-    """S2.3.3 — rules bite on a GPU triple; inert (serial) on x86."""
+    """Entry-shape rules bite on a GPU triple; inert (serial) on x86."""
 
     _FUNC_IFACE = "DEVICE INTERFACE;\nUNIT U (f);\nFUNCTION f: INTEGER;\nEND;\n"
     _FUNC_IMPL = "(*$INCLUDE:'u'*)\nDEVICE IMPLEMENTATION OF U;\nFUNCTION f: INTEGER;\nBEGIN f := 1; END;\n.\n"
@@ -177,7 +177,7 @@ class TestCheckerMarksExportsUnderSeparateCompilation(unittest.TestCase):
     def test_only_exported_routines_are_flagged(self):
         # Compile the implementation *alone* (interface only on disk): the
         # checker loads the interface and flags exports on the impl AST, which
-        # is what codegen later reads (S2.3.2 caveat).
+        # is what codegen later reads.
         ast, _ = _compile_unit(_IFACE, _IMPL, module_name='VADD', device_triple='nvptx64-nvidia-cuda')
         flags = {d.name.lower(): d.is_exported_entry for d in ast.decls if hasattr(d, 'is_exported_entry')}
         self.assertTrue(flags.get('vecadd'))

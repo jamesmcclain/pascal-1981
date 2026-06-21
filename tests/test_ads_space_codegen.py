@@ -1,9 +1,8 @@
-"""Step 4 of the ADS memory-spaces work: per-module triple + addrspace lowering.
+"""ADS memory-spaces: per-module triple + addrspace lowering.
 
 Scope: a DEVICE MODULE lowers against the device triple and lowers ADS(s) OF T
 to a typed addrspace(k) pointer; host/plain-module output is byte-identical.
-The ADS-value / residence-storage / coerce_arg rewrite is Step 4b (deferred).
-See docs/ads-implementation-plan.md Step 4.
+The ADS-value / residence-storage / coerce_arg rewrite is deferred.
 """
 import re
 import unittest

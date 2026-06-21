@@ -1,4 +1,4 @@
-"""DEVICE UNIT codegen parity tests for Phase 1.4."""
+"""DEVICE UNIT codegen parity tests."""
 
 import os
 import re

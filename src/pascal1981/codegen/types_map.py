@@ -243,7 +243,7 @@ class TypesMapMixin:
             return self.builder.insert_value(out, ir.Constant(target_type.elements[1], 0), 1)
 
         if isinstance(target_type, ir.PointerType) and isinstance(vt, ir.PointerType):
-            # Step 4b / design S6.3: never silently cross address spaces. A bitcast
+            # Never silently cross address spaces (design S6.3). A bitcast
             # cannot change addrspace, and no-mixing is enforced in the checker, so a
             # differing addrspace here means something slipped through -- fail loudly
             # rather than emit illegal IR.
@@ -515,7 +515,7 @@ class TypesMapMixin:
         return type_expr
 
     # ------------------------------------------------------------------
-    # Enum support (checklist 9.8)
+    # Enum support
     # ------------------------------------------------------------------
 
     def coerce_printf_int(self, val: ir.Value) -> ir.Value:
@@ -529,7 +529,7 @@ class TypesMapMixin:
 
     def retype_source_is_pointer_value(self, expr) -> Optional[bool]:
         """Classify the inner expression of a RETYPE for the pointer-vs-aggregate
-        conflation documented in checklist item 9.9.
+        conflation between pointer and aggregate values.
 
         ``codegen_expr`` returns an LLVM pointer for two unrelated reasons:
 

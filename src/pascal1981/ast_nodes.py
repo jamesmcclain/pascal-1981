@@ -143,10 +143,10 @@ class ProcDecl(ASTNode):
     body: Optional[Block]  # None if EXTERN/FORWARD/EXTERNAL
     directive: Optional[str] = None  # 'FORWARD' | 'EXTERN' | 'EXTERNAL' when body is None
     # Set by the type checker when this routine's name is in its DEVICE
-    # interface's export list (checklist S2.3.1): such routines are the
+    # interface's export list: such routines are the
     # launchable kernel entries.  Marked on the AST (not read from a loaded
     # interface in codegen) so it survives separate compilation, where codegen
-    # never sees the interface (checklist S2.3.2 caveat).
+    # never sees the interface.
     is_exported_entry: bool = False
 
 

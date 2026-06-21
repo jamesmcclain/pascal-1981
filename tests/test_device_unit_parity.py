@@ -1,4 +1,4 @@
-"""Phase 3.3 — DEVICE UNIT / DEVICE MODULE parity and final-acceptance guards.
+"""DEVICE UNIT / DEVICE MODULE parity and final-acceptance guards.
 
 Three sets of tests:
 
@@ -11,13 +11,13 @@ Three sets of tests:
    load appears, whether a host-runtime extern appears — must match.
 
 2. **DEVICE MODULE unchanged guard** — compilations of existing DEVICE MODULE
-   source with the same inputs before and after the checklist changes are
+   source with the same inputs before and after the DEVICE UNIT changes are
    byte-for-byte identical (golden self-compare: current run's IR is the
-   reference).  If any Phase-1/2/3 change silently altered DEVICE MODULE
+   reference).  If any DEVICE UNIT change silently altered DEVICE MODULE
    lowering, these tests break.
 
-3. **Final checklist acceptance items** — a compact checklist of the
-   'definition of done' items from the migration checklist, each mapped to an
+3. **Final acceptance items** — a compact checklist of the
+   'definition of done' items, each mapped to an
    artifact assertion.
 """
 
@@ -215,7 +215,7 @@ class TestDeviceModuleUnchanged(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 3. Final checklist acceptance items
+# 3. Final acceptance items
 # ---------------------------------------------------------------------------
 
 class TestFinalAcceptance(unittest.TestCase):

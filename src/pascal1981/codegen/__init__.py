@@ -78,7 +78,7 @@ def compile_to_llvm(
         merged['RANGECK'] = force_rangeck
     if force_flags:
         merged.update(force_flags)
-    # Checklist S4.1: only PROGRAM owns the process-wide @input/@output
+    # Only PROGRAM owns the process-wide @input/@output
     # definitions. MODULE and UNIT compilands are library-like objects and emit
     # external declarations so linking them with a PROGRAM cannot collide.
     is_root_compiland = isinstance(ast, ProgramUnit)

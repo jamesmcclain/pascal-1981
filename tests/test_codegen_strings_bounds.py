@@ -103,7 +103,7 @@ class TestArrayBoundIntrinsicCodegen(unittest.TestCase):
 
 
 class TestStringLowerUpperSemantics(unittest.TestCase):
-    """D-001: STRING/LSTRING participate in LOWER/UPPER like super arrays."""
+    """STRING/LSTRING participate in LOWER/UPPER like super arrays."""
 
     def test_string_lower_upper_typechecks(self):
         src = "PROGRAM P; VAR s: STRING(10); BEGIN WRITELN(LOWER(s)); WRITELN(UPPER(s)) END."

@@ -315,7 +315,7 @@ class Lexer:
         Nested $IF/$END pairs increment/decrement depth so inner blocks are
         skipped atomically.
 
-        Vintage duplicate-$ELSE behavior (D-003): even when stop_at_else is
+        Vintage duplicate-$ELSE behavior: even when stop_at_else is
         False because a completed true-branch is being skipped, a second
         depth-1 $ELSE terminates the skip and tokenization resumes after it.
         This leaks the later branch text, matching the observed 1981 output.

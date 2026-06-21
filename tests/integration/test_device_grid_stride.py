@@ -1,4 +1,4 @@
-"""CPU-device integration test for Milestone C.1 grid-stride indexing.
+"""CPU-device integration test for grid-stride indexing.
 
 The host CPU is the device for this test: DEVICE code lowers with the x86
 CPU-device constants for THREADIDX/BLOCKIDX/BLOCKDIM/GRIDDIM.  The grid-stride
