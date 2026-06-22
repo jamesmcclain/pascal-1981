@@ -48,3 +48,49 @@ GPU allocator calls unless a real device heap design is approved.
 heap recission. Add new differential probes before expanding beyond the current
 subset, especially for multi-dimensional super arrays, `UPPER(p^)`, and any
 variant-record long-form `NEW` behavior.
+
+---
+
+## 2. USES-import rejects a DEVICE INTERFACE that declares shared TYPEs [OPEN]
+
+**Where.** `type_checker.py::import_symbols` (the `InterfaceUnit` branch):
+the `len(export_names) != len(export_decls)` guard. The export list is the
+UNIT's parameter list (`UNIT U (a, b)`); the declaration list is every decl in
+the interface body, including any `TYPE`/`CONST`/`VAR` section.
+
+**What.** A DEVICE INTERFACE that declares a shared type alongside its exported
+routines — e.g. `examples/device_ptx/mandelbrot/mandelbrot.inc`, which declares
+`TYPE PIXELS = SUPER ARRAY [0..*] OF INTEGER32;` before the two exported
+`PROCEDURE`s — cannot be imported by a host `USES` clause. The TYPE decl makes
+`len(export_decls)` (3) exceed `len(export_names)` (2), so the checker reports
+`Interface 'MANDELBROT' export list does not match its declarations` and the
+referenced procedures become undefined. A device interface with no shared types
+(e.g. the primes/grid-stride fixtures) imports fine.
+
+**Why it matters.** It blocks the natural host-launcher shape for a device unit
+whose kernels take a typed buffer: the host program ought to be able to `USES`
+the unit and pass an `ADS(GLOBAL) OF PIXELS` through to the kernel using the
+shared type name. Today the only ways to exercise such a unit from the host are
+to compile the unit standalone (as the PTX substitution test does) or to call
+the lowered routine directly from C (as
+`tests/integration/test_device_mandelbrot_x86.py` does via a C harness). The
+check is also stricter than the `ImplementationUnit`/`ModuleUnit` branch right
+below it, which filters decls by `getattr(decl, 'name', None)` and would skip a
+nameless TYPE section.
+
+**Suggested resolution.** In the `InterfaceUnit` branch, derive `export_decls`
+from the named, exported routine decls only (filter to `ProcDecl`/`FuncDecl`
+whose `name` is in `export_names`), matching the leniency the sibling branch
+already uses, rather than comparing against every body decl. Shared TYPE/CONST
+names from the interface should still be imported into the host scope so a
+`USES`-ing program can name `PIXELS`; decide whether non-exported interface
+decls are name-imported or type-only-imported. Keep rejecting a real export-
+list/declaration mismatch (an export name with no matching declaration, or a
+declaration the export list did not name).
+
+**How to verify.** Add a host `USES MANDELBROT` integration test that declares
+a `PIXELS`-typed buffer, calls `mandelbrot_f32`/`mandelbrot_f64`, and checks the
+result — replacing the C-harness workaround in
+`tests/integration/test_device_mandelbrot_x86.py`. Keep the existing
+`test_device_unit_parity.py` import-shape tests green (those interfaces have no
+shared types, so they are unaffected).
