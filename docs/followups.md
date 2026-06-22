@@ -7,8 +7,8 @@ IN-PROGRESS / DONE.
 
 These are not bugs that produce wrong output today; they are seams worth
 closing when the surrounding code is next touched. Resolved items are moved to
-`docs/old/old-followups.md` once they ship (most recently the device phantom
-`input`/`output` extern leak, which was item 2 here).
+`docs/old/old-followups.md` once they ship (most recently the device codegen-
+quality gap vs `nvcc` — predication, FMA, alignment — which was item 2 here).
 
 
 ---
@@ -48,43 +48,3 @@ GPU allocator calls unless a real device heap design is approved.
 heap recission. Add new differential probes before expanding beyond the current
 subset, especially for multi-dimensional super arrays, `UPPER(p^)`, and any
 variant-record long-form `NEW` behavior.
-
----
-
-## 2. Device codegen-quality gap vs `nvcc` (predication, FMA, alignment) [OPEN]
-
-**Where.** Expression/statement lowering for `DEVICE` code (`codegen/exprs.py`,
-`codegen/stmts.py`) and pointer-parameter typing (`codegen/types_map.py`).
-
-**What.** A PTX diff of the Mandelbrot kernels (`nvcc` 12.8 vs this toolchain)
-found only below-the-ABI-line differences. Three are codegen-quality gaps worth
-closing when the device lowering is next tuned:
-
-- **Branch vs predication on the bounds guard.** The source
-  `IF width > 1 THEN ... ELSE ...` lowers to real control flow (`bra`); `nvcc`
-  predicates it into a branchless `selp.f32`. Predication is the preferred GPU
-  idiom because it avoids warp divergence at image edges.
-- **No FMA fusion.** `2*x*y + y0` lowers to a discrete multiply/add; `nvcc` fuses
-  it into one `fma.rn`. The FMA also carries more intermediate precision, so the
-  two kernels can differ in the last bit (the rendered image still matched).
-- **Conservative pointer alignment.** Pointer parameters are emitted as
-  `.ptr .global .align 1`; the element type is known (`int`), so `.align 4` is
-  the tighter, correct hint.
-
-**Why it matters.** None of these affect correctness, ABI, or memory layout — the
-kernel is a faithful drop-in as-is. They are the difference between "runs
-correctly" and "indistinguishable from `nvcc`'s output," and the FMA/predication
-points have real performance and edge-case-precision implications on large
-renders.
-
-**Suggested resolution.** Consider enabling `contract`/FMA fast-math on device
-arithmetic (or emitting `llvm.fma` for the fused pattern), letting the NVPTX
-backend predicate small `IF` guards (or lowering simple `IF/ELSE`-of-assignment to
-`select`), and propagating element alignment to the pointer-parameter type. Treat
-fast-math contraction as a deliberate, documented choice since it changes last-bit
-results.
-
-**How to verify.** Re-diff `mandelbrot.ptx` against the `nvcc` reference and check
-for `fma.rn`, `selp`, and a tighter `.align`. Guard any FMA/fast-math change with a
-note that device float results may differ in the last bit from the strict-IEEE
-host path.
