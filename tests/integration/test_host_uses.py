@@ -49,6 +49,7 @@ _EXPECTED = ["42", "42"]
 
 @requires_exe
 class TestHostUsesIntegration(unittest.TestCase):
+
     def test_plain_interface_implementation_builds_and_runs_via_uses(self):
         rc, out, err = build_and_run_pascal_project(
             files={
@@ -63,7 +64,7 @@ class TestHostUsesIntegration(unittest.TestCase):
             ],
             link_ir_relpaths=['mathbox.ll', 'main.ll'],
             exe_name='host-uses',
-            link_flags=[],  # INPUT/OUTPUT ownership fix (S4.1) eliminates the collision
+            link_flags=[],  # INPUT/OUTPUT ownership fix eliminates the collision
         )
         self.assertEqual(rc, 0, msg=err)
         self.assertEqual([line.strip() for line in out.splitlines() if line.strip()], _EXPECTED)

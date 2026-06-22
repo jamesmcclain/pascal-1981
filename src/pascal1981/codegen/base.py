@@ -64,7 +64,7 @@ def _is_gpu_triple(triple: str) -> bool:
     """True for real GPU target triples (NVPTX / AMDGPU).
 
     Single source of truth shared by addrspace lowering (_space_addrspace) and
-    the device host-runtime-extern skip (checklist S2.2.1).  The x86 CPU-device
+    the device host-runtime-extern skip.  The x86 CPU-device
     triple is deliberately *not* a GPU triple: there address spaces collapse to
     0 and device code still links the host runtime, so its externs stay (the
     green-safe boundary)."""
@@ -91,7 +91,15 @@ class CodegenBase:
     Initializes module state, builder, scope, and shared constants/tables.
     """
 
-    def __init__(self, verbose: bool = False, source_file: Optional[str] = None, force_flags: Optional[Dict[str, bool]] = None, features: Optional[Dict[str, bool]] = None, device_triple: str = "x86_64-pc-linux-gnu", host_triple: str = "x86_64-pc-linux-gnu", is_root_compiland: bool = True):
+    def __init__(self,
+                 verbose: bool = False,
+                 source_file: Optional[str] = None,
+                 force_flags: Optional[Dict[str, bool]] = None,
+                 features: Optional[Dict[str, bool]] = None,
+                 device_triple: str = "x86_64-pc-linux-gnu",
+                 host_triple: str = "x86_64-pc-linux-gnu",
+                 is_root_compiland: bool = True,
+                 is_device_compiland: bool = False):
         # Each compilation gets its own LLVM context. Identified struct types
         # (used for named records, so self-referential linked-list nodes can
         # build) are interned by name *within a context*; the default global
@@ -113,6 +121,15 @@ class CodegenBase:
         # Historical name: now means "currently lowering device code" once
         # DEVICE UNIT codegen is wired. Host/vintage codegen stays unchanged.
         self.is_device_module = False
+        # Whether the top-level compiland being lowered is a DEVICE unit/module.
+        # Unlike is_device_module (which toggles on/off as lowering enters and
+        # leaves device routines), this is fixed for the whole compilation and
+        # is known at construction time from the AST root's `is_device` flag.
+        # It gates one-time, module-level emission decisions made in __init__
+        # (e.g. the predeclared INPUT/OUTPUT host-stream globals) before any
+        # routine-level device context has been established. See followups.md
+        # item 2 (phantom `.extern .global input/output` in device PTX).
+        self.is_device_compiland = is_device_compiland
         self.builder: Optional[IRBuilder] = None
         self.scope = Scope()  # global scope
         self._root_scope = self.scope  # fixed reference; self.scope moves during function lowering
@@ -134,7 +151,7 @@ class CodegenBase:
             'DIRECT': 2,
             # SPACE enum ordinals. Builtin enums do not auto-seed codegen's
             # constants (only the checker symbol table gets them), so they are
-            # hand-seeded here alongside MAXINT (plan Step 0/Step 1), otherwise
+            # hand-seeded here alongside MAXINT, otherwise
             # ADS(GLOBAL) type-checks but fails to fold. Inert outside device code.
             'HOST': 0,
             'GLOBAL': 1,
@@ -155,7 +172,7 @@ class CodegenBase:
         # GOTO can target a label that appears either earlier (backward) or
         # later (forward) in the source.  Reset/restored per function body.
         self.label_blocks: Dict[Union[int, str], ir.Block] = {}
-        # Enum support (checklist 9.8): map each enum member (UPPER) to the full
+        # Enum support: map each enum member (UPPER) to the full
         # ordered member-name list of its enum so WRITE can print the symbolic
         # name of a bare member literal; cache the per-enum `[n x i8*]` name
         # tables so each enum emits its name strings only once.
@@ -169,7 +186,7 @@ class CodegenBase:
         # lowered (set by codegen_stmt).  Expression-level runtime checks
         # (INDEXCK, MATHCK, NILCK) read it via check_enabled().
         self._stmt_meta: Optional[Dict[str, bool]] = None
-        # Lazy extern registration (checklist S2.2.1 full/lazy form): build a
+        # Lazy extern registration: build a
         # private cache/registry now (cheap — no IR emitted), materialise each extern
         # the first time codegen actually references it via runtime_extern().
         # Dead externs (never referenced) never appear in the module IR at all,
@@ -179,8 +196,13 @@ class CodegenBase:
         self._build_extern_factories()
         # INPUT/OUTPUT: only PROGRAM owns the strong definition; MODULE and
         # UNIT compilands emit declare-only (external global) so the linker
-        # resolves to the single copy in the program root (S4.1).
-        self._register_predeclared_files(is_root_compiland)
+        # resolves to the single copy in the program root.  DEVICE
+        # compilands have no host I/O, so these host-stream globals are
+        # suppressed entirely there -- emitting them leaked two unreferenced
+        # `.extern .global ... input/output` lines into device PTX
+        # (followups.md item 2).
+        if not self.is_device_compiland:
+            self._register_predeclared_files(is_root_compiland)
 
     def _log(self, msg: str) -> None:
         """Emit a diagnostic line to stderr when verbose mode is on."""
@@ -195,7 +217,7 @@ class CodegenBase:
     def _space_addrspace(self, space_ord: Optional[int]) -> int:
         """Map a SPACE ordinal to its LLVM addrspace for the device triple.
 
-        GPU triples use the validated S3.2 table (GLOBAL=1, SHARED=3,
+        GPU triples use the validated address-space table (GLOBAL=1, SHARED=3,
         CONSTANT=4, LOCAL=5); HOST and the x86 CPU-device collapse to 0.
         """
         if not space_ord:  # None or 0 (HOST)
@@ -207,8 +229,8 @@ class CodegenBase:
     # Runtime-check flags whose failure path lowers to a *host* trap
     # (fflush+abort, via emit_runtime_abort / _emit_case_no_match_trap /
     # _guard_string_capacity).  In device code those host symbols don't exist,
-    # so the checks are suppressed wholesale (checklist S2.1.1; prescription
-    # S2.3.A1).  INITCK is deliberately excluded: it zero-initializes rather
+    # so the checks are suppressed wholesale.  INITCK is deliberately excluded:
+    # it zero-initializes rather
     # than trapping, so it is harmless — and arguably desirable — on device.
     _HOST_TRAPPING_CHECKS = frozenset({'MATHCK', 'RANGECK', 'INDEXCK', 'NILCK', 'STACKCK'})
 
@@ -221,7 +243,7 @@ class CodegenBase:
         effective_flag for statement-level RANGECK).  Fires only under
         is_device_module, so host/vintage and DEVICE-MODULE-on-host lowering
         stay byte-identical; on a GPU triple it is what makes device IR carry
-        zero abort/fflush (checklist S2.1 green gate).  A future S2.1.2 could
+        zero abort/fflush.  A future on-device trap could
         swap the elision here for an on-device llvm.trap() instead.
         """
         return self.is_device_module and flag in self._HOST_TRAPPING_CHECKS
@@ -262,8 +284,12 @@ class CodegenBase:
         of these program-wide singletons. MODULE and UNIT compilands emit an
         external declaration only; the linker resolves their reference to the
         PROGRAM definition. This prevents multiple-definition collisions when
-        linking a host program with one or more compiled library objects
-        (checklist S4.1).
+        linking a host program with one or more compiled library objects.
+
+        Not called for DEVICE compilands: device code has no host I/O, so these
+        host-stream globals would be dead `.extern .global` declarations in the
+        emitted PTX (followups.md item 2). The caller in __init__ gates this on
+        is_device_compiland.
         """
         text_type = FileType(NamedType('CHAR', None), structure='ASCII')
         for name in ('INPUT', 'OUTPUT'):
@@ -284,15 +310,15 @@ class CodegenBase:
         """
         m = self.module  # captured by all factories
         # Shared type shorthands.
-        i8p  = ir.IntType(8).as_pointer()
-        i8   = ir.IntType(8)
-        i16  = ir.IntType(16)
-        i32  = ir.IntType(32)
-        i64  = ir.IntType(64)
-        f64  = ir.DoubleType()
+        i8p = ir.IntType(8).as_pointer()
+        i8 = ir.IntType(8)
+        i16 = ir.IntType(16)
+        i32 = ir.IntType(32)
+        i64 = ir.IntType(64)
+        f64 = ir.DoubleType()
         void = ir.VoidType()
-        ads_ty  = ir.LiteralStructType([i8p, i16])
-        fcb_ty  = self.file_fcb_type()
+        ads_ty = ir.LiteralStructType([i8p, i16])
+        fcb_ty = self.file_fcb_type()
         fcb_ptr = fcb_ty.as_pointer()
         set_ptr = ir.ArrayType(i64, 4).as_pointer()
 
@@ -308,65 +334,65 @@ class CodegenBase:
 
         self._extern_factories: Dict[str, Any] = {
             # ---- fill family -----------------------------------------------
-            'fillc':  _mk('fillc',  ir.FunctionType(i32, [i8p, i16, i8])),
+            'fillc': _mk('fillc', ir.FunctionType(i32, [i8p, i16, i8])),
             'fillsc': _mk('fillsc', ir.FunctionType(i32, [ads_ty, i16, i8])),
             # ---- move family -----------------------------------------------
-            'movel':  _mk('movel',  ir.FunctionType(i32, [i8p, i8p, i16])),
-            'mover':  _mk('mover',  ir.FunctionType(i32, [i8p, i8p, i16])),
+            'movel': _mk('movel', ir.FunctionType(i32, [i8p, i8p, i16])),
+            'mover': _mk('mover', ir.FunctionType(i32, [i8p, i8p, i16])),
             'movesl': _mk('movesl', ir.FunctionType(i32, [ads_ty, ads_ty, i16])),
             'movesr': _mk('movesr', ir.FunctionType(i32, [ads_ty, ads_ty, i16])),
             # ---- libc / libm -----------------------------------------------
             'printf': _mk('printf', ir.FunctionType(i32, [i8p], var_arg=True)),
-            'memcpy':  _mk('memcpy',  ir.FunctionType(i8p,  [i8p, i8p, i64])),
-            'memset':  _mk('memset',  ir.FunctionType(i8p,  [i8p, i32, i64])),
+            'memcpy': _mk('memcpy', ir.FunctionType(i8p, [i8p, i8p, i64])),
+            'memset': _mk('memset', ir.FunctionType(i8p, [i8p, i32, i64])),
             'memmove': _mk('memmove', ir.FunctionType(void, [i8p, i8p, i64])),
-            'malloc':  _mk('malloc',  ir.FunctionType(i8p,  [i64])),
-            'free':    _mk('free',    ir.FunctionType(void, [i8p])),
-            'abort':   _mk('abort',   ir.FunctionType(void, [])),
-            'fflush':  _mk('fflush',  ir.FunctionType(i32, [i8p])),
-            'sqrt':    _mk('sqrt',    ir.FunctionType(f64, [f64])),
-            'sin':     _mk('sin',     ir.FunctionType(f64, [f64])),
-            'cos':     _mk('cos',     ir.FunctionType(f64, [f64])),
-            'log':     _mk('log',     ir.FunctionType(f64, [f64])),
-            'exp':     _mk('exp',     ir.FunctionType(f64, [f64])),
-            'atan':    _mk('atan',    ir.FunctionType(f64, [f64])),
+            'malloc': _mk('malloc', ir.FunctionType(i8p, [i64])),
+            'free': _mk('free', ir.FunctionType(void, [i8p])),
+            'abort': _mk('abort', ir.FunctionType(void, [])),
+            'fflush': _mk('fflush', ir.FunctionType(i32, [i8p])),
+            'sqrt': _mk('sqrt', ir.FunctionType(f64, [f64])),
+            'sin': _mk('sin', ir.FunctionType(f64, [f64])),
+            'cos': _mk('cos', ir.FunctionType(f64, [f64])),
+            'log': _mk('log', ir.FunctionType(f64, [f64])),
+            'exp': _mk('exp', ir.FunctionType(f64, [f64])),
+            'atan': _mk('atan', ir.FunctionType(f64, [f64])),
             # ---- string helpers --------------------------------------------
-            'positn':       _mk('positn',       ir.FunctionType(i32, [i8p, i32, i8p, i32])),
-            'scaneq':       _mk('scaneq',       ir.FunctionType(i32, [i32, i8, i8p, i32, i32, i32])),
-            'scanne':       _mk('scanne',       ir.FunctionType(i32, [i32, i8, i8p, i32, i32, i32])),
+            'positn': _mk('positn', ir.FunctionType(i32, [i8p, i32, i8p, i32])),
+            'scaneq': _mk('scaneq', ir.FunctionType(i32, [i32, i8, i8p, i32, i32, i32])),
+            'scanne': _mk('scanne', ir.FunctionType(i32, [i32, i8, i8p, i32, i32, i32])),
             'encode_value': _mk('encode_value', ir.FunctionType(i32, [i8p, i32, i8p, i32, i32, i32, i32])),
             'decode_value': _mk('decode_value', ir.FunctionType(i32, [i8p, i32, i8p, i32, i32, i32, i32])),
             # ---- stdin read family -----------------------------------------
-            'pas_read_int':    _mk('pas_read_int',    ir.FunctionType(i32,  [i32.as_pointer()])),
-            'pas_read_word':   _mk('pas_read_word',   ir.FunctionType(i32,  [i16.as_pointer()])),
-            'pas_read_real':   _mk('pas_read_real',   ir.FunctionType(i32,  [f64.as_pointer()])),
-            'pas_read_char':   _mk('pas_read_char',   ir.FunctionType(i32,  [i8p])),
-            'pas_read_lstring':_mk('pas_read_lstring',ir.FunctionType(i32,  [i8p, i32])),
-            'pas_read_string': _mk('pas_read_string', ir.FunctionType(i32,  [i8p, i32])),
+            'pas_read_int': _mk('pas_read_int', ir.FunctionType(i32, [i32.as_pointer()])),
+            'pas_read_word': _mk('pas_read_word', ir.FunctionType(i32, [i16.as_pointer()])),
+            'pas_read_real': _mk('pas_read_real', ir.FunctionType(i32, [f64.as_pointer()])),
+            'pas_read_char': _mk('pas_read_char', ir.FunctionType(i32, [i8p])),
+            'pas_read_lstring': _mk('pas_read_lstring', ir.FunctionType(i32, [i8p, i32])),
+            'pas_read_string': _mk('pas_read_string', ir.FunctionType(i32, [i8p, i32])),
             'pas_readln_skip': _mk('pas_readln_skip', ir.FunctionType(void, [])),
             # ---- file-based read family ------------------------------------
-            'pas_fread_int':    _mk('pas_fread_int',    ir.FunctionType(i32,  [fcb_ptr, i32.as_pointer()])),
-            'pas_fread_word':   _mk('pas_fread_word',   ir.FunctionType(i32,  [fcb_ptr, i16.as_pointer()])),
-            'pas_fread_real':   _mk('pas_fread_real',   ir.FunctionType(i32,  [fcb_ptr, f64.as_pointer()])),
-            'pas_fread_char':   _mk('pas_fread_char',   ir.FunctionType(i32,  [fcb_ptr, i8p])),
-            'pas_fread_lstring':_mk('pas_fread_lstring',ir.FunctionType(i32,  [fcb_ptr, i8p, i32])),
-            'pas_fread_string': _mk('pas_fread_string', ir.FunctionType(i32,  [fcb_ptr, i8p, i32])),
+            'pas_fread_int': _mk('pas_fread_int', ir.FunctionType(i32, [fcb_ptr, i32.as_pointer()])),
+            'pas_fread_word': _mk('pas_fread_word', ir.FunctionType(i32, [fcb_ptr, i16.as_pointer()])),
+            'pas_fread_real': _mk('pas_fread_real', ir.FunctionType(i32, [fcb_ptr, f64.as_pointer()])),
+            'pas_fread_char': _mk('pas_fread_char', ir.FunctionType(i32, [fcb_ptr, i8p])),
+            'pas_fread_lstring': _mk('pas_fread_lstring', ir.FunctionType(i32, [fcb_ptr, i8p, i32])),
+            'pas_fread_string': _mk('pas_fread_string', ir.FunctionType(i32, [fcb_ptr, i8p, i32])),
             'pas_freadln_skip': _mk('pas_freadln_skip', ir.FunctionType(void, [fcb_ptr])),
-            'pas_freadset':     _mk('pas_freadset',     ir.FunctionType(void, [fcb_ptr, i8p, i32, set_ptr])),
-            'pas_fread_filename':_mk('pas_fread_filename', ir.FunctionType(void, [fcb_ptr, fcb_ptr])),
+            'pas_freadset': _mk('pas_freadset', ir.FunctionType(void, [fcb_ptr, i8p, i32, set_ptr])),
+            'pas_fread_filename': _mk('pas_fread_filename', ir.FunctionType(void, [fcb_ptr, fcb_ptr])),
             # ---- file control ----------------------------------------------
-            'pas_file_buffer':       _mk('pas_file_buffer',       ir.FunctionType(i8p,  [fcb_ptr])),
+            'pas_file_buffer': _mk('pas_file_buffer', ir.FunctionType(i8p, [fcb_ptr])),
             'pas_file_touch_buffer': _mk('pas_file_touch_buffer', ir.FunctionType(void, [fcb_ptr])),
-            'pas_file_reset':        _mk('pas_file_reset',        ir.FunctionType(void, [fcb_ptr])),
-            'pas_file_rewrite':      _mk('pas_file_rewrite',      ir.FunctionType(void, [fcb_ptr])),
-            'pas_file_get':          _mk('pas_file_get',          ir.FunctionType(void, [fcb_ptr])),
-            'pas_file_put':          _mk('pas_file_put',          ir.FunctionType(void, [fcb_ptr])),
-            'pas_file_close':        _mk('pas_file_close',        ir.FunctionType(void, [fcb_ptr])),
-            'pas_file_discard':      _mk('pas_file_discard',      ir.FunctionType(void, [fcb_ptr])),
-            'pas_file_assign':       _mk('pas_file_assign',       ir.FunctionType(void, [fcb_ptr, i8p, i32])),
-            'pas_file_attach_std':   _mk('pas_file_attach_std',   ir.FunctionType(void, [fcb_ptr, fcb_ptr])),
-            'pas_file_eof':          _mk('pas_file_eof',          ir.FunctionType(i32,  [fcb_ptr])),
-            'pas_file_eoln':         _mk('pas_file_eoln',         ir.FunctionType(i32,  [fcb_ptr])),
+            'pas_file_reset': _mk('pas_file_reset', ir.FunctionType(void, [fcb_ptr])),
+            'pas_file_rewrite': _mk('pas_file_rewrite', ir.FunctionType(void, [fcb_ptr])),
+            'pas_file_get': _mk('pas_file_get', ir.FunctionType(void, [fcb_ptr])),
+            'pas_file_put': _mk('pas_file_put', ir.FunctionType(void, [fcb_ptr])),
+            'pas_file_close': _mk('pas_file_close', ir.FunctionType(void, [fcb_ptr])),
+            'pas_file_discard': _mk('pas_file_discard', ir.FunctionType(void, [fcb_ptr])),
+            'pas_file_assign': _mk('pas_file_assign', ir.FunctionType(void, [fcb_ptr, i8p, i32])),
+            'pas_file_attach_std': _mk('pas_file_attach_std', ir.FunctionType(void, [fcb_ptr, fcb_ptr])),
+            'pas_file_eof': _mk('pas_file_eof', ir.FunctionType(i32, [fcb_ptr])),
+            'pas_file_eoln': _mk('pas_file_eoln', ir.FunctionType(i32, [fcb_ptr])),
             # ---- write / enum helpers -------------------------------------
             'pas_write_fmt': _mk('pas_write_fmt', ir.FunctionType(i32, [fcb_ptr, i8p], var_arg=True)),
             'pas_enum_write_token': _mk('pas_enum_write_token', ir.FunctionType(i8p, [i32, i8p.as_pointer(), i32])),

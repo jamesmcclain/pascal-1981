@@ -76,7 +76,7 @@ class ExprsMixin:
             if not symbol:
                 raise CodegenError(f'Undefined variable: {expr.name}')
             if self.is_device_module:
-                # Step 4b: inside a DEVICE MODULE, `ADS x` is a typed address-space
+                # Inside a DEVICE MODULE, `ADS x` is a typed address-space
                 # pointer to x's storage -- not the vintage {ptr, i16} pair. x already
                 # lives in its residence addrspace (codegen_var_decl), so its address
                 # is the correct addrspace(k)* value and matches an ADS(s) OF T slot.
@@ -225,7 +225,7 @@ class ExprsMixin:
 
             # 3. Get pointer to the memory representation of target size.
             #
-            # An LLVM pointer reaching here is ambiguous (checklist 9.9): it is
+            # An LLVM pointer reaching here is ambiguous: it is
             # either the *address of* an aggregate value (STRING/LSTRING/ARRAY/
             # RECORD), in which case RETYPE reinterprets the pointee by loading
             # through the bitcast, OR it is a genuine Pascal pointer *value* (a
@@ -319,7 +319,7 @@ class ExprsMixin:
     def _expr_is_unsigned_word(self, expr: Expression) -> bool:
         """Best-effort Pascal signedness query for checked integer arithmetic.
 
-        Phase 0 keeps INTEGER at i32, but stops selecting signedness from LLVM
+        INTEGER stays at i32, and signedness is not derived from LLVM
         width. WORD is the only unsigned arithmetic scalar in the vintage core;
         later INTEGER-family i16/i32/i64 values remain signed.
         """

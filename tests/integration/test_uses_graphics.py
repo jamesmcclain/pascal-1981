@@ -4,12 +4,7 @@ import os
 import subprocess
 import unittest
 
-from tests.support import (
-    compile_pascal_project,
-    link_pascal_project,
-    requires_exe,
-    temporary_pascal_project,
-)
+from tests.support import (compile_pascal_project, link_pascal_project, requires_exe, temporary_pascal_project)
 
 _INTERFACE = """INTERFACE;
 UNIT GRAPHICS (BJUMP, WJUMP);
@@ -71,14 +66,13 @@ _EXPECTED_PLAIN = [
 
 @requires_exe
 class TestUsesGraphicsIntegration(unittest.TestCase):
+
     def _run_case(self, main_source: str, exe_name: str):
-        with temporary_pascal_project(
-            {
+        with temporary_pascal_project({
                 'GRAPHI': _INTERFACE,
                 'graphics_impl.pas': _IMPLEMENTATION,
                 'plotbox.pas': main_source,
-            }
-        ) as project_dir:
+        }) as project_dir:
             outputs = compile_pascal_project(
                 project_dir,
                 [

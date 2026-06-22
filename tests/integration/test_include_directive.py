@@ -13,24 +13,18 @@ Design constraints
 * Only the files that are genuine compilation units (PROGRAM, IMPLEMENTATION
   OF …, UNIT) appear in ``compile_pairs``.
 
-Phase 0 scope
+Scope
 -------------
 Only the working case is covered here.  The not-yet-working case (splicing a
 full INTERFACE unit block before a PROGRAM or IMPLEMENTATION compilation unit)
-is addressed in Phase 1/2 and will have its own tests added then.
+is addressed by the spliced-interface tests.
 """
 
 import os
 import subprocess
 import unittest
 
-from tests.support import (
-    compile_pascal_file,
-    compile_pascal_project,
-    link_pascal_project,
-    requires_exe,
-    temporary_pascal_project,
-)
+from tests.support import (compile_pascal_file, compile_pascal_project, link_pascal_project, requires_exe, temporary_pascal_project)
 
 # ---------------------------------------------------------------------------
 # Source fragments used across tests
@@ -63,6 +57,7 @@ VAR TOTAL: INTEGER;
 # Helper
 # ---------------------------------------------------------------------------
 
+
 def _run_exe(exe_path: str, stdin: str = '') -> tuple[int, str, str]:
     run = subprocess.run([exe_path], input=stdin, capture_output=True, text=True)
     return run.returncode, run.stdout, run.stderr
@@ -71,6 +66,7 @@ def _run_exe(exe_path: str, stdin: str = '') -> tuple[int, str, str]:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 @requires_exe
 class TestIncludeDirectiveSplicing(unittest.TestCase):

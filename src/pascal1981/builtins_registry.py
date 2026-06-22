@@ -11,10 +11,18 @@ from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYP
 
 # Lists of all built-in function and procedure names
 DEVICE_INDEX_BUILTIN_FUNCTIONS = {
-    'THREADIDX_X', 'THREADIDX_Y', 'THREADIDX_Z',
-    'BLOCKIDX_X', 'BLOCKIDX_Y', 'BLOCKIDX_Z',
-    'BLOCKDIM_X', 'BLOCKDIM_Y', 'BLOCKDIM_Z',
-    'GRIDDIM_X', 'GRIDDIM_Y', 'GRIDDIM_Z',
+    'THREADIDX_X',
+    'THREADIDX_Y',
+    'THREADIDX_Z',
+    'BLOCKIDX_X',
+    'BLOCKIDX_Y',
+    'BLOCKIDX_Z',
+    'BLOCKDIM_X',
+    'BLOCKDIM_Y',
+    'BLOCKDIM_Z',
+    'GRIDDIM_X',
+    'GRIDDIM_Y',
+    'GRIDDIM_Z',
 }
 
 BUILTIN_FUNCTIONS = {

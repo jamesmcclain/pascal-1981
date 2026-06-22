@@ -4,7 +4,6 @@ import unittest
 
 from tests.support import build_and_run_pascal_project, requires_exe
 
-
 _INTERFACE = """DEVICE INTERFACE;
 UNIT sharedsync (stage_values, checksum);
 PROCEDURE stage_values;
@@ -66,6 +65,7 @@ END.
 
 @requires_exe
 class TestDeviceSharedSyncthreadsIntegration(unittest.TestCase):
+
     def test_cpu_device_shared_staging_with_syncthreads_runs_serially(self):
         rc, out, err = build_and_run_pascal_project(
             files={

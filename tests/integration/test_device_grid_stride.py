@@ -1,4 +1,4 @@
-"""CPU-device integration test for Milestone C.1 grid-stride indexing.
+"""CPU-device integration test for grid-stride indexing.
 
 The host CPU is the device for this test: DEVICE code lowers with the x86
 CPU-device constants for THREADIDX/BLOCKIDX/BLOCKDIM/GRIDDIM.  The grid-stride
@@ -9,7 +9,6 @@ block.
 import unittest
 
 from tests.support import build_and_run_pascal_project, requires_exe
-
 
 _INTERFACE = """DEVICE INTERFACE;
 UNIT vadd (init_vectors, add_vectors, checksum);
@@ -79,6 +78,7 @@ END.
 
 @requires_exe
 class TestDeviceGridStrideIntegration(unittest.TestCase):
+
     def test_cpu_device_grid_stride_vector_add_covers_full_array(self):
         rc, out, err = build_and_run_pascal_project(
             files={

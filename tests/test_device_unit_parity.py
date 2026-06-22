@@ -1,4 +1,4 @@
-"""Phase 3.3 — DEVICE UNIT / DEVICE MODULE parity and final-acceptance guards.
+"""DEVICE UNIT / DEVICE MODULE parity and final-acceptance guards.
 
 Three sets of tests:
 
@@ -11,13 +11,13 @@ Three sets of tests:
    load appears, whether a host-runtime extern appears — must match.
 
 2. **DEVICE MODULE unchanged guard** — compilations of existing DEVICE MODULE
-   source with the same inputs before and after the checklist changes are
+   source with the same inputs before and after the DEVICE UNIT changes are
    byte-for-byte identical (golden self-compare: current run's IR is the
-   reference).  If any Phase-1/2/3 change silently altered DEVICE MODULE
+   reference).  If any DEVICE UNIT change silently altered DEVICE MODULE
    lowering, these tests break.
 
-3. **Final checklist acceptance items** — a compact checklist of the
-   'definition of done' items from the migration checklist, each mapped to an
+3. **Final acceptance items** — a compact checklist of the
+   'definition of done' items, each mapped to an
    artifact assertion.
 """
 
@@ -32,10 +32,10 @@ from pascal1981.parser import parse_file
 from pascal1981.type_checker import PascalTypeChecker
 from tests.support import parse_source
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _compile(src, **kw):
     ast = parse_source(src)
@@ -71,9 +71,7 @@ def _triple(ir_text):
 
 
 def _has_runtime_extern(ir_text):
-    _HOST = ('memmove', 'movel', 'mover', 'movesl', 'movesr', 'fillc', 'fillsc',
-             'pas_read_int', 'pas_read_word', 'pas_write_fmt', 'malloc', 'free',
-             'abort', 'fflush')
+    _HOST = ('memmove', 'movel', 'mover', 'movesl', 'movesr', 'fillc', 'fillsc', 'pas_read_int', 'pas_read_word', 'pas_write_fmt', 'malloc', 'free', 'abort', 'fflush')
     return any(f'@"{n}"' in ir_text or f'@{n}' in ir_text for n in _HOST)
 
 
@@ -113,17 +111,17 @@ END;
 .
 """
 
-
 # ---------------------------------------------------------------------------
 # 1. IR shape parity
 # ---------------------------------------------------------------------------
+
 
 class TestDeviceUnitModuleParity(unittest.TestCase):
     """DEVICE UNIT and DEVICE MODULE produce structurally equivalent IR."""
 
     def _both(self, **kw):
-        mod_ir   = _compile(_MODULE_SRC, **kw)
-        unit_ir  = _compile_unit(_UNIT_IFACE, _UNIT_IMPL, module_name='M', **kw)
+        mod_ir = _compile(_MODULE_SRC, **kw)
+        unit_ir = _compile_unit(_UNIT_IFACE, _UNIT_IMPL, module_name='M', **kw)
         return mod_ir, unit_ir
 
     def test_same_target_triple_x86(self):
@@ -149,10 +147,8 @@ class TestDeviceUnitModuleParity(unittest.TestCase):
         """Even on x86, the xfer body uses only the seg-bridge (inline); no
         host-runtime externs should appear in either form."""
         mod_ir, unit_ir = self._both()
-        self.assertFalse(_has_runtime_extern(mod_ir),
-                         f'DEVICE MODULE: unexpected host-runtime extern\n{mod_ir}')
-        self.assertFalse(_has_runtime_extern(unit_ir),
-                         f'DEVICE UNIT: unexpected host-runtime extern\n{unit_ir}')
+        self.assertFalse(_has_runtime_extern(mod_ir), f'DEVICE MODULE: unexpected host-runtime extern\n{mod_ir}')
+        self.assertFalse(_has_runtime_extern(unit_ir), f'DEVICE UNIT: unexpected host-runtime extern\n{unit_ir}')
 
     def test_zero_host_runtime_declares_nvptx(self):
         mod_ir, unit_ir = self._both(device_triple='nvptx64-nvidia-cuda')
@@ -165,15 +161,14 @@ class TestDeviceUnitModuleParity(unittest.TestCase):
         mod_ir, unit_ir = self._both(device_triple='nvptx64-nvidia-cuda')
         for label, ir in (('MODULE', mod_ir), ('UNIT', unit_ir)):
             with self.subTest(form=label):
-                self.assertRegex(ir, r'load i8, i8 addrspace\(1\)\*',
-                                 f'{label}: missing load from addrspace(1)')
-                self.assertRegex(ir, r'store i8 %[^,]+, i8 addrspace\(3\)\*',
-                                 f'{label}: missing store to addrspace(3)')
+                self.assertRegex(ir, r'load i8, i8 addrspace\(1\)\*', f'{label}: missing load from addrspace(1)')
+                self.assertRegex(ir, r'store i8 %[^,]+, i8 addrspace\(3\)\*', f'{label}: missing store to addrspace(3)')
 
 
 # ---------------------------------------------------------------------------
 # 2. DEVICE MODULE golden-self-compare (unchanged guard)
 # ---------------------------------------------------------------------------
+
 
 class TestDeviceModuleUnchanged(unittest.TestCase):
     """DEVICE MODULE IR is byte-for-byte stable across runs (golden self-compare).
@@ -195,8 +190,7 @@ class TestDeviceModuleUnchanged(unittest.TestCase):
             with self.subTest(src=src[:40]):
                 ir1 = _compile(src)
                 ir2 = _compile(src)
-                self.assertEqual(ir1, ir2,
-                                 'DEVICE MODULE IR is non-deterministic across runs')
+                self.assertEqual(ir1, ir2, 'DEVICE MODULE IR is non-deterministic across runs')
 
     def test_device_module_ir_is_deterministic_nvptx(self):
         for src in self._SRCS:
@@ -215,8 +209,9 @@ class TestDeviceModuleUnchanged(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 3. Final checklist acceptance items
+# 3. Final acceptance items
 # ---------------------------------------------------------------------------
+
 
 class TestFinalAcceptance(unittest.TestCase):
     """Compact artifact-level verification of the definition-of-done items."""
@@ -282,8 +277,7 @@ class TestFinalAcceptance(unittest.TestCase):
             module_name='U',
         )
         self.assertFalse(r.success)
-        self.assertIn('initializer code is not available in a device unit',
-                      ' '.join(str(e) for e in r.errors).lower())
+        self.assertIn('initializer code is not available in a device unit', ' '.join(str(e) for e in r.errors).lower())
 
     # ---- Item 3: zero host-runtime symbol references ----
 
@@ -293,10 +287,8 @@ class TestFinalAcceptance(unittest.TestCase):
             "(*$INCLUDE:'u'*)\nDEVICE IMPLEMENTATION OF U;\nPROCEDURE go;\nBEGIN END;\n.\n",
             device_triple='nvptx64-nvidia-cuda',
         )
-        self.assertFalse(_has_runtime_extern(ir),
-                         f'device unit on nvptx64 has host-runtime symbol\n{ir}')
-        self.assertEqual(ir.count('declare'), 0,
-                         f'unexpected declare in empty device unit\n{ir}')
+        self.assertFalse(_has_runtime_extern(ir), f'device unit on nvptx64 has host-runtime symbol\n{ir}')
+        self.assertEqual(ir.count('declare'), 0, f'unexpected declare in empty device unit\n{ir}')
 
     def test_device_unit_no_abort_or_fflush_nvptx(self):
         ir = _compile_unit(
@@ -312,10 +304,10 @@ class TestFinalAcceptance(unittest.TestCase):
     def test_exported_routine_is_entry_non_exported_is_func(self):
         iface = ("DEVICE INTERFACE;\nUNIT U (kernel);\n"
                  "PROCEDURE kernel (n: INTEGER);\nEND;\n")
-        impl  = ("(*$INCLUDE:'u'*)\n"
-                 "DEVICE IMPLEMENTATION OF U;\n"
-                 "PROCEDURE helper;\nBEGIN END;\n"
-                 "PROCEDURE kernel (n: INTEGER);\nBEGIN helper END;\n.\n")
+        impl = ("(*$INCLUDE:'u'*)\n"
+                "DEVICE IMPLEMENTATION OF U;\n"
+                "PROCEDURE helper;\nBEGIN END;\n"
+                "PROCEDURE kernel (n: INTEGER);\nBEGIN helper END;\n.\n")
         ir = _compile_unit(iface, impl, device_triple='nvptx64-nvidia-cuda')
         self.assertIn('ptx_kernel', ir, 'exported kernel must get ptx_kernel CC')
         kernel_def = re.search(r'define (\S+) \w+ @"kernel"', ir)
@@ -334,8 +326,7 @@ class TestFinalAcceptance(unittest.TestCase):
             device_triple='nvptx64-nvidia-cuda',
         )
         self.assertIn('nvptx64-nvidia-cuda', ir)
-        self.assertNotIn('ptx_kernel', ir,
-                         'DEVICE MODULE has no exports; no entry should appear')
+        self.assertNotIn('ptx_kernel', ir, 'DEVICE MODULE has no exports; no entry should appear')
 
     def test_host_program_ir_unchanged_shape(self):
         ir = _compile('PROGRAM P; BEGIN WRITELN(42) END.')

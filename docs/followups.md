@@ -6,9 +6,9 @@ a suggested resolution, and how to verify the fix. Status is one of OPEN /
 IN-PROGRESS / DONE.
 
 These are not bugs that produce wrong output today; they are seams worth
-closing when the surrounding code is next touched. Items 1 and 2 were surfaced
-while reviewing the lazy-extern / `INPUT`/`OUTPUT`-ownership work (checklist
-S2.2.1 full form + S4.1).
+closing when the surrounding code is next touched. Resolved items are moved to
+`docs/old/old-followups.md` once they ship (most recently the device phantom
+`input`/`output` extern leak, which was item 2 here).
 
 
 ---
@@ -51,35 +51,7 @@ variant-record long-form `NEW` behavior.
 
 ---
 
-## 2. Phantom `.extern .global input/output` in device PTX [OPEN]
-
-**Where.** Device PTX emission for `DEVICE UNIT` compilands; the INPUT/OUTPUT
-single-definition handling (`codegen/base.py`, S4.1) and the lazy-extern path.
-
-**What.** The generated `mandelbrot.ptx` carries two unreferenced module-level
-globals — `.extern .global .align 8 .b64 input;` and `... output;` — that no
-kernel uses. They are a leak of the host INPUT/OUTPUT stream globals into a device
-compiland that has no host I/O.
-
-**Why it matters.** Harmless at runtime: an `.extern` with no use generates no
-SASS and resolved to nothing during the hardware launch (the kernel ran correctly
-with them present). But they are confusing in a device artifact — a reader of a
-Mandelbrot kernel rightly wonders what `input`/`output` are — and they are the one
-purely cosmetic difference from the `nvcc` output noted in the PTX diff
-(`docs/mandelbrot-ptx-substitution-plan.md`, "Hardware validation result").
-
-**Suggested resolution.** Suppress emission of the INPUT/OUTPUT (and any other
-host-stream) globals when the compiland is a `DEVICE` unit/module, the same way
-host-runtime externs are already suppressed there. Confirm zero unreferenced
-globals in device PTX.
-
-**How to verify.** Extend `tests/integration/test_device_mandelbrot_ptx.py` (or a
-device-no-host-externs guard test) to assert no `.extern .global` for `input` /
-`output` appears in the emitted PTX. Keep host INPUT/OUTPUT ownership unchanged.
-
----
-
-## 3. Device codegen-quality gap vs `nvcc` (predication, FMA, alignment) [OPEN]
+## 2. Device codegen-quality gap vs `nvcc` (predication, FMA, alignment) [OPEN]
 
 **Where.** Expression/statement lowering for `DEVICE` code (`codegen/exprs.py`,
 `codegen/stmts.py`) and pointer-parameter typing (`codegen/types_map.py`).

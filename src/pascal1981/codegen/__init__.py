@@ -39,9 +39,24 @@ from .types_map import TypesMapMixin
 class Codegen(CodegenBase, TypesMapMixin, ConstFoldMixin, RuntimeBuiltinsMixin, FilesMixin, SetsMixin, StringsMixin, IoWriteReadMixin, StmtsMixin, DeclsMixin, ExprsMixin):
     """LLVM IR code generator."""
 
-    def __init__(self, verbose: bool = False, source_file: Optional[str] = None, force_flags: Optional[Dict[str, bool]] = None, features: Optional[Dict[str, bool]] = None, device_triple: str = "x86_64-pc-linux-gnu", host_triple: str = "x86_64-pc-linux-gnu", is_root_compiland: bool = True):
+    def __init__(self,
+                 verbose: bool = False,
+                 source_file: Optional[str] = None,
+                 force_flags: Optional[Dict[str, bool]] = None,
+                 features: Optional[Dict[str, bool]] = None,
+                 device_triple: str = "x86_64-pc-linux-gnu",
+                 host_triple: str = "x86_64-pc-linux-gnu",
+                 is_root_compiland: bool = True,
+                 is_device_compiland: bool = False):
         """Initialize Codegen with all mixins."""
-        super().__init__(verbose=verbose, source_file=source_file, force_flags=force_flags, features=features, device_triple=device_triple, host_triple=host_triple, is_root_compiland=is_root_compiland)
+        super().__init__(verbose=verbose,
+                         source_file=source_file,
+                         force_flags=force_flags,
+                         features=features,
+                         device_triple=device_triple,
+                         host_triple=host_triple,
+                         is_root_compiland=is_root_compiland,
+                         is_device_compiland=is_device_compiland)
 
     # ========================================================================
     # Type System
@@ -78,11 +93,24 @@ def compile_to_llvm(
         merged['RANGECK'] = force_rangeck
     if force_flags:
         merged.update(force_flags)
-    # Checklist S4.1: only PROGRAM owns the process-wide @input/@output
+    # Only PROGRAM owns the process-wide @input/@output
     # definitions. MODULE and UNIT compilands are library-like objects and emit
     # external declarations so linking them with a PROGRAM cannot collide.
     is_root_compiland = isinstance(ast, ProgramUnit)
-    codegen = Codegen(verbose=verbose, source_file=source_file, force_flags=merged or None, features=features, device_triple=device_triple, host_triple=host_triple, is_root_compiland=is_root_compiland)
+    # A DEVICE unit/module (DEVICE MODULE / DEVICE INTERFACE / DEVICE
+    # IMPLEMENTATION) carries no host I/O, so the predeclared INPUT/OUTPUT
+    # host-stream globals must not be emitted -- they would otherwise surface
+    # as dead `.extern .global input/output` in the device PTX (followups.md
+    # item 2). The root AST node's is_device flag is the authoritative source.
+    is_device_compiland = bool(getattr(ast, 'is_device', False))
+    codegen = Codegen(verbose=verbose,
+                      source_file=source_file,
+                      force_flags=merged or None,
+                      features=features,
+                      device_triple=device_triple,
+                      host_triple=host_triple,
+                      is_root_compiland=is_root_compiland,
+                      is_device_compiland=is_device_compiland)
     module = codegen.codegen(ast)
     return str(module)
 

@@ -40,9 +40,13 @@ def llvm_ir_to_ptx(ir_text: str, *, triple: str = 'nvptx64-nvidia-cuda', cpu: st
     return tm.emit_assembly(llvm_mod)
 
 
-def compile_file_to_ptx(source_file: str, *, host_triple: str = 'x86_64-pc-linux-gnu',
-                        device_triple: str = 'nvptx64-nvidia-cuda', cpu: str = 'sm_70',
-                        features=None, emit_llvm_path: str | None = None) -> str:
+def compile_file_to_ptx(source_file: str,
+                        *,
+                        host_triple: str = 'x86_64-pc-linux-gnu',
+                        device_triple: str = 'nvptx64-nvidia-cuda',
+                        cpu: str = 'sm_70',
+                        features=None,
+                        emit_llvm_path: str | None = None) -> str:
     """Compile one Pascal source file to PTX text."""
     ast = parse_file(source_file)
     result = PascalTypeChecker(source_file=source_file, features=features).check(ast)

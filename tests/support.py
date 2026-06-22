@@ -139,9 +139,7 @@ def temporary_pascal_project(files: dict[str, str]):
         shutil.rmtree(tmpdir)
 
 
-def compile_pascal_file(source_path: str, output_path: str = None, *, features=None,
-                        host_triple: str = 'x86_64-pc-linux-gnu',
-                        device_triple: str = 'x86_64-pc-linux-gnu') -> str:
+def compile_pascal_file(source_path: str, output_path: str = None, *, features=None, host_triple: str = 'x86_64-pc-linux-gnu', device_triple: str = 'x86_64-pc-linux-gnu') -> str:
     """Parse, type-check, and lower one Pascal source file to LLVM IR.
 
     Returns the output .ll path. Raises RuntimeError on type-check failure.
@@ -152,8 +150,7 @@ def compile_pascal_file(source_path: str, output_path: str = None, *, features=N
     result = PascalTypeChecker(source_file=source_path, features=features).check(ast)
     if not result.success:
         raise RuntimeError(f"Type check failed for {source_path}: {result.errors}")
-    ir = compile_to_llvm(ast, source_file=source_path, features=features,
-                         host_triple=host_triple, device_triple=device_triple)
+    ir = compile_to_llvm(ast, source_file=source_path, features=features, host_triple=host_triple, device_triple=device_triple)
     if output_path is None:
         output_path = f"{source_path}.ll"
     with open(output_path, 'w') as f:
@@ -161,7 +158,10 @@ def compile_pascal_file(source_path: str, output_path: str = None, *, features=N
     return output_path
 
 
-def compile_pascal_project(project_dir: str, compile_pairs: list[tuple[str, str]], *, features=None,
+def compile_pascal_project(project_dir: str,
+                           compile_pairs: list[tuple[str, str]],
+                           *,
+                           features=None,
                            host_triple: str = 'x86_64-pc-linux-gnu',
                            device_triple: str = 'x86_64-pc-linux-gnu') -> dict[str, str]:
     """Compile multiple Pascal files in one project directory.
@@ -187,8 +187,7 @@ def compile_pascal_project(project_dir: str, compile_pairs: list[tuple[str, str]
     return outputs
 
 
-def link_pascal_project(project_dir: str, ir_relpaths: list[str], *, exe_name: str = 'prog',
-                        runtime_libs: list[str] = None, link_flags: list[str] = None) -> str:
+def link_pascal_project(project_dir: str, ir_relpaths: list[str], *, exe_name: str = 'prog', runtime_libs: list[str] = None, link_flags: list[str] = None) -> str:
     """Link one or more LLVM IR files plus the Pascal runtime into an executable."""
     runtime_libs = runtime_libs or [RUNTIME_LIB]
     link_flags = link_flags or []
@@ -204,10 +203,16 @@ def link_pascal_project(project_dir: str, ir_relpaths: list[str], *, exe_name: s
     return exe_path
 
 
-def build_and_run_pascal_project(files: dict[str, str], compile_pairs: list[tuple[str, str]],
-                                 link_ir_relpaths: list[str], *, exe_name: str = 'prog',
-                                 runtime_libs: list[str] = None, link_flags: list[str] = None,
-                                 run_args: list[str] = None, stdin: str = '', features=None,
+def build_and_run_pascal_project(files: dict[str, str],
+                                 compile_pairs: list[tuple[str, str]],
+                                 link_ir_relpaths: list[str],
+                                 *,
+                                 exe_name: str = 'prog',
+                                 runtime_libs: list[str] = None,
+                                 link_flags: list[str] = None,
+                                 run_args: list[str] = None,
+                                 stdin: str = '',
+                                 features=None,
                                  host_triple: str = 'x86_64-pc-linux-gnu',
                                  device_triple: str = 'x86_64-pc-linux-gnu') -> tuple[int, str, str]:
     """Full multi-file integration path: write files, compile separately, link, run."""

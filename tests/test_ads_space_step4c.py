@@ -1,4 +1,4 @@
-"""Closes the two follow-ups left after Step 4b:
+"""Closes two remaining ADS-value follow-ups:
 
   1. Mutual/indirect recursion in a DEVICE MODULE (call-graph cycle), not just
      direct self-calls.
@@ -86,24 +86,21 @@ class TestMutualRecursion(unittest.TestCase):
 
 
 class TestInRoutineResidence(unittest.TestCase):
-    _SRC = (
-        "DEVICE MODULE M;\n"
-        "PROCEDURE k;\n"
-        "VAR\n"
-        "  [SPACE(SHARED)] tile: INTEGER;\n"
-        "  t: ADS(SHARED) OF INTEGER;\n"
-        "BEGIN\n"
-        "  t := ADS tile;\n"
-        "END;\n"
-        ".\n"
-    )
+    _SRC = ("DEVICE MODULE M;\n"
+            "PROCEDURE k;\n"
+            "VAR\n"
+            "  [SPACE(SHARED)] tile: INTEGER;\n"
+            "  t: ADS(SHARED) OF INTEGER;\n"
+            "BEGIN\n"
+            "  t := ADS tile;\n"
+            "END;\n"
+            ".\n")
 
     def test_shared_local_is_static_global_in_addrspace_three(self):
         ir = _compile(self._SRC, device_triple='nvptx64-nvidia-cuda')
         # The shared local is emitted as a statically-allocated addrspace(3)
         # global (name is function-prefixed), NOT a stack alloca.
-        tile_line = next(l for l in ir.splitlines()
-                         if l.lstrip().startswith('@') and '.tile"' in l)
+        tile_line = next(l for l in ir.splitlines() if l.lstrip().startswith('@') and '.tile"' in l)
         self.assertIn('addrspace(3) global', tile_line)
 
     def test_ads_of_shared_local_has_no_punning(self):

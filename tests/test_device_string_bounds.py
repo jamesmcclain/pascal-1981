@@ -3,7 +3,6 @@ import unittest
 from pascal1981.codegen import compile_to_llvm
 from tests.support import parse_source, requires_llvm, typecheck_source
 
-
 DEVICE_STRING_BOUNDS_SRC = """
 DEVICE MODULE M;
 VAR s: STRING(10); l: LSTRING(10); x: INTEGER;
@@ -16,6 +15,7 @@ END;
 
 
 class DeviceStringBoundsTypecheckTests(unittest.TestCase):
+
     def test_device_code_accepts_string_lower_upper(self):
         result = typecheck_source(DEVICE_STRING_BOUNDS_SRC)
         self.assertTrue(result.success, [e.message for e in result.errors])
@@ -23,6 +23,7 @@ class DeviceStringBoundsTypecheckTests(unittest.TestCase):
 
 @requires_llvm
 class DeviceStringBoundsCodegenTests(unittest.TestCase):
+
     def _compile(self, src=DEVICE_STRING_BOUNDS_SRC, device_triple='x86_64-pc-linux-gnu'):
         result = typecheck_source(src)
         self.assertTrue(result.success, [e.message for e in result.errors])

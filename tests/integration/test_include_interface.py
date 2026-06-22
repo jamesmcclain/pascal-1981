@@ -1,4 +1,4 @@
-"""Integration tests for $INCLUDE-spliced INTERFACE units (Phase 1).
+"""Integration tests for $INCLUDE-spliced INTERFACE units.
 
 These tests verify that a PROGRAM (or IMPLEMENTATION) can use a UNIT whose
 interface is delivered exclusively via a $INCLUDE header file rather than
@@ -30,17 +30,16 @@ IMPLEMENTATION that provides it include that same header file:
     ...
 
 Crucially, there is **no separate ``GRAPHICS`` file on disk**.  The program
-receives the interface declaration only through the spliced text.  Prior to
-Phase 1, the type checker ignored spliced interfaces when resolving USES and
+receives the interface declaration only through the spliced text.  Before this fix, the type checker ignored spliced interfaces when resolving USES and
 always went to disk; this caused ``Module 'GRAPHICS' not found`` errors.
 
-What is NOT covered here (Phase 2)
+What is NOT covered here (multiple interfaces)
 ------------------------------------
 The case where an IMPLEMENTATION splices *two* header files — its own
-interface plus an additional USES-dependency interface — is handled in Phase 2
+interface plus an additional USES-dependency interface — is handled in the multi-interface tests
 and tested in ``test_include_multi_interface.py``.
 
-File layout rules (same as Phase 0)
+File layout rules
 -------------------------------------
 * Include files are **never** listed in ``compile_pairs``.
 * Only genuine compilation units (PROGRAM, IMPLEMENTATION OF …) are compiled.
@@ -49,12 +48,7 @@ File layout rules (same as Phase 0)
 import subprocess
 import unittest
 
-from tests.support import (
-    compile_pascal_project,
-    link_pascal_project,
-    requires_exe,
-    temporary_pascal_project,
-)
+from tests.support import (compile_pascal_project, link_pascal_project, requires_exe, temporary_pascal_project)
 
 # ---------------------------------------------------------------------------
 # Shared header (the include file — never compiled independently)
@@ -72,7 +66,7 @@ END;
 # Implementation file
 # The implementation includes the header so the parser can attach the
 # spliced InterfaceUnit to impl.interface (single-leading-interface path
-# that already worked before Phase 1).
+# that already worked before this fix).
 # Named graphics_impl.pas — deliberately *different* from the unit name —
 # so there is no ``GRAPHICS`` or ``GRAPHICS.pas`` file on disk for the
 # type checker to fall back to.
@@ -221,9 +215,11 @@ USES NOSUCHMODULE;
 BEGIN
 END.
 """
+        import os
+        import tempfile
+
         from pascal1981.parser import parse_file
         from pascal1981.type_checker import PascalTypeChecker
-        import os, tempfile
 
         with temporary_pascal_project({'GRAPHI': _GRAPHICS_HEADER, 'p.pas': bad_prog}) as d:
             path = os.path.join(d, 'p.pas')

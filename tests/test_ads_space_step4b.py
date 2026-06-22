@@ -1,10 +1,10 @@
-"""Step 4b (ADS-value lowering + residence storage) and the first recission
-tranche (heap, host I/O, direct recursion) for DEVICE MODULEs.
+"""ADS-value lowering + residence storage, plus the device-code recissions
+(heap, host I/O, direct recursion) for DEVICE compilands.
 
-These cover the gaps left after Step 4a: the earlier suite checked ADS *type*
+These cover the ADS *value* gaps: the earlier suite checked ADS *type*
 lowering but never ADS *value* production, which silently miscompiled
 (`ADS x` produced a {ptr,i16} pair stored through a punning bitcast over an
-addrspace(1) slot). See docs/ads-implementation-plan.md Steps 0.5 and 4.
+addrspace(1) slot).
 """
 import re
 import unittest
@@ -26,20 +26,19 @@ def _compile(src, **kw):
 
 
 # Producing an ADS value into a matching ADS(s) slot inside a device routine.
-_VALUE_SRC = (
-    "DEVICE MODULE M;\n"
-    "VAR\n"
-    "  [SPACE(GLOBAL)] g: INTEGER;\n"
-    "  p: ADS(GLOBAL) OF INTEGER;\n"
-    "PROCEDURE go;\n"
-    "BEGIN\n"
-    "  p := ADS g;\n"
-    "END;\n"
-    ".\n"
-)
+_VALUE_SRC = ("DEVICE MODULE M;\n"
+              "VAR\n"
+              "  [SPACE(GLOBAL)] g: INTEGER;\n"
+              "  p: ADS(GLOBAL) OF INTEGER;\n"
+              "PROCEDURE go;\n"
+              "BEGIN\n"
+              "  p := ADS g;\n"
+              "END;\n"
+              ".\n")
 
 
 class TestAdsValueLowering(unittest.TestCase):
+
     def test_residence_global_is_placed_in_addrspace(self):
         ir = _compile(_VALUE_SRC, device_triple='nvptx64-nvidia-cuda')
         # g carries [SPACE(GLOBAL)] -> it must be an addrspace(1) global.
@@ -70,6 +69,7 @@ class TestAdsValueLowering(unittest.TestCase):
 
 
 class TestFirstRecissionTranche(unittest.TestCase):
+
     def _err(self, src):
         r = _check(src)
         self.assertFalse(r.success)

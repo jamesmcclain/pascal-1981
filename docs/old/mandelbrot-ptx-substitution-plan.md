@@ -1,5 +1,18 @@
 # Mandelbrot PTX substitution plan
 
+> **ARCHIVED (2026-06-21) — goal met.** The Pascal-side PTX-substitution goal of
+> this document is complete: both `mandelbrot_f32` and `mandelbrot_f64` emit
+> ABI-correct, void-returning PTX entries from `examples/device_ptx/mandelbrot/`,
+> and the generated `mandelbrot.ptx` has run on a real NVIDIA GPU as a no-change
+> drop-in for the `nvcc`-built artifact. The substitution path is covered by
+> `tests/integration/test_device_mandelbrot_ptx.py`. One item this plan listed as
+> an open below-ABI-line difference — the phantom `.extern .global input/output`
+> leaks — has since been **resolved** (was `followups.md` item 2; now archived in
+> `docs/old/old-followups.md`). The remaining below-ABI-line codegen-quality polish
+> (predication, FMA fusion, tighter pointer alignment) is tracked as an open item
+> in `docs/followups.md`. Pascal-side host orchestration remains Milestone D in
+> `docs/cuda-kernel-prescription.md`.
+
 ## Goal
 
 Generate a PTX file from Pascal `DEVICE` source that can substitute for the

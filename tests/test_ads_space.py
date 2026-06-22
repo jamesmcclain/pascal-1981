@@ -1,11 +1,11 @@
-"""Step 1 of the ADS memory-spaces work: PointerType.space + the SPACE enum.
+"""ADS memory-spaces: PointerType.space + the SPACE enum.
 
-Types only, no IR. See docs/ads-implementation-plan.md Step 1.
+Types only, no IR.
 """
-from pascal1981.type_system import PointerType, REAL_TYPE, EnumType
 from pascal1981.builtins_registry import register_builtins
-from pascal1981.symbol_table import SymbolTable
 from pascal1981.codegen import Codegen
+from pascal1981.symbol_table import SymbolTable
+from pascal1981.type_system import REAL_TYPE, EnumType, PointerType
 
 
 def _ads(space):
@@ -14,7 +14,7 @@ def _ads(space):
 
 def test_ads_space_is_part_of_identity():
     # Different concrete spaces are incompatible.
-    assert not _ads(1).equivalent_to(_ads(2))      # GLOBAL vs SHARED
+    assert not _ads(1).equivalent_to(_ads(2))  # GLOBAL vs SHARED
     # Same space is equivalent.
     assert _ads(1).equivalent_to(_ads(1))
 

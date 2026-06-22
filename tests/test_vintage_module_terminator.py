@@ -3,14 +3,12 @@ from tests.support import ParserError, parse_source
 
 
 def test_plain_module_accepts_vintage_end_dot_terminator():
-    unit = parse_source(
-        "MODULE kernel;\n"
-        "VAR flags: ARRAY [0..99] OF INTEGER;\n"
-        "PROCEDURE build_primes;\n"
-        "BEGIN\n"
-        "END;\n"
-        "END.\n"
-    )
+    unit = parse_source("MODULE kernel;\n"
+                        "VAR flags: ARRAY [0..99] OF INTEGER;\n"
+                        "PROCEDURE build_primes;\n"
+                        "BEGIN\n"
+                        "END;\n"
+                        "END.\n")
 
     assert isinstance(unit, ModuleUnit)
     assert unit.name == "kernel"

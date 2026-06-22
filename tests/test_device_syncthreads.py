@@ -1,8 +1,7 @@
 import unittest
 
 from pascal1981.codegen import compile_to_llvm
-from tests.support import parse_source, typecheck_source, requires_llvm
-
+from tests.support import parse_source, requires_llvm, typecheck_source
 
 DEVICE_SRC = """
 DEVICE MODULE M;
@@ -18,6 +17,7 @@ END;
 
 
 class DeviceSyncthreadsTypecheckTests(unittest.TestCase):
+
     def test_host_code_rejects_syncthreads(self):
         result = typecheck_source("PROGRAM P; BEGIN SYNCTHREADS END.")
         self.assertFalse(result.success)
@@ -35,6 +35,7 @@ class DeviceSyncthreadsTypecheckTests(unittest.TestCase):
 
 @requires_llvm
 class DeviceSyncthreadsCodegenTests(unittest.TestCase):
+
     def _compile(self, src=DEVICE_SRC, device_triple='x86_64-pc-linux-gnu'):
         result = typecheck_source(src)
         self.assertTrue(result.success, result.errors)

@@ -1,4 +1,4 @@
-"""Checklist S2.1 — no compiler-inserted runtime checks in device code.
+"""No compiler-inserted runtime checks in device code.
 
 These are *artifact*-level guards: they compile to LLVM IR and assert on the
 emitted module, not on the checker.  That catches the whole class of
@@ -8,7 +8,7 @@ keeps proving the property as new check sites are added.
 
 The host counterparts assert the *same* source still traps off-device, so the
 suppression is provably device-only (host/vintage and DEVICE-MODULE-on-host
-output stay byte-identical — the green gate for S2.1).
+output stay byte-identical).
 """
 
 import os
@@ -24,25 +24,23 @@ from tests.support import parse_source
 
 # Host-runtime symbols that must never appear in device IR.  abort/fflush are
 # the two emitted by emit_runtime_abort; the rest are the predeclared-extern
-# family the S2.1 green gate also names (kept here so this test tightens
-# automatically once S2.2 lands).
+# family the device path may later elide too (kept here so this test
+# tightens automatically if that happens).
 _HOST_TRAP_SYMS = ('abort', 'fflush')
 
 # A body that exercises all three host-trapping check families at once:
 #   y := x * x          -> MATHCK (integer overflow)
 #   a[x] := y           -> INDEXCK (array bounds)
 #   CASE y .. END       -> RANGECK (no-match trap, no OTHERWISE)
-_BODY = (
-    "VAR y: INTEGER; a: ARRAY [1..4] OF INTEGER;\n"
-    "BEGIN\n"
-    "  y := x * x;\n"
-    "  a[x] := y;\n"
-    "  CASE y OF\n"
-    "    1: y := 1;\n"
-    "    2: y := 2;\n"
-    "  END;\n"
-    "END;\n"
-)
+_BODY = ("VAR y: INTEGER; a: ARRAY [1..4] OF INTEGER;\n"
+         "BEGIN\n"
+         "  y := x * x;\n"
+         "  a[x] := y;\n"
+         "  CASE y OF\n"
+         "    1: y := 1;\n"
+         "    2: y := 2;\n"
+         "  END;\n"
+         "END;\n")
 
 
 def _refs(ir_text, sym):
@@ -108,7 +106,7 @@ class TestDeviceModuleNoRuntimeChecks(unittest.TestCase):
 class TestDeviceUnitNoRuntimeChecks(unittest.TestCase):
     """The same guarantee under the DEVICE UNIT (separate-compilation) shape."""
 
-    # The exported routine is a launchable kernel entry (S2.3), so its
+    # The exported routine is a launchable kernel entry, so its
     # parameter must be device-passable: a value scalar, not a VAR (host-space
     # pointer).  The body still exercises MATHCK/INDEXCK/RANGECK with value x.
     _IFACE = "DEVICE INTERFACE;\nUNIT U (go);\nPROCEDURE go (x: INTEGER);\nEND;\n"

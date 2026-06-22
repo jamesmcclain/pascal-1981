@@ -304,8 +304,7 @@ class RuntimeBuiltinsMixin:
     def _runtime_fillmove(self, name: str, args: List[Expression]) -> None:
         fn = self.runtime_extern(name.lower())
         values = [self.codegen_expr(arg) for arg in args]
-        coerced = [self.coerce_arg(value, target)
-                   for value, target in zip(values, fn.function_type.args)]
+        coerced = [self.coerce_arg(value, target) for value, target in zip(values, fn.function_type.args)]
         self.builder.call(fn, coerced)
 
     def _as_i8_space_ptr(self, ptr: ir.Value) -> ir.Value:
@@ -346,8 +345,7 @@ class RuntimeBuiltinsMixin:
             length = self._to_i64(self.codegen_expr(args[1]))
             fill = self.codegen_expr(args[2])
             if isinstance(fill.type, ir.IntType) and fill.type.width != 8:
-                fill = (self.builder.trunc(fill, i8) if fill.type.width > 8
-                        else self.builder.zext(fill, i8))
+                fill = (self.builder.trunc(fill, i8) if fill.type.width > 8 else self.builder.zext(fill, i8))
             src = None
             reverse = False
         else:

@@ -46,17 +46,20 @@ def _entry_block(ptx: str, name: str) -> str:
 
 @requires_llvm
 class TestDeviceMandelbrotPtxSubstitution(unittest.TestCase):
+
     def _emit(self, cpu='sm_86'):
         repo = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         example_dir = os.path.join(repo, 'examples', 'device_ptx', 'mandelbrot')
         ptx_path = os.path.join(example_dir, 'mandelbrot.test.ptx')
         ll_path = os.path.join(example_dir, 'mandelbrot.test.ll')
         result = subprocess.run(
-            [sys.executable, '-m', 'pascal1981.compile_to_ptx',
-             'mandelbrot.pas', ptx_path, '--emit-llvm', ll_path, '--cpu', cpu],
+            [sys.executable, '-m', 'pascal1981.compile_to_ptx', 'mandelbrot.pas', ptx_path, '--emit-llvm', ll_path, '--cpu', cpu],
             cwd=example_dir,
-            env={**os.environ, 'PYTHONPATH': os.path.join(repo, 'src')},
-            capture_output=True, text=True,
+            env={
+                **os.environ, 'PYTHONPATH': os.path.join(repo, 'src')
+            },
+            capture_output=True,
+            text=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         with open(ptx_path) as f:
@@ -101,14 +104,23 @@ class TestDeviceMandelbrotPtxSubstitution(unittest.TestCase):
         # f32 kernel is genuinely single precision: real arithmetic is .f32 and
         # no .f64 op leaks in.
         self.assertNotIn('.f64', f32)
-        self.assertTrue(re.search(r'\b(mul|add|sub|div)\.rn\.f32\b', f32),
-                        'expected single-precision arithmetic in mandelbrot_f32')
+        self.assertTrue(re.search(r'\b(mul|add|sub|div)\.rn\.f32\b', f32), 'expected single-precision arithmetic in mandelbrot_f32')
 
         # 2-D CUDA indexing and the 32-bit global store, in both kernels.
         for blk in (f32, f64):
             for sreg in ('%tid.x', '%tid.y', '%ctaid.x', '%ctaid.y', '%ntid.x', '%ntid.y'):
                 self.assertIn(sreg, blk)
             self.assertIn('st.global.u32', blk)
+
+    def test_no_phantom_input_output_externs(self):
+        # followups.md item 2: a DEVICE compiland has no host I/O, so the
+        # predeclared INPUT/OUTPUT host-stream globals must not appear in the
+        # device artifact.  They used to leak in as two dead module-level
+        # declarations -- the one purely cosmetic difference from the nvcc PTX.
+        ptx, ll = self._emit()
+        for name in ('input', 'output'):
+            self.assertNotRegex(ptx, r'\.extern\s+\.global[^\n]*\b' + name + r'\b', f'phantom `.extern .global ... {name}` leaked into device PTX')
+            self.assertNotRegex(ll, r'@"?' + name + r'"?\s*=\s*[^\n]*\bglobal\b', f'phantom @{name} host-stream global leaked into device IR')
 
 
 if __name__ == '__main__':

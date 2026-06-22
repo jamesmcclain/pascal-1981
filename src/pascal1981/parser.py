@@ -4,9 +4,9 @@ import argparse
 import sys
 from typing import List, Optional, Sequence, Union
 
-from .ast_nodes import (AdrExpr, AdsExpr, ArrayType, AssignStmt, ASTNode, Attribute, BinOp, Block, BoolLiteral, BreakStmt, BuiltinType, CaseElement, CaseStmt, CharLiteral, CompoundStmt,
-                        ConstDecl, CycleStmt, Declaration, Designator, EmptyStmt, EnumType, Expression, FileType, ForStmt, FuncCall, FuncDecl, GotoStmt, Identifier, IfStmt,
-                        ImplementationUnit, IndexRange, InterfaceUnit, IntLiteral, LabelDecl, LabelStmt, LowerExpr, LStringType, ModuleUnit, NamedType, NilLiteral, Param,
+from .ast_nodes import (AdrExpr, AdsExpr, ArrayType, AssignStmt, ASTNode, Attribute, BinOp, Block, BoolLiteral, BreakStmt, BuiltinType, CaseElement, CaseStmt, CharLiteral,
+                        CompoundStmt, ConstDecl, CycleStmt, Declaration, Designator, EmptyStmt, EnumType, Expression, FileType, ForStmt, FuncCall, FuncDecl, GotoStmt, Identifier,
+                        IfStmt, ImplementationUnit, IndexRange, InterfaceUnit, IntLiteral, LabelDecl, LabelStmt, LowerExpr, LStringType, ModuleUnit, NamedType, NilLiteral, Param,
                         PointerType, ProcCallStmt, ProcDecl, ProgramUnit, RangeExpr, RealLiteral, RecordType, RepeatStmt, ReturnStmt, RetypeExpr, Selector, SetConstructor, SetType,
                         SizeofExpr, Statement, StringLiteral, SubrangeType, Type, TypeDecl, UnaryOp, UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt, WriteArg)
 from .lexer import ALL_CODES, KEYWORD_CODES, LexerError, Token, lex_file
@@ -54,7 +54,7 @@ class Parser:
         # $INCLUDE before the main compilation unit.  A single implementation
         # file may include its own interface header AND one or more dependency
         # interface headers (e.g. GRAPHI + BASEPL before IMPLEMENTATION OF
-        # GRAPHICS).  Phase 2 extends the Phase 1 single-interface path to a
+        # GRAPHICS).  This extends the single-interface path to a
         # loop so arbitrarily many headers are accepted.
         interfaces: List[InterfaceUnit] = []
         while self.current().kind == 'INTERFACE' or self._at_device_prefix('INTERFACE'):
@@ -140,8 +140,7 @@ class Parser:
         device-marked compilation-unit keyword.
         """
         cur = self.current()
-        return (cur.kind == 'IDENTIFIER' and cur.lexeme.upper() == 'DEVICE'
-                and self.next_kind(1) == next_kind)
+        return (cur.kind == 'IDENTIFIER' and cur.lexeme.upper() == 'DEVICE' and self.next_kind(1) == next_kind)
 
     def _at_device_module(self) -> bool:
         """Backward-compatible helper for DEVICE MODULE call sites/tests."""
@@ -576,7 +575,7 @@ class Parser:
             if self.current().kind == 'COLON':
                 # P::N (manual 12-17): width M omitted — "same as passing
                 # MAXINT", i.e. the type's default width is used.  Vintage
-                # compiler accepts this; see discrepancy D-002.
+                # compiler accepts this.
                 self.match('COLON')
                 precision = self.parse_expression()
             else:

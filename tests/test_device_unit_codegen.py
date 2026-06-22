@@ -1,4 +1,4 @@
-"""DEVICE UNIT codegen parity tests for Phase 1.4."""
+"""DEVICE UNIT codegen parity tests."""
 
 import os
 import re
@@ -41,6 +41,7 @@ def _addrspaces(ir_text):
 
 
 class TestDeviceInterfaceCodegen(unittest.TestCase):
+
     def test_device_interface_uses_device_triple(self):
         ir = _compile(
             "DEVICE INTERFACE;\n"
@@ -52,12 +53,10 @@ class TestDeviceInterfaceCodegen(unittest.TestCase):
         self.assertIn('target triple = "nvptx64-nvidia-cuda"', ir)
 
     def test_plain_interface_keeps_host_triple(self):
-        ir = _compile(
-            "INTERFACE;\n"
-            "UNIT U;\n"
-            "CONST k = 1;\n"
-            "END;\n"
-        )
+        ir = _compile("INTERFACE;\n"
+                      "UNIT U;\n"
+                      "CONST k = 1;\n"
+                      "END;\n")
         self.assertIn('target triple = "x86_64-pc-linux-gnu"', ir)
 
     def test_device_interface_lowers_addrspaces_on_gpu(self):
@@ -72,24 +71,20 @@ class TestDeviceInterfaceCodegen(unittest.TestCase):
 
 
 class TestDeviceImplementationCodegen(unittest.TestCase):
-    _IFACE = (
-        "DEVICE INTERFACE;\n"
-        "UNIT U (go);\n"
-        "PROCEDURE go;\n"
-        "END;\n"
-    )
-    _IMPL = (
-        "(*$INCLUDE:'u'*)\n"
-        "DEVICE IMPLEMENTATION OF U;\n"
-        "VAR\n"
-        "  [SPACE(GLOBAL)] g: CHAR;\n"
-        "  [SPACE(SHARED)] s: CHAR;\n"
-        "PROCEDURE go;\n"
-        "BEGIN\n"
-        "  MOVESL(ADS g, ADS s, WRD(1));\n"
-        "END;\n"
-        ".\n"
-    )
+    _IFACE = ("DEVICE INTERFACE;\n"
+              "UNIT U (go);\n"
+              "PROCEDURE go;\n"
+              "END;\n")
+    _IMPL = ("(*$INCLUDE:'u'*)\n"
+             "DEVICE IMPLEMENTATION OF U;\n"
+             "VAR\n"
+             "  [SPACE(GLOBAL)] g: CHAR;\n"
+             "  [SPACE(SHARED)] s: CHAR;\n"
+             "PROCEDURE go;\n"
+             "BEGIN\n"
+             "  MOVESL(ADS g, ADS s, WRD(1));\n"
+             "END;\n"
+             ".\n")
 
     def test_device_implementation_uses_device_triple(self):
         ir = _compile_module(self._IFACE, self._IMPL, device_triple='nvptx64-nvidia-cuda')
@@ -112,18 +107,17 @@ class TestDeviceImplementationCodegen(unittest.TestCase):
 
 
 class TestHostUnitsUnchanged(unittest.TestCase):
+
     def test_plain_implementation_keeps_host_triple(self):
-        ir = _compile(
-            "INTERFACE;\n"
-            "UNIT U (go);\n"
-            "PROCEDURE go;\n"
-            "END;\n"
-            "IMPLEMENTATION OF U;\n"
-            "PROCEDURE go;\n"
-            "BEGIN\n"
-            "END;\n"
-            ".\n"
-        )
+        ir = _compile("INTERFACE;\n"
+                      "UNIT U (go);\n"
+                      "PROCEDURE go;\n"
+                      "END;\n"
+                      "IMPLEMENTATION OF U;\n"
+                      "PROCEDURE go;\n"
+                      "BEGIN\n"
+                      "END;\n"
+                      ".\n")
         self.assertIn('target triple = "x86_64-pc-linux-gnu"', ir)
         self.assertEqual(_addrspaces(ir), [])
 

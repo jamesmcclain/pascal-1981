@@ -1,8 +1,7 @@
 import unittest
 
 from pascal1981.codegen import compile_to_llvm
-from tests.support import parse_source, typecheck_source, requires_llvm
-
+from tests.support import parse_source, requires_llvm, typecheck_source
 
 DEVICE_SRC = """
 DEVICE MODULE M;
@@ -29,6 +28,7 @@ END;
 
 
 class DeviceIndexIntrinsicTypecheckTests(unittest.TestCase):
+
     def test_normal_host_code_rejects_threadidx(self):
         result = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := THREADIDX_X END.")
         self.assertFalse(result.success)
@@ -46,6 +46,7 @@ class DeviceIndexIntrinsicTypecheckTests(unittest.TestCase):
 
 @requires_llvm
 class DeviceIndexIntrinsicCodegenTests(unittest.TestCase):
+
     def _compile(self, src, device_triple='x86_64-pc-linux-gnu'):
         result = typecheck_source(src)
         self.assertTrue(result.success, result.errors)
@@ -61,18 +62,18 @@ class DeviceIndexIntrinsicCodegenTests(unittest.TestCase):
     def test_nvptx_lowers_all_reads_to_special_register_intrinsics(self):
         ir = self._compile(ALL_INDEX_READS_SRC, device_triple='nvptx64-nvidia-cuda')
         for name in [
-            'llvm.nvvm.read.ptx.sreg.tid.x',
-            'llvm.nvvm.read.ptx.sreg.tid.y',
-            'llvm.nvvm.read.ptx.sreg.tid.z',
-            'llvm.nvvm.read.ptx.sreg.ctaid.x',
-            'llvm.nvvm.read.ptx.sreg.ctaid.y',
-            'llvm.nvvm.read.ptx.sreg.ctaid.z',
-            'llvm.nvvm.read.ptx.sreg.ntid.x',
-            'llvm.nvvm.read.ptx.sreg.ntid.y',
-            'llvm.nvvm.read.ptx.sreg.ntid.z',
-            'llvm.nvvm.read.ptx.sreg.nctaid.x',
-            'llvm.nvvm.read.ptx.sreg.nctaid.y',
-            'llvm.nvvm.read.ptx.sreg.nctaid.z',
+                'llvm.nvvm.read.ptx.sreg.tid.x',
+                'llvm.nvvm.read.ptx.sreg.tid.y',
+                'llvm.nvvm.read.ptx.sreg.tid.z',
+                'llvm.nvvm.read.ptx.sreg.ctaid.x',
+                'llvm.nvvm.read.ptx.sreg.ctaid.y',
+                'llvm.nvvm.read.ptx.sreg.ctaid.z',
+                'llvm.nvvm.read.ptx.sreg.ntid.x',
+                'llvm.nvvm.read.ptx.sreg.ntid.y',
+                'llvm.nvvm.read.ptx.sreg.ntid.z',
+                'llvm.nvvm.read.ptx.sreg.nctaid.x',
+                'llvm.nvvm.read.ptx.sreg.nctaid.y',
+                'llvm.nvvm.read.ptx.sreg.nctaid.z',
         ]:
             self.assertIn(name, ir)
         self.assertNotIn('declare void @abort', ir)

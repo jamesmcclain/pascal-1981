@@ -3,10 +3,9 @@ import subprocess
 import sys
 import unittest
 
-from pascal1981.compile_to_ptx import compile_file_to_ptx, llvm_ir_to_ptx
 from pascal1981.codegen import compile_to_llvm
-from tests.support import parse_source, requires_llvm, temporary_pascal_project, typecheck_module, typecheck_source
-
+from pascal1981.compile_to_ptx import compile_file_to_ptx, llvm_ir_to_ptx
+from tests.support import (parse_source, requires_llvm, temporary_pascal_project, typecheck_module, typecheck_source)
 
 _IFACE = """DEVICE INTERFACE;
 UNIT FILL (fill_indices);
@@ -28,6 +27,7 @@ END;
 
 
 class DeviceInteger32IndexTests(unittest.TestCase):
+
     def test_device_code_accepts_integer32_array_index(self):
         result = typecheck_module(_IFACE, _IMPL, module_name='FILL')
         self.assertTrue(result.success, result.errors)
@@ -48,6 +48,7 @@ END.
 
 @requires_llvm
 class CompileToPtxTests(unittest.TestCase):
+
     def test_llvm_ir_to_ptx_emits_special_register_read(self):
         # Use a minimal module smoke for raw backend conversion.
         ir = compile_to_llvm(
@@ -85,7 +86,9 @@ class CompileToPtxTests(unittest.TestCase):
                     '--cpu',
                     'sm_70',
                 ],
-                env={**os.environ, 'PYTHONPATH': os.path.abspath('src')},
+                env={
+                    **os.environ, 'PYTHONPATH': os.path.abspath('src')
+                },
                 capture_output=True,
                 text=True,
             )

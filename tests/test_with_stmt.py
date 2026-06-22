@@ -20,7 +20,6 @@ rejected.
 import unittest
 
 from tests.support import requires_exe, requires_llvm, typecheck_source
-
 # Codegen helpers live in test_codegen (the only module that imports llvmlite);
 # reuse them rather than duplicating the parse/check/build plumbing.
 from tests.test_codegen import build_and_run, compile_to_ir
@@ -31,37 +30,29 @@ class TestWithTypecheck(unittest.TestCase):
 
     def test_bare_field_assignment_accepted(self):
         """Bare field names inside WITH resolve to the record's fields."""
-        result = typecheck_source(
-            "PROGRAM P; TYPE r = RECORD a: INTEGER END; VAR d: r; "
-            "BEGIN WITH d DO a := 1 END."
-        )
+        result = typecheck_source("PROGRAM P; TYPE r = RECORD a: INTEGER END; VAR d: r; "
+                                  "BEGIN WITH d DO a := 1 END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_body_is_actually_checked(self):
         """The WITH body is type-checked (it was previously skipped entirely):
         an undefined name inside the body must be reported, not passed over."""
-        result = typecheck_source(
-            "PROGRAM P; TYPE r = RECORD a: INTEGER END; VAR d: r; "
-            "BEGIN WITH d DO a := nonesuch END."
-        )
+        result = typecheck_source("PROGRAM P; TYPE r = RECORD a: INTEGER END; VAR d: r; "
+                                  "BEGIN WITH d DO a := nonesuch END.")
         self.assertFalse(result.success)
         self.assertIn("Undefined", " ".join(str(e) for e in result.errors))
 
     def test_non_record_target_rejected(self):
         """WITH over a non-record target is a type error."""
-        result = typecheck_source(
-            "PROGRAM P; VAR n: INTEGER; BEGIN WITH n DO WRITELN('x') END."
-        )
+        result = typecheck_source("PROGRAM P; VAR n: INTEGER; BEGIN WITH n DO WRITELN('x') END.")
         self.assertFalse(result.success)
         self.assertIn("record", " ".join(str(e) for e in result.errors).lower())
 
     def test_field_alias_does_not_leak_past_with(self):
         """Field names are visible only inside the body; referencing them after
         the WITH ends is an undefined-variable error."""
-        result = typecheck_source(
-            "PROGRAM P; TYPE r = RECORD a: INTEGER END; VAR d: r; "
-            "BEGIN WITH d DO a := 1; a := 2 END."
-        )
+        result = typecheck_source("PROGRAM P; TYPE r = RECORD a: INTEGER END; VAR d: r; "
+                                  "BEGIN WITH d DO a := 1; a := 2 END.")
         self.assertFalse(result.success)
         self.assertIn("Undefined", " ".join(str(e) for e in result.errors))
 
@@ -73,10 +64,8 @@ class TestWithIR(unittest.TestCase):
     def test_with_body_emits_field_store(self):
         """The body must lower to a real store of the assigned constant; the
         regression was that WITH emitted no stores at all."""
-        ir = compile_to_ir(
-            "PROGRAM P; TYPE r = RECORD a: INTEGER END; VAR d: r; "
-            "BEGIN WITH d DO a := 2026 END."
-        )
+        ir = compile_to_ir("PROGRAM P; TYPE r = RECORD a: INTEGER END; VAR d: r; "
+                           "BEGIN WITH d DO a := 2026 END.")
         self.assertIn("store i16 2026", ir)
 
 
