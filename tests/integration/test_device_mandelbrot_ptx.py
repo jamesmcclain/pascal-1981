@@ -126,6 +126,14 @@ class TestDeviceMandelbrotPtxSubstitution(unittest.TestCase):
         for blk in (f32, f64):
             self.assertEqual(len(re.findall(r'selp', blk)), 2, 'expected two selp guards (wd, hd)')
 
+        # followups.md item 2 (FMA fusion): the `2*x*y + y0` update lowers to a
+        # fused `fma.rn` (device fp ops carry the `contract` flag), matching
+        # nvcc's default `--fmad=true`. This is a deliberate device-only choice;
+        # device float results may differ from the strict-IEEE host path in the
+        # last bit. The f32 kernel stays single-precision (no .f64 leaks).
+        self.assertIn('fma.rn.f32', f32)
+        self.assertIn('fma.rn.f64', f64)
+
     def test_no_phantom_input_output_externs(self):
         # followups.md item 2: a DEVICE compiland has no host I/O, so the
         # predeclared INPUT/OUTPUT host-stream globals must not appear in the

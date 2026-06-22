@@ -378,6 +378,20 @@ class ExprsMixin:
         ok = self.builder.icmp_signed('!=', divisor, ir.Constant(divisor.type, 0))
         self._emit_runtime_check(ok, 'mathck_div')
 
+    def _fp_binop(self, opname: str, lhs: 'ir.Value', rhs: 'ir.Value', name: str = '') -> 'ir.Value':
+        """Emit a floating-point binary op, contracting on device targets.
+
+        On device code the ``contract`` fast-math flag is set so the NVPTX
+        backend fuses ``a*b + c`` into a single ``fma.rn`` (matching `nvcc`'s
+        default ``--fmad=true``).  Host code keeps the strict, flag-free path
+        byte-identical; this is a deliberate device-only choice, so device
+        float results may differ from the strict-IEEE host path in the last
+        bit.  (followups.md item 2: no FMA fusion.)
+        """
+        if self.is_device_module:
+            return getattr(self.builder, opname)(lhs, rhs, name=name, flags=('contract',))
+        return getattr(self.builder, opname)(lhs, rhs, name=name)
+
     def codegen_binop(self, expr: BinOp) -> ir.Value:
         """Codegen binary operation."""
         if expr.op in {'AND_THEN', 'OR_ELSE'}:
@@ -428,14 +442,14 @@ class ExprsMixin:
             right = _to_common(right)
 
         if expr.op == 'PLUS':
-            return self.builder.fadd(left, right) if is_real else self._mathck_arith('add', left, right, signed=not self._expr_is_unsigned_word(expr))
+            return self._fp_binop('fadd', left, right) if is_real else self._mathck_arith('add', left, right, signed=not self._expr_is_unsigned_word(expr))
         elif expr.op == 'MINUS':
-            return self.builder.fsub(left, right) if is_real else self._mathck_arith('sub', left, right, signed=not self._expr_is_unsigned_word(expr))
+            return self._fp_binop('fsub', left, right) if is_real else self._mathck_arith('sub', left, right, signed=not self._expr_is_unsigned_word(expr))
         elif expr.op == 'MUL':
-            return self.builder.fmul(left, right) if is_real else self._mathck_arith('mul', left, right, signed=not self._expr_is_unsigned_word(expr))
+            return self._fp_binop('fmul', left, right) if is_real else self._mathck_arith('mul', left, right, signed=not self._expr_is_unsigned_word(expr))
         elif expr.op == 'SLASH' or expr.op == 'DIV':
             if is_real:
-                return self.builder.fdiv(left, right)
+                return self._fp_binop('fdiv', left, right)
             self._mathck_div_guard(right)
             return self.builder.sdiv(left, right)
         elif expr.op == 'MOD':
