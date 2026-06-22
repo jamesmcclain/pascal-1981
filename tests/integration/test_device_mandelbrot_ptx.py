@@ -120,6 +120,12 @@ class TestDeviceMandelbrotPtxSubstitution(unittest.TestCase):
             self.assertRegex(blk, r'\.param \.u64 \.ptr \.global \.align 4 [^\n]*_param_0')
             self.assertNotRegex(blk, r'\.ptr \.global \.align 1', 'conservative .align 1 leaked onto a device pointer param')
 
+        # followups.md item 2 (predication): the `IF width > 1 THEN wd := width
+        # - 1 ELSE wd := 1` bounds guards lower to branchless `selp`, not a
+        # divergent `bra` diamond. Two guards per kernel (wd, hd).
+        for blk in (f32, f64):
+            self.assertEqual(len(re.findall(r'selp', blk)), 2, 'expected two selp guards (wd, hd)')
+
     def test_no_phantom_input_output_externs(self):
         # followups.md item 2: a DEVICE compiland has no host I/O, so the
         # predeclared INPUT/OUTPUT host-stream globals must not appear in the
