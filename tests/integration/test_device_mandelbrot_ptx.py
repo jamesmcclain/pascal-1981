@@ -112,6 +112,14 @@ class TestDeviceMandelbrotPtxSubstitution(unittest.TestCase):
                 self.assertIn(sreg, blk)
             self.assertIn('st.global.u32', blk)
 
+        # followups.md item 2 (pointer alignment): the output pointer param is
+        # `ADS(GLOBAL) OF INTEGER32`, so its natural alignment is 4 (the i32
+        # element), not the backend's conservative `.align 1`. nvcc emits the
+        # tighter hint; we now match.
+        for blk in (f32, f64):
+            self.assertRegex(blk, r'\.param \.u64 \.ptr \.global \.align 4 [^\n]*_param_0')
+            self.assertNotRegex(blk, r'\.ptr \.global \.align 1', 'conservative .align 1 leaked onto a device pointer param')
+
     def test_no_phantom_input_output_externs(self):
         # followups.md item 2: a DEVICE compiland has no host I/O, so the
         # predeclared INPUT/OUTPUT host-stream globals must not appear in the

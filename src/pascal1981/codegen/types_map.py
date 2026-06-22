@@ -198,6 +198,33 @@ class TypesMapMixin:
         else:
             return 4  # fallback
 
+    def natural_alignment(self, llvm_type: ir.Type) -> int:
+        """Natural byte alignment of an LLVM type for the NVPTX target.
+
+        Used to annotate device pointer parameters with a tight ``.align N``
+        hint instead of the backend's conservative ``.align 1``. Scalars align
+        to their width (1/2/4/8); arrays/records take the max element alignment;
+        pointers align to 8 on the 64-bit address-size target. This is the
+        alignment the element type is known to carry, so it is a correctness-
+        neutral hint -- it never over-promises what the caller actually passes.
+        """
+        if isinstance(llvm_type, ir.IntType):
+            return max(1, llvm_type.width // 8)
+        if isinstance(llvm_type, ir.FloatType):
+            return 4
+        if isinstance(llvm_type, ir.DoubleType):
+            return 8
+        if isinstance(llvm_type, ir.PointerType):
+            return 8  # 64-bit address space on nvptx64
+        if isinstance(llvm_type, ir.ArrayType):
+            return self.natural_alignment(llvm_type.element)
+        if isinstance(llvm_type, ir.LiteralStructType):
+            best = 1
+            for el in llvm_type.elements:
+                best = max(best, self.natural_alignment(el))
+            return best
+        return 1  # conservative fallback
+
     def zero_initializer(self, llvm_type: ir.Type) -> ir.Value:
         """Produce a valid zero initializer for any LLVM type.
 

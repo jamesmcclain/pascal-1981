@@ -468,6 +468,17 @@ class DeclsMixin:
                 raise CodegenError(f"kernel entry '{decl.name}' has a non-device-passable parameter: pass device "
                                    f"data by value or as ADS(GLOBAL)/ADS(CONSTANT) OF T, not a host-space pointer")
         func.calling_convention = 'amdgpu_kernel' if self.device_triple.startswith('amdgcn') else 'ptx_kernel'
+        # Tighten pointer-parameter alignment to the element type's natural
+        # alignment.  Without this the NVPTX backend annotates every pointer
+        # param `.ptr .global .align 1`; the element type is known (e.g. an
+        # `int*` into `INTEGER32` data is genuinely 4-byte aligned), so the
+        # tighter hint is both correct and what `nvcc` emits.  Only the LLVM
+        # pointee type is consulted, so this works uniformly for `ADS(s) OF T`
+        # pointers regardless of address space.  Inert for scalar params.
+        # (followups.md item 2: conservative pointer alignment.)
+        for arg in func.args:
+            if isinstance(arg.type, ir.PointerType):
+                arg.attributes.align = self.natural_alignment(arg.type.pointee)
 
     def codegen_proc_decl(self, decl: ProcDecl) -> None:
         """Codegen for PROCEDURE declaration."""
