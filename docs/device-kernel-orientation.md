@@ -55,10 +55,9 @@ site or the `*` is seen as a multiply operator and the parser fails.
 
 ### Correct pattern
 
-Declare the type alias **in the same section where it is used**. Both the
-interface and the implementation must define it independently (type aliases from
-the interface are not automatically in scope during implementation type-checking;
-define the alias in both, or share via `(*$INCLUDE:...*)` of the interface file):
+Declare the type alias in the interface; the implementation inherits it
+automatically (the compiler seeds the interface's `TYPE` and `CONST` declarations
+into the implementation scope before processing implementation declarations):
 
 ```pascal
 { In the interface (.inc file) }
@@ -73,16 +72,18 @@ END;
 ```
 
 ```pascal
-{ In the implementation (.pas file) }
+{ In the implementation (.pas file) — TYPE section NOT restated }
 (*$INCLUDE:'mykernel.inc'*)
 DEVICE IMPLEMENTATION OF MYKERNEL;
-
-TYPE
-  BUFFER = SUPER ARRAY [0..*] OF INTEGER32;  { restate, or use $INCLUDE }
 
 PROCEDURE kernel_entry(inp: ADS(GLOBAL) OF BUFFER; n: INTEGER32);
 ...
 ```
+
+If the implementation needs to override or extend the interface's type it may
+declare its own `TYPE` section; the implementation declaration wins. An
+implementation-private type (not in the interface) is also fine and resolves
+normally.
 
 `SUPER ARRAY [0..*]` lowers to a flat device pointer (no hidden length field).
 Dimensions and bounds are the caller's responsibility — exactly the CUDA
@@ -215,8 +216,7 @@ END;
 (*$INCLUDE:'kernel.inc'*)
 DEVICE IMPLEMENTATION OF KERNEL;
 
-TYPE
-  BUFFER = SUPER ARRAY [0..*] OF INTEGER32;
+{ TYPE BUFFER is declared in the interface; no need to restate it here. }
 
 PROCEDURE kernel_entry(buf: ADS(GLOBAL) OF BUFFER; n: INTEGER32);
 VAR
