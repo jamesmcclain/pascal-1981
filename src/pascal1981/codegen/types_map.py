@@ -261,7 +261,23 @@ class TypesMapMixin:
             out = self.builder.insert_value(ir.Constant(target_type, ir.Undefined), ptr, 0)
             return self.builder.insert_value(out, seg, 1)
         if _is_seg(vt) and isinstance(target_type, ir.PointerType):
-            # Segmented value into a flat pointer parameter: drop the segment.
+            # Segmented value into a flat pointer parameter.
+            #
+            # In *host* (vintage) code this is the correct seg->flat collapse:
+            # the host is a single flat address space, the segment word is
+            # always 0, and dropping it loses nothing (e.g. passing `ADS x` to
+            # an ADRMEM/flat-pointer parameter).
+            #
+            # In *device* code a {ptr, i16} value reaching here would mean a
+            # genuine address-space crossing was about to be silently dropped,
+            # which the design forbids (S6.3: cross-space is data movement, not a
+            # cast).  Device ADS values lower to bare addrspace pointers and are
+            # reconciled by the bare-pointer path below, so this branch should be
+            # unreachable in device code; fail loudly if it is ever reached
+            # rather than emit a silent segment drop.  (followups.md item 4.)
+            if self.is_device_module:
+                raise CodegenError("cannot silently drop an address-space segment "
+                                   "when crossing to a flat pointer in device code")
             return self.builder.bitcast(self.builder.extract_value(value, 0), target_type)
         if isinstance(vt, ir.PointerType) and _is_seg(target_type):
             # Flat pointer into a segmented parameter: segment zero.

@@ -348,6 +348,14 @@ class CodegenBase:
             'memmove': _mk('memmove', ir.FunctionType(void, [i8p, i8p, i64])),
             'malloc': _mk('malloc', ir.FunctionType(i8p, [i64])),
             'free': _mk('free', ir.FunctionType(void, [i8p])),
+            # ---- device orchestration shim (Milestone D, §5/§7) ------------
+            # CPU-device stand-in: alloc=malloc, copies=memcpy, free=free.
+            # LAUNCH has no extern here -- it lowers to a direct call to the
+            # kernel function on the CPU-device path.
+            'pas_dev_alloc': _mk('pas_dev_alloc', ir.FunctionType(i8p, [i64])),
+            'pas_dev_copy_to': _mk('pas_dev_copy_to', ir.FunctionType(void, [i8p, i8p, i64])),
+            'pas_dev_copy_from': _mk('pas_dev_copy_from', ir.FunctionType(void, [i8p, i8p, i64])),
+            'pas_dev_free': _mk('pas_dev_free', ir.FunctionType(void, [i8p])),
             'abort': _mk('abort', ir.FunctionType(void, [])),
             'fflush': _mk('fflush', ir.FunctionType(i32, [i8p])),
             'sqrt': _mk('sqrt', ir.FunctionType(f64, [f64])),

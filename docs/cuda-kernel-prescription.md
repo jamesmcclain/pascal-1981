@@ -22,8 +22,13 @@ get an actual GPU kernel to **launch, run, and return a result** on real hardwar
 tier) is **complete**. Milestone C (parallel execution model) is **complete** — the index
 intrinsics and `SYNCTHREADS` barrier are implemented, gated, and validated on the `x86` CPU
 device; the build record is archived at `docs/old/milestone-c-parallel-execution-plan.md`.
-Milestones D (host orchestration) and E (AMDGPU stack) remain prescribed. Suite: **798 passed,
-69 subtests**.
+Milestone D (host orchestration) has its **CPU-device first slice landed** (§5.5
+acceptance): the host builtins `DEVALLOC`/`DEVCOPYTO`/`DEVCOPYFROM`/`DEVFREE`/
+`LAUNCH` lower to a malloc/memcpy/direct-call shim, and a host program that
+allocates, copies in, launches a grid-stride vector-add, copies back, and prints
+the result runs end-to-end on `x86`. The real-GPU shim (CUDA driver API, §5.2)
+and the geometry sugar (`GRID`/`BLOCK`) remain prescribed, as does Milestone E
+(AMDGPU stack). Suite: **834 passed, 69 subtests**.
 
 **Update (2026-06, first GPU run via the external-launcher path):** A Pascal
 `DEVICE UNIT` kernel has now run on a real NVIDIA GPU. The `REAL32`/`REAL64` scalar
@@ -68,7 +73,7 @@ The four findings that gate a real kernel, each expanded below:
 | §2 | Device IR is **not self-contained** | **[DONE]** — Milestones A1–A3 complete (Phase 2.1 + 2.2 lazy plan) |
 | §3 | There are **no entry points**, only device functions | **[DONE]** — Milestone B complete (Phase 2.3) |
 | §4 | **No parallel execution model** | **[DONE]** — Milestone C complete: index reads, `SYNCTHREADS`, no new body launch syntax, CPU-device correctness tests |
-| §5 | **No host orchestration** | [PRESCRIBED] — open |
+| §5 | **No host orchestration** | [IN-PROGRESS] — CPU-device slice DONE (DEVALLOC/DEVCOPYTO/DEVCOPYFROM/DEVFREE/LAUNCH on a malloc/memcpy/direct-call shim; §5.5 vector-add runs end-to-end on x86). CUDA driver shim + GRID/BLOCK sugar still open |
 | §6 | **AMDGPU back end crashes** (bonus, ROCm-only) | [PRESCRIBED] — open |
 
 Milestones below are ordered so each one is independently testable and the host/vintage path
@@ -477,6 +482,22 @@ host shim `cuModuleLoadData` it. You do **not** need a fatbinary to launch. So:
 
 A host program that allocates, H2Ds two arrays, launches a 1-block/N-thread vector-add,
 D2Hs, and prints the summed array - running on a real GPU (or the CPU-device stand-in, §7).
+
+**[DONE on the CPU device.]** `tests/integration/test_device_orchestration.py` builds a
+`DEVICE UNIT` vector-add kernel and a host `PROGRAM` that does exactly this — `DEVALLOC` ×3,
+`DEVCOPYTO` ×2, `LAUNCH(add, 1, n, da, db, dc, n)`, `DEVCOPYFROM`, prints `0 3 6 … 21` — and
+runs it via `clang` on x86 with no GPU. The orchestration builtins lower to the
+`runtime/cpu_device_shim.c` externs (`pas_dev_alloc`=malloc, copies=memcpy,
+`pas_dev_free`=free); `LAUNCH` lowers to a direct call to the kernel, which runs as a
+single-thread grid so its grid-stride loop covers the whole buffer. Swapping the four shim
+functions for CUDA Driver API wrappers (and routing `LAUNCH` through `pas_dev_launch` by name)
+is the remaining step to run the *same* Pascal program on a GPU.
+
+One ABI subtlety surfaced and was fixed: a host `USES` of a device unit must declare the
+imported kernel in *device* lowering context, or its `ADS(GLOBAL) OF T` parameters lower to
+the host segmented `{ptr, i16}` pair while the kernel definition takes a flat/addrspace
+pointer — a silent mismatch that hands the kernel a garbage buffer. The imported-kernel
+declaration now matches the definition's parameter ABI.
 
 ---
 

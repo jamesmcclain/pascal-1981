@@ -352,6 +352,70 @@ class StmtsMixin:
             fn = ir.Function(self.module, ir.FunctionType(ir.VoidType(), []), name=intrinsic_name)
         self.builder.call(fn, [])
 
+    def _orch_i8ptr(self, arg: Expression) -> ir.Value:
+        """Lower an orchestration address argument to a flat ``i8*``.
+
+        Handles a held ADRMEM handle (a loaded ``i8*``), an ``ADR buf`` address
+        (a typed pointer to host storage), or any other pointer/segmented-address
+        value -- ``coerce_arg`` performs the pointer bitcast (and seg->flat
+        collapse) into ``i8*``.
+        """
+        i8p = ir.IntType(8).as_pointer()
+        return self.coerce_arg(self.codegen_expr(arg), i8p)
+
+    def _codegen_device_orchestration(self, name: str, args: list) -> None:
+        """Lower DEVCOPYTO / DEVCOPYFROM / DEVFREE / LAUNCH (Milestone D).
+
+        DEV* lower to the orchestration-shim externs (``pas_dev_copy_to`` /
+        ``pas_dev_copy_from`` / ``pas_dev_free``).  LAUNCH lowers, on the
+        CPU-device path, to a *direct call* of the named kernel: the kernel runs
+        as a single-thread grid (THREADIDX_X=0, BLOCKDIM_X=1, ...), so a
+        grid-stride kernel still covers the whole buffer.  The grid/block
+        geometry arguments are accepted and type-checked but ignored here; they
+        become the six ``cuLaunchKernel`` geometry args when the shim is later
+        swapped for the CUDA driver path (§5.4).
+        """
+        i8p = ir.IntType(8).as_pointer()
+        if name == 'DEVCOPYTO':
+            dev = self._orch_i8ptr(args[0])
+            src = self._orch_i8ptr(args[1])
+            nbytes = self._to_i64(self.codegen_expr(args[2]))
+            self.builder.call(self.runtime_extern('pas_dev_copy_to'), [dev, src, nbytes])
+            return
+        if name == 'DEVCOPYFROM':
+            dst = self._orch_i8ptr(args[0])
+            dev = self._orch_i8ptr(args[1])
+            nbytes = self._to_i64(self.codegen_expr(args[2]))
+            self.builder.call(self.runtime_extern('pas_dev_copy_from'), [dst, dev, nbytes])
+            return
+        if name == 'DEVFREE':
+            self.builder.call(self.runtime_extern('pas_dev_free'), [self._orch_i8ptr(args[0])])
+            return
+        # LAUNCH(kernel, grid, block, arg0, arg1, ...)
+        if len(args) < 3:
+            raise CodegenError('LAUNCH expects at least a kernel, grid, and block')
+        kernel = args[0]
+        kernel_name = getattr(kernel, 'name', None)
+        if kernel_name is None:
+            raise CodegenError('LAUNCH first argument must name a kernel')
+        symbol = self.scope.lookup(kernel_name) or self.scope.lookup(kernel_name.upper())
+        if not symbol or not isinstance(getattr(symbol, 'llvm_value', None), ir.Function):
+            raise CodegenError(f"LAUNCH cannot resolve kernel '{kernel_name}'")
+        # Evaluate (and discard) the geometry args so any side effects in the
+        # geometry expressions are preserved; on the CPU device they do not
+        # affect the single-thread launch.
+        self.codegen_expr(args[1])
+        self.codegen_expr(args[2])
+        fn = symbol.llvm_value
+        param_types = fn.function_type.args
+        call_args = []
+        for i, actual in enumerate(args[3:]):
+            v = self.codegen_expr(actual)
+            if i < len(param_types):
+                v = self.coerce_arg(v, param_types[i])
+            call_args.append(v)
+        self.builder.call(fn, call_args)
+
     def codegen_proc_call_stmt(self, stmt: ProcCallStmt) -> None:
         """Codegen for procedure call statement."""
         lookup_name = stmt.name.upper()
@@ -365,6 +429,11 @@ class StmtsMixin:
             # fill loops across the operands' concrete spaces -- not the vintage
             # extern call with the {ptr, i16} segmented ABI (which host code keeps).
             self._device_seg_bridge(lookup_name, stmt.args)
+            return
+        if lookup_name in {'DEVCOPYTO', 'DEVCOPYFROM', 'DEVFREE', 'LAUNCH'}:
+            # Host device-orchestration (Milestone D). Host-only; the type
+            # checker has already rejected any use inside DEVICE code.
+            self._codegen_device_orchestration(lookup_name, stmt.args)
             return
         symbol = self.scope.lookup(lookup_name) or self.scope.lookup(stmt.name)
         if not symbol or symbol.llvm_value is None:

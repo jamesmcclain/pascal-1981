@@ -1152,6 +1152,11 @@ class PascalTypeChecker(TypeChecker):
         any enumerated type."""
         return isinstance(t, EnumType) or t in (INTEGER_TYPE, WORD_TYPE, CHAR_TYPE, BOOLEAN_TYPE)
 
+    def _is_integer_type(self, t) -> bool:
+        """True for the integer family (INTEGER/WORD and, where enabled, the
+        wide INTEGER32/INTEGER64). Used to validate byte-count arguments."""
+        return t in (INTEGER_TYPE, WORD_TYPE, INTEGER32_TYPE, INTEGER64_TYPE)
+
     def check_for_stmt(self, stmt: ForStmt) -> None:
         """Type check a FOR statement."""
         # The control variable must be an ordinal type (INTEGER, CHAR, BOOLEAN,
@@ -1336,6 +1341,9 @@ class PascalTypeChecker(TypeChecker):
                     self.error(f"Procedure '{lookup_name}' expects 0 arguments, got {argc}", stmt)
                     return
                 return
+            if lookup_name in {'DEVCOPYTO', 'DEVCOPYFROM', 'DEVFREE', 'LAUNCH'}:
+                self._check_device_orchestration_args(lookup_name, stmt)
+                return
             if lookup_name == 'PACK':
                 self._check_pack_args(stmt)
                 return
@@ -1470,6 +1478,79 @@ class PascalTypeChecker(TypeChecker):
             val_type = self.infer_expression_type(stmt.args[2])
             if val_type is not None and not val_type.equivalent_to(CHAR_TYPE):
                 self.error(f"FILLSC fill value must be a CHAR, got {val_type}", stmt)
+
+    def _check_device_orchestration_args(self, name: str, stmt: ProcCallStmt) -> None:
+        """Type-check the host device-orchestration procedures (Milestone D).
+
+        DEVCOPYTO(dev, src, nbytes), DEVCOPYFROM(dst, dev, nbytes),
+        DEVFREE(dev), LAUNCH(kernel, grid, block, args...).
+
+        All are host-only: orchestration has no meaning inside DEVICE code.
+        Address slots accept an ADRMEM handle, an ``ADR``/``ADS`` address, or an
+        addressable aggregate/variable; byte counts and launch geometry must be
+        integers.  LAUNCH's first argument must name an (imported) kernel; the
+        remaining arguments are the kernel's actuals and are checked against its
+        parameter count.
+        """
+        args = stmt.args or []
+        if self.in_device_module:
+            self.error(f"{name} is host-only and cannot appear in DEVICE code", stmt)
+            return
+
+        def _is_address_like(expr) -> bool:
+            if isinstance(expr, (AdrExpr, AdsExpr, Designator)):
+                return True
+            t = self.infer_expression_type(expr)
+            return isinstance(t, (PointerType, ArrayType, RecordType, StringType, LStringType))
+
+        if name in {'DEVCOPYTO', 'DEVCOPYFROM'}:
+            if len(args) != 3:
+                self.error(f"{name} expects 3 arguments (two addresses and a byte count), got {len(args)}", stmt)
+                return
+            for i in (0, 1):
+                if not _is_address_like(args[i]):
+                    self.error(f"{name} argument {i + 1} must be a device handle or buffer address", stmt)
+            n_type = self.infer_expression_type(args[2])
+            if n_type is not None and not self._is_integer_type(n_type):
+                self.error(f"{name} byte count must be an integer, got {n_type}", stmt)
+            return
+
+        if name == 'DEVFREE':
+            if len(args) != 1:
+                self.error(f"DEVFREE expects 1 argument (a device handle), got {len(args)}", stmt)
+                return
+            if not _is_address_like(args[0]):
+                self.error("DEVFREE argument must be a device handle", stmt)
+            return
+
+        # LAUNCH(kernel, grid, block, args...)
+        if len(args) < 3:
+            self.error(f"LAUNCH expects at least a kernel name, grid, and block (got {len(args)})", stmt)
+            return
+        kernel = args[0]
+        if not isinstance(kernel, (Identifier, Designator)) or getattr(kernel, 'selectors', None):
+            self.error("LAUNCH first argument must name a kernel", stmt)
+            return
+        ksym = self.symbol_table.lookup(kernel.name) or self.symbol_table.lookup(kernel.name.upper())
+        if not ksym or not isinstance(ksym.type, ProcedureType):
+            self.error(f"LAUNCH cannot resolve kernel procedure '{kernel.name}'", stmt)
+            return
+        for gi in (1, 2):
+            g_type = self.infer_expression_type(args[gi])
+            label = 'grid' if gi == 1 else 'block'
+            if g_type is not None and not self._is_integer_type(g_type):
+                self.error(f"LAUNCH {label} dimension must be an integer, got {g_type}", stmt)
+        kernel_actuals = args[3:]
+        expected = len(ksym.type.params)
+        if len(kernel_actuals) != expected:
+            self.error(f"LAUNCH of '{kernel.name}' passes {len(kernel_actuals)} kernel argument(s) "
+                       f"but the kernel takes {expected}", stmt)
+        # Visit each actual so undefined identifiers are still reported. Exact
+        # type compatibility (an ADRMEM handle into an ADS(GLOBAL) buffer
+        # parameter) is intentionally lenient -- the codegen coerces the handle
+        # to the kernel's pointer parameter type.
+        for actual in kernel_actuals:
+            self.infer_expression_type(actual)
 
     def _check_assign_file_args(self, stmt: ProcCallStmt) -> None:
         if len(stmt.args) != 2:
@@ -2317,6 +2398,20 @@ class PascalTypeChecker(TypeChecker):
                     self.error(f"Function '{lookup_name}' expects 0 arguments, got {argc}", expr)
                     return None
                 return INTEGER32_TYPE
+            if lookup_name == 'DEVALLOC':
+                # Host-only device allocation (Milestone D). Returns an opaque
+                # ADRMEM handle that the host passes to DEVCOPYTO/LAUNCH/DEVFREE.
+                if self.in_device_module:
+                    self.error("DEVALLOC is host-only and cannot appear in DEVICE code", expr)
+                    return None
+                argc = len(expr.args) if expr.args else 0
+                if argc != 1:
+                    self.error(f"DEVALLOC expects 1 argument (byte count), got {argc}", expr)
+                    return None
+                nbytes_type = self.infer_expression_type(expr.args[0])
+                if nbytes_type is not None and not self._is_integer_type(nbytes_type):
+                    self.error(f"DEVALLOC byte count must be an integer, got {nbytes_type}", expr)
+                return PointerType(CHAR_TYPE)
             if lookup_name in {'EOF', 'EOLN'}:
                 argc = len(expr.args) if expr.args else 0
                 if argc > 1:
