@@ -163,11 +163,30 @@ class DeclsMixin:
         # MODULE/IMPLEMENTATION it is declaration order. This mirrors the type
         # checker's import_symbols pairing so a renaming USES binds the local
         # alias to the right exported symbol.
+        #
+        # For InterfaceUnit we match by name rather than by positional zip so
+        # that non-routine decls (TYPE, CONST) in the interface body do not
+        # corrupt the pairing when they precede the exported procedures.
+        all_iface_decls = list(getattr(ast, 'decls', []))
         if isinstance(ast, InterfaceUnit):
-            paired = list(zip(getattr(ast, 'params', []), getattr(ast, 'decls', [])))
-            export_routines = [(n, d) for (n, d) in paired if isinstance(d, (ProcDecl, FuncDecl))]
+            export_name_list = list(getattr(ast, 'params', []))
+            routine_by_name  = {getattr(d, 'name', '').lower(): d
+                                for d in all_iface_decls
+                                if isinstance(d, (ProcDecl, FuncDecl))}
+            export_routines  = [(n, routine_by_name[n.lower()])
+                                for n in export_name_list
+                                if n.lower() in routine_by_name]
+            # Also seed TYPE/CONST decls into the importing module's type_aliases
+            # so the caller can reference shared buffer types by name.
+            for decl in all_iface_decls:
+                if isinstance(decl, TypeDecl) and getattr(decl, 'name', None):
+                    if decl.name.upper() not in self.type_aliases:
+                        self.codegen_type_decl(decl)
+                elif isinstance(decl, ConstDecl) and getattr(decl, 'name', None):
+                    if decl.name.upper() not in self.constants:
+                        self.codegen_const_decl(decl)
         else:
-            export_routines = [(d.name, d) for d in getattr(ast, 'decls', []) if isinstance(d, (ProcDecl, FuncDecl)) and getattr(d, 'name', None)]
+            export_routines = [(d.name, d) for d in all_iface_decls if isinstance(d, (ProcDecl, FuncDecl)) and getattr(d, 'name', None)]
 
         # A renaming USES (e.g. `USES GRAPHICS (MOVE, PLOT)`) binds the imports
         # positionally onto the exports; a plain USES imports each under its own
