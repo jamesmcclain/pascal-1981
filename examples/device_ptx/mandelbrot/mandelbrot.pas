@@ -11,8 +11,8 @@
 (*$INCLUDE:'mandelbrot.inc'*)
 DEVICE IMPLEMENTATION OF MANDELBROT;
 
-TYPE
-  PIXELS = SUPER ARRAY [0..*] OF INTEGER32;
+{ TYPE PIXELS is declared in the interface (mandelbrot.inc) and is now
+  automatically visible here; no need to restate it. }
 
 PROCEDURE mandelbrot_f32(
   output: ADS(GLOBAL) OF PIXELS;

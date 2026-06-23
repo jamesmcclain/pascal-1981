@@ -105,6 +105,21 @@ class DeclsMixin:
         self.current_interface_decls = {getattr(decl, 'name', '').lower(): decl for decl in (unit.interface.decls if unit.interface else []) if getattr(decl, 'name', None)}
         try:
             with self._device_codegen_context(getattr(unit, 'is_device', False)):
+                # Seed TYPE and CONST aliases from the interface so the
+                # implementation can reference them without restating.
+                # Only seed names the implementation does not itself declare
+                # (impl wins when both define the same name), mirroring the
+                # identical logic in type_checker.py::check_implementation_unit.
+                if unit.interface:
+                    impl_type_names  = {getattr(d, 'name', '').upper() for d in (unit.decls or []) if isinstance(d, TypeDecl)}
+                    impl_const_names = {getattr(d, 'name', '').upper() for d in (unit.decls or []) if isinstance(d, ConstDecl)}
+                    for decl in unit.interface.decls:
+                        name = getattr(decl, 'name', '') or ''
+                        if isinstance(decl, TypeDecl) and name.upper() not in impl_type_names:
+                            self.codegen_type_decl(decl)
+                        elif isinstance(decl, ConstDecl) and name.upper() not in impl_const_names:
+                            self.codegen_const_decl(decl)
+
                 for decl in unit.decls:
                     self.codegen_decl(decl)
 
@@ -148,11 +163,30 @@ class DeclsMixin:
         # MODULE/IMPLEMENTATION it is declaration order. This mirrors the type
         # checker's import_symbols pairing so a renaming USES binds the local
         # alias to the right exported symbol.
+        #
+        # For InterfaceUnit we match by name rather than by positional zip so
+        # that non-routine decls (TYPE, CONST) in the interface body do not
+        # corrupt the pairing when they precede the exported procedures.
+        all_iface_decls = list(getattr(ast, 'decls', []))
         if isinstance(ast, InterfaceUnit):
-            paired = list(zip(getattr(ast, 'params', []), getattr(ast, 'decls', [])))
-            export_routines = [(n, d) for (n, d) in paired if isinstance(d, (ProcDecl, FuncDecl))]
+            export_name_list = list(getattr(ast, 'params', []))
+            routine_by_name  = {getattr(d, 'name', '').lower(): d
+                                for d in all_iface_decls
+                                if isinstance(d, (ProcDecl, FuncDecl))}
+            export_routines  = [(n, routine_by_name[n.lower()])
+                                for n in export_name_list
+                                if n.lower() in routine_by_name]
+            # Also seed TYPE/CONST decls into the importing module's type_aliases
+            # so the caller can reference shared buffer types by name.
+            for decl in all_iface_decls:
+                if isinstance(decl, TypeDecl) and getattr(decl, 'name', None):
+                    if decl.name.upper() not in self.type_aliases:
+                        self.codegen_type_decl(decl)
+                elif isinstance(decl, ConstDecl) and getattr(decl, 'name', None):
+                    if decl.name.upper() not in self.constants:
+                        self.codegen_const_decl(decl)
         else:
-            export_routines = [(d.name, d) for d in getattr(ast, 'decls', []) if isinstance(d, (ProcDecl, FuncDecl)) and getattr(d, 'name', None)]
+            export_routines = [(d.name, d) for d in all_iface_decls if isinstance(d, (ProcDecl, FuncDecl)) and getattr(d, 'name', None)]
 
         # A renaming USES (e.g. `USES GRAPHICS (MOVE, PLOT)`) binds the imports
         # positionally onto the exports; a plain USES imports each under its own
@@ -468,6 +502,17 @@ class DeclsMixin:
                 raise CodegenError(f"kernel entry '{decl.name}' has a non-device-passable parameter: pass device "
                                    f"data by value or as ADS(GLOBAL)/ADS(CONSTANT) OF T, not a host-space pointer")
         func.calling_convention = 'amdgpu_kernel' if self.device_triple.startswith('amdgcn') else 'ptx_kernel'
+        # Tighten pointer-parameter alignment to the element type's natural
+        # alignment.  Without this the NVPTX backend annotates every pointer
+        # param `.ptr .global .align 1`; the element type is known (e.g. an
+        # `int*` into `INTEGER32` data is genuinely 4-byte aligned), so the
+        # tighter hint is both correct and what `nvcc` emits.  Only the LLVM
+        # pointee type is consulted, so this works uniformly for `ADS(s) OF T`
+        # pointers regardless of address space.  Inert for scalar params.
+        # (followups.md item 2: conservative pointer alignment.)
+        for arg in func.args:
+            if isinstance(arg.type, ir.PointerType):
+                arg.attributes.align = self.natural_alignment(arg.type.pointee)
 
     def codegen_proc_decl(self, decl: ProcDecl) -> None:
         """Codegen for PROCEDURE declaration."""

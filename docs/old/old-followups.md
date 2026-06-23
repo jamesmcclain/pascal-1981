@@ -120,3 +120,63 @@ globals in device PTX.
 **How to verify.** Extend `tests/integration/test_device_mandelbrot_ptx.py` (or a
 device-no-host-externs guard test) to assert no `.extern .global` for `input` /
 `output` appears in the emitted PTX. Keep host INPUT/OUTPUT ownership unchanged.
+
+---
+
+## 4. Device codegen-quality gap vs `nvcc` (predication, FMA, alignment) [DONE]
+
+**Where.** Expression/statement lowering for `DEVICE` code (`codegen/exprs.py`,
+`codegen/stmts.py`) and pointer-parameter typing (`codegen/types_map.py`,
+`codegen/decls.py`).
+
+**What.** A PTX diff of the Mandelbrot kernels (`nvcc` 12.8 vs this toolchain)
+found only below-the-ABI-line differences. Three codegen-quality gaps:
+
+- **Branch vs predication on the bounds guard.** `IF width > 1 THEN ... ELSE ...`
+lowered to real control flow (`bra`); `nvcc` predicates it into a branchless
+`selp.f32`.
+- **No FMA fusion.** `2*x*y + y0` lowered to a discrete multiply/add; `nvcc`
+fuses it into one `fma.rn`.
+- **Conservative pointer alignment.** Pointer parameters were emitted as
+`.ptr .global .align 1`; the element type is known (`int`), so `.align 4` is the
+tighter, correct hint.
+
+**Why it mattered.** None affected correctness, ABI, or memory layout — the
+kernel was a faithful drop-in as-is. They were the difference between "runs
+correctly" and "indistinguishable from `nvcc`'s output," and the FMA/predication
+points have real performance and edge-case-precision implications on large
+renders.
+
+**Resolution.** Done across three independent commits:
+
+1. **Alignment** — `codegen/types_map.py::natural_alignment` computes the
+   pointee type's natural byte alignment, and `codegen/decls.py::_apply_kernel_entry`
+   annotates each device kernel-entry pointer arg with `arg.attributes.align`, so
+   `ADS(GLOBAL) OF INTEGER32` emits `.ptr .global .align 4`. Correctness-neutral
+   hint; inert on host, x86 CPU-device, and non-pointer params.
+2. **Predication** — `codegen/stmts.py::codegen_if_stmt` gains a conservative
+   peephole (`_try_select_if`) that lowers `IF c THEN x := a ELSE x := b` on a
+   scalar `x` with pure, side-effect-free, non-faulting RHS to a branchless LLVM
+   `select` (PTX `selp`). It bails to branch lowering on anything ambiguous
+   (aggregate/string targets, mismatched targets, multi-statement arms, function
+   calls in the RHS, dividing ops that could trap, indexed/dereferenced reads
+   that could fire INDEXCK/NILCK, or selector-bearing targets). The scalar
+   assignment coercion was extracted into a shared `_coerce_assign_value` helper
+   so both select arms are coerced through the same int/float/pointer path.
+3. **FMA** — `codegen/exprs.py::_fp_binop` emits device fp binops
+   (fadd/fsub/fmul/fdiv) with the LLVM `contract` fast-math flag, so the NVPTX
+   backend fuses `a*b + c` into `fma.rn`, matching `nvcc --fmad=true`. This is a
+   **deliberate device-only choice**: host code keeps the strict, flag-free path
+   byte-identical, so device float results may differ from the strict-IEEE host
+   path in the last bit.
+
+**How verified.** `tests/integration/test_device_mandelbrot_ptx.py` now asserts
+`.ptr .global .align 4` on the output param, two `selp` guards per kernel (the
+`wd`/`hd` bounds guards), and `fma.rn.f32`/`fma.rn.f64` in the respective
+kernels. `tests/test_device_if_select.py` pins the select peephole hit plus the
+bail-outs (mismatched targets, multi-statement arms, division in RHS, call in
+RHS). `tests/test_device_fma_contraction.py` pins that device fp ops carry the
+`contract` flag and emit `fma.rn`, and that the host path stays strict (no
+`contract`/`fast` flags leak onto host fp ops). The full suite (806 tests)
+passes. Re-diff `mandelbrot.ptx` against the `nvcc` reference to confirm the
+three gaps are closed.

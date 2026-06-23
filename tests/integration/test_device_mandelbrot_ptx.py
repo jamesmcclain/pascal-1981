@@ -112,6 +112,28 @@ class TestDeviceMandelbrotPtxSubstitution(unittest.TestCase):
                 self.assertIn(sreg, blk)
             self.assertIn('st.global.u32', blk)
 
+        # followups.md item 2 (pointer alignment): the output pointer param is
+        # `ADS(GLOBAL) OF INTEGER32`, so its natural alignment is 4 (the i32
+        # element), not the backend's conservative `.align 1`. nvcc emits the
+        # tighter hint; we now match.
+        for blk in (f32, f64):
+            self.assertRegex(blk, r'\.param \.u64 \.ptr \.global \.align 4 [^\n]*_param_0')
+            self.assertNotRegex(blk, r'\.ptr \.global \.align 1', 'conservative .align 1 leaked onto a device pointer param')
+
+        # followups.md item 2 (predication): the `IF width > 1 THEN wd := width
+        # - 1 ELSE wd := 1` bounds guards lower to branchless `selp`, not a
+        # divergent `bra` diamond. Two guards per kernel (wd, hd).
+        for blk in (f32, f64):
+            self.assertEqual(len(re.findall(r'selp', blk)), 2, 'expected two selp guards (wd, hd)')
+
+        # followups.md item 2 (FMA fusion): the `2*x*y + y0` update lowers to a
+        # fused `fma.rn` (device fp ops carry the `contract` flag), matching
+        # nvcc's default `--fmad=true`. This is a deliberate device-only choice;
+        # device float results may differ from the strict-IEEE host path in the
+        # last bit. The f32 kernel stays single-precision (no .f64 leaks).
+        self.assertIn('fma.rn.f32', f32)
+        self.assertIn('fma.rn.f64', f64)
+
     def test_no_phantom_input_output_externs(self):
         # followups.md item 2: a DEVICE compiland has no host I/O, so the
         # predeclared INPUT/OUTPUT host-stream globals must not appear in the

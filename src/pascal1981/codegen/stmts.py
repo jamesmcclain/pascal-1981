@@ -13,7 +13,7 @@ import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
 from ..ast_nodes import *
-from ..builtins_registry import DEVICE_SYNC_BUILTIN_PROCEDURES
+from ..builtins_registry import DEVICE_SYNC_BUILTIN_PROCEDURES, DEVICE_INDEX_BUILTIN_FUNCTIONS
 from .base import CodegenError, LoopContext, Scope
 
 
@@ -132,28 +132,7 @@ class StmtsMixin:
 
         # Handle simple type conversions
         if not is_str and hasattr(ptr.type, 'pointee'):
-            target_type = ptr.type.pointee
-            if isinstance(target_type, ir.IntType) and isinstance(value.type, ir.IntType):
-                if target_type.width < value.type.width:
-                    value = self.builder.trunc(value, target_type)
-                elif target_type.width > value.type.width:
-                    value = self._extend_int_for_pascal_expr(value, target_type, stmt.expr)
-            elif isinstance(target_type, (ir.FloatType, ir.DoubleType)) and isinstance(value.type, ir.IntType):
-                value = self.builder.sitofp(value, target_type)
-            elif isinstance(target_type, ir.IntType) and isinstance(value.type, (ir.FloatType, ir.DoubleType)):
-                value = self.builder.fptosi(value, target_type)
-            elif isinstance(target_type, ir.DoubleType) and isinstance(value.type, ir.FloatType):
-                # REAL32 value into a REAL slot: widen f32 -> f64.
-                value = self.builder.fpext(value, target_type)
-            elif isinstance(target_type, ir.FloatType) and isinstance(value.type, ir.DoubleType):
-                # REAL value into a REAL32 slot: narrow f64 -> f32 (e.g. a bare
-                # ``0.0`` literal stored into a REAL32 variable).
-                value = self.builder.fptrunc(value, target_type)
-            elif isinstance(target_type, ir.PointerType) and isinstance(value.type, ir.PointerType):
-                if isinstance(stmt.expr, NilLiteral):
-                    value = ir.Constant(target_type, None)
-                elif value.type != target_type:
-                    value = self.builder.bitcast(value, target_type)
+            value = self._coerce_assign_value(value, ptr.type.pointee, stmt.expr)
 
         rangeck_enabled = self.effective_rangeck(stmt)
 
@@ -218,6 +197,140 @@ class StmtsMixin:
                 # destination-pointer bitcast rather than by nominal type.
                 ptr = self.builder.bitcast(ptr, value.type.as_pointer())
             self.builder.store(value, ptr)
+
+    def _coerce_assign_value(self, value: ir.Value, target_type: ir.Type, expr: Expression) -> ir.Value:
+        """Coerce a lowered RHS value to a scalar/pointer assignment target.
+
+        Shared by :meth:`codegen_assign_stmt` and the IF/ELSE-of-assignment
+        `select` peephole so the two arms of a select are coerced through the
+        same int/float/pointer widening/narrowing path before they are merged.
+        Returns ``value`` unchanged for types with no applicable conversion.
+        """
+        if isinstance(target_type, ir.IntType) and isinstance(value.type, ir.IntType):
+            if target_type.width < value.type.width:
+                return self.builder.trunc(value, target_type)
+            elif target_type.width > value.type.width:
+                return self._extend_int_for_pascal_expr(value, target_type, expr)
+        elif isinstance(target_type, (ir.FloatType, ir.DoubleType)) and isinstance(value.type, ir.IntType):
+            return self.builder.sitofp(value, target_type)
+        elif isinstance(target_type, ir.IntType) and isinstance(value.type, (ir.FloatType, ir.DoubleType)):
+            return self.builder.fptosi(value, target_type)
+        elif isinstance(target_type, ir.DoubleType) and isinstance(value.type, ir.FloatType):
+            # REAL32 value into a REAL slot: widen f32 -> f64.
+            return self.builder.fpext(value, target_type)
+        elif isinstance(target_type, ir.FloatType) and isinstance(value.type, ir.DoubleType):
+            # REAL value into a REAL32 slot: narrow f64 -> f32 (e.g. a bare
+            # ``0.0`` literal stored into a REAL32 variable).
+            return self.builder.fptrunc(value, target_type)
+        elif isinstance(target_type, ir.PointerType) and isinstance(value.type, ir.PointerType):
+            if isinstance(expr, NilLiteral):
+                return ir.Constant(target_type, None)
+            elif value.type != target_type:
+                return self.builder.bitcast(value, target_type)
+        return value
+
+    def _unwrap_single(self, stmt: Statement) -> Statement:
+        """Unwrap a single-statement BEGIN/END (CompoundStmt of length 1)."""
+        if isinstance(stmt, CompoundStmt) and len(stmt.stmts) == 1:
+            return stmt.stmts[0]
+        return stmt
+
+    def _select_rhs_is_safe(self, expr: Expression) -> bool:
+        """Whether an RHS expression is safe to evaluate *unconditionally*.
+
+        The IF/ELSE-of-assignment select peephole evaluates both arms' RHS
+        regardless of the condition, so each RHS must be free of side effects
+        (function calls) and free of operations that could trap or fire a
+        runtime check on the not-taken arm: division (``$MATHCK`` divide-by-zero
+        or an illegal quotient), integer ``+``/``-``/``*`` (``$MATHCK`` overflow
+        guard), array indexing (``$INDEXCK``), and pointer dereference
+        (``$NILCK``).  Pure literal/variable reads are always safe.
+
+        Checks that lower to a host trap are suppressed in device code, so in
+        the device-only context where this peephole actually runs the integer
+        ``$MATHCK`` arm is moot; the explicit ``check_enabled`` test keeps the
+        predicate correct on its own terms, so the transform stays sound even if
+        it is ever re-enabled on a path where those checks are live.
+        """
+        if expr is None:
+            return True
+        if isinstance(expr, FuncCall):
+            return False
+        if isinstance(expr, BinOp):
+            if expr.op in ('SLASH', 'DIV', 'MOD'):
+                return False
+            if expr.op in ('PLUS', 'MINUS', 'MUL') and self.check_enabled('MATHCK'):
+                # Integer add/sub/mul lower through the $MATHCK overflow guard,
+                # which traps on the not-taken arm if speculatively evaluated.
+                # (Float arithmetic does not trap, but the AST does not carry a
+                # lowered type here, so bail conservatively when the check is
+                # live; device code, where the peephole runs, has it suppressed.)
+                return False
+            return self._select_rhs_is_safe(expr.left) and self._select_rhs_is_safe(expr.right)
+        if isinstance(expr, UnaryOp):
+            return self._select_rhs_is_safe(expr.operand)
+        if isinstance(expr, Designator):
+            # Bare variable read only; indexed/dereferenced reads could fire
+            # INDEXCK/NILCK or read out-of-bounds on the not-taken arm.
+            return len(expr.selectors) == 0
+        if isinstance(expr, Identifier):
+            key = expr.name.upper()
+            if key in self.constants:
+                return True
+            if key in DEVICE_INDEX_BUILTIN_FUNCTIONS:
+                return True  # pure special-register read
+            if key in {'EOF', 'EOLN', 'NULL'}:
+                return False  # EOF/EOLN call runtime; NULL is handled via type
+            sym = self.scope.lookup(expr.name) or self.scope.lookup(key)
+            if sym is not None and isinstance(getattr(sym, 'llvm_value', None), ir.Function):
+                return False  # parameterless function call (may have side effects)
+            return True  # plain variable / parameter read
+        # literals (Int/Real/Char/String/Bool/Nil) are safe
+        return True
+
+    def _try_select_if(self, stmt: IfStmt) -> bool:
+        """Lower ``IF c THEN x:=a ELSE x:=b`` to a branchless ``select``.
+
+        Returns True if lowered, False to fall back to branch lowering.
+        """
+        if not stmt.else_branch:
+            return False
+        then_s = self._unwrap_single(stmt.then_branch)
+        else_s = self._unwrap_single(stmt.else_branch)
+        if not (isinstance(then_s, AssignStmt) and isinstance(else_s, AssignStmt)):
+            return False
+        # Same simple-variable target (no selectors): the designator must
+        # resolve to a pure pointer with no index/deref checks of its own.
+        if then_s.target != else_s.target or then_s.target.selectors:
+            return False
+        if not (self._select_rhs_is_safe(then_s.expr) and self._select_rhs_is_safe(else_s.expr)):
+            return False
+        symbol = self.scope.lookup(then_s.target.name) or self.scope.lookup(then_s.target.name.upper())
+        if not symbol:
+            return False
+        is_str, _max_len, _is_lstr = self.get_string_type_info(symbol.type_expr)
+        if is_str:
+            return False
+        ptr = self.resolve_designator_ptr(then_s.target)
+        if not hasattr(ptr.type, 'pointee'):
+            return False
+        target_type = ptr.type.pointee
+        # Scalar/pointer targets only: merging aggregates via select is unusual
+        # and the aggregate assign path does whole-record bitcasts we skip here.
+        if not isinstance(target_type, (ir.IntType, ir.FloatType, ir.DoubleType, ir.PointerType)):
+            return False
+        # Evaluate condition first (source order), then both arms' RHS, coerce
+        # each to the target type, merge via select, and store once.  Both RHS
+        # are pure (verified above), so unconditional evaluation is equivalent.
+        cond = self.codegen_expr(stmt.cond)
+        cond_bit = self.to_bool(cond)
+        then_val = self._coerce_assign_value(self.codegen_expr(then_s.expr), target_type, then_s.expr)
+        else_val = self._coerce_assign_value(self.codegen_expr(else_s.expr), target_type, else_s.expr)
+        if then_val.type != else_val.type:
+            return False  # defensive: coercion should already align these
+        merged = self.builder.select(cond_bit, then_val, else_val)
+        self.builder.store(merged, ptr)
+        return True
 
     def codegen_device_sync_builtin(self, name: str) -> None:
         """Lower DEVICE synchronization builtins.
@@ -337,7 +450,33 @@ class StmtsMixin:
             self.builder.call(fn, args)
 
     def codegen_if_stmt(self, stmt: IfStmt) -> None:
-        """Codegen for IF statement."""
+        """Codegen for IF statement.
+
+        A narrow ``IF c THEN x := a ELSE x := b`` on a *scalar* ``x`` with pure,
+        side-effect-free, non-faulting RHS lowers to a branchless LLVM
+        ``select`` (PTX ``selp``) instead of a real branch diamond.  This is the
+        preferred GPU idiom because it avoids warp divergence at image edges;
+        `nvcc` predicates the same pattern.  The peephole is conservative: it
+        bails to the branch lowering on anything ambiguous (aggregate/string
+        targets, function calls in the RHS, dividing ops that could trap,
+        indexed/dereferenced reads that could fault or fire INDEXCK/NILCK, or
+        targets whose designator itself carries selectors).  (followups.md
+        item 2: branch vs predication on the bounds guard.)
+
+        The transform is **device-only**.  Its safety argument ("both arms are
+        pure, so evaluating the not-taken arm unconditionally is equivalent")
+        holds only where the host-trapping runtime checks are suppressed -- and
+        that is exactly device code (see ``_HOST_TRAPPING_CHECKS``).  On the
+        host path, integer ``+``/``-``/``*`` lower through the ``$MATHCK``
+        overflow guard (on by default), so speculatively evaluating an
+        overflowing not-taken arm would fire an abort the source-level branch
+        never reaches.  Gating on ``is_device_module`` keeps host lowering
+        byte-for-byte unchanged; ``_select_rhs_is_safe`` additionally refuses
+        any arm whose evaluation could trap under a live check, as defense in
+        depth should an on-device trap ever be introduced.
+        """
+        if self.is_device_module and self._try_select_if(stmt):
+            return
         cond = self.codegen_expr(stmt.cond)
         cond_bit = self.to_bool(cond)
 

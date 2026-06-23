@@ -980,8 +980,11 @@ END.
         result = typecheck_module(prog_code=prog)
         self.assertFalse(result.success)
 
-    def test_non_exported_symbol_import_error(self):
-        """Importing non-exported symbol is an error."""
+    def test_positional_rename_of_exported_symbol(self):
+        """USES TEST (LocalName) is a positional rename of the first exported
+        symbol — valid vintage Pascal semantics, not a non-exported-name error.
+        An interface may have private decls not in the export list; they are
+        not importable but their presence does not block valid USES."""
         iface = """INTERFACE;
    UNIT TEST (PublicFunc);
 FUNCTION PublicFunc: INTEGER;
@@ -990,9 +993,46 @@ BEGIN
 END;
 
 """
+        # Rename the one exported function to a local alias — valid.
+        prog_rename = """(*$INCLUDE:'test'*)
+PROGRAM Prog (OUTPUT);
+USES TEST (LocalAlias);
+BEGIN
+END.
+"""
+        result = typecheck_module(iface_code=iface, prog_code=prog_rename, module_name='TEST')
+        self.assertTrue(result.success, result.errors)
+
+    def test_too_many_imports_is_error(self):
+        """Requesting more import aliases than the module exports is an error."""
+        iface = """INTERFACE;
+   UNIT TEST (PublicFunc);
+FUNCTION PublicFunc: INTEGER;
+BEGIN
+END;
+
+"""
         prog = """(*$INCLUDE:'test'*)
 PROGRAM Prog (OUTPUT);
-USES TEST (PrivateFunc);
+USES TEST (Alias1, Alias2);
+BEGIN
+END.
+"""
+        result = typecheck_module(iface_code=iface, prog_code=prog, module_name='TEST')
+        self.assertFalse(result.success)
+
+    def test_export_name_not_declared_is_error(self):
+        """An export list that names a routine with no matching declaration is an error."""
+        iface = """INTERFACE;
+   UNIT TEST (MissingFunc);
+FUNCTION PublicFunc: INTEGER;
+BEGIN
+END;
+
+"""
+        prog = """(*$INCLUDE:'test'*)
+PROGRAM Prog (OUTPUT);
+USES TEST;
 BEGIN
 END.
 """

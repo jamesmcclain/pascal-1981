@@ -304,24 +304,89 @@ class PascalTypeChecker(TypeChecker):
         """Import symbols from a loaded module/interface into the current scope."""
         if isinstance(interface, InterfaceUnit):
             export_names = list(interface.params)
-            export_decls = list(interface.decls)
-            if len(export_names) != len(export_decls):
-                self.error(
-                    f"Interface '{interface.name}' export list does not match its declarations",
-                    None,
-                )
-                return
-            if uses.imports:
-                imported_aliases = list(uses.imports)
-                if len(imported_aliases) > len(export_names):
+            all_decls    = list(interface.decls)
+
+            # A DEVICE INTERFACE was written in the device dialect: its types
+            # (INTEGER32, ADS(GLOBAL), etc.) must be resolved in device context.
+            # We enter _device_context for the duration of the import so that
+            # resolve_type and check_declaration see the same extended feature
+            # set and address-space rules that the interface was compiled under.
+            # The resulting symbols land in the *host* symbol table after the
+            # context exits, so the host caller can reference them by name.
+            is_device_iface = getattr(interface, 'is_device', False)
+
+            with self._device_context(is_device_iface):
+                # Build the exported-routine list by matching names from the
+                # export list against the declarations.  Non-routine decls
+                # (TYPE, CONST, VAR) are excluded from this list; they are
+                # imported separately below so their presence does not inflate
+                # the export count.
+                export_name_set = {n.lower() for n in export_names}
+                routine_decls   = [d for d in all_decls
+                                   if isinstance(d, (ProcDecl, FuncDecl))
+                                   and getattr(d, 'name', '').lower() in export_name_set]
+
+                # Validate: every name in the export list must have a matching decl.
+                declared_names = {getattr(d, 'name', '').lower() for d in routine_decls}
+                missing = [n for n in export_names if n.lower() not in declared_names]
+                if missing:
                     self.error(
-                        f"Module {uses.name} imports {len(imported_aliases)} name(s) but only exports {len(export_names)}",
+                        f"Interface '{interface.name}' export list names not found "
+                        f"in declarations: {missing}",
                         None,
                     )
                     return
-                pairs = list(zip(imported_aliases, export_names[:len(imported_aliases)], export_decls[:len(imported_aliases)]))
-            else:
-                pairs = list(zip(export_names, export_names, export_decls))
+
+                if uses.imports:
+                    imported_aliases = list(uses.imports)
+                    if len(imported_aliases) > len(export_names):
+                        self.error(
+                            f"Module {uses.name} imports {len(imported_aliases)} name(s) but only exports {len(export_names)}",
+                            None,
+                        )
+                        return
+                    # Positional rename: pair each local alias with the nth export
+                    # name, then find the matching decl by that export name.
+                    pairs = []
+                    for alias, ename in zip(imported_aliases, export_names):
+                        decl = next((d for d in routine_decls
+                                     if getattr(d, 'name', '').lower() == ename.lower()), None)
+                        if decl:
+                            pairs.append((alias, ename, decl))
+                else:
+                    pairs = [(n, n, next(d for d in routine_decls
+                                         if getattr(d, 'name', '').lower() == n.lower()))
+                             for n in export_names]
+
+                # Import non-exported TYPE/CONST decls so the importing scope
+                # can reference shared buffer type names (e.g. PIXELS).  These
+                # are checked under the same device context so INTEGER32,
+                # ADS(GLOBAL), etc. resolve without errors.
+                for decl in all_decls:
+                    if isinstance(decl, (TypeDecl, ConstDecl)) and getattr(decl, 'name', None):
+                        if not self.symbol_table.lookup_local(decl.name):
+                            self.check_declaration(decl)
+
+                # Build the routine symbols under device context so parameter
+                # types involving INTEGER32 / ADS(s) / etc. resolve correctly.
+                routine_symbols = []
+                for local_name, exported_name, decl in pairs:
+                    sym = Symbol(
+                        name=local_name,
+                        type=self._get_declaration_type(decl),
+                        kind=self._get_declaration_kind(decl),
+                        is_mutable=isinstance(decl, VarDecl),
+                    )
+                    routine_symbols.append((local_name, sym))
+
+            # Register the resolved symbols in the host scope (outside the
+            # device context so no device restrictions apply to the host body).
+            for local_name, sym in routine_symbols:
+                if self.symbol_table.lookup_local(local_name):
+                    self.error(f"Symbol '{local_name}' from module {uses.name} conflicts with existing definition", None)
+                    continue
+                self.symbol_table.define(local_name, sym)
+            return
         else:
             export_decls = [decl for decl in getattr(interface, 'decls', []) if getattr(decl, 'name', None)]
             export_names = [decl.name for decl in export_decls]
@@ -644,6 +709,21 @@ class PascalTypeChecker(TypeChecker):
             with self._device_context(getattr(impl, 'is_device', False)):
                 if getattr(impl, 'is_device', False) and impl.init_body is not None:
                     self.error("initializer code is not available in a DEVICE UNIT", None)
+
+                # Seed TYPE and CONST aliases from the interface so the
+                # implementation can reference them without restating.  Only
+                # seed names that the implementation does not itself declare
+                # (impl wins when both define the same name).
+                if iface:
+                    impl_type_names  = {getattr(d, 'name', '').upper() for d in (impl.decls or []) if isinstance(d, TypeDecl)}
+                    impl_const_names = {getattr(d, 'name', '').upper() for d in (impl.decls or []) if isinstance(d, ConstDecl)}
+                    for decl in iface.decls:
+                        name = getattr(decl, 'name', '') or ''
+                        if isinstance(decl, TypeDecl) and name.upper() not in impl_type_names:
+                            self.check_declaration(decl)
+                        elif isinstance(decl, ConstDecl) and name.upper() not in impl_const_names:
+                            self.check_declaration(decl)
+
                 if impl.decls:
                     for decl in impl.decls:
                         self.check_declaration(decl)
@@ -1544,17 +1624,21 @@ class PascalTypeChecker(TypeChecker):
         # WRITE supports printable BOOLEAN and enum values.  User enums are
         # ordinal by default and symbolic under -f symbolic-enum-io; BOOLEAN is
         # always name-based on output.
-        wide = (type(INTEGER32_TYPE), type(INTEGER64_TYPE)) if self.feature_enabled('wide-integers') else ()
+        # INTEGER32/INTEGER64 are always writable when a value of that type
+        # exists — the feature flag gates whether you can NAME the type in host
+        # source, not whether a live typed value (e.g. returned from an imported
+        # device function) can be passed to WRITE.
         wide_real = (type(REAL32_TYPE), ) if (self.feature_enabled('wide-reals') or self.in_device_module) else ()
-        return isinstance(t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), EnumType, StringType, LStringType) + wide +
+        return isinstance(t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), type(INTEGER32_TYPE), type(INTEGER64_TYPE), EnumType, StringType, LStringType) +
                           wide_real) or is_fixed_char_array(t)
 
     def _is_readable_type(self, t: Type) -> bool:
         # READ remains narrower than WRITE: BOOLEAN input is unsupported, but
         # user enums are readable in both modes (numeric by default, symbolic
         # under -f symbolic-enum-io).
-        wide = (type(INTEGER32_TYPE), type(INTEGER64_TYPE)) if self.feature_enabled('wide-integers') else ()
-        return isinstance(t, (type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), EnumType, StringType, LStringType) + wide)
+        # INTEGER32/INTEGER64 are always readable for the same reason they are
+        # always writable: the type object is valid regardless of how it arrived.
+        return isinstance(t, (type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), type(INTEGER32_TYPE), type(INTEGER64_TYPE), EnumType, StringType, LStringType))
 
     def _check_concat_args(self, stmt: ProcCallStmt) -> None:
         """Type check CONCAT(VAR D: LSTRING; CONST S: STRING).
