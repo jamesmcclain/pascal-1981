@@ -177,8 +177,11 @@ class ExprsMixin:
             symbol = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
             if not symbol:
                 raise CodegenError(f'Undefined variable: {expr.name}')
-            # Parameters are passed by value, don't load them
-            if symbol.is_parameter:
+            # Parameters are passed by value; return the value directly when
+            # there are no selectors. When selectors ARE present (e.g. p^[i]),
+            # fall through to resolve_designator_ptr so the DEREF/INDEX chain
+            # is walked — exactly as the write path in stmts.py already does.
+            if symbol.is_parameter and not expr.selectors:
                 return symbol.llvm_value
 
             ptr = self.resolve_designator_ptr(expr)
