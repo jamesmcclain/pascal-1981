@@ -644,6 +644,21 @@ class PascalTypeChecker(TypeChecker):
             with self._device_context(getattr(impl, 'is_device', False)):
                 if getattr(impl, 'is_device', False) and impl.init_body is not None:
                     self.error("initializer code is not available in a DEVICE UNIT", None)
+
+                # Seed TYPE and CONST aliases from the interface so the
+                # implementation can reference them without restating.  Only
+                # seed names that the implementation does not itself declare
+                # (impl wins when both define the same name).
+                if iface:
+                    impl_type_names  = {getattr(d, 'name', '').upper() for d in (impl.decls or []) if isinstance(d, TypeDecl)}
+                    impl_const_names = {getattr(d, 'name', '').upper() for d in (impl.decls or []) if isinstance(d, ConstDecl)}
+                    for decl in iface.decls:
+                        name = getattr(decl, 'name', '') or ''
+                        if isinstance(decl, TypeDecl) and name.upper() not in impl_type_names:
+                            self.check_declaration(decl)
+                        elif isinstance(decl, ConstDecl) and name.upper() not in impl_const_names:
+                            self.check_declaration(decl)
+
                 if impl.decls:
                     for decl in impl.decls:
                         self.check_declaration(decl)

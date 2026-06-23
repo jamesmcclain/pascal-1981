@@ -105,6 +105,21 @@ class DeclsMixin:
         self.current_interface_decls = {getattr(decl, 'name', '').lower(): decl for decl in (unit.interface.decls if unit.interface else []) if getattr(decl, 'name', None)}
         try:
             with self._device_codegen_context(getattr(unit, 'is_device', False)):
+                # Seed TYPE and CONST aliases from the interface so the
+                # implementation can reference them without restating.
+                # Only seed names the implementation does not itself declare
+                # (impl wins when both define the same name), mirroring the
+                # identical logic in type_checker.py::check_implementation_unit.
+                if unit.interface:
+                    impl_type_names  = {getattr(d, 'name', '').upper() for d in (unit.decls or []) if isinstance(d, TypeDecl)}
+                    impl_const_names = {getattr(d, 'name', '').upper() for d in (unit.decls or []) if isinstance(d, ConstDecl)}
+                    for decl in unit.interface.decls:
+                        name = getattr(decl, 'name', '') or ''
+                        if isinstance(decl, TypeDecl) and name.upper() not in impl_type_names:
+                            self.codegen_type_decl(decl)
+                        elif isinstance(decl, ConstDecl) and name.upper() not in impl_const_names:
+                            self.codegen_const_decl(decl)
+
                 for decl in unit.decls:
                     self.codegen_decl(decl)
 
