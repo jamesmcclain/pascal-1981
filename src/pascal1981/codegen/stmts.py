@@ -241,8 +241,16 @@ class StmtsMixin:
         The IF/ELSE-of-assignment select peephole evaluates both arms' RHS
         regardless of the condition, so each RHS must be free of side effects
         (function calls) and free of operations that could trap or fire a
-        runtime check on the not-taken arm (division, array indexing, pointer
-        dereference).  Pure literal/variable reads are always safe.
+        runtime check on the not-taken arm: division (``$MATHCK`` divide-by-zero
+        or an illegal quotient), integer ``+``/``-``/``*`` (``$MATHCK`` overflow
+        guard), array indexing (``$INDEXCK``), and pointer dereference
+        (``$NILCK``).  Pure literal/variable reads are always safe.
+
+        Checks that lower to a host trap are suppressed in device code, so in
+        the device-only context where this peephole actually runs the integer
+        ``$MATHCK`` arm is moot; the explicit ``check_enabled`` test keeps the
+        predicate correct on its own terms, so the transform stays sound even if
+        it is ever re-enabled on a path where those checks are live.
         """
         if expr is None:
             return True
@@ -250,6 +258,13 @@ class StmtsMixin:
             return False
         if isinstance(expr, BinOp):
             if expr.op in ('SLASH', 'DIV', 'MOD'):
+                return False
+            if expr.op in ('PLUS', 'MINUS', 'MUL') and self.check_enabled('MATHCK'):
+                # Integer add/sub/mul lower through the $MATHCK overflow guard,
+                # which traps on the not-taken arm if speculatively evaluated.
+                # (Float arithmetic does not trap, but the AST does not carry a
+                # lowered type here, so bail conservatively when the check is
+                # live; device code, where the peephole runs, has it suppressed.)
                 return False
             return self._select_rhs_is_safe(expr.left) and self._select_rhs_is_safe(expr.right)
         if isinstance(expr, UnaryOp):
@@ -447,8 +462,20 @@ class StmtsMixin:
         indexed/dereferenced reads that could fault or fire INDEXCK/NILCK, or
         targets whose designator itself carries selectors).  (followups.md
         item 2: branch vs predication on the bounds guard.)
+
+        The transform is **device-only**.  Its safety argument ("both arms are
+        pure, so evaluating the not-taken arm unconditionally is equivalent")
+        holds only where the host-trapping runtime checks are suppressed -- and
+        that is exactly device code (see ``_HOST_TRAPPING_CHECKS``).  On the
+        host path, integer ``+``/``-``/``*`` lower through the ``$MATHCK``
+        overflow guard (on by default), so speculatively evaluating an
+        overflowing not-taken arm would fire an abort the source-level branch
+        never reaches.  Gating on ``is_device_module`` keeps host lowering
+        byte-for-byte unchanged; ``_select_rhs_is_safe`` additionally refuses
+        any arm whose evaluation could trap under a live check, as defense in
+        depth should an on-device trap ever be introduced.
         """
-        if self._try_select_if(stmt):
+        if self.is_device_module and self._try_select_if(stmt):
             return
         cond = self.codegen_expr(stmt.cond)
         cond_bit = self.to_bool(cond)
