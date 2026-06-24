@@ -1523,9 +1523,9 @@ class PascalTypeChecker(TypeChecker):
                 self.error("DEVFREE argument must be a device handle", stmt)
             return
 
-        # LAUNCH(kernel, grid, block, args...)
-        if len(args) < 3:
-            self.error(f"LAUNCH expects at least a kernel name, grid, and block (got {len(args)})", stmt)
+        # LAUNCH(kernel, <geometry>, kernel actuals...)
+        if len(args) < 1:
+            self.error("LAUNCH expects at least a kernel name", stmt)
             return
         kernel = args[0]
         if not isinstance(kernel, (Identifier, Designator)) or getattr(kernel, 'selectors', None):
@@ -1535,16 +1535,24 @@ class PascalTypeChecker(TypeChecker):
         if not ksym or not isinstance(ksym.type, ProcedureType):
             self.error(f"LAUNCH cannot resolve kernel procedure '{kernel.name}'", stmt)
             return
-        for gi in (1, 2):
-            g_type = self.infer_expression_type(args[gi])
-            label = 'grid' if gi == 1 else 'block'
-            if g_type is not None and not self._is_integer_type(g_type):
-                self.error(f"LAUNCH {label} dimension must be an integer, got {g_type}", stmt)
-        kernel_actuals = args[3:]
+        # Geometry is 2 (grid, block -> 1-D) or 6 (gx,gy,gz, bx,by,bz) integer
+        # values; the count is implied by the kernel's arity (the trailing
+        # `expected` args are the kernel actuals).
         expected = len(ksym.type.params)
-        if len(kernel_actuals) != expected:
-            self.error(f"LAUNCH of '{kernel.name}' passes {len(kernel_actuals)} kernel argument(s) "
-                       f"but the kernel takes {expected}", stmt)
+        split = len(args) - expected
+        geometry = args[1:split] if split >= 1 else []
+        kernel_actuals = args[split:] if expected else []
+        if len(geometry) not in (2, 6):
+            self.error(
+                f"LAUNCH of '{kernel.name}' (a {expected}-parameter kernel) expects "
+                f"2 (grid, block) or 6 (gx,gy,gz, bx,by,bz) geometry values plus "
+                f"{expected} kernel argument(s); got {max(len(args) - 1, 0)} argument(s) "
+                f"after the kernel name", stmt)
+        else:
+            for gexpr in geometry:
+                g_type = self.infer_expression_type(gexpr)
+                if g_type is not None and not self._is_integer_type(g_type):
+                    self.error(f"LAUNCH geometry dimension must be an integer, got {g_type}", stmt)
         # Visit each actual so undefined identifiers are still reported. Exact
         # type compatibility (an ADRMEM handle into an ADS(GLOBAL) buffer
         # parameter) is intentionally lenient -- the codegen coerces the handle

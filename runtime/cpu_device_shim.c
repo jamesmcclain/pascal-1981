@@ -45,3 +45,28 @@ void pas_dev_copy_from(void *host_dst, const void *dev_src, long long nbytes) {
 void pas_dev_free(void *dev_ptr) {
     free(dev_ptr);
 }
+
+/* Launch a kernel.  The compiler hands us, for every LAUNCH, a GPU-faithful
+ * argument bundle: the kernel name (used by the CUDA shim to find the entry in
+ * the loaded module), a per-kernel host dispatch thunk (used by *this* CPU-device
+ * shim), the six cuLaunchKernel geometry values, and a void** argument array
+ * whose i-th slot points at the storage cell holding kernel argument i.
+ *
+ * On the CPU device the kernel runs as a single-thread grid -- we invoke the
+ * thunk once, which unpacks argv and calls the kernel.  A grid-stride kernel
+ * (i := tid + bid*bdim; i += bdim*gdim) therefore still covers the whole buffer
+ * because BLOCKDIM_X/GRIDDIM_X lower to 1 on the CPU device.  The geometry and
+ * name are unused here; they carry the same information the CUDA driver shim
+ * will consume when it replaces this function with a cuLaunchKernel by name
+ * out of a cuModuleLoadData'd PTX module -- with no change to the Pascal side. */
+typedef void (*pas_klaunch_fn)(void **);
+void pas_dev_launch(const char *name, void *thunk,
+                    long long gx, long long gy, long long gz,
+                    long long bx, long long by, long long bz,
+                    void **argv) {
+    (void)name;
+    (void)gx; (void)gy; (void)gz;
+    (void)bx; (void)by; (void)bz;
+    if (thunk)
+        ((pas_klaunch_fn)thunk)(argv);
+}

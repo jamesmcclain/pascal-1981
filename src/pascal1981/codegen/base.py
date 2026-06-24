@@ -193,6 +193,9 @@ class CodegenBase:
         # making "no dead host-runtime declare" hold for every triple — not just
         # GPU device targets.  The old gated-skip scaffolding is removed.
         self._runtime_extern_cache: Dict[str, ir.Function] = {}
+        # Per-kernel host dispatch thunks emitted for LAUNCH (Milestone D); keyed
+        # by thunk name so a kernel launched more than once reuses one thunk.
+        self._launch_thunks: Dict[str, ir.Function] = {}
         self._build_extern_factories()
         # INPUT/OUTPUT: only PROGRAM owns the strong definition; MODULE and
         # UNIT compilands emit declare-only (external global) so the linker
@@ -350,12 +353,18 @@ class CodegenBase:
             'free': _mk('free', ir.FunctionType(void, [i8p])),
             # ---- device orchestration shim (Milestone D, §5/§7) ------------
             # CPU-device stand-in: alloc=malloc, copies=memcpy, free=free.
-            # LAUNCH has no extern here -- it lowers to a direct call to the
-            # kernel function on the CPU-device path.
+            # LAUNCH lowers to pas_dev_launch with a GPU-faithful launch ABI: a
+            # kernel-name string, a per-kernel host dispatch thunk (used only on
+            # the CPU device), the six cuLaunchKernel geometry values, and a
+            # void** argument array.  The CUDA driver shim later reuses the same
+            # call site -- it dispatches by name out of the loaded module and
+            # ignores the thunk -- so no codegen change is needed for the GPU.
             'pas_dev_alloc': _mk('pas_dev_alloc', ir.FunctionType(i8p, [i64])),
             'pas_dev_copy_to': _mk('pas_dev_copy_to', ir.FunctionType(void, [i8p, i8p, i64])),
             'pas_dev_copy_from': _mk('pas_dev_copy_from', ir.FunctionType(void, [i8p, i8p, i64])),
             'pas_dev_free': _mk('pas_dev_free', ir.FunctionType(void, [i8p])),
+            'pas_dev_launch': _mk('pas_dev_launch', ir.FunctionType(
+                void, [i8p, i8p, i64, i64, i64, i64, i64, i64, i8p.as_pointer()])),
             'abort': _mk('abort', ir.FunctionType(void, [])),
             'fflush': _mk('fflush', ir.FunctionType(i32, [i8p])),
             'sqrt': _mk('sqrt', ir.FunctionType(f64, [f64])),

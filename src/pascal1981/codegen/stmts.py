@@ -363,19 +363,71 @@ class StmtsMixin:
         i8p = ir.IntType(8).as_pointer()
         return self.coerce_arg(self.codegen_expr(arg), i8p)
 
+    def _kernel_cstring(self, text: str) -> ir.Value:
+        """A module-global, NUL-terminated C string; returns an ``i8*`` to it."""
+        data = bytearray(text.encode('utf-8') + b'\0')
+        const = ir.Constant(ir.ArrayType(ir.IntType(8), len(data)), data)
+        gv = ir.GlobalVariable(self.module, const.type, name=self.unique_name('kname'))
+        gv.global_constant = True
+        gv.initializer = const
+        zero = ir.Constant(ir.IntType(32), 0)
+        return self.builder.gep(gv, [zero, zero])
+
+    def _kernel_launch_thunk(self, fn: ir.Function) -> ir.Function:
+        """Return (creating once per kernel) the host dispatch thunk.
+
+        The thunk ``void __pas_klaunch_<name>(i8** argv)`` unpacks ``argv`` into
+        ``fn``'s parameter types and calls ``fn``.  This is the CPU-device launch
+        dispatch: ``pas_dev_launch`` invokes it as a single-thread grid, so a
+        grid-stride kernel still covers the whole buffer.  On a GPU the shim
+        dispatches the kernel by name out of the loaded module and the thunk is
+        never called -- but it is harmless to emit, and LAUNCH only ever appears
+        in host code (never a device compiland), so the thunk never collides with
+        a ``ptx_kernel`` calling convention.
+
+        ``argv`` mirrors ``cuLaunchKernel``'s ``void**``: each slot points at a
+        storage cell holding one argument value (a scalar by value, or a device
+        handle by its opaque pointer value).
+        """
+        thunk_name = '__pas_klaunch_' + fn.name
+        cache = self._launch_thunks
+        existing = cache.get(thunk_name)
+        if existing is not None:
+            return existing
+        i8p = ir.IntType(8).as_pointer()
+        i8pp = i8p.as_pointer()
+        thunk = ir.Function(self.module, ir.FunctionType(ir.VoidType(), [i8pp]), name=thunk_name)
+        thunk.linkage = 'internal'
+        argv = thunk.args[0]
+        argv.name = 'argv'
+        b = ir.IRBuilder(thunk.append_basic_block('entry'))
+        call_args = []
+        for i, pty in enumerate(fn.function_type.args):
+            slot_pp = b.gep(argv, [ir.Constant(ir.IntType(32), i)], inbounds=True)
+            slot = b.load(slot_pp)                       # i8* -> the cell holding arg i
+            typed = b.bitcast(slot, pty.as_pointer())
+            call_args.append(b.load(typed))
+        b.call(fn, call_args)
+        b.ret_void()
+        cache[thunk_name] = thunk
+        return thunk
+
     def _codegen_device_orchestration(self, name: str, args: list) -> None:
         """Lower DEVCOPYTO / DEVCOPYFROM / DEVFREE / LAUNCH (Milestone D).
 
         DEV* lower to the orchestration-shim externs (``pas_dev_copy_to`` /
-        ``pas_dev_copy_from`` / ``pas_dev_free``).  LAUNCH lowers, on the
-        CPU-device path, to a *direct call* of the named kernel: the kernel runs
-        as a single-thread grid (THREADIDX_X=0, BLOCKDIM_X=1, ...), so a
-        grid-stride kernel still covers the whole buffer.  The grid/block
-        geometry arguments are accepted and type-checked but ignored here; they
-        become the six ``cuLaunchKernel`` geometry args when the shim is later
-        swapped for the CUDA driver path (§5.4).
+        ``pas_dev_copy_from`` / ``pas_dev_free``).  LAUNCH lowers to a real
+        launch ABI: it marshals the kernel arguments into a ``void**`` array (the
+        shape ``cuLaunchKernel`` consumes) and calls ``pas_dev_launch`` with the
+        kernel-name string, a per-kernel dispatch thunk, the six geometry values,
+        and that array.  On the CPU device ``pas_dev_launch`` runs the thunk
+        (single-thread grid); swapping the shim for the CUDA driver path reuses
+        this exact call site -- it dispatches by name and ignores the thunk -- so
+        no codegen change is needed to run the same program on a GPU (§5.2/§5.4).
+
+        Launch geometry is 2 values (grid, block -> a 1-D launch) or 6 values
+        (gx,gy,gz, bx,by,bz); the count is implied by the kernel's arity.
         """
-        i8p = ir.IntType(8).as_pointer()
         if name == 'DEVCOPYTO':
             dev = self._orch_i8ptr(args[0])
             src = self._orch_i8ptr(args[1])
@@ -391,9 +443,10 @@ class StmtsMixin:
         if name == 'DEVFREE':
             self.builder.call(self.runtime_extern('pas_dev_free'), [self._orch_i8ptr(args[0])])
             return
-        # LAUNCH(kernel, grid, block, arg0, arg1, ...)
-        if len(args) < 3:
-            raise CodegenError('LAUNCH expects at least a kernel, grid, and block')
+
+        # LAUNCH(kernel, <geometry>, kernel actuals...)
+        if len(args) < 1:
+            raise CodegenError('LAUNCH expects at least a kernel name')
         kernel = args[0]
         kernel_name = getattr(kernel, 'name', None)
         if kernel_name is None:
@@ -401,20 +454,50 @@ class StmtsMixin:
         symbol = self.scope.lookup(kernel_name) or self.scope.lookup(kernel_name.upper())
         if not symbol or not isinstance(getattr(symbol, 'llvm_value', None), ir.Function):
             raise CodegenError(f"LAUNCH cannot resolve kernel '{kernel_name}'")
-        # Evaluate (and discard) the geometry args so any side effects in the
-        # geometry expressions are preserved; on the CPU device they do not
-        # affect the single-thread launch.
-        self.codegen_expr(args[1])
-        self.codegen_expr(args[2])
         fn = symbol.llvm_value
         param_types = fn.function_type.args
-        call_args = []
-        for i, actual in enumerate(args[3:]):
-            v = self.codegen_expr(actual)
-            if i < len(param_types):
-                v = self.coerce_arg(v, param_types[i])
-            call_args.append(v)
-        self.builder.call(fn, call_args)
+        expected = len(param_types)
+
+        # Split the flat argument list using the kernel's arity: the trailing
+        # `expected` args are the kernel actuals; everything between the kernel
+        # name and them is launch geometry (2 or 6 integer values).
+        split = len(args) - expected
+        geometry = args[1:split]
+        kernel_actuals = args[split:] if expected else []
+        gvals = [self._to_i64(self.codegen_expr(g)) for g in geometry]
+        i64 = ir.IntType(64)
+        one = ir.Constant(i64, 1)
+        if len(gvals) == 2:           # 1-D: grid, block
+            gx, bx = gvals
+            geom6 = [gx, one, one, bx, one, one]
+        elif len(gvals) == 6:         # gx,gy,gz, bx,by,bz
+            geom6 = gvals
+        else:
+            raise CodegenError(
+                f"LAUNCH of '{kernel_name}' expects 2 (grid, block) or 6 geometry "
+                f"values before its {expected} argument(s), got {len(geometry)}")
+
+        # Marshal the kernel actuals into a void** argument array: argv[i] points
+        # at a storage cell holding actual i, coerced to the kernel's parameter
+        # ABI (the same coercion the former direct call used).
+        i8p = ir.IntType(8).as_pointer()
+        i32 = ir.IntType(32)
+        if kernel_actuals:
+            argv = self.builder.alloca(ir.ArrayType(i8p, len(kernel_actuals)), name='launch_argv')
+            for i, actual in enumerate(kernel_actuals):
+                v = self.coerce_arg(self.codegen_expr(actual), param_types[i])
+                cell = self.builder.alloca(param_types[i], name=f'launch_arg{i}')
+                self.builder.store(v, cell)
+                slot = self.builder.gep(argv, [i32(0), i32(i)], inbounds=True)
+                self.builder.store(self.builder.bitcast(cell, i8p), slot)
+            argv_ptr = self.builder.gep(argv, [i32(0), i32(0)], inbounds=True)
+        else:
+            argv_ptr = ir.Constant(i8p.as_pointer(), None)
+
+        name_str = self._kernel_cstring(fn.name)
+        thunk_ptr = self.builder.bitcast(self._kernel_launch_thunk(fn), i8p)
+        self.builder.call(self.runtime_extern('pas_dev_launch'),
+                          [name_str, thunk_ptr] + geom6 + [argv_ptr])
 
     def codegen_proc_call_stmt(self, stmt: ProcCallStmt) -> None:
         """Codegen for procedure call statement."""

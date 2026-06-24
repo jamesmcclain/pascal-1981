@@ -24,11 +24,19 @@ intrinsics and `SYNCTHREADS` barrier are implemented, gated, and validated on th
 device; the build record is archived at `docs/old/milestone-c-parallel-execution-plan.md`.
 Milestone D (host orchestration) has its **CPU-device first slice landed** (§5.5
 acceptance): the host builtins `DEVALLOC`/`DEVCOPYTO`/`DEVCOPYFROM`/`DEVFREE`/
-`LAUNCH` lower to a malloc/memcpy/direct-call shim, and a host program that
+`LAUNCH` lower to a malloc/memcpy shim, and a host program that
 allocates, copies in, launches a grid-stride vector-add, copies back, and prints
-the result runs end-to-end on `x86`. The real-GPU shim (CUDA driver API, §5.2)
-and the geometry sugar (`GRID`/`BLOCK`) remain prescribed, as does Milestone E
-(AMDGPU stack). Suite: **834 passed, 69 subtests**.
+the result runs end-to-end on `x86`. **`LAUNCH` now lowers through a
+GPU-faithful launch ABI** — it marshals the kernel actuals into a `void**`
+argument array and calls a `pas_dev_launch(name, thunk, gx,gy,gz, bx,by,bz, argv)`
+shim seam (geometry accepted as 2 *or* 6 values), instead of the earlier direct
+call to the kernel. On the CPU device the shim runs a compiler-emitted per-kernel
+dispatch thunk; the same call site is reused unchanged for the GPU, where the
+CUDA shim dispatches by name out of the loaded module and ignores the thunk. So
+the real-GPU shim (CUDA driver API, §5.2) is now a pure runtime-library swap plus
+the PTX-load/module-handle plumbing; the `GRID`/`BLOCK` *naming* sugar over the
+already-supported 6-value geometry, and Milestone E (AMDGPU stack), remain
+prescribed. Suite: **840 passed, 69 subtests**.
 
 **Update (2026-06, first GPU run via the external-launcher path):** A Pascal
 `DEVICE UNIT` kernel has now run on a real NVIDIA GPU. The `REAL32`/`REAL64` scalar
@@ -73,7 +81,7 @@ The four findings that gate a real kernel, each expanded below:
 | §2 | Device IR is **not self-contained** | **[DONE]** — Milestones A1–A3 complete (Phase 2.1 + 2.2 lazy plan) |
 | §3 | There are **no entry points**, only device functions | **[DONE]** — Milestone B complete (Phase 2.3) |
 | §4 | **No parallel execution model** | **[DONE]** — Milestone C complete: index reads, `SYNCTHREADS`, no new body launch syntax, CPU-device correctness tests |
-| §5 | **No host orchestration** | [IN-PROGRESS] — CPU-device slice DONE (DEVALLOC/DEVCOPYTO/DEVCOPYFROM/DEVFREE/LAUNCH on a malloc/memcpy/direct-call shim; §5.5 vector-add runs end-to-end on x86). CUDA driver shim + GRID/BLOCK sugar still open |
+| §5 | **No host orchestration** | [IN-PROGRESS] — CPU-device slice DONE (DEVALLOC/DEVCOPYTO/DEVCOPYFROM/DEVFREE on a malloc/memcpy shim; LAUNCH lowers through the real `pas_dev_launch(name, thunk, gx,gy,gz, bx,by,bz, argv)` ABI with 2-or-6 geometry; §5.5 vector-add runs end-to-end on x86). CUDA driver shim (now a runtime-only swap + PTX module load) + `GRID`/`BLOCK` naming sugar still open |
 | §6 | **AMDGPU back end crashes** (bonus, ROCm-only) | [PRESCRIBED] — open |
 
 Milestones below are ordered so each one is independently testable and the host/vintage path
@@ -488,10 +496,26 @@ D2Hs, and prints the summed array - running on a real GPU (or the CPU-device sta
 `DEVCOPYTO` ×2, `LAUNCH(add, 1, n, da, db, dc, n)`, `DEVCOPYFROM`, prints `0 3 6 … 21` — and
 runs it via `clang` on x86 with no GPU. The orchestration builtins lower to the
 `runtime/cpu_device_shim.c` externs (`pas_dev_alloc`=malloc, copies=memcpy,
-`pas_dev_free`=free); `LAUNCH` lowers to a direct call to the kernel, which runs as a
-single-thread grid so its grid-stride loop covers the whole buffer. Swapping the four shim
-functions for CUDA Driver API wrappers (and routing `LAUNCH` through `pas_dev_launch` by name)
-is the remaining step to run the *same* Pascal program on a GPU.
+`pas_dev_free`=free).
+
+`LAUNCH` lowers through a **real launch ABI**, not a direct call: the compiler marshals the
+kernel actuals into a `void**` array (each slot points at a cell holding one argument value,
+coerced to the kernel's parameter ABI — exactly what `cuLaunchKernel` consumes) and calls
+`pas_dev_launch(name, thunk, gx,gy,gz, bx,by,bz, argv)`. Geometry is supplied as 2 values
+(grid, block → a 1-D launch) or 6 (gx,gy,gz, bx,by,bz); the count is implied by the kernel's
+arity. On the CPU device `pas_dev_launch` invokes a compiler-emitted per-kernel dispatch
+thunk `__pas_klaunch_<name>(void** argv)` that unpacks `argv` and calls the kernel as a
+single-thread grid, so its grid-stride loop covers the whole buffer. The kernel-name string
+and the geometry ride along unused on the CPU device — they are precisely what the CUDA shim
+will consume. So running the *same* Pascal program on a GPU is now a pure runtime-library
+swap: replace the four `cpu_device_shim.c` functions with CUDA Driver API wrappers and let
+`pas_dev_launch` `cuModuleGetFunction` the entry by `name` and `cuLaunchKernel` it with the
+geometry and `argv` already supplied — *no* further codegen change to argument handling. The
+one remaining compiler-side piece is the PTX-load/module-handle plumbing (emit the device
+PTX, embed or load it, thread the `cuModuleLoadData` handle to the launch), which §5.3 tracks.
+The new ABI is pinned by `tests/test_device_launch_abi.py` (IR-level: the host reaches the
+kernel only through the thunk, via `pas_dev_launch` with a marshalled `argv`; runtime: the
+6-value geometry form prints `0 3 6 … 21`; type checker: the 2-or-6 geometry rule).
 
 One ABI subtlety surfaced and was fixed: a host `USES` of a device unit must declare the
 imported kernel in *device* lowering context, or its `ADS(GLOBAL) OF T` parameters lower to
@@ -543,8 +567,10 @@ currently gets away without it.
 - §4 (intrinsics): provide CPU-device lowerings - `THREADIDX_X`→0, `BLOCKDIM_X`→1,
   `SYNCTHREADS`→no-op - so a kernel run on the CPU executes as a single-thread grid and
   produces the right scalar answer. This lets you validate kernel math with zero GPU.
-- §5 (orchestration): a CPU-device shim where `DEVALLOC`=`malloc`, copies=`memcpy`, `LAUNCH`=a
-  direct call. Same Pascal program, no GPU. Then swap the shim for the CUDA one.
+- §5 (orchestration): a CPU-device shim where `DEVALLOC`=`malloc`, copies=`memcpy`, and
+  `LAUNCH` marshals a `void**` and calls `pas_dev_launch`, which runs a per-kernel dispatch
+  thunk (single-thread grid). Same Pascal program, no GPU. Then swap the shim for the CUDA one
+  — the launch call site is already GPU-shaped, so only the runtime library changes.
 
 This is the CPU-device dividend the design designed for; lean on it.
 
