@@ -46,27 +46,65 @@ void pas_dev_free(void *dev_ptr) {
     free(dev_ptr);
 }
 
-/* Launch a kernel.  The compiler hands us, for every LAUNCH, a GPU-faithful
- * argument bundle: the kernel name (used by the CUDA shim to find the entry in
- * the loaded module), a per-kernel host dispatch thunk (used by *this* CPU-device
- * shim), the six cuLaunchKernel geometry values, and a void** argument array
- * whose i-th slot points at the storage cell holding kernel argument i.
+/* Launch a kernel through a CUDA-driver-shaped three-step path.  The compiler
+ * emits, per host compiland, a kernel registry: parallel name/entry tables it
+ * fills with the launchable kernels and their per-kernel dispatch thunks.  The
+ * launch site then does:
  *
- * On the CPU device the kernel runs as a single-thread grid -- we invoke the
- * thunk once, which unpacks argv and calls the kernel.  A grid-stride kernel
- * (i := tid + bid*bdim; i += bdim*gdim) therefore still covers the whole buffer
- * because BLOCKDIM_X/GRIDDIM_X lower to 1 on the CPU device.  The geometry and
- * name are unused here; they carry the same information the CUDA driver shim
- * will consume when it replaces this function with a cuLaunchKernel by name
- * out of a cuModuleLoadData'd PTX module -- with no change to the Pascal side. */
+ *     module = pas_dev_module_load(registry, ptx);     // cuModuleLoadData
+ *     entry  = pas_dev_module_get_function(module, name); // cuModuleGetFunction
+ *     pas_dev_launch(entry, gx,gy,gz, bx,by,bz, argv);  // cuLaunchKernel
+ *
+ * On the CPU device the "module" is the registry, get_function is a by-name
+ * lookup returning the thunk, and launch invokes the thunk as a single-thread
+ * grid (so a grid-stride kernel still covers the whole buffer).  Swapping this
+ * file for CUDA Driver API wrappers turns the *same* compiler output into a real
+ * GPU launch with no Pascal-side change: load takes the embedded PTX blob,
+ * get_function returns a CUfunction, launch is cuLaunchKernel.  (A CUDA shim
+ * should cache the loaded module internally -- e.g. a static handle keyed on the
+ * registry/ptx pointer -- so the per-launch load call stays cheap.) */
+
+/* Must match the LLVM struct the compiler emits: { i8** names; i8** entries;
+ * i64 count }. */
+typedef struct {
+    const char *const *names;
+    void *const *entries;
+    long long count;
+} pas_dev_registry;
+
+/* Load a "module".  CPU device: the module *is* the compiler-emitted registry;
+ * the PTX blob is unused here (the CUDA shim cuModuleLoadData's it instead and
+ * ignores the registry). */
+void *pas_dev_module_load(void *registry, const char *ptx) {
+    (void)ptx;
+    return registry;
+}
+
+/* Resolve a kernel entry by name out of a loaded module.  CPU device: linear
+ * search of the registry's name table, returning the matching dispatch thunk
+ * (or NULL if absent). */
+void *pas_dev_module_get_function(void *module, const char *name) {
+    const pas_dev_registry *r = (const pas_dev_registry *)module;
+    long long i;
+    if (!r || !name)
+        return 0;
+    for (i = 0; i < r->count; i++)
+        if (r->names[i] && strcmp(r->names[i], name) == 0)
+            return r->entries[i];
+    return 0;
+}
+
+/* Launch a resolved entry.  CPU device: the entry is the dispatch thunk; call
+ * it once with the marshalled argument array.  Geometry is unused on the CPU
+ * device (BLOCKDIM_X/GRIDDIM_X lower to 1, so a single-thread grid is correct);
+ * it carries the same six values cuLaunchKernel consumes. */
 typedef void (*pas_klaunch_fn)(void **);
-void pas_dev_launch(const char *name, void *thunk,
+void pas_dev_launch(void *entry,
                     long long gx, long long gy, long long gz,
                     long long bx, long long by, long long bz,
                     void **argv) {
-    (void)name;
     (void)gx; (void)gy; (void)gz;
     (void)bx; (void)by; (void)bz;
-    if (thunk)
-        ((pas_klaunch_fn)thunk)(argv);
+    if (entry)
+        ((pas_klaunch_fn)entry)(argv);
 }

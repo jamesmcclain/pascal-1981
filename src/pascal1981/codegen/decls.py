@@ -80,6 +80,7 @@ class DeclsMixin:
             if not self.builder.block.is_terminated:
                 self.builder.ret(ir.Constant(ir.IntType(32), 0))
 
+        self._emit_launch_registry()
         return self.module
 
     def codegen_module(self, unit: ModuleUnit) -> ir.Module:
@@ -90,6 +91,7 @@ class DeclsMixin:
         with self._device_codegen_context(getattr(unit, 'is_device', False)):
             for decl in unit.decls:
                 self.codegen_decl(decl)
+        self._emit_launch_registry()
         return self.module
 
     def codegen_interface(self, unit: InterfaceUnit) -> ir.Module:

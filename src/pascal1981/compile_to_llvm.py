@@ -45,6 +45,14 @@ def main() -> int:
                         help='LLVM target triple for DEVICE MODULE units; e.g. nvptx64-nvidia-cuda or '
                         'amdgcn-amd-amdhsa. Defaults to the host x86 triple (CPU-device: address '
                         'spaces collapse to addrspace 0).')
+    parser.add_argument('--embed-device-ptx',
+                        default=None,
+                        metavar='PTX_FILE',
+                        help='Embed the named device PTX artifact (the companion device unit, '
+                        'compiled with python -m pascal1981.compile_to_ptx) into this host '
+                        'compiland as the __pas_device_ptx blob, so the launch path is '
+                        'self-contained. The CPU device never executes it; the CUDA driver shim '
+                        'cuModuleLoadData''s it. Only meaningful for host PROGRAM/MODULE units.')
     # ----------------------------------------------------------------
     # Runtime-check flag overrides
     # Each flag follows the same tri-state convention:
@@ -144,13 +152,19 @@ def main() -> int:
             if val != 'source':
                 force_flags[flag_name] = (val == 'on')
 
+        embed_device_ptx_text = None
+        if getattr(args, 'embed_device_ptx', None):
+            with open(args.embed_device_ptx, 'r') as ptx_f:
+                embed_device_ptx_text = ptx_f.read()
+
         ir = compile_to_llvm(ast,
                              verbose=verbose,
                              source_file=source_file,
                              force_flags=force_flags or None,
                              features=features,
                              host_triple=args.host_triple,
-                             device_triple=args.device_triple)
+                             device_triple=args.device_triple,
+                             embed_device_ptx_text=embed_device_ptx_text)
 
         # Output
         if output_file:

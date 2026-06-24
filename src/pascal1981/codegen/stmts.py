@@ -495,9 +495,108 @@ class StmtsMixin:
             argv_ptr = ir.Constant(i8p.as_pointer(), None)
 
         name_str = self._kernel_cstring(fn.name)
-        thunk_ptr = self.builder.bitcast(self._kernel_launch_thunk(fn), i8p)
+        # Record this kernel in the per-compiland registry and emit its dispatch
+        # thunk (the CPU-device "entry").  Resolve the entry by name through the
+        # module, mirroring cuModuleLoadData + cuModuleGetFunction, then launch
+        # the resolved entry.  On the CPU device load returns the registry,
+        # get_function returns the thunk, and launch calls it; on the GPU the
+        # same three calls become cuModuleLoadData(ptx) / cuModuleGetFunction /
+        # cuLaunchKernel, with no change here.
+        self._record_launched_kernel(fn.name, self._kernel_launch_thunk(fn))
+        module = self.builder.call(
+            self.runtime_extern('pas_dev_module_load'),
+            [self._launch_registry_ptr(), self._device_ptx_ptr()])
+        entry = self.builder.call(
+            self.runtime_extern('pas_dev_module_get_function'), [module, name_str])
         self.builder.call(self.runtime_extern('pas_dev_launch'),
-                          [name_str, thunk_ptr] + geom6 + [argv_ptr])
+                          [entry] + geom6 + [argv_ptr])
+
+    # ---- launch registry (CPU stand-in for a loaded CUDA module) -----------
+
+    def _record_launched_kernel(self, name: str, thunk: ir.Function) -> None:
+        """Note a kernel launched by this compiland (deduped by name)."""
+        if not any(n == name for n, _ in self._launched_kernels):
+            self._launched_kernels.append((name, thunk))
+
+    def _launch_registry_ptr(self) -> ir.Value:
+        """An ``i8*`` to this compiland's kernel registry global.
+
+        The global is created (shell, no initializer) on first reference and
+        filled in by ``_emit_launch_registry`` at finalize, once every LAUNCH
+        has recorded its kernel.
+        """
+        i8p = ir.IntType(8).as_pointer()
+        i64 = ir.IntType(64)
+        if self._launch_registry_gv is None:
+            reg_ty = ir.LiteralStructType([i8p.as_pointer(), i8p.as_pointer(), i64])
+            self._launch_registry_gv = ir.GlobalVariable(
+                self.module, reg_ty, name='__pas_klaunch_registry')
+            self._launch_registry_gv.global_constant = True
+        return self.builder.bitcast(self._launch_registry_gv, i8p)
+
+    def _device_ptx_ptr(self) -> ir.Value:
+        """An ``i8*`` to the embedded device-PTX blob (NUL-terminated).
+
+        The blob is the companion device unit's emitted PTX, embedded so the
+        launch path is self-contained and the GPU swap is a pure runtime change
+        (the CUDA shim ``cuModuleLoadData``s this blob).  When no PTX was
+        supplied at compile time, an empty blob is embedded -- the mechanism is
+        always present; the CPU device never executes it.
+        """
+        i8 = ir.IntType(8)
+        i8p = i8.as_pointer()
+        if self._device_ptx_gv is None:
+            text = self._embed_device_ptx_text or ''
+            data = bytearray(text.encode('utf-8') + b'\0')
+            const = ir.Constant(ir.ArrayType(i8, len(data)), data)
+            gv = ir.GlobalVariable(self.module, const.type, name='__pas_device_ptx')
+            gv.global_constant = True
+            gv.initializer = const
+            self._device_ptx_gv = gv
+        zero = ir.Constant(ir.IntType(32), 0)
+        return self.builder.gep(self._device_ptx_gv, [zero, zero])
+
+    def _emit_launch_registry(self) -> None:
+        """Fill the kernel registry global from the launched-kernel list.
+
+        Builds a names table and an entries (thunk) table and points the
+        registry struct ``{ i8** names; i8** entries; i64 count }`` at them.
+        Called at the end of host PROGRAM/MODULE codegen.  A no-op when the
+        compiland performed no launches, so launch-free host IR is byte-identical
+        to before.
+        """
+        if self._launch_registry_gv is None or not self._launched_kernels:
+            return
+        i8 = ir.IntType(8)
+        i8p = i8.as_pointer()
+        i64 = ir.IntType(64)
+        i32 = ir.IntType(32)
+        zero = ir.Constant(i32, 0)
+        name_ptrs = []
+        entry_ptrs = []
+        for kname, thunk in self._launched_kernels:
+            data = bytearray(kname.encode('utf-8') + b'\0')
+            nm = ir.GlobalVariable(self.module, ir.ArrayType(i8, len(data)),
+                                   name=self.unique_name('kregname'))
+            nm.global_constant = True
+            nm.initializer = ir.Constant(ir.ArrayType(i8, len(data)), data)
+            name_ptrs.append(nm.gep([zero, zero]))
+            entry_ptrs.append(thunk.bitcast(i8p))
+        count = len(self._launched_kernels)
+        names_arr = ir.GlobalVariable(self.module, ir.ArrayType(i8p, count),
+                                      name=self.unique_name('kregnames'))
+        names_arr.global_constant = True
+        names_arr.initializer = ir.Constant(ir.ArrayType(i8p, count), name_ptrs)
+        ents_arr = ir.GlobalVariable(self.module, ir.ArrayType(i8p, count),
+                                     name=self.unique_name('kregentries'))
+        ents_arr.global_constant = True
+        ents_arr.initializer = ir.Constant(ir.ArrayType(i8p, count), entry_ptrs)
+        reg_ty = self._launch_registry_gv.type.pointee
+        self._launch_registry_gv.initializer = ir.Constant(reg_ty, [
+            names_arr.gep([zero, zero]),
+            ents_arr.gep([zero, zero]),
+            ir.Constant(i64, count),
+        ])
 
     def codegen_proc_call_stmt(self, stmt: ProcCallStmt) -> None:
         """Codegen for procedure call statement."""

@@ -26,17 +26,21 @@ Milestone D (host orchestration) has its **CPU-device first slice landed** (§5.
 acceptance): the host builtins `DEVALLOC`/`DEVCOPYTO`/`DEVCOPYFROM`/`DEVFREE`/
 `LAUNCH` lower to a malloc/memcpy shim, and a host program that
 allocates, copies in, launches a grid-stride vector-add, copies back, and prints
-the result runs end-to-end on `x86`. **`LAUNCH` now lowers through a
-GPU-faithful launch ABI** — it marshals the kernel actuals into a `void**`
-argument array and calls a `pas_dev_launch(name, thunk, gx,gy,gz, bx,by,bz, argv)`
-shim seam (geometry accepted as 2 *or* 6 values), instead of the earlier direct
-call to the kernel. On the CPU device the shim runs a compiler-emitted per-kernel
-dispatch thunk; the same call site is reused unchanged for the GPU, where the
-CUDA shim dispatches by name out of the loaded module and ignores the thunk. So
-the real-GPU shim (CUDA driver API, §5.2) is now a pure runtime-library swap plus
-the PTX-load/module-handle plumbing; the `GRID`/`BLOCK` *naming* sugar over the
-already-supported 6-value geometry, and Milestone E (AMDGPU stack), remain
-prescribed. Suite: **840 passed, 69 subtests**.
+the result runs end-to-end on `x86`. **`LAUNCH` lowers through a GPU-faithful
+launch ABI** — it marshals the kernel actuals into a `void**` argument array
+(geometry accepted as 2 *or* 6 values), instead of a direct call — **and resolves
+the kernel by name out of a module, mirroring the CUDA driver API**:
+`pas_dev_module_load(registry, ptx)` → `pas_dev_module_get_function(module, name)`
+→ `pas_dev_launch(entry, gx,gy,gz, bx,by,bz, argv)` (↔ `cuModuleLoadData` /
+`cuModuleGetFunction` / `cuLaunchKernel`). On the CPU device the "module" is a
+compiler-emitted kernel registry (name table + dispatch-thunk table) and the
+companion device PTX is embedded as the `__pas_device_ptx` blob via
+`--embed-device-ptx`; the CPU and GPU launch control flow are now identical and
+differ only in the shim's backend. So the real-GPU shim (CUDA driver API, §5.2)
+is now a pure runtime-library swap (plus an optional load-caching detail inside
+the shim); the `GRID`/`BLOCK` *naming* sugar over the already-supported 6-value
+geometry, and Milestone E (AMDGPU stack), remain prescribed. Suite: **845 passed,
+69 subtests**.
 
 **Update (2026-06, first GPU run via the external-launcher path):** A Pascal
 `DEVICE UNIT` kernel has now run on a real NVIDIA GPU. The `REAL32`/`REAL64` scalar
@@ -448,26 +452,44 @@ Four host-side operations, mediated by the vendor runtime/driver:
   and a raw PTX module is dramatically simpler to stand up first and is fully sufficient to
   *run a kernel*.
 
-### 5.3 Build-model consequence (the two-artifact problem) [GAP - partly real today]
+### 5.3 Build-model consequence (the two-artifact problem) [DONE - embedding + by-name module landed; PTX-emit driver mode still open]
 
 The design's "multi-target build → two artifacts (host object + device PTX), bundled
-fatbinary-style" is **not implemented**. Today (per the Step-4b build log) it is *one module
-per `Codegen` instance*; you compile `kernel.pas` and `main.pas` as separate invocations and
-link the `.ll`s with `clang`. That separate-compilation model is actually *fine* for Strategy
-1: compile the `DEVICE MODULE` to **PTX text** (`emit_assembly` on the device target machine),
-embed that PTX as a host string constant (or load it from a file at runtime), and have the
-host shim `cuModuleLoadData` it. You do **not** need a fatbinary to launch. So:
+fatbinary-style" is **not implemented**, and is **not needed** for Strategy 1. The shipped
+model: compile `kernel.pas` and `main.pas` as separate invocations and link the `.ll`s with
+`clang`; the device unit is additionally compiled to **PTX text** (`compile_to_ptx`), and the
+host compiland **embeds that PTX** as the `__pas_device_ptx` blob via `--embed-device-ptx
+PATH` (an empty blob is embedded when the flag is absent, so the mechanism is always present).
+You do **not** need a fatbinary to launch.
 
-- **[PRESCRIBED]** Add a driver mode that, for a `DEVICE MODULE` + GPU device triple, runs the
-  emitted IR through the device `TargetMachine` and writes a `.ptx` (you proved this emits
-  correctly). The host program references that PTX by path or embedded blob.
+The launch path now mirrors the CUDA driver API as three steps, so the embedded PTX has a
+defined consumer:
+
+- `pas_dev_module_load(registry, ptx)` ↔ `cuModuleLoadData` — on the CPU device returns the
+  compiler-emitted **kernel registry** (a name table + parallel dispatch-thunk table, the
+  stand-in for a loaded module); the CUDA shim `cuModuleLoadData`s the `ptx` blob and ignores
+  the registry.
+- `pas_dev_module_get_function(module, name)` ↔ `cuModuleGetFunction` — on the CPU device a
+  by-name lookup in the registry returning the dispatch thunk; on the GPU a `CUfunction`.
+- `pas_dev_launch(entry, gx,gy,gz, bx,by,bz, argv)` ↔ `cuLaunchKernel`.
+
+So a host program reaches its kernel **by name out of a module**, exactly as on the GPU; the
+CPU and GPU launch control flow are now identical and differ only in the shim's lookup
+backend. Covered by `tests/test_device_ptx_module.py` (the three-step lowering, the registry
+and `__pas_device_ptx` globals, embedding via `--embed-device-ptx`, and a two-kernel program
+that proves by-name dispatch selects the correct entry).
+
+- **[PRESCRIBED]** A *driver mode* that, for a `DEVICE UNIT`/`DEVICE MODULE` + GPU device
+  triple, runs the emitted IR through the device `TargetMachine` and writes the `.ptx` in one
+  step (today `compile_to_ptx` does this as a separate invocation, which is then fed to
+  `--embed-device-ptx`). This is convenience wiring, not a capability gap.
 - The `--allow-multiple-definition` link hack that appeared in the original integration tests
   (caused by both compilands emitting `input`/`output` globals) has been **removed**: the
   INPUT/OUTPUT single-definition fix (S4.1) ensures only the root compiland owns the strong
   globals; units declare them externally. Once the device artifact is *PTX loaded at runtime*
   rather than `clang`-linked into the host binary, even this source of the collision disappears.
 
-### 5.4 Host-side launch surface (host `USES` the device unit) [PRESCRIBED]
+### 5.4 Host-side launch surface (host `USES` the device unit) [DONE on the CPU device; GRID/BLOCK naming sugar still open]
 
 - A host `PROGRAM`/`MODULE` names a kernel to launch it via the **verified `USES` path** (§1.5):
   `USES vadd (add);` imports the entry `add` by name, and `LAUNCH(add, ...)` launches it. This is
@@ -475,11 +497,14 @@ host shim `cuModuleLoadData` it. You do **not** need a fatbinary to launch. So:
   works** - the earlier "`uses` is broken, use `EXTERN`-by-name" guidance was based on a
   since-fixed one-line bug and is **rescinded** (`uses-fix.patch`).
 - **What "launch" lowers to.** `LAUNCH(add, ...)` does not call `@add` directly - the host cannot
-  call a GPU function. It lowers to the host shim's `pas_dev_launch(module, "add", ...)` (§5.2),
-  which `cuModuleGetFunction`s the entry *by name* out of the loaded PTX and `cuLaunchKernel`s
-  it. So the `USES`-imported `add` gives you the name and signature for type-checking the call;
-  the shim does the actual dispatch by that name. (This is also why §1.5's "exported = entry"
-  works cleanly: the export list is precisely the set of names the host can hand the shim.)
+  call a GPU function. It marshals the kernel actuals into a `void**` argument array and resolves
+  the kernel **by name out of a module**: `pas_dev_module_load(registry, ptx)` →
+  `pas_dev_module_get_function(module, "add")` → `pas_dev_launch(entry, geom, argv)` (↔
+  `cuModuleLoadData` / `cuModuleGetFunction` / `cuLaunchKernel`, §5.2/§5.3). The `USES`-imported
+  `add` gives the name and signature for type-checking the call; the shim dispatches by that name.
+  (This is also why §1.5's "exported = entry" works cleanly: the export list is precisely the set
+  of names the host can hand the module.) Landed and CPU-tested in
+  `tests/test_device_ptx_module.py`.
 - `GRID(x[,y[,z]])`/`BLOCK(x[,y[,z]])` are argument-packing sugar over the six geometry args to
   `cuLaunchKernel`. Start with plain integers, add the sugar later.
 - Kernel arguments cross the boundary as: scalars by value, device buffers as the opaque
@@ -628,13 +653,20 @@ Each step is independently landable and keeps host/vintage byte-identical.
    `DEVICE UNIT` model, so no new syntax (§3). *(Milestone B.)*
 3. **C.1/C.2 (thread-index intrinsics + `SYNCTHREADS`), with CPU-device lowerings.** Now a
    kernel can be *written* and validated for correctness on the CPU device. *(Milestone D core.)*
-4. **PTX emission driver mode** (§5.3) - turn device IR into a `.ptx` artifact via the device
-   `TargetMachine` (proven to work).
-5. **CPU-device orchestration shim** (§7) - `DEVALLOC`/copies/`LAUNCH` as malloc/memcpy/call;
-   prove the *whole vector-add program* runs end-to-end with no GPU.
+4. **PTX emission** (§5.3) - turn device IR into a `.ptx` artifact via the device
+   `TargetMachine`. **[DONE]** `compile_to_ptx` does this; `--embed-device-ptx` embeds the
+   result into the host compiland as the `__pas_device_ptx` blob.
+5. **CPU-device orchestration shim** (§7) - `DEVALLOC`/copies as malloc/memcpy, and `LAUNCH`
+   through the CUDA-driver-shaped triple (`pas_dev_module_load` / `pas_dev_module_get_function`
+   / `pas_dev_launch`) with a compiler-emitted kernel registry as the loaded-module stand-in.
+   **[DONE]** the *whole vector-add program* runs end-to-end with no GPU, resolving the kernel
+   by name out of the module exactly as the GPU will.
 6. **Stand up the CUDA container** (§8) and confirm `nvidia-smi` + a `cuInit` smoke test.
 7. **CUDA orchestration shim** (§5.2 Strategy 1) - swap the CPU shim for `libcuda` driver-API
-   calls + `cuModuleLoadData(ptx)`. **First real GPU launch here.**
+   calls (`pas_dev_module_load`→`cuModuleLoadData(__pas_device_ptx)`,
+   `pas_dev_module_get_function`→`cuModuleGetFunction`, `pas_dev_launch`→`cuLaunchKernel`,
+   alloc/copies→`cuMemAlloc`/`cuMemcpy*`). The call sites are already GPU-shaped, so this is a
+   runtime-library change only. **First real GPU launch here.**
 8. **Datalayout/alloca hygiene** (§6) - fixes AMDGPU and is latently correct for NVPTX.
 9. **Ergonomics & breadth:** `FORALL`, `GRID/BLOCK` sugar, width changes (`REAL32`/`HALF`,
    32-bit index), device helper libraries (`DEVICE UNIT` uses `DEVICE UNIT`) and cross-kind
