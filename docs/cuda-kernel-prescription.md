@@ -666,7 +666,13 @@ Each step is independently landable and keeps host/vintage byte-identical.
    calls (`pas_dev_module_load`→`cuModuleLoadData(__pas_device_ptx)`,
    `pas_dev_module_get_function`→`cuModuleGetFunction`, `pas_dev_launch`→`cuLaunchKernel`,
    alloc/copies→`cuMemAlloc`/`cuMemcpy*`). The call sites are already GPU-shaped, so this is a
-   runtime-library change only. **First real GPU launch here.**
+   runtime-library change only. **First real GPU launch here. [DONE]** `runtime/cuda_launch.c`
+   implements the six `pas_dev_*` symbols against the CUDA Driver API (lazy `cuInit`/context,
+   load-once module cache keyed on the embedded PTX blob, `cuCtxSynchronize` after launch,
+   every return code checked with `cuGetErrorName`). The runtime Makefile's `DEVICE_SHIM=cpu|cuda`
+   switch selects exactly one shim (they define the same symbols); `scripts/build-cuda-host.sh`
+   is the end-to-end recipe, and `tests/integration/test_device_orchestration_gpu.py`
+   (`@requires_gpu`) runs the vector-add on the device and asserts `0 3 6 … 21`.
 8. **Datalayout/alloca hygiene** (§6) - fixes AMDGPU and is latently correct for NVPTX.
 9. **Ergonomics & breadth:** `FORALL`, `GRID/BLOCK` sugar, width changes (`REAL32`/`HALF`,
    32-bit index), device helper libraries (`DEVICE UNIT` uses `DEVICE UNIT`) and cross-kind
@@ -690,11 +696,13 @@ A committed, reproducible test that:
    numeric result. The future §5 host launch/orchestration shim remains prescribed for the
    CUDA-style `LAUNCH(...)` surface; this test proves the kernel body contract now works;
 3. *(gated on `@requires_gpu`)* runs the kernel through the **CUDA** shim in the container and
-   checks the same result against a real device - **[PRESCRIBED]**: requires §5 CUDA shim
-   and §8 container setup.
+   checks the same result against a real device - **[DONE]**:
+   `tests/integration/test_device_orchestration_gpu.py` builds the runtime with
+   `DEVICE_SHIM=cuda`, compiles the device unit to PTX, embeds it via `--embed-device-ptx`,
+   links the host with the CUDA shim + `-lcuda`, and runs the vector-add on the GPU, asserting
+   `0 3 6 … 21`. Verified on an RTX 4090 (driver CUDA 13.0, toolkit 12.8).
 
-Point (1) is green. Points (2) and (3) are the remaining work; together they define when you
-have a *running* CUDA kernel.
+Points (1), (2), and (3) are all green: the *running* CUDA kernel is achieved.
 
 ---
 

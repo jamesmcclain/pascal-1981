@@ -24,9 +24,41 @@ HAS_CLANG = shutil.which("clang") is not None
 HAS_LLVM = HAS_LLVMLITE
 CAN_BUILD_EXE = HAS_LLVMLITE and HAS_CLANG
 
+
+def _probe_gpu() -> bool:
+    """True iff a real CUDA GPU run is possible here.
+
+    Requires: an NVIDIA device visible to the driver, the NVPTX backend in this
+    llvmlite (to emit PTX), clang, and a linkable libcuda.  Probed cheaply so the
+    @requires_gpu tests skip cleanly on CPU-only machines.
+    """
+    if not CAN_BUILD_EXE:
+        return False
+    if not (shutil.which("nvidia-smi") and
+            subprocess.run(["nvidia-smi"], capture_output=True).returncode == 0):
+        return False
+    # NVPTX backend present in this llvmlite?
+    try:
+        import llvmlite.binding as llvm
+        llvm.initialize_all_targets()
+        llvm.Target.from_triple("nvptx64-nvidia-cuda")
+    except Exception:
+        return False
+    # A linkable libcuda (real driver lib or the toolkit stub)?
+    if any(Path(p).exists() for p in (
+            "/usr/lib/x86_64-linux-gnu/libcuda.so",
+            "/usr/lib/x86_64-linux-gnu/libcuda.so.1")):
+        return True
+    cuda_home = os.environ.get("CUDA_HOME", "/usr/local/cuda")
+    return Path(cuda_home, "lib64", "stubs", "libcuda.so").exists()
+
+
+HAS_GPU = _probe_gpu()
+
 # Skip decorators
 requires_llvm = unittest.skipUnless(HAS_LLVM, "requires llvmlite (IR generation)")
 requires_exe = unittest.skipUnless(CAN_BUILD_EXE, "requires llvmlite + clang (native build/run)")
+requires_gpu = unittest.skipUnless(HAS_GPU, "requires an NVIDIA GPU + NVPTX backend + libcuda")
 
 # In-process helpers
 from pascal1981.lexer import LexerError, lex_file
