@@ -25,16 +25,23 @@ DEVICE_INDEX_BUILTIN_FUNCTIONS = {
     'GRIDDIM_Z',
 }
 
+# Host-side device orchestration (Milestone D): allocate / copy / launch / free.
+# These are HOST-only -- the type checker rejects them inside DEVICE code, where
+# orchestration has no meaning. DEVALLOC is a function (returns an opaque ADRMEM
+# handle); the rest are procedures. LAUNCH is variadic and checked specially.
+DEVICE_ORCHESTRATION_BUILTIN_FUNCTIONS = {'DEVALLOC'}
+DEVICE_ORCHESTRATION_BUILTIN_PROCEDURES = {'DEVCOPYTO', 'DEVCOPYFROM', 'DEVFREE', 'LAUNCH'}
+
 BUILTIN_FUNCTIONS = {
     'ABS', 'SQR', 'SQRT', 'SIN', 'COS', 'LN', 'EXP', 'ARCTAN', 'CHR', 'ORD', 'ODD', 'SUCC', 'PRED', 'HIBYTE', 'LOBYTE', 'WRD', 'BYWORD', 'TRUNC', 'ROUND', 'FLOAT', 'SCANEQ',
-    'SCANNE', 'ENCODE', 'DECODE', 'EOF', 'EOLN', *DEVICE_INDEX_BUILTIN_FUNCTIONS
+    'SCANNE', 'ENCODE', 'DECODE', 'EOF', 'EOLN', *DEVICE_INDEX_BUILTIN_FUNCTIONS, *DEVICE_ORCHESTRATION_BUILTIN_FUNCTIONS
 }
 
 DEVICE_SYNC_BUILTIN_PROCEDURES = {'SYNCTHREADS'}
 
 BUILTIN_PROCEDURES = {
     'WRITE', 'WRITELN', 'READ', 'READLN', 'RESET', 'REWRITE', 'GET', 'PUT', 'ASSIGN', 'CLOSE', 'DISCARD', 'READFN', 'READSET', 'CONCAT', 'COPYLST', 'COPYSTR', 'INSERT', 'DELETE',
-    'POSITN', 'PACK', 'UNPACK', 'NEW', 'DISPOSE', 'FILLC', 'FILLSC', 'MOVEL', 'MOVER', 'MOVESL', 'MOVESR', 'ABORT', *DEVICE_SYNC_BUILTIN_PROCEDURES
+    'POSITN', 'PACK', 'UNPACK', 'NEW', 'DISPOSE', 'FILLC', 'FILLSC', 'MOVEL', 'MOVER', 'MOVESL', 'MOVESR', 'ABORT', *DEVICE_SYNC_BUILTIN_PROCEDURES, *DEVICE_ORCHESTRATION_BUILTIN_PROCEDURES
 }
 
 
@@ -88,6 +95,18 @@ def register_builtins(symbol_table, features=None) -> None:
     define_builtin('MOVESR', ProcedureType('MOVESR', [('src', ADSMEM), ('dst', ADSMEM), ('len', WORD_TYPE)]), 'procedure')
     # ABORT(CONST STRING, WORD, WORD): error message, error code, STATUS word.
     define_builtin('ABORT', ProcedureType('ABORT', [('msg', StringType(255)), ('code', WORD_TYPE), ('status', WORD_TYPE)]), 'procedure')
+
+    # Device host-orchestration surface (Milestone D, cuda-kernel-prescription
+    # §5/§7).  Registered globally so they are recognized as builtins; the type
+    # checker rejects their use *inside* DEVICE code and validates argument
+    # shapes specially (LAUNCH is variadic).  The opaque device handle is an
+    # ADRMEM (generic address); the host holds it but never dereferences it.
+    ADRMEM = PointerType(CHAR_TYPE)
+    define_builtin('DEVALLOC', FunctionType('DEVALLOC', [('nbytes', INTEGER_TYPE)], ADRMEM), 'function')
+    define_builtin('DEVCOPYTO', ProcedureType('DEVCOPYTO', [('dev', ADRMEM), ('src', ADRMEM), ('nbytes', INTEGER_TYPE)]), 'procedure')
+    define_builtin('DEVCOPYFROM', ProcedureType('DEVCOPYFROM', [('dst', ADRMEM), ('dev', ADRMEM), ('nbytes', INTEGER_TYPE)]), 'procedure')
+    define_builtin('DEVFREE', ProcedureType('DEVFREE', [('dev', ADRMEM)]), 'procedure')
+    define_builtin('LAUNCH', ProcedureType('LAUNCH', []), 'procedure')
 
     # Device synchronization procedures.  Registered globally because the registry
     # runs before compiland device-ness is known; the type checker rejects use

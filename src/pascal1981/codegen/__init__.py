@@ -47,7 +47,8 @@ class Codegen(CodegenBase, TypesMapMixin, ConstFoldMixin, RuntimeBuiltinsMixin, 
                  device_triple: str = "x86_64-pc-linux-gnu",
                  host_triple: str = "x86_64-pc-linux-gnu",
                  is_root_compiland: bool = True,
-                 is_device_compiland: bool = False):
+                 is_device_compiland: bool = False,
+                 embed_device_ptx_text: Optional[str] = None):
         """Initialize Codegen with all mixins."""
         super().__init__(verbose=verbose,
                          source_file=source_file,
@@ -56,7 +57,8 @@ class Codegen(CodegenBase, TypesMapMixin, ConstFoldMixin, RuntimeBuiltinsMixin, 
                          device_triple=device_triple,
                          host_triple=host_triple,
                          is_root_compiland=is_root_compiland,
-                         is_device_compiland=is_device_compiland)
+                         is_device_compiland=is_device_compiland,
+                         embed_device_ptx_text=embed_device_ptx_text)
 
     # ========================================================================
     # Type System
@@ -84,6 +86,7 @@ def compile_to_llvm(
         features: Optional[Dict[str, bool]] = None,
         device_triple: str = "x86_64-pc-linux-gnu",
         host_triple: str = "x86_64-pc-linux-gnu",
+        embed_device_ptx_text: Optional[str] = None,
         # Legacy compat: force_rangeck=True/False is equivalent to
         # force_flags={'RANGECK': True/False}.
         force_rangeck: Optional[bool] = None) -> str:
@@ -110,7 +113,8 @@ def compile_to_llvm(
                       device_triple=device_triple,
                       host_triple=host_triple,
                       is_root_compiland=is_root_compiland,
-                      is_device_compiland=is_device_compiland)
+                      is_device_compiland=is_device_compiland,
+                      embed_device_ptx_text=embed_device_ptx_text)
     module = codegen.codegen(ast)
     return str(module)
 

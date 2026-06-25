@@ -506,7 +506,12 @@ END."""
             with open(ll_path, "w") as f:
                 f.write(ir)
             repo = os.path.dirname(os.path.dirname(__file__))
-            runtime_sources = glob.glob(os.path.join(repo, "runtime", "*.c"))
+            # cuda_launch.c is the opt-in GPU shim: it needs the CUDA headers and
+            # defines the same pas_dev_* symbols as cpu_device_shim.c, so it must
+            # not be linked into this default CPU build (mirrors the Makefile's
+            # DEVICE_SHIM=cpu default).
+            runtime_sources = [c for c in glob.glob(os.path.join(repo, "runtime", "*.c"))
+                               if os.path.basename(c) != "cuda_launch.c"]
             clang = subprocess.run(["clang", ll_path, *runtime_sources, "-o", exe_path, "-lm", "-w"], capture_output=True, text=True)
             self.assertEqual(clang.returncode, 0, msg=clang.stderr)
             run = subprocess.run([exe_path], cwd=tmpdir, capture_output=True, text=True, timeout=15)
@@ -535,7 +540,12 @@ END."""
             with open(ll_path, "w") as f:
                 f.write(ir)
             repo = os.path.dirname(os.path.dirname(__file__))
-            runtime_sources = glob.glob(os.path.join(repo, "runtime", "*.c"))
+            # cuda_launch.c is the opt-in GPU shim: it needs the CUDA headers and
+            # defines the same pas_dev_* symbols as cpu_device_shim.c, so it must
+            # not be linked into this default CPU build (mirrors the Makefile's
+            # DEVICE_SHIM=cpu default).
+            runtime_sources = [c for c in glob.glob(os.path.join(repo, "runtime", "*.c"))
+                               if os.path.basename(c) != "cuda_launch.c"]
             clang = subprocess.run(["clang", ll_path, *runtime_sources, "-o", exe_path, "-lm", "-w"], capture_output=True, text=True)
             self.assertEqual(clang.returncode, 0, msg=clang.stderr)
             run = subprocess.run([exe_path], cwd=tmpdir, capture_output=True, text=True, timeout=15)
@@ -563,7 +573,12 @@ END."""
             with open(ll_path, "w") as f:
                 f.write(ir)
             repo = os.path.dirname(os.path.dirname(__file__))
-            runtime_sources = glob.glob(os.path.join(repo, "runtime", "*.c"))
+            # cuda_launch.c is the opt-in GPU shim: it needs the CUDA headers and
+            # defines the same pas_dev_* symbols as cpu_device_shim.c, so it must
+            # not be linked into this default CPU build (mirrors the Makefile's
+            # DEVICE_SHIM=cpu default).
+            runtime_sources = [c for c in glob.glob(os.path.join(repo, "runtime", "*.c"))
+                               if os.path.basename(c) != "cuda_launch.c"]
             clang = subprocess.run(["clang", ll_path, *runtime_sources, "-o", exe_path, "-lm", "-w"], capture_output=True, text=True)
             self.assertEqual(clang.returncode, 0, msg=clang.stderr)
             run = subprocess.run([exe_path], cwd=tmpdir, capture_output=True, text=True, timeout=15)

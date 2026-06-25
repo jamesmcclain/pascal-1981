@@ -561,6 +561,13 @@ class ExprsMixin:
             return self.builtin_encode(expr.args)
         if lookup_name == 'DECODE':
             return self.builtin_decode(expr.args)
+        if lookup_name == 'DEVALLOC':
+            # Host device-memory allocation (Milestone D). Lowers to the
+            # orchestration shim's pas_dev_alloc(i64) -> i8*; the returned i8*
+            # is the opaque ADRMEM handle the host passes to DEVCOPYTO/LAUNCH/
+            # DEVFREE. On the CPU device this is malloc.
+            nbytes = self._to_i64(self.codegen_expr(expr.args[0]))
+            return self.builder.call(self.runtime_extern('pas_dev_alloc'), [nbytes])
 
         symbol = self.scope.lookup(lookup_name) or self.scope.lookup(expr.name)
 

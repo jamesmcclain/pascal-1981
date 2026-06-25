@@ -80,6 +80,7 @@ class DeclsMixin:
             if not self.builder.block.is_terminated:
                 self.builder.ret(ir.Constant(ir.IntType(32), 0))
 
+        self._emit_launch_registry()
         return self.module
 
     def codegen_module(self, unit: ModuleUnit) -> ir.Module:
@@ -90,6 +91,7 @@ class DeclsMixin:
         with self._device_codegen_context(getattr(unit, 'is_device', False)):
             for decl in unit.decls:
                 self.codegen_decl(decl)
+        self._emit_launch_registry()
         return self.module
 
     def codegen_interface(self, unit: InterfaceUnit) -> ir.Module:
@@ -197,14 +199,25 @@ class DeclsMixin:
         else:
             pairs = list(export_routines)
 
+        is_device_iface = bool(getattr(ast, 'is_device', False))
         for alias, decl in pairs:
             exported = decl.name
             # The external LLVM function keeps the REAL exported name so it
             # resolves against the separately-compiled IMPLEMENTATION's symbol.
-            if isinstance(decl, ProcDecl):
-                self.codegen_decl(ProcDecl(exported, decl.params, getattr(decl, 'attributes', []), body=None))
-            else:
-                self.codegen_decl(FuncDecl(exported, decl.params, decl.return_type, getattr(decl, 'attributes', []), body=None))
+            #
+            # For a DEVICE unit the declaration must be lowered in *device*
+            # context so its parameter ABI matches the kernel definition (which
+            # was compiled as device code).  Otherwise an `ADS(GLOBAL) OF T`
+            # parameter would lower here to the host segmented `{ptr, i16}` pair
+            # while the kernel itself takes a flat/addrspace pointer -- a silent
+            # ABI mismatch that hands the kernel a garbage buffer pointer.  On
+            # the CPU device (device=x86) this yields the flat addrspace(0)
+            # pointer the kernel expects; a direct LAUNCH call then matches.
+            with self._device_codegen_context(is_device_iface):
+                if isinstance(decl, ProcDecl):
+                    self.codegen_decl(ProcDecl(exported, decl.params, getattr(decl, 'attributes', []), body=None))
+                else:
+                    self.codegen_decl(FuncDecl(exported, decl.params, decl.return_type, getattr(decl, 'attributes', []), body=None))
             # Bind the call-site alias (MOVE) to that same function (@BJUMP).
             if alias and alias.lower() != exported.lower():
                 sym = self.scope.lookup(exported)

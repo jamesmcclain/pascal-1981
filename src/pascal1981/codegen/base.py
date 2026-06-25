@@ -99,7 +99,8 @@ class CodegenBase:
                  device_triple: str = "x86_64-pc-linux-gnu",
                  host_triple: str = "x86_64-pc-linux-gnu",
                  is_root_compiland: bool = True,
-                 is_device_compiland: bool = False):
+                 is_device_compiland: bool = False,
+                 embed_device_ptx_text: Optional[str] = None):
         # Each compilation gets its own LLVM context. Identified struct types
         # (used for named records, so self-referential linked-list nodes can
         # build) are interned by name *within a context*; the default global
@@ -193,6 +194,23 @@ class CodegenBase:
         # making "no dead host-runtime declare" hold for every triple — not just
         # GPU device targets.  The old gated-skip scaffolding is removed.
         self._runtime_extern_cache: Dict[str, ir.Function] = {}
+        # Per-kernel host dispatch thunks emitted for LAUNCH (Milestone D); keyed
+        # by thunk name so a kernel launched more than once reuses one thunk.
+        self._launch_thunks: Dict[str, ir.Function] = {}
+        # Kernels actually LAUNCHed by this host compiland, as ordered
+        # (name, thunk) pairs (deduped by name).  At finalize these become a
+        # per-compiland kernel registry -- the CPU-device stand-in for a CUDA
+        # module: pas_dev_module_get_function resolves a kernel by name out of
+        # it exactly as cuModuleGetFunction resolves an entry out of a loaded
+        # module (cuda-kernel-prescription.md §5.3/§5.4).
+        self._launched_kernels = []  # ordered (name, thunk) pairs, deduped by name
+        self._launch_registry_gv: Optional[ir.GlobalVariable] = None
+        self._device_ptx_gv: Optional[ir.GlobalVariable] = None
+        # Device PTX text to embed in this host compiland (the emitted artifact
+        # of the companion device unit).  None/'' embeds an empty blob: the
+        # embedding *mechanism* is always present so the GPU swap is a runtime
+        # change, but the CPU-device path never executes the PTX.
+        self._embed_device_ptx_text: Optional[str] = embed_device_ptx_text
         self._build_extern_factories()
         # INPUT/OUTPUT: only PROGRAM owns the strong definition; MODULE and
         # UNIT compilands emit declare-only (external global) so the linker
@@ -348,6 +366,27 @@ class CodegenBase:
             'memmove': _mk('memmove', ir.FunctionType(void, [i8p, i8p, i64])),
             'malloc': _mk('malloc', ir.FunctionType(i8p, [i64])),
             'free': _mk('free', ir.FunctionType(void, [i8p])),
+            # ---- device orchestration shim (Milestone D, §5/§7) ------------
+            # CPU-device stand-in: alloc=malloc, copies=memcpy, free=free.
+            # The launch path mirrors the CUDA driver API as three steps:
+            #   module = pas_dev_module_load(registry, ptx)   (cuModuleLoadData)
+            #   entry  = pas_dev_module_get_function(module, name)
+            #                                                 (cuModuleGetFunction)
+            #   pas_dev_launch(entry, gx,gy,gz, bx,by,bz, argv)  (cuLaunchKernel)
+            # On the CPU device the "module" is the compiler-emitted kernel
+            # registry, get_function is a by-name lookup returning the dispatch
+            # thunk, and launch calls the thunk.  Swapping these for the CUDA
+            # driver shim reuses the same call sites unchanged: load takes the
+            # embedded PTX, get_function returns a CUfunction, launch is
+            # cuLaunchKernel.  No codegen change is needed for the GPU.
+            'pas_dev_alloc': _mk('pas_dev_alloc', ir.FunctionType(i8p, [i64])),
+            'pas_dev_copy_to': _mk('pas_dev_copy_to', ir.FunctionType(void, [i8p, i8p, i64])),
+            'pas_dev_copy_from': _mk('pas_dev_copy_from', ir.FunctionType(void, [i8p, i8p, i64])),
+            'pas_dev_free': _mk('pas_dev_free', ir.FunctionType(void, [i8p])),
+            'pas_dev_module_load': _mk('pas_dev_module_load', ir.FunctionType(i8p, [i8p, i8p])),
+            'pas_dev_module_get_function': _mk('pas_dev_module_get_function', ir.FunctionType(i8p, [i8p, i8p])),
+            'pas_dev_launch': _mk('pas_dev_launch', ir.FunctionType(
+                void, [i8p, i64, i64, i64, i64, i64, i64, i8p.as_pointer()])),
             'abort': _mk('abort', ir.FunctionType(void, [])),
             'fflush': _mk('fflush', ir.FunctionType(i32, [i8p])),
             'sqrt': _mk('sqrt', ir.FunctionType(f64, [f64])),

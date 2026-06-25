@@ -352,6 +352,252 @@ class StmtsMixin:
             fn = ir.Function(self.module, ir.FunctionType(ir.VoidType(), []), name=intrinsic_name)
         self.builder.call(fn, [])
 
+    def _orch_i8ptr(self, arg: Expression) -> ir.Value:
+        """Lower an orchestration address argument to a flat ``i8*``.
+
+        Handles a held ADRMEM handle (a loaded ``i8*``), an ``ADR buf`` address
+        (a typed pointer to host storage), or any other pointer/segmented-address
+        value -- ``coerce_arg`` performs the pointer bitcast (and seg->flat
+        collapse) into ``i8*``.
+        """
+        i8p = ir.IntType(8).as_pointer()
+        return self.coerce_arg(self.codegen_expr(arg), i8p)
+
+    def _kernel_cstring(self, text: str) -> ir.Value:
+        """A module-global, NUL-terminated C string; returns an ``i8*`` to it."""
+        data = bytearray(text.encode('utf-8') + b'\0')
+        const = ir.Constant(ir.ArrayType(ir.IntType(8), len(data)), data)
+        gv = ir.GlobalVariable(self.module, const.type, name=self.unique_name('kname'))
+        gv.global_constant = True
+        gv.initializer = const
+        zero = ir.Constant(ir.IntType(32), 0)
+        return self.builder.gep(gv, [zero, zero])
+
+    def _kernel_launch_thunk(self, fn: ir.Function) -> ir.Function:
+        """Return (creating once per kernel) the host dispatch thunk.
+
+        The thunk ``void __pas_klaunch_<name>(i8** argv)`` unpacks ``argv`` into
+        ``fn``'s parameter types and calls ``fn``.  This is the CPU-device launch
+        dispatch: ``pas_dev_launch`` invokes it as a single-thread grid, so a
+        grid-stride kernel still covers the whole buffer.  On a GPU the shim
+        dispatches the kernel by name out of the loaded module and the thunk is
+        never called -- but it is harmless to emit, and LAUNCH only ever appears
+        in host code (never a device compiland), so the thunk never collides with
+        a ``ptx_kernel`` calling convention.
+
+        ``argv`` mirrors ``cuLaunchKernel``'s ``void**``: each slot points at a
+        storage cell holding one argument value (a scalar by value, or a device
+        handle by its opaque pointer value).
+        """
+        thunk_name = '__pas_klaunch_' + fn.name
+        cache = self._launch_thunks
+        existing = cache.get(thunk_name)
+        if existing is not None:
+            return existing
+        i8p = ir.IntType(8).as_pointer()
+        i8pp = i8p.as_pointer()
+        thunk = ir.Function(self.module, ir.FunctionType(ir.VoidType(), [i8pp]), name=thunk_name)
+        thunk.linkage = 'internal'
+        argv = thunk.args[0]
+        argv.name = 'argv'
+        b = ir.IRBuilder(thunk.append_basic_block('entry'))
+        call_args = []
+        for i, pty in enumerate(fn.function_type.args):
+            slot_pp = b.gep(argv, [ir.Constant(ir.IntType(32), i)], inbounds=True)
+            slot = b.load(slot_pp)                       # i8* -> the cell holding arg i
+            typed = b.bitcast(slot, pty.as_pointer())
+            call_args.append(b.load(typed))
+        b.call(fn, call_args)
+        b.ret_void()
+        cache[thunk_name] = thunk
+        return thunk
+
+    def _codegen_device_orchestration(self, name: str, args: list) -> None:
+        """Lower DEVCOPYTO / DEVCOPYFROM / DEVFREE / LAUNCH (Milestone D).
+
+        DEV* lower to the orchestration-shim externs (``pas_dev_copy_to`` /
+        ``pas_dev_copy_from`` / ``pas_dev_free``).  LAUNCH lowers to a real
+        launch ABI: it marshals the kernel arguments into a ``void**`` array (the
+        shape ``cuLaunchKernel`` consumes) and calls ``pas_dev_launch`` with the
+        kernel-name string, a per-kernel dispatch thunk, the six geometry values,
+        and that array.  On the CPU device ``pas_dev_launch`` runs the thunk
+        (single-thread grid); swapping the shim for the CUDA driver path reuses
+        this exact call site -- it dispatches by name and ignores the thunk -- so
+        no codegen change is needed to run the same program on a GPU (§5.2/§5.4).
+
+        Launch geometry is 2 values (grid, block -> a 1-D launch) or 6 values
+        (gx,gy,gz, bx,by,bz); the count is implied by the kernel's arity.
+        """
+        if name == 'DEVCOPYTO':
+            dev = self._orch_i8ptr(args[0])
+            src = self._orch_i8ptr(args[1])
+            nbytes = self._to_i64(self.codegen_expr(args[2]))
+            self.builder.call(self.runtime_extern('pas_dev_copy_to'), [dev, src, nbytes])
+            return
+        if name == 'DEVCOPYFROM':
+            dst = self._orch_i8ptr(args[0])
+            dev = self._orch_i8ptr(args[1])
+            nbytes = self._to_i64(self.codegen_expr(args[2]))
+            self.builder.call(self.runtime_extern('pas_dev_copy_from'), [dst, dev, nbytes])
+            return
+        if name == 'DEVFREE':
+            self.builder.call(self.runtime_extern('pas_dev_free'), [self._orch_i8ptr(args[0])])
+            return
+
+        # LAUNCH(kernel, <geometry>, kernel actuals...)
+        if len(args) < 1:
+            raise CodegenError('LAUNCH expects at least a kernel name')
+        kernel = args[0]
+        kernel_name = getattr(kernel, 'name', None)
+        if kernel_name is None:
+            raise CodegenError('LAUNCH first argument must name a kernel')
+        symbol = self.scope.lookup(kernel_name) or self.scope.lookup(kernel_name.upper())
+        if not symbol or not isinstance(getattr(symbol, 'llvm_value', None), ir.Function):
+            raise CodegenError(f"LAUNCH cannot resolve kernel '{kernel_name}'")
+        fn = symbol.llvm_value
+        param_types = fn.function_type.args
+        expected = len(param_types)
+
+        # Split the flat argument list using the kernel's arity: the trailing
+        # `expected` args are the kernel actuals; everything between the kernel
+        # name and them is launch geometry (2 or 6 integer values).
+        split = len(args) - expected
+        geometry = args[1:split]
+        kernel_actuals = args[split:] if expected else []
+        gvals = [self._to_i64(self.codegen_expr(g)) for g in geometry]
+        i64 = ir.IntType(64)
+        one = ir.Constant(i64, 1)
+        if len(gvals) == 2:           # 1-D: grid, block
+            gx, bx = gvals
+            geom6 = [gx, one, one, bx, one, one]
+        elif len(gvals) == 6:         # gx,gy,gz, bx,by,bz
+            geom6 = gvals
+        else:
+            raise CodegenError(
+                f"LAUNCH of '{kernel_name}' expects 2 (grid, block) or 6 geometry "
+                f"values before its {expected} argument(s), got {len(geometry)}")
+
+        # Marshal the kernel actuals into a void** argument array: argv[i] points
+        # at a storage cell holding actual i, coerced to the kernel's parameter
+        # ABI (the same coercion the former direct call used).
+        i8p = ir.IntType(8).as_pointer()
+        i32 = ir.IntType(32)
+        if kernel_actuals:
+            argv = self.builder.alloca(ir.ArrayType(i8p, len(kernel_actuals)), name='launch_argv')
+            for i, actual in enumerate(kernel_actuals):
+                v = self.coerce_arg(self.codegen_expr(actual), param_types[i])
+                cell = self.builder.alloca(param_types[i], name=f'launch_arg{i}')
+                self.builder.store(v, cell)
+                slot = self.builder.gep(argv, [i32(0), i32(i)], inbounds=True)
+                self.builder.store(self.builder.bitcast(cell, i8p), slot)
+            argv_ptr = self.builder.gep(argv, [i32(0), i32(0)], inbounds=True)
+        else:
+            argv_ptr = ir.Constant(i8p.as_pointer(), None)
+
+        name_str = self._kernel_cstring(fn.name)
+        # Record this kernel in the per-compiland registry and emit its dispatch
+        # thunk (the CPU-device "entry").  Resolve the entry by name through the
+        # module, mirroring cuModuleLoadData + cuModuleGetFunction, then launch
+        # the resolved entry.  On the CPU device load returns the registry,
+        # get_function returns the thunk, and launch calls it; on the GPU the
+        # same three calls become cuModuleLoadData(ptx) / cuModuleGetFunction /
+        # cuLaunchKernel, with no change here.
+        self._record_launched_kernel(fn.name, self._kernel_launch_thunk(fn))
+        module = self.builder.call(
+            self.runtime_extern('pas_dev_module_load'),
+            [self._launch_registry_ptr(), self._device_ptx_ptr()])
+        entry = self.builder.call(
+            self.runtime_extern('pas_dev_module_get_function'), [module, name_str])
+        self.builder.call(self.runtime_extern('pas_dev_launch'),
+                          [entry] + geom6 + [argv_ptr])
+
+    # ---- launch registry (CPU stand-in for a loaded CUDA module) -----------
+
+    def _record_launched_kernel(self, name: str, thunk: ir.Function) -> None:
+        """Note a kernel launched by this compiland (deduped by name)."""
+        if not any(n == name for n, _ in self._launched_kernels):
+            self._launched_kernels.append((name, thunk))
+
+    def _launch_registry_ptr(self) -> ir.Value:
+        """An ``i8*`` to this compiland's kernel registry global.
+
+        The global is created (shell, no initializer) on first reference and
+        filled in by ``_emit_launch_registry`` at finalize, once every LAUNCH
+        has recorded its kernel.
+        """
+        i8p = ir.IntType(8).as_pointer()
+        i64 = ir.IntType(64)
+        if self._launch_registry_gv is None:
+            reg_ty = ir.LiteralStructType([i8p.as_pointer(), i8p.as_pointer(), i64])
+            self._launch_registry_gv = ir.GlobalVariable(
+                self.module, reg_ty, name='__pas_klaunch_registry')
+            self._launch_registry_gv.global_constant = True
+        return self.builder.bitcast(self._launch_registry_gv, i8p)
+
+    def _device_ptx_ptr(self) -> ir.Value:
+        """An ``i8*`` to the embedded device-PTX blob (NUL-terminated).
+
+        The blob is the companion device unit's emitted PTX, embedded so the
+        launch path is self-contained and the GPU swap is a pure runtime change
+        (the CUDA shim ``cuModuleLoadData``s this blob).  When no PTX was
+        supplied at compile time, an empty blob is embedded -- the mechanism is
+        always present; the CPU device never executes it.
+        """
+        i8 = ir.IntType(8)
+        i8p = i8.as_pointer()
+        if self._device_ptx_gv is None:
+            text = self._embed_device_ptx_text or ''
+            data = bytearray(text.encode('utf-8') + b'\0')
+            const = ir.Constant(ir.ArrayType(i8, len(data)), data)
+            gv = ir.GlobalVariable(self.module, const.type, name='__pas_device_ptx')
+            gv.global_constant = True
+            gv.initializer = const
+            self._device_ptx_gv = gv
+        zero = ir.Constant(ir.IntType(32), 0)
+        return self.builder.gep(self._device_ptx_gv, [zero, zero])
+
+    def _emit_launch_registry(self) -> None:
+        """Fill the kernel registry global from the launched-kernel list.
+
+        Builds a names table and an entries (thunk) table and points the
+        registry struct ``{ i8** names; i8** entries; i64 count }`` at them.
+        Called at the end of host PROGRAM/MODULE codegen.  A no-op when the
+        compiland performed no launches, so launch-free host IR is byte-identical
+        to before.
+        """
+        if self._launch_registry_gv is None or not self._launched_kernels:
+            return
+        i8 = ir.IntType(8)
+        i8p = i8.as_pointer()
+        i64 = ir.IntType(64)
+        i32 = ir.IntType(32)
+        zero = ir.Constant(i32, 0)
+        name_ptrs = []
+        entry_ptrs = []
+        for kname, thunk in self._launched_kernels:
+            data = bytearray(kname.encode('utf-8') + b'\0')
+            nm = ir.GlobalVariable(self.module, ir.ArrayType(i8, len(data)),
+                                   name=self.unique_name('kregname'))
+            nm.global_constant = True
+            nm.initializer = ir.Constant(ir.ArrayType(i8, len(data)), data)
+            name_ptrs.append(nm.gep([zero, zero]))
+            entry_ptrs.append(thunk.bitcast(i8p))
+        count = len(self._launched_kernels)
+        names_arr = ir.GlobalVariable(self.module, ir.ArrayType(i8p, count),
+                                      name=self.unique_name('kregnames'))
+        names_arr.global_constant = True
+        names_arr.initializer = ir.Constant(ir.ArrayType(i8p, count), name_ptrs)
+        ents_arr = ir.GlobalVariable(self.module, ir.ArrayType(i8p, count),
+                                     name=self.unique_name('kregentries'))
+        ents_arr.global_constant = True
+        ents_arr.initializer = ir.Constant(ir.ArrayType(i8p, count), entry_ptrs)
+        reg_ty = self._launch_registry_gv.type.pointee
+        self._launch_registry_gv.initializer = ir.Constant(reg_ty, [
+            names_arr.gep([zero, zero]),
+            ents_arr.gep([zero, zero]),
+            ir.Constant(i64, count),
+        ])
+
     def codegen_proc_call_stmt(self, stmt: ProcCallStmt) -> None:
         """Codegen for procedure call statement."""
         lookup_name = stmt.name.upper()
@@ -365,6 +611,11 @@ class StmtsMixin:
             # fill loops across the operands' concrete spaces -- not the vintage
             # extern call with the {ptr, i16} segmented ABI (which host code keeps).
             self._device_seg_bridge(lookup_name, stmt.args)
+            return
+        if lookup_name in {'DEVCOPYTO', 'DEVCOPYFROM', 'DEVFREE', 'LAUNCH'}:
+            # Host device-orchestration (Milestone D). Host-only; the type
+            # checker has already rejected any use inside DEVICE code.
+            self._codegen_device_orchestration(lookup_name, stmt.args)
             return
         symbol = self.scope.lookup(lookup_name) or self.scope.lookup(stmt.name)
         if not symbol or symbol.llvm_value is None:
