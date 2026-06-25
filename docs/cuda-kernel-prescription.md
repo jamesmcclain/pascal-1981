@@ -622,6 +622,13 @@ with caveats.**
 - **Driver/toolkit version coupling:** the container's CUDA toolkit version must be supported
   by the **host driver** (newer toolkit needs newer-or-equal driver). This is the most common
   bring-up failure. `nvidia-smi` on the host shows the max CUDA version the driver supports.
+- **Reference dev image (optional):** `docker/Dockerfile` builds a ready-made image on
+  `nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04` with `clang-20` and a venv carrying
+  `pytest` + `llvmlite==0.47` — enough to build the CUDA shim (`make -C runtime
+  DEVICE_SHIM=cuda`) and run the `@requires_gpu` test on a device. It is optional: the
+  CPU-device path needs none of it. See `docker/README.md` for build/run and the
+  environment-verification checklist (notably: confirm this `llvmlite` has the NVPTX backend
+  before relying on PTX emission).
 
 ### 8.2 AMD / ROCm
 
