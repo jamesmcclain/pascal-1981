@@ -727,18 +727,48 @@ class ExprsMixin:
     # Built-in Functions
     # ========================================================================
 
+    # Mapping from Pascal builtin name to the thread-local global the CPU shim
+    # defines and pas_dev_launch sets before each kernel invocation.
+    _CPU_TLS_GLOBALS = {
+        'THREADIDX_X': '__pas_tid_x',
+        'THREADIDX_Y': '__pas_tid_y',
+        'THREADIDX_Z': '__pas_tid_z',
+        'BLOCKIDX_X':  '__pas_ctaid_x',
+        'BLOCKIDX_Y':  '__pas_ctaid_y',
+        'BLOCKIDX_Z':  '__pas_ctaid_z',
+        'BLOCKDIM_X':  '__pas_ntid_x',
+        'BLOCKDIM_Y':  '__pas_ntid_y',
+        'BLOCKDIM_Z':  '__pas_ntid_z',
+        'GRIDDIM_X':   '__pas_nctaid_x',
+        'GRIDDIM_Y':   '__pas_nctaid_y',
+        'GRIDDIM_Z':   '__pas_nctaid_z',
+    }
+
     def codegen_device_index_builtin(self, name: str) -> ir.Value:
         """Lower DEVICE thread/block index reads.
 
-        On the CPU-device stand-in, DEVICE code executes as a one-thread,
-        one-block grid.  On NVPTX, lower to the corresponding special-register
-        read intrinsic.  AMDGPU dimension plumbing is deferred; keep it
-        deterministic rather than inventing a half-wrong dispatch-ptr decode.
+        On the CPU-device stand-in, lower each builtin to a load from a
+        thread-local global variable defined and maintained by the CPU shim's
+        ``pas_dev_launch`` loop.  This lets the shim drive every thread in the
+        launch geometry and have the kernel see the correct index on each
+        invocation -- the same semantic a GPU provides via hardware registers.
+
+        On NVPTX, lower to the corresponding special-register read intrinsic.
+        AMDGPU dimension plumbing is deferred; keep it deterministic rather
+        than inventing a half-wrong dispatch-ptr decode.
         """
         upper = name.upper()
         if not _is_gpu_triple(self.device_triple):
-            value = 1 if upper.startswith(('BLOCKDIM_', 'GRIDDIM_')) else 0
-            return ir.Constant(ir.IntType(32), value)
+            # Emit a load from the thread-local global the CPU shim sets.
+            tls_name = self._CPU_TLS_GLOBALS[upper]
+            i32 = ir.IntType(32)
+            try:
+                gv = self.module.get_global(tls_name)
+            except KeyError:
+                gv = ir.GlobalVariable(self.module, i32, tls_name)
+                gv.storage_class = 'thread_local'
+                # linkage stays 'external' (default) — defined in cpu_device_shim.c
+            return self.builder.load(gv)
         if self.device_triple.startswith('nvptx'):
             nvptx_map = {
                 'THREADIDX_X': 'llvm.nvvm.read.ptx.sreg.tid.x',

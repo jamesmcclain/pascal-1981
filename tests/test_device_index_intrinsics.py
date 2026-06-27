@@ -53,11 +53,15 @@ class DeviceIndexIntrinsicCodegenTests(unittest.TestCase):
         ast = parse_source(src)
         return compile_to_llvm(ast, device_triple=device_triple)
 
-    def test_cpu_device_lowers_reads_to_one_thread_grid_constants(self):
+    def test_cpu_device_lowers_reads_to_tls_globals(self):
         ir = self._compile(DEVICE_SRC)
         self.assertNotIn('llvm.nvvm.read.ptx.sreg', ir)
-        self.assertIn('mul i32 0, 1', ir)
-        self.assertIn('add i32 %".3", 1', ir)
+        # Each builtin lowers to a load from a thread-local global so that
+        # pas_dev_launch can set the correct index before each thunk call.
+        self.assertIn('thread_local global i32', ir)
+        self.assertIn('@"__pas_tid_x"', ir)
+        self.assertIn('@"__pas_ntid_x"', ir)
+        self.assertIn('@"__pas_ctaid_x"', ir)
 
     def test_nvptx_lowers_all_reads_to_special_register_intrinsics(self):
         ir = self._compile(ALL_INDEX_READS_SRC, device_triple='nvptx64-nvidia-cuda')

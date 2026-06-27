@@ -146,12 +146,14 @@ class TestMandelbrotX86CpuDevice(unittest.TestCase):
             with open(harness_path, 'w') as f:
                 f.write(_HARNESS_C)
 
-            # 3. Link and run. No Pascal runtime needed: the kernel is
-            #    self-contained (no host I/O, no externs on the CPU-device
-            #    path).
+            # 3. Link and run. The kernel IR now references the thread-local
+            #    index globals (__pas_tid_x etc.) defined in cpu_device_shim.c,
+            #    so link that in too (no other Pascal runtime needed).
+            shim_path = os.path.join(
+                os.path.dirname(__file__), '..', '..', 'runtime', 'cpu_device_shim.c')
             exe_path = os.path.join(tmpdir, 'mandelbrot_x86')
             link = subprocess.run(
-                ['clang', ir_path, harness_path, '-o', exe_path],
+                ['clang', ir_path, harness_path, shim_path, '-o', exe_path],
                 capture_output=True, text=True)
             self.assertEqual(link.returncode, 0, msg=link.stderr)
 

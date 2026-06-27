@@ -100,7 +100,8 @@ class CodegenBase:
                  host_triple: str = "x86_64-pc-linux-gnu",
                  is_root_compiland: bool = True,
                  is_device_compiland: bool = False,
-                 embed_device_ptx_text: Optional[str] = None):
+                 embed_device_ptx_text: Optional[str] = None,
+                 device_backend: str = 'cpu'):
         # Each compilation gets its own LLVM context. Identified struct types
         # (used for named records, so self-referential linked-list nodes can
         # build) are interned by name *within a context*; the default global
@@ -211,6 +212,13 @@ class CodegenBase:
         # embedding *mechanism* is always present so the GPU swap is a runtime
         # change, but the CPU-device path never executes the PTX.
         self._embed_device_ptx_text: Optional[str] = embed_device_ptx_text
+        # Host launch backend: 'cpu' (CPU-device stand-in) emits the per-kernel
+        # dispatch thunk + registry that resolves and calls the kernel in-process;
+        # 'cuda' targets the real CUDA Driver API shim, where the kernel is the
+        # loaded PTX module and the host never references the kernel symbol -- so
+        # the thunk/registry (and the dead link-time kernel reference they force,
+        # i.e. the second 'dev.ll' device compile) are suppressed entirely.
+        self.device_backend: str = device_backend
         self._build_extern_factories()
         # INPUT/OUTPUT: only PROGRAM owns the strong definition; MODULE and
         # UNIT compilands emit declare-only (external global) so the linker

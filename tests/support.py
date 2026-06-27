@@ -25,12 +25,41 @@ HAS_LLVM = HAS_LLVMLITE
 CAN_BUILD_EXE = HAS_LLVMLITE and HAS_CLANG
 
 
+def _probe_cuda_headers() -> bool:
+    """True iff ``<cuda.h>`` is findable by clang the way the runtime build looks.
+
+    ``runtime/cuda_launch.c`` does ``#include <cuda.h>`` and the runtime
+    Makefile compiles it with ``-I$(CUDA_HOME)/include`` (plus clang's default
+    system search paths). Probe exactly that: a syntax-only compile of a
+    one-liner ``#include <cuda.h>`` with ``-I$CUDA_HOME/include``. This returns
+    False on a box that has the NVIDIA driver (``nvidia-smi`` / ``libcuda.so.1``)
+    but not the CUDA toolkit headers, so the build+run GPU test is skipped at
+    collection rather than selected and then failing the shim compile.
+    """
+    if not HAS_CLANG:
+        return False
+    cuda_home = os.environ.get("CUDA_HOME", "/usr/local/cuda")
+    try:
+        r = subprocess.run(
+            ["clang", "-x", "c", "-fsyntax-only", "-Wno-unknown-pragmas",
+             "-I", os.path.join(cuda_home, "include"), "-"],
+            input="#include <cuda.h>\n",
+            capture_output=True, text=True, timeout=10)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
 def _probe_gpu() -> bool:
     """True iff a real CUDA GPU run is possible here.
 
     Requires: an NVIDIA device visible to the driver, the NVPTX backend in this
-    llvmlite (to emit PTX), clang, and a linkable libcuda.  Probed cheaply so the
-    @requires_gpu tests skip cleanly on CPU-only machines.
+    llvmlite (to emit PTX), clang, a linkable libcuda, AND the CUDA toolkit
+    headers (``cuda.h``) to build the CUDA shim.  The last check is what skips
+    a driver-only box (``nvidia-smi`` + ``libcuda.so.1`` but no toolkit): the
+    test builds+runs the shim, so the headers are a hard prerequisite, not just
+    the driver.  Probed cheaply so the @requires_gpu tests skip cleanly on
+    CPU-only and driver-only machines.
     """
     if not CAN_BUILD_EXE:
         return False
@@ -48,9 +77,20 @@ def _probe_gpu() -> bool:
     if any(Path(p).exists() for p in (
             "/usr/lib/x86_64-linux-gnu/libcuda.so",
             "/usr/lib/x86_64-linux-gnu/libcuda.so.1")):
-        return True
-    cuda_home = os.environ.get("CUDA_HOME", "/usr/local/cuda")
-    return Path(cuda_home, "lib64", "stubs", "libcuda.so").exists()
+        has_libcuda = True
+    else:
+        cuda_home = os.environ.get("CUDA_HOME", "/usr/local/cuda")
+        has_libcuda = Path(cuda_home, "lib64", "stubs", "libcuda.so").exists()
+    if not has_libcuda:
+        return False
+    # The CUDA shim (runtime/cuda_launch.c) #includes <cuda.h>, built with
+    # -I$(CUDA_HOME)/include. A box can have the *driver* (nvidia-smi +
+    # libcuda.so.1) but not the *toolkit* headers, which is enough to run an
+    # already-built shim but NOT to build it -- and this is a build+run test.
+    # Probe the header exactly the way the Makefile looks for it so @requires_gpu
+    # is false on a driver-only box (the test skips at collection) instead of
+    # being selected and then failing the shim build.
+    return _probe_cuda_headers()
 
 
 HAS_GPU = _probe_gpu()

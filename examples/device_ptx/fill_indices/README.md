@@ -30,19 +30,27 @@ has an NVPTX backend.
 
 ```bash
 cd examples/device_ptx/fill_indices
-make DEVICE=cuda run     # build the host + device, run on the GPU
+make DEVICE=cpu run      # no GPU needed
+make DEVICE=cuda run     # real GPU
 ```
 
 `DEVICE` selects the device-orchestration runtime shim at build time:
 
 - `DEVICE=cuda` — the real GPU path (CUDA Driver API shim + embedded PTX). Needs
   the CUDA toolkit headers, `-lcuda`, and an NVIDIA device.
-- `DEVICE=cpu` (the default) — the CPU-device stand-in, **not yet wired for this
-  example**; see [`../CPU_DEVICE_TODO.md`](../CPU_DEVICE_TODO.md). The host
-  orchestration already works on the CPU shim; what it needs is a grid-stride
-  kernel, which is a deferred kernel change.
+- `DEVICE=cpu` — the CPU-device stand-in. No GPU or CUDA toolkit required. The
+  CPU shim emulates a full GPU launch: `pas_dev_launch` loops over the complete
+  launch geometry (`gx×gy×gz` blocks × `bx×by×bz` threads), setting thread-local
+  index registers (`__pas_tid_x` etc.) before each kernel call so the kernel sees
+  the correct `THREADIDX_*`/`BLOCKIDX_*` values. Produces correct output
+  identical to the CUDA path.
 
-A correct GPU run prints the first eight buffer elements (`0 1 2 3 4 5 6 7`) and
+Prerequisites by device:
+- **cpu**: Python + llvmlite, clang, `make -C runtime` (cpu archive, built by default).
+- **cuda**: all of the above plus CUDA toolkit headers, `-lcuda`, and an NVIDIA device;
+  `make -C runtime cuda` for the cuda archive.
+
+A correct run prints the first eight buffer elements (`0 1 2 3 4 5 6 7`) and
 `OK: all 256 indices correct`. The build rules live in
 [`../device-example.mk`](../device-example.mk).
 
@@ -106,14 +114,16 @@ From the repository root:
 
 ```bash
 cd examples/device_ptx/fill_indices
-PYTHONPATH=../../../src python3 -m pascal1981.compile_to_ptx \
+PYTHONPATH=../../../src python3 -m pascal1981 --target ptx \
   fill.pas \
   fill.ptx \
   --emit-llvm fill.ll \
-  --cpu sm_70
+  --sm sm_70
 ```
 
-Outputs:
+`--target ptx` on the single `pascal1981` driver replaces the old
+`python -m pascal1981.compile_to_ptx` (still accepted as a deprecated alias;
+`--sm` replaces `--cpu`). Outputs:
 
 ```text
 fill.ll   # intermediate LLVM IR

@@ -32,7 +32,8 @@ the companion *mandelbrot-gpu* repository.
 
 ```bash
 cd examples/device_ptx/mandelbrot
-make DEVICE=cuda run     # build the host + device, run on the GPU
+make DEVICE=cpu run      # no GPU needed
+make DEVICE=cuda run     # real GPU
 ```
 
 `DEVICE` selects the device-orchestration runtime shim at build time:
@@ -40,14 +41,30 @@ make DEVICE=cuda run     # build the host + device, run on the GPU
 - `DEVICE=cuda` — the real GPU path (CUDA Driver API shim + embedded PTX). Needs
   the CUDA toolkit headers, `-lcuda`, and an NVIDIA device. `SM` defaults to
   `sm_86` to mirror `mandelbrot.cu`.
-- `DEVICE=cpu` (the default) — the CPU-device stand-in, **not yet wired for this
-  example**; see [`../CPU_DEVICE_TODO.md`](../CPU_DEVICE_TODO.md) (it needs a
-  grid-stride kernel, a deferred kernel change).
+- `DEVICE=cpu` — the CPU-device stand-in. No GPU or CUDA toolkit required. The
+  CPU shim emulates a full GPU launch: `pas_dev_launch` loops over the complete
+  launch geometry (`gx×gy×gz` blocks × `bx×by×bz` threads), setting thread-local
+  index registers (`__pas_tid_x` etc.) before each kernel call so the kernel sees
+  the correct `THREADIDX_*`/`BLOCKIDX_*` values. Produces correct output
+  identical to the CUDA path.
+
+Prerequisites by device:
+- **cpu**: Python + llvmlite, clang, `make -C runtime` (cpu archive, built by default).
+- **cuda**: all of the above plus CUDA toolkit headers, `-lcuda`, and an NVIDIA device;
+  `make -C runtime cuda` for the cuda archive.
 
 The host orchestration is compiler-generated from the Pascal source; only the
 leaf runtime shim is C. The kernels are unchanged, so the emitted PTX remains the
 drop-in described next. Build rules live in
 [`../device-example.mk`](../device-example.mk).
+
+The GPU build is now three commands (the runtime archive is prebuilt once with
+`make -C runtime cuda`): device unit -> PTX (`--target ptx`); host program ->
+`.ll` (`--device-backend cuda`, which emits no launch thunk and no kernel-symbol
+reference, so there is **no** second device compile); then one `clang` link of
+`host.ll` + the PTX-blob object + `libpascalrt_cuda.a` `-lcuda`. The PTX text is
+packaged as its own NUL-terminated `__pas_device_ptx` data object (a `*_blob.o`,
+**not** `ptxas`/cubin output) that the host references as an external symbol.
 
 ## The ABI being matched
 
@@ -71,15 +88,17 @@ parameters are genuinely 32-bit; `mandelbrot_f64` uses `REAL64` (≡ `REAL`, f64
 ## Build the PTX
 
 ```bash
-PYTHONPATH=src python3 -m pascal1981.compile_to_ptx \
+PYTHONPATH=src python3 -m pascal1981 --target ptx \
   examples/device_ptx/mandelbrot/mandelbrot.pas \
   examples/device_ptx/mandelbrot/mandelbrot.ptx \
-  --emit-llvm examples/device_ptx/mandelbrot/mandelbrot.ll \
-  --cpu sm_86
+  --sm sm_86 -f wide-integers
 ```
 
-This needs `llvmlite`/LLVM with the NVPTX backend; it needs **no** NVIDIA device,
-CUDA driver/runtime, `nvcc`, or the Pascal runtime library.
+`--target ptx` on the single `pascal1981` driver replaces the old
+`python -m pascal1981.compile_to_ptx` (still accepted as a deprecated alias;
+`--sm` replaces `--cpu`). It needs `llvmlite`/LLVM with the NVPTX backend; it
+needs **no** NVIDIA device, CUDA driver/runtime, `nvcc`, or the Pascal runtime
+library.
 
 ## Inspect the artifact
 

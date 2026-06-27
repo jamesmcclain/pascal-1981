@@ -16,8 +16,23 @@
  *   DEVFREE(dev)           -> pas_dev_free(dev)
  */
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* Thread-local index registers.  The compiler emits THREADIDX_X / BLOCKIDX_X
+ * etc. as loads from these symbols (declared 'external thread_local global i32'
+ * in the device LLVM IR).  pas_dev_launch sets them before each thunk call so
+ * the kernel body sees the correct indices -- the same values a GPU provides
+ * via hardware special registers.  _Thread_local storage makes the design
+ * naturally OpenMP-parallelisable: each OS thread gets its own set. */
+/* Thread indices and block indices start at 0 (first and only thread/block). */
+_Thread_local int32_t __pas_tid_x   = 0, __pas_tid_y   = 0, __pas_tid_z   = 0;
+_Thread_local int32_t __pas_ctaid_x = 0, __pas_ctaid_y = 0, __pas_ctaid_z = 0;
+/* Dimension counts default to 1: a unit grid so stride = BLOCKDIM*GRIDDIM = 1.
+ * pas_dev_launch overrides these before the first thunk call. */
+_Thread_local int32_t __pas_ntid_x  = 1, __pas_ntid_y  = 1, __pas_ntid_z  = 1;
+_Thread_local int32_t __pas_nctaid_x= 1, __pas_nctaid_y= 1, __pas_nctaid_z= 1;
 
 /* Allocate n bytes of "device" memory; returns an opaque handle the host must
  * not dereference (the dereferenceability invariant). On the CPU device the
@@ -56,8 +71,8 @@ void pas_dev_free(void *dev_ptr) {
  *     pas_dev_launch(entry, gx,gy,gz, bx,by,bz, argv);  // cuLaunchKernel
  *
  * On the CPU device the "module" is the registry, get_function is a by-name
- * lookup returning the thunk, and launch invokes the thunk as a single-thread
- * grid (so a grid-stride kernel still covers the whole buffer).  Swapping this
+ * lookup returning the thunk, and launch drives it across the full launch
+ * geometry (see pas_dev_launch).  Swapping this
  * file for CUDA Driver API wrappers turns the *same* compiler output into a real
  * GPU launch with no Pascal-side change: load takes the embedded PTX blob,
  * get_function returns a CUfunction, launch is cuLaunchKernel.  (A CUDA shim
@@ -94,17 +109,37 @@ void *pas_dev_module_get_function(void *module, const char *name) {
     return 0;
 }
 
-/* Launch a resolved entry.  CPU device: the entry is the dispatch thunk; call
- * it once with the marshalled argument array.  Geometry is unused on the CPU
- * device (BLOCKDIM_X/GRIDDIM_X lower to 1, so a single-thread grid is correct);
- * it carries the same six values cuLaunchKernel consumes. */
+/* Launch a resolved entry.  CPU device: the entry is the dispatch thunk.
+ * We emulate the GPU by iterating over every block (gx*gy*gz) and every thread
+ * within each block (bx*by*bz), setting the thread-local index registers before
+ * each call so the kernel body sees the correct THREADIDX_x/BLOCKIDX_x values.
+ * BLOCKDIM_x/GRIDDIM_x are constant for the whole launch and are set once.
+ *
+ * Loop order matches CUDA's row-major convention: x is the fastest-varying
+ * thread index, z the slowest, mirroring the hardware warp layout. */
 typedef void (*pas_klaunch_fn)(void **);
 void pas_dev_launch(void *entry,
                     long long gx, long long gy, long long gz,
                     long long bx, long long by, long long bz,
                     void **argv) {
-    (void)gx; (void)gy; (void)gz;
-    (void)bx; (void)by; (void)bz;
-    if (entry)
-        ((pas_klaunch_fn)entry)(argv);
+    if (!entry) return;
+    pas_klaunch_fn fn = (pas_klaunch_fn)entry;
+    /* Block and grid dimensions are constant across the launch. */
+    __pas_ntid_x  = (int32_t)bx; __pas_ntid_y  = (int32_t)by; __pas_ntid_z  = (int32_t)bz;
+    __pas_nctaid_x= (int32_t)gx; __pas_nctaid_y= (int32_t)gy; __pas_nctaid_z= (int32_t)gz;
+    for (long long gz_i = 0; gz_i < gz; gz_i++)
+    for (long long gy_i = 0; gy_i < gy; gy_i++)
+    for (long long gx_i = 0; gx_i < gx; gx_i++) {
+        __pas_ctaid_x = (int32_t)gx_i;
+        __pas_ctaid_y = (int32_t)gy_i;
+        __pas_ctaid_z = (int32_t)gz_i;
+        for (long long bz_i = 0; bz_i < bz; bz_i++)
+        for (long long by_i = 0; by_i < by; by_i++)
+        for (long long bx_i = 0; bx_i < bx; bx_i++) {
+            __pas_tid_x = (int32_t)bx_i;
+            __pas_tid_y = (int32_t)by_i;
+            __pas_tid_z = (int32_t)bz_i;
+            fn(argv);
+        }
+    }
 }

@@ -529,8 +529,13 @@ coerced to the kernel's parameter ABI — exactly what `cuLaunchKernel` consumes
 `pas_dev_launch(name, thunk, gx,gy,gz, bx,by,bz, argv)`. Geometry is supplied as 2 values
 (grid, block → a 1-D launch) or 6 (gx,gy,gz, bx,by,bz); the count is implied by the kernel's
 arity. On the CPU device `pas_dev_launch` invokes a compiler-emitted per-kernel dispatch
-thunk `__pas_klaunch_<name>(void** argv)` that unpacks `argv` and calls the kernel as a
-single-thread grid, so its grid-stride loop covers the whole buffer. The kernel-name string
+thunk `__pas_klaunch_<name>(void** argv)` that unpacks `argv` and calls the kernel.
+The CPU shim emulates the full launch: `pas_dev_launch` loops over the entire
+`gx*gy*gz x bx*by*bz` grid, setting thread-local index registers (`__pas_tid_x`
+etc., which `THREADIDX_*`/`BLOCKIDX_*` lower to on the CPU triple) before each
+call, so the kernel sees the correct indices — the same semantic a GPU provides.
+A grid-stride kernel covers the whole buffer on a single-thread grid, but the
+emulation now covers one-thread-per-element kernels too. The kernel-name string
 and the geometry ride along unused on the CPU device — they are precisely what the CUDA shim
 will consume. So running the *same* Pascal program on a GPU is now a pure runtime-library
 swap: replace the four `cpu_device_shim.c` functions with CUDA Driver API wrappers and let
@@ -589,13 +594,16 @@ currently gets away without it.
   (A3) for the no-host-symbols invariant.
 - §3 (entry points): on `device=x86` the kernel calling convention is inert/ignored - kernel
   *logic* still runs serially, so you can test kernel *correctness* on CPU before you have a GPU.
-- §4 (intrinsics): provide CPU-device lowerings - `THREADIDX_X`→0, `BLOCKDIM_X`→1,
-  `SYNCTHREADS`→no-op - so a kernel run on the CPU executes as a single-thread grid and
-  produces the right scalar answer. This lets you validate kernel math with zero GPU.
+- §4 (intrinsics): provide CPU-device lowerings - `THREADIDX_X`/`BLOCKIDX_X` lower to
+  loads from thread-local globals (`__pas_tid_x` etc.) that `pas_dev_launch` sets before each
+  kernel call; `BLOCKDIM_X`/`GRIDDIM_X` likewise. So a kernel run on the CPU executes across
+  the *full* launch geometry and produces the right answer. This lets you validate kernel
+  math with zero GPU.
 - §5 (orchestration): a CPU-device shim where `DEVALLOC`=`malloc`, copies=`memcpy`, and
-  `LAUNCH` marshals a `void**` and calls `pas_dev_launch`, which runs a per-kernel dispatch
-  thunk (single-thread grid). Same Pascal program, no GPU. Then swap the shim for the CUDA one
-  — the launch call site is already GPU-shaped, so only the runtime library changes.
+  `LAUNCH` marshals a `void**` and calls `pas_dev_launch`, which loops over the full grid,
+  setting thread-local index registers before each per-kernel dispatch-thunk call. Same
+  Pascal program, no GPU. Then swap the shim for the CUDA one — the launch call site is
+  already GPU-shaped, so only the runtime library changes.
 
 This is the CPU-device dividend the design designed for; lean on it.
 
