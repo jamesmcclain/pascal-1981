@@ -465,6 +465,17 @@ class Parser:
             arg = self.parse_expression()
             self.expect('RPAREN')
             return Attribute('SPACE', arg)
+        # C / CDECL: foreign C-ABI marker (Phase 1 of the C-FFI plan,
+        # docs/c-abi-foreign-functions.md). Contextual like SPACE -- recognized
+        # from an IDENTIFIER lexeme, never lexer-reserved -- so vintage `c`/`cdecl`
+        # identifiers survive. Both spellings normalize to 'C'. It opts a foreign
+        # routine into C-ABI-correct lowering; for scalar/pointer signatures the
+        # current lowering is already correct, so the marker is presently inert
+        # except that it parses. By-value aggregates remain rejected until the
+        # aggregate classifier (Phase 2) ships.
+        if cur.kind == 'IDENTIFIER' and cur.lexeme.upper() in {'C', 'CDECL'}:
+            self.pos += 1
+            return Attribute('C')
         self.error('expected attribute item')
 
     def parse_compound_statement(self) -> CompoundStmt:

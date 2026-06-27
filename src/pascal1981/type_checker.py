@@ -917,6 +917,63 @@ class PascalTypeChecker(TypeChecker):
         setattr(symbol, 'type_expr', decl.type_expr)
         self.symbol_table.define(decl.name, symbol)
 
+    # Aggregate Pascal types that cannot cross the C ABI by value with the
+    # current lowering (no per-target aggregate classifier exists yet).  Passed
+    # or returned by value, they are silently mislowered, so a foreign routine
+    # using them is rejected at type-check time.  See Phase 0 of
+    # docs/c-abi-foreign-functions.md.
+    _C_ABI_AGGREGATE_TYPES = (RecordType, ArrayType, SetType, StringType, LStringType)
+
+    @staticmethod
+    def _is_foreign_routine(decl) -> bool:
+        """True if a routine is an EXTERN/EXTERNAL (foreign) import.
+
+        Recognizes both the directive form (`; EXTERN;`) and the attribute form
+        (`[EXTERN]`).  PUBLIC exports are intentionally out of scope: they are
+        defined here, and the cross-ABI concern for them runs the other
+        direction (C calling Pascal).
+        """
+        directive = (getattr(decl, 'directive', None) or '').upper()
+        attrs = {a.name.upper() for a in getattr(decl, 'attributes', [])}
+        return directive in {'EXTERN', 'EXTERNAL'} or bool(attrs & {'EXTERN', 'EXTERNAL'})
+
+    def _check_foreign_abi(self, decl, return_type) -> None:
+        """Phase 0 C-FFI guard: reject ABI-incompatible foreign signatures.
+
+        By-value aggregate parameters and aggregate return types are not yet
+        C-ABI compatible (the per-target classifier is Phase 2), so they are
+        rejected with actionable guidance instead of being silently mislowered.
+        By-reference (CONST/VAR/CONSTS/VARS) aggregates are fine -- they lower to
+        a pointer, which is ABI-safe as long as the C side also takes a pointer.
+
+        Also emits a non-fatal warning when a bare 16-bit INTEGER is used in a
+        foreign signature, since C `int` is 32-bit; CINT/INTEGER32 (or CSHORT for
+        a genuine C `short`) is almost always what was meant.
+        """
+        if not self._is_foreign_routine(decl):
+            return
+        for param in getattr(decl, 'params', []):
+            by_reference = getattr(param, 'mode', None) in {'VAR', 'VARS', 'CONST', 'CONSTS'}
+            param_type = self.resolve_type(param.type_expr) if param.type_expr else None
+            names = ', '.join(param.names)
+            if not by_reference and isinstance(param_type, self._C_ABI_AGGREGATE_TYPES):
+                self.error(
+                    f"foreign routine '{decl.name}': by-value aggregate parameter '{names}' "
+                    f"is not C-ABI compatible; pass it by CONST or VAR and declare the C side "
+                    f"to take a pointer. By-value aggregates will be supported via the [C] "
+                    f"attribute once the aggregate classifier ships.", decl)
+            elif not by_reference and isinstance(param.type_expr, NamedType) and param.type_expr.name.upper() == 'INTEGER':
+                self.warning(
+                    f"foreign routine '{decl.name}': parameter '{names}' is a 16-bit INTEGER, "
+                    f"but C 'int' is 32-bit; use CINT/INTEGER32 (or CSHORT for a C 'short') to "
+                    f"match the intended C width.", decl)
+        if isinstance(return_type, self._C_ABI_AGGREGATE_TYPES):
+            self.error(
+                f"foreign function '{decl.name}': by-value aggregate return is not C-ABI "
+                f"compatible; return it through a CONST/VAR pointer parameter instead. "
+                f"By-value aggregate returns will be supported via the [C] attribute once "
+                f"the aggregate classifier ships.", decl)
+
     def check_func_decl(self, decl: FuncDecl) -> None:
         """Type check a function declaration."""
         if not decl.name:
@@ -953,6 +1010,9 @@ class PascalTypeChecker(TypeChecker):
 
         # Create function type
         func_type = FunctionType(decl.name, param_types, return_type)
+
+        # Phase 0 C-FFI guard: reject ABI-incompatible foreign signatures.
+        self._check_foreign_abi(decl, return_type)
 
         # Check for redeclaration. A FORWARD declaration is completed (not
         # redeclared) by a later body definition.
@@ -1018,6 +1078,10 @@ class PascalTypeChecker(TypeChecker):
 
         # Create procedure type
         proc_type = ProcedureType(decl.name, param_types)
+
+        # Phase 0 C-FFI guard: reject ABI-incompatible foreign signatures
+        # (procedures have no return type, so only by-value aggregate params).
+        self._check_foreign_abi(decl, None)
 
         # Check for redeclaration. A FORWARD declaration is completed (not
         # redeclared) by a later body definition -- this is what makes forward

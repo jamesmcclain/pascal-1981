@@ -165,6 +165,15 @@ class CodegenBase:
             self.constants['MAXINT32'] = 2147483647
             self.constants['MAXINT64'] = 9223372036854775807
         self.type_aliases: Dict[str, Type] = {}  # compile-time type aliases, keyed UPPER
+        # Seed the C-ABI fixed-width aliases (Phase 1 of the C-FFI plan) so a
+        # foreign `[C]` routine spelled with CINT/CLONG/CPTR/etc. lowers through
+        # the existing INTEGER32/INTEGER64/ADRMEM paths.  Each maps to an AST
+        # NamedType for its underlying built-in, which llvm_type already handles
+        # ungated.  A user TYPE decl of the same name overwrites the seed (line
+        # ~259), preserving shadowing.
+        from ..builtins_registry import C_ABI_TYPE_ALIASES
+        for _alias, _base in C_ABI_TYPE_ALIASES.items():
+            self.type_aliases[_alias] = NamedType(_base, None)
         self.current_interface_decls: Dict[str, Declaration] = {}
         self.proc_param_modes: Dict[str, List[Optional[str]]] = {}
         self.loop_stack: List[LoopContext] = []
