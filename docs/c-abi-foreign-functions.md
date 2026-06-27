@@ -14,8 +14,11 @@ Phases 0, 1, and 2 of the plan below have shipped:
 - **Phase 1 (C-ABI surface).** A `[C]` attribute (with `[CDECL]` as an accepted synonym)
   parses in attribute position, and predeclared fixed-width C type aliases — `CCHAR`,
   `CSHORT`, `CINT`, `CLONG`, `CSIZE_T`, `CDOUBLE`, `CPTR` — let foreign declarations spell
-  exact C widths independent of the vintage 16-bit `INTEGER`, with no feature flag
-  required. (`parser.py`, `builtins_registry.py::C_ABI_TYPE_ALIASES`, `codegen/base.py`.)
+  exact C widths independent of the vintage 16-bit `INTEGER`. The **whole C-FFI surface is
+  gated behind the extended dialect** (see *Dialect gating* below): in the faithful 1981
+  dialect the aliases are undeclared and `[C]` is rejected, so a vintage program cannot
+  reach a wide C width through a C alias. (`parser.py`,
+  `builtins_registry.py::C_ABI_TYPE_ALIASES`, `codegen/base.py`, `type_checker.py`.)
 - **Phase 2 (aggregate classifier).** A System V AMD64 classifier reproduces clang's
   eightbyte INTEGER/SSE/MEMORY lowering: small aggregates are coerced into register-sized
   pieces (`i64`, `<2 x float>`, `double`, expanded multi-eightbyte args, …) and large or
@@ -28,10 +31,31 @@ Phases 0, 1, and 2 of the plan below have shipped:
 By-value aggregates were validated differentially against clang across the eightbyte size
 classes (1- and 2-eightbyte integer structs, `double`/`<2 x float>` SSE structs, mixed
 SSE+INTEGER, and >16-byte MEMORY structs), for both arguments and returns. Variadics
-remain unsupported (Phase 3). The gate is the `[C]` attribute; gating behind the
-`extended` dialect was considered and left optional, since the attribute is a more
-local opt-in and the classifier work is identical either way. Coverage is in
-`tests/test_c_ffi.py`.
+remain unsupported (Phase 3). Coverage is in `tests/test_c_ffi.py`.
+
+### Dialect gating
+
+The C-FFI surface — the `[C]`/`[CDECL]` attribute *and* the `CINT`/`CLONG`/`CSIZE_T`/…
+aliases — is available **only under the extended dialect**. The motivation is that the
+interface drags in fixed 32/64-bit widths the faithful 1981 dialect does not otherwise
+have: `CLONG` is a 64-bit integer wherever it appears, so the thing that names it should
+live behind the same door as `INTEGER64` itself. Gating the surface as a unit means the
+wide widths and the interface that needs them arrive together, instead of letting `[C]`
+smuggle wide types into an otherwise-vintage program. (This also retired an earlier
+shortcut where the aliases resolved to wide types *regardless* of `wide-integers`; under
+the umbrella `wide-integers` is on, so `CINT → INTEGER32` is now legitimate rather than a
+gate bypass.)
+
+The umbrella is read, deliberately, as **"all of `extended_features()` is on"**
+(`features.is_extended`). That is the simplest correct reading and keeps the three
+touchpoints — alias registration in `builtins_registry`, the alias seed in
+`codegen/base.py`, and the `[C]` attribute check in `type_checker._check_foreign_abi` — on
+a single predicate so they cannot drift. A finer-grained dedicated `c-ffi` feature (enable
+C interop without committing to every other extension) is a possible later refinement; it
+would only change `is_extended`'s definition, not its callers. The faithful dialect
+rejects `[C]` with an explicit "requires the extended dialect" diagnostic, and the
+parser stays dialect-agnostic (it recognizes the attribute syntactically; the checker is
+where every dialect gate lives, exactly as for `INTEGER32`/`REAL32`).
 
 ## TL;DR — what's the verdict?
 
@@ -274,16 +298,19 @@ incrementally; each phase is independently useful and independently testable.
 
 ### Design principle: keep the vintage surface untouched
 
-The default dialect must stay byte-for-byte faithful to IBM Pascal 2.0. The opt-in
-mechanism for the new by-value behavior is the explicit **`[C]` attribute** introduced in
-Phase 1, not a global feature flag. The attribute is local to the one declaration that
-needs ABI-correct lowering, and — unlike a flag — it never names a capability that does
-not yet exist behind it. (Contrast the abandoned `-f c-ffi` idea: at Phase 0 there is
-nothing for such a flag to enable, since the by-value aggregate path is simply wrong on
-every target with no correct interpretation, so a flag would only re-arm a silent
-miscompile.) Unflagged, unattributed builds and all existing tests are therefore
-unaffected, the same way `wide-integers` and `symbolic-enum-io` leave the default build
-alone.
+The default dialect must stay byte-for-byte faithful to IBM Pascal 2.0. Two things follow.
+First, by-value lowering is opted into per-declaration with the explicit **`[C]` attribute**
+from Phase 1, so the marker is local to the one declaration that needs ABI-correct
+lowering rather than a mode that reinterprets ordinary code. Second — and this is the
+shipped decision (see *Dialect gating* above) — the C-FFI surface as a whole (`[C]` plus
+the `CINT`/`CLONG`/… aliases) is **available only under the extended dialect**, because the
+aliases name fixed 32/64-bit widths that the faithful dialect does not otherwise expose;
+gating the surface as a unit keeps those widths and the interface that needs them arriving
+together. So in the faithful dialect the aliases are undeclared and `[C]` is rejected
+outright, leaving unattributed vintage builds and all existing tests unaffected, the same
+way `wide-integers` and `symbolic-enum-io` leave the default build alone. (An earlier draft
+of this section argued for the bare attribute with *no* flag; that was superseded once it
+was clear `[C]` would otherwise smuggle wide widths past the `wide-integers` gate.)
 
 ### Phase 0 — Diagnostics and discipline (small, high value) — IMPLEMENTED
 
@@ -330,8 +357,10 @@ for scalar/pointer signatures — already lowers correctly even before Phase 2, 
 scalars need no classification.
 
 Touchpoints: `parser.py` (attribute keyword), `ast_nodes.py` (flag),
-`builtins_registry.py` (C aliases). No new feature flag — the `[C]` attribute is the gate.
-Cost: low–medium. Risk: low.
+`builtins_registry.py` (C aliases), `type_checker.py` (`[C]` dialect gate). As shipped,
+the entire surface is gated behind the extended dialect rather than a dedicated flag (see
+*Dialect gating*); the `[C]` attribute is the per-declaration opt-in *within* that
+dialect. Cost: low–medium. Risk: low.
 
 ### Phase 2 — Aggregate classifier (the core), behind a per-target seam — IMPLEMENTED
 

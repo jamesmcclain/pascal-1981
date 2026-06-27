@@ -938,24 +938,36 @@ class PascalTypeChecker(TypeChecker):
         return directive in {'EXTERN', 'EXTERNAL'} or bool(attrs & {'EXTERN', 'EXTERNAL'})
 
     def _check_foreign_abi(self, decl, return_type) -> None:
-        """Phase 0 C-FFI guard: reject ABI-incompatible foreign signatures.
+        """C-FFI guard: gate the [C] surface and reject ABI-incompatible signatures.
 
-        By-value aggregate parameters and aggregate return types are not yet
-        C-ABI compatible (the per-target classifier is Phase 2), so they are
-        rejected with actionable guidance instead of being silently mislowered.
-        By-reference (CONST/VAR/CONSTS/VARS) aggregates are fine -- they lower to
-        a pointer, which is ABI-safe as long as the C side also takes a pointer.
+        First, the [C]/[CDECL] foreign-ABI marker is part of the C-FFI surface,
+        which is available only under the extended dialect (the wide widths it
+        implies are themselves extended types); it is rejected in the faithful
+        1981 dialect, so a vintage program cannot opt into C-ABI lowering.
+
+        Then, for foreign routines: by-value aggregate parameters and aggregate
+        return types are rejected on plain EXTERN routines (no [C]) instead of
+        being silently mislowered; with [C] they are lowered correctly by the
+        Phase 2 classifier.  By-reference (CONST/VAR/CONSTS/VARS) aggregates are
+        fine -- they lower to a pointer, which is ABI-safe as long as the C side
+        also takes a pointer.
 
         Also emits a non-fatal warning when a bare 16-bit INTEGER is used in a
         foreign signature, since C `int` is 32-bit; CINT/INTEGER32 (or CSHORT for
         a genuine C `short`) is almost always what was meant.
         """
+        from .features import is_extended
+        has_c = 'C' in {a.name.upper() for a in getattr(decl, 'attributes', [])}
+        if has_c and not is_extended(self.features):
+            self.error(
+                f"routine '{decl.name}': the [C] (C-ABI) attribute requires the "
+                f"extended dialect and is not available in the faithful 1981 dialect.",
+                decl)
         if not self._is_foreign_routine(decl):
             return
         # The [C]/[CDECL] marker opts into C-ABI-correct lowering of by-value
         # aggregates (Phase 2 classifier). Plain EXTERN routines still reject
         # them, since without [C] the aggregate is passed as a raw LLVM value.
-        has_c = 'C' in {a.name.upper() for a in getattr(decl, 'attributes', [])}
         for param in getattr(decl, 'params', []):
             by_reference = getattr(param, 'mode', None) in {'VAR', 'VARS', 'CONST', 'CONSTS'}
             param_type = self.resolve_type(param.type_expr) if param.type_expr else None

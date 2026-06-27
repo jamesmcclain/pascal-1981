@@ -11,6 +11,17 @@ import unittest
 from pascal1981.parser import ParserError
 
 from tests.support import build_and_run_pascal_project, parse_source, requires_exe, typecheck_source
+from pascal1981.features import extended_features
+
+# The C-FFI surface ([C] + CINT/CLONG/... aliases) is gated behind the extended
+# dialect, so every C-FFI typecheck/build runs with the umbrella on.  _tc() is the
+# extended-dialect typecheck; bare typecheck_source() is used only by the gating
+# tests that assert the faithful (vintage) dialect rejects the surface.
+EXT = extended_features()
+
+
+def _tc(src):
+    return typecheck_source(src, features=EXT)
 
 
 def _errors(result):
@@ -53,10 +64,10 @@ class TestCAttributeParsing(unittest.TestCase):
 
 
 class TestCTypeAliases(unittest.TestCase):
-    """Phase 1: the C-ABI fixed-width aliases resolve without -f wide-integers."""
+    """The C-ABI fixed-width aliases resolve under the extended dialect."""
 
-    def test_scalar_aliases_typecheck_without_wide_integers(self):
-        result = typecheck_source(
+    def test_scalar_aliases_typecheck_under_extended(self):
+        result = _tc(
             "PROGRAM P(output);\n"
             "FUNCTION cube(x: CINT): CINT [C]; EXTERN;\n"
             "FUNCTION addd(a: CDOUBLE; b: CDOUBLE): CDOUBLE [C]; EXTERN;\n"
@@ -67,12 +78,56 @@ class TestCTypeAliases(unittest.TestCase):
 
     def test_user_type_shadows_alias(self):
         # A user TYPE named like an alias still wins (builtins are shadowable).
-        result = typecheck_source(
+        result = _tc(
             "PROGRAM P(output);\n"
             "TYPE cint = BOOLEAN;\n"
             "VAR b: cint;\n"
             "BEGIN b := TRUE END.")
         self.assertTrue(result.success, msg=_errors(result))
+
+
+class TestCFfiDialectGating(unittest.TestCase):
+    """The whole C-FFI surface is available only under the extended dialect.
+
+    Gating it here (rather than on the by-value behavior alone) keeps the wide C
+    widths and the interface that needs them arriving together: a faithful 1981
+    program cannot reach a wide type through a C alias, nor opt a routine into
+    C-ABI lowering. The umbrella is read as "all of extended_features() is on".
+    """
+
+    def test_c_attribute_rejected_in_vintage(self):
+        result = typecheck_source(
+            "PROGRAM P(output);\n"
+            "FUNCTION f(x: INTEGER32): INTEGER32 [C]; EXTERN;\n"
+            "BEGIN END.")
+        self.assertFalse(result.success)
+        self.assertTrue(any('[C]' in m and 'extended' in m for m in _errors(result)),
+                        msg=_errors(result))
+
+    def test_c_aliases_undeclared_in_vintage(self):
+        # Without extended, CINT et al. are simply not predeclared.
+        result = typecheck_source(
+            "PROGRAM P(output);\n"
+            "VAR r: CINT;\n"
+            "BEGIN END.")
+        self.assertFalse(result.success)
+
+    def test_c_attribute_accepted_under_extended(self):
+        result = _tc(
+            "PROGRAM P(output);\n"
+            "FUNCTION f(x: CINT): CINT [C]; EXTERN;\n"
+            "BEGIN END.")
+        self.assertTrue(result.success, msg=_errors(result))
+
+    def test_non_extended_with_wide_integers_only_still_rejects(self):
+        # wide-integers alone is not the umbrella; the C surface stays gated.
+        result = typecheck_source(
+            "PROGRAM P(output);\n"
+            "FUNCTION f(x: INTEGER32): INTEGER32 [C]; EXTERN;\n"
+            "BEGIN END.",
+            features={'wide-integers': True})
+        self.assertFalse(result.success)
+        self.assertTrue(any('extended' in m for m in _errors(result)), msg=_errors(result))
 
 
 class TestForeignAbiDiagnostics(unittest.TestCase):
@@ -82,7 +137,7 @@ class TestForeignAbiDiagnostics(unittest.TestCase):
 
     def test_byvalue_aggregate_param_rejected_without_c(self):
         # Plain EXTERN (no [C]) still rejects by-value aggregates.
-        result = typecheck_source(
+        result = _tc(
             "PROGRAM P(output);\n" + self._POINT +
             "FUNCTION sumpt(p: point): CINT; EXTERN;\n"
             "BEGIN END.")
@@ -90,7 +145,7 @@ class TestForeignAbiDiagnostics(unittest.TestCase):
         self.assertTrue(any('by-value aggregate parameter' in m for m in _errors(result)))
 
     def test_byvalue_aggregate_return_rejected_without_c(self):
-        result = typecheck_source(
+        result = _tc(
             "PROGRAM P(output);\n" + self._POINT +
             "FUNCTION mk(v: CINT): point; EXTERN;\n"
             "BEGIN END.")
@@ -99,21 +154,21 @@ class TestForeignAbiDiagnostics(unittest.TestCase):
 
     def test_byvalue_aggregate_param_accepted_with_c(self):
         # Phase 2: the [C] marker opts into C-ABI-correct by-value lowering.
-        result = typecheck_source(
+        result = _tc(
             "PROGRAM P(output);\n" + self._POINT +
             "FUNCTION sumpt(p: point): CINT [C]; EXTERN;\n"
             "BEGIN END.")
         self.assertTrue(result.success, msg=_errors(result))
 
     def test_byvalue_aggregate_return_accepted_with_c(self):
-        result = typecheck_source(
+        result = _tc(
             "PROGRAM P(output);\n" + self._POINT +
             "FUNCTION mk(v: CINT): point [C]; EXTERN;\n"
             "BEGIN END.")
         self.assertTrue(result.success, msg=_errors(result))
 
     def test_byvalue_string_param_rejected(self):
-        result = typecheck_source(
+        result = _tc(
             "PROGRAM P(output);\n"
             "PROCEDURE g(s: STRING(20)); EXTERN;\n"
             "BEGIN END.")
@@ -121,14 +176,14 @@ class TestForeignAbiDiagnostics(unittest.TestCase):
         self.assertTrue(any('by-value aggregate parameter' in m for m in _errors(result)))
 
     def test_const_aggregate_param_accepted(self):
-        result = typecheck_source(
+        result = _tc(
             "PROGRAM P(output);\n" + self._POINT +
             "FUNCTION sumpt(CONST p: point): CINT [C]; EXTERN;\n"
             "BEGIN END.")
         self.assertTrue(result.success, msg=_errors(result))
 
     def test_var_aggregate_param_accepted(self):
-        result = typecheck_source(
+        result = _tc(
             "PROGRAM P(output);\n" + self._POINT +
             "FUNCTION sumpt(VAR p: point): CINT; EXTERN;\n"
             "BEGIN END.")
@@ -136,7 +191,7 @@ class TestForeignAbiDiagnostics(unittest.TestCase):
 
     def test_non_foreign_byvalue_aggregate_allowed(self):
         # The guard is scoped to EXTERN/EXTERNAL; ordinary routines are untouched.
-        result = typecheck_source(
+        result = _tc(
             "PROGRAM P(output);\n" + self._POINT +
             "FUNCTION sumpt(p: point): CINT;\n"
             "BEGIN sumpt := p.x + p.y END;\n"
@@ -144,7 +199,7 @@ class TestForeignAbiDiagnostics(unittest.TestCase):
         self.assertTrue(result.success, msg=_errors(result))
 
     def test_bare_integer_param_warns(self):
-        result = typecheck_source(
+        result = _tc(
             "PROGRAM P(output);\n"
             "FUNCTION f(x: INTEGER): INTEGER [C]; EXTERN;\n"
             "BEGIN END.")
@@ -152,7 +207,7 @@ class TestForeignAbiDiagnostics(unittest.TestCase):
         self.assertTrue(any('16-bit INTEGER' in m for m in _warnings(result)))
 
     def test_cint_param_does_not_warn(self):
-        result = typecheck_source(
+        result = _tc(
             "PROGRAM P(output);\n"
             "FUNCTION f(x: CINT): CINT [C]; EXTERN;\n"
             "BEGIN END.")
@@ -180,6 +235,7 @@ class TestCFfiBuildAndRun(unittest.TestCase):
             compile_pairs=[('p.pas', 'p.ll')],
             link_ir_relpaths=['p.ll', 'cimpl.c'],
             exe_name='c-ffi-scalar',
+            features=EXT,
         )
         self.assertEqual(rc, 0, msg=err)
         lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
@@ -202,6 +258,7 @@ class TestCFfiBuildAndRun(unittest.TestCase):
             compile_pairs=[('q.pas', 'q.ll')],
             link_ir_relpaths=['q.ll', 'qimpl.c'],
             exe_name='c-ffi-aggregate-ref',
+            features=EXT,
         )
         self.assertEqual(rc, 0, msg=err)
         self.assertEqual([ln.strip() for ln in out.splitlines() if ln.strip()], ['42'])
@@ -283,7 +340,7 @@ class TestCAbiAggregateBuildAndRun(unittest.TestCase):
             compile_pairs=[('m.pas', 'm.ll')],
             link_ir_relpaths=['m.ll', 'c.c'],
             exe_name=exe,
-            features={'wide-integers': True},
+            features=EXT,
         )
         self.assertEqual(rc, 0, msg=err)
         return [ln.strip() for ln in out.splitlines() if ln.strip()]

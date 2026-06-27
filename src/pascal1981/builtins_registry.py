@@ -6,6 +6,7 @@ This is shared between the type checker and code generator to prevent
 """
 
 from .symbol_table import Symbol
+from .features import is_extended
 from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, EnumType, FileType, FunctionType, LStringType, PointerType,
                           ProcedureType, RecordType, StringType)
 
@@ -170,20 +171,25 @@ def register_builtins(symbol_table, features=None) -> None:
     define_builtin('SPACE', space_type, 'type')
     define_builtin('FCBFQQ', RecordType('FCBFQQ', {'MODE': filemodes_type, 'TRAP': BOOLEAN_TYPE, 'ERRS': INTEGER_TYPE}), 'type')
 
-    # C-ABI fixed-width type aliases (Phase 1 of the C-FFI plan).  Resolved
-    # directly to the underlying type objects so they are available regardless of
-    # the wide-integers feature flag: the programmer writes `CINT`, never the
-    # gated name `INTEGER32`, and resolve_type finds the predeclared TYPE symbol.
-    _c_alias_resolved = {
-        'CHAR': CHAR_TYPE,
-        'INTEGER': INTEGER_TYPE,
-        'INTEGER32': INTEGER32_TYPE,
-        'INTEGER64': INTEGER64_TYPE,
-        'REAL': REAL_TYPE,
-        'ADRMEM': PointerType(CHAR_TYPE),
-    }
-    for _alias, _base in C_ABI_TYPE_ALIASES.items():
-        define_builtin(_alias, _c_alias_resolved[_base], 'type')
+    # C-ABI fixed-width type aliases (Phase 1 of the C-FFI plan).  These are part
+    # of the C-FFI surface and are therefore registered only under the extended
+    # dialect (see features.is_extended): the wide widths they name -- INTEGER32,
+    # INTEGER64 -- are themselves extended types, so the interface and the widths
+    # it needs become available together.  Under the faithful 1981 dialect these
+    # identifiers are simply undeclared, so a vintage program cannot reach a wide
+    # type through a C alias.  Under extended, wide-integers is on, so resolving
+    # CINT -> INTEGER32 is legitimate rather than a gate bypass.
+    if is_extended(features):
+        _c_alias_resolved = {
+            'CHAR': CHAR_TYPE,
+            'INTEGER': INTEGER_TYPE,
+            'INTEGER32': INTEGER32_TYPE,
+            'INTEGER64': INTEGER64_TYPE,
+            'REAL': REAL_TYPE,
+            'ADRMEM': PointerType(CHAR_TYPE),
+        }
+        for _alias, _base in C_ABI_TYPE_ALIASES.items():
+            define_builtin(_alias, _c_alias_resolved[_base], 'type')
 
     # Variables/Files
     define_builtin('INPUT', text_type, 'var')
