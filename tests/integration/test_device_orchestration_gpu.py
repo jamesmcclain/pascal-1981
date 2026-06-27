@@ -91,15 +91,32 @@ END.
 """
 
 
-def _build_cuda_runtime() -> str:
-    """Build (once) the runtime archive with the CUDA shim; return its path."""
-    out = os.path.join(RUNTIME_DIR, "build", "libpascalrt.a")
-    subprocess.run(["make", "-C", RUNTIME_DIR, "clean"],
-                   capture_output=True, check=True)
-    r = subprocess.run(["make", "-C", RUNTIME_DIR, "DEVICE_SHIM=cuda"],
+def _build_cuda_runtime(tmpdir: str) -> str:
+    """Build the CUDA-shim runtime archive into an ISOLATED temp dir.
+
+    Building in a *copy* of the runtime sources keeps the shared source-tree
+    ``runtime/build/`` (which every other link test links against as
+    ``libpascalrt.a``) completely untouched -- so this test can neither delete
+    nor repoint it, and a build failure leaves only a leaked /tmp dir, never a
+    broken source tree.  Raises ``unittest.SkipTest`` (so a GPU box with a
+    broken/incomplete CUDA toolkit skips cleanly instead of erroring and
+    cascading failures into every other link test) if the build fails.
+    """
+    # Copy the runtime sources (skip any pre-existing build/ dir) so the
+    # Makefile can build self-contained inside the temp dir.
+    for name in os.listdir(RUNTIME_DIR):
+        if name == 'build':
+            continue
+        src = os.path.join(RUNTIME_DIR, name)
+        if os.path.isfile(src):
+            shutil.copy(src, os.path.join(tmpdir, name))
+    r = subprocess.run(["make", "-C", tmpdir, "DEVICE_SHIM=cuda"],
                        capture_output=True, text=True)
     if r.returncode != 0:
-        raise RuntimeError(f"CUDA runtime build failed: {r.stderr}")
+        raise unittest.SkipTest(f"CUDA runtime build failed: {r.stderr}")
+    out = os.path.join(tmpdir, "build", "libpascalrt.a")
+    if not os.path.exists(out):
+        raise unittest.SkipTest("CUDA runtime build failed: no archive produced")
     return out
 
 
@@ -108,13 +125,26 @@ class TestDeviceOrchestrationVectorAddGPU(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.runtime_lib = _build_cuda_runtime()
+        # Build into an isolated temp dir; never touch the shared
+        # runtime/build/ that every other link test depends on.
+        cls._runtime_tmp = tempfile.mkdtemp(prefix='pascalrt-cuda-')
+        try:
+            cls.runtime_lib = _build_cuda_runtime(cls._runtime_tmp)
+        except BaseException:
+            # setUpClass failure (incl. SkipTest) skips tearDownClass, so clean
+            # the temp dir here rather than leak it.
+            shutil.rmtree(cls._runtime_tmp, ignore_errors=True)
+            cls._runtime_tmp = None
+            raise
 
     @classmethod
     def tearDownClass(cls):
-        # Restore the default (CPU) shim so other suites/tools see the usual lib.
-        subprocess.run(["make", "-C", RUNTIME_DIR, "clean"], capture_output=True)
-        subprocess.run(["make", "-C", RUNTIME_DIR], capture_output=True)
+        # The only shared state we created is our private temp dir; the source
+        # tree's runtime/build/ was never touched, so there is nothing to
+        # restore.
+        tmp = getattr(cls, '_runtime_tmp', None)
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def test_vector_add_runs_on_gpu(self):
         files = {
