@@ -555,5 +555,228 @@ class TestVariadicBuildAndRun(unittest.TestCase):
         self.assertEqual(lines, ['64'])
 
 
+# =============================================================================
+# Phase 4: signext / zeroext / void fidelity
+# =============================================================================
+
+class TestPhase4ScalarExtensionIR(unittest.TestCase):
+    """Phase 4: verify signext/zeroext appear in emitted IR without running anything.
+
+    These are IR-level checks: parse + codegen, then grep the LLVM text.  No
+    llvmlite or clang installation required beyond what codegen needs.
+    """
+
+    def _ir_lines(self, src):
+        """Return the LLVM IR lines for a C-FFI program."""
+        try:
+            import llvmlite.ir  # noqa: F401
+        except ImportError:
+            self.skipTest('llvmlite not available')
+        from pascal1981.codegen import compile_to_llvm
+        ast = parse_source(src)
+        mod = compile_to_llvm(ast, features=EXT)
+        return str(mod).splitlines()
+
+    def _decl_line(self, lines, name):
+        for ln in lines:
+            if f'@"{name}"' in ln or f'@{name}(' in ln:
+                return ln
+        self.fail(f'no declaration line found for {name!r} in IR')
+
+    def test_char_param_gets_signext(self):
+        lines = self._ir_lines(
+            "PROGRAM P(output);\n"
+            "FUNCTION f(c: CHAR): CINT [C]; EXTERN;\n"
+            "BEGIN END.")
+        ln = self._decl_line(lines, 'f')
+        self.assertIn('signext', ln, msg=f'IR line: {ln}')
+
+    def test_integer_param_gets_signext(self):
+        lines = self._ir_lines(
+            "PROGRAM P(output);\n"
+            "FUNCTION f(x: INTEGER): CINT [C]; EXTERN;\n"
+            "BEGIN END.")
+        ln = self._decl_line(lines, 'f')
+        self.assertIn('signext', ln, msg=f'IR line: {ln}')
+
+    def test_word_param_gets_zeroext(self):
+        lines = self._ir_lines(
+            "PROGRAM P(output);\n"
+            "FUNCTION f(w: WORD): CINT [C]; EXTERN;\n"
+            "BEGIN END.")
+        ln = self._decl_line(lines, 'f')
+        self.assertIn('zeroext', ln, msg=f'IR line: {ln}')
+
+    def test_boolean_param_gets_zeroext(self):
+        lines = self._ir_lines(
+            "PROGRAM P(output);\n"
+            "FUNCTION f(b: BOOLEAN): CINT [C]; EXTERN;\n"
+            "BEGIN END.")
+        ln = self._decl_line(lines, 'f')
+        self.assertIn('zeroext', ln, msg=f'IR line: {ln}')
+
+    def test_cshort_param_gets_signext(self):
+        lines = self._ir_lines(
+            "PROGRAM P(output);\n"
+            "FUNCTION f(x: CSHORT): CINT [C]; EXTERN;\n"
+            "BEGIN END.")
+        ln = self._decl_line(lines, 'f')
+        self.assertIn('signext', ln, msg=f'IR line: {ln}')
+
+    def test_cchar_param_gets_signext(self):
+        lines = self._ir_lines(
+            "PROGRAM P(output);\n"
+            "FUNCTION f(c: CCHAR): CINT [C]; EXTERN;\n"
+            "BEGIN END.")
+        ln = self._decl_line(lines, 'f')
+        self.assertIn('signext', ln, msg=f'IR line: {ln}')
+
+    def test_char_return_gets_signext(self):
+        lines = self._ir_lines(
+            "PROGRAM P(output);\n"
+            "FUNCTION getc(fd: CINT): CHAR [C]; EXTERN;\n"
+            "BEGIN END.")
+        ln = self._decl_line(lines, 'getc')
+        self.assertIn('signext i8', ln, msg=f'IR line: {ln}')
+
+    def test_integer_return_gets_signext(self):
+        lines = self._ir_lines(
+            "PROGRAM P(output);\n"
+            "FUNCTION f(x: CINT): INTEGER [C]; EXTERN;\n"
+            "BEGIN END.")
+        ln = self._decl_line(lines, 'f')
+        self.assertIn('signext i16', ln, msg=f'IR line: {ln}')
+
+    def test_word_return_gets_zeroext(self):
+        lines = self._ir_lines(
+            "PROGRAM P(output);\n"
+            "FUNCTION f(x: CINT): WORD [C]; EXTERN;\n"
+            "BEGIN END.")
+        ln = self._decl_line(lines, 'f')
+        self.assertIn('zeroext i16', ln, msg=f'IR line: {ln}')
+
+    def test_cint_param_no_extension_attr(self):
+        """32-bit types do not need extension attrs."""
+        lines = self._ir_lines(
+            "PROGRAM P(output);\n"
+            "FUNCTION f(x: CINT): CINT [C]; EXTERN;\n"
+            "BEGIN END.")
+        ln = self._decl_line(lines, 'f')
+        self.assertNotIn('signext', ln, msg=f'IR line: {ln}')
+        self.assertNotIn('zeroext', ln, msg=f'IR line: {ln}')
+
+    def test_clong_no_extension_attr(self):
+        lines = self._ir_lines(
+            "PROGRAM P(output);\n"
+            "FUNCTION f(x: CLONG): CLONG [C]; EXTERN;\n"
+            "BEGIN END.")
+        ln = self._decl_line(lines, 'f')
+        self.assertNotIn('signext', ln)
+        self.assertNotIn('zeroext', ln)
+
+    def test_procedure_emits_void_return(self):
+        """[C] EXTERN procedures declare void, not i32.  The i32 in the param is fine."""
+        lines = self._ir_lines(
+            "PROGRAM P(output);\n"
+            "PROCEDURE cnoise [C]; EXTERN;\n"
+            "BEGIN END.")
+        ln = self._decl_line(lines, 'cnoise')
+        # Return type should be void; the old internal convention was i32.
+        self.assertIn('void', ln, msg=f'IR line: {ln}')
+        self.assertNotIn('i32', ln, msg=f'IR line: {ln}')
+
+
+@requires_exe
+class TestPhase4BuildAndRun(unittest.TestCase):
+    """Phase 4 end-to-end: signext/zeroext/void affect actual call correctness.
+
+    These tests construct situations where wrong extension would produce bad
+    results: negative char returns, unsigned short manipulation, and a void
+    procedure that must not clobber a register the caller expects clean.
+    """
+
+    def _run(self, files, compile_pairs, link_ir, exe):
+        rc, out, err = build_and_run_pascal_project(
+            files=files,
+            compile_pairs=compile_pairs,
+            link_ir_relpaths=link_ir,
+            exe_name=exe,
+            features=EXT,
+        )
+        self.assertEqual(rc, 0, msg=err)
+        return [ln.strip() for ln in out.splitlines() if ln.strip()]
+
+    def test_negative_char_return_correct(self):
+        """C function returning a negative char (-1) must read as -1 in Pascal.
+
+        Without signext on the return, the high bits of eax are undefined; a
+        subsequent ORD() or comparison could read garbage.  With signext the
+        i8 -1 is guaranteed sign-extended so ORD gives 255 (unsigned) and the
+        comparison works.
+        """
+        files = {
+            'nc.pas': (
+                "PROGRAM P(output);\n"
+                "FUNCTION neg_char(dummy: CINT): CHAR [C]; EXTERN;\n"
+                "VAR c: CHAR;\n"
+                "BEGIN\n"
+                "  c := neg_char(0);\n"
+                "  IF ORD(c) = 255 THEN WRITELN('ok') ELSE WRITELN('bad')\n"
+                "END."),
+            'ncimpl.c': (
+                "#include <stdint.h>\n"
+                "char neg_char(int32_t dummy) { return (char)-1; }\n"),
+        }
+        lines = self._run(files, [('nc.pas', 'nc.ll')], ['nc.ll', 'ncimpl.c'], 'p4-negchar')
+        self.assertEqual(lines, ['ok'])
+
+    def test_void_procedure_does_not_corrupt(self):
+        """A void C procedure called in the middle of a computation must not
+        corrupt result registers.  This catches any ABI mismatch from i32 vs
+        void on the call.
+        """
+        files = {
+            'vp.pas': (
+                "PROGRAM P(output);\n"
+                "PROCEDURE do_nothing(x: CINT) [C]; EXTERN;\n"
+                "FUNCTION add(a: CINT; b: CINT): CINT [C]; EXTERN;\n"
+                "VAR r: CINT;\n"
+                "BEGIN\n"
+                "  do_nothing(99);\n"
+                "  r := add(10, 32);\n"
+                "  WRITELN(r)\n"
+                "END."),
+            'vpimpl.c': (
+                "#include <stdint.h>\n"
+                "void do_nothing(int32_t x) { (void)x; }\n"
+                "int32_t add(int32_t a, int32_t b) { return a + b; }\n"),
+        }
+        lines = self._run(files, [('vp.pas', 'vp.ll')], ['vp.ll', 'vpimpl.c'], 'p4-void')
+        self.assertEqual(lines, ['42'])
+
+    def test_word_param_zeroext_correct(self):
+        """A WORD (unsigned 16-bit) parameter must arrive at the callee with the
+        upper bits zeroed (zeroext), not sign-extended (which would be wrong for
+        values >= 0x8000).
+        """
+        files = {
+            'wp.pas': (
+                "PROGRAM P(output);\n"
+                "FUNCTION pass_word(w: WORD): CINT [C]; EXTERN;\n"
+                "VAR w: WORD; r: CINT;\n"
+                "BEGIN\n"
+                "  w := 65535;  { 0xFFFF -- would sign-extend to -1 without zeroext }\n"
+                "  r := pass_word(w);\n"
+                "  WRITELN(r)\n"
+                "END."),
+            'wpimpl.c': (
+                "#include <stdint.h>\n"
+                "/* Callee receives uint16_t -- upper bits must be zero */\n"
+                "int32_t pass_word(uint16_t w) { return (int32_t)w; }\n"),
+        }
+        lines = self._run(files, [('wp.pas', 'wp.ll')], ['wp.ll', 'wpimpl.c'], 'p4-word')
+        self.assertEqual(lines, ['65535'])
+
+
 if __name__ == '__main__':
     unittest.main()

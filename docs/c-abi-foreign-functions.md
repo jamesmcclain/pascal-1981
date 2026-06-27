@@ -1,6 +1,6 @@
 # Calling C-ABI Foreign Functions from Host Pascal
 
-Status: report + implementation plan • Phases 0–3 implemented in-tree • Scope: host `MODULE`/`PROGRAM` code • Tested target: GNU/Linux AMD64 (System V) • Intended targets: also Windows AMD64 and ARM Linux (AArch64)
+Status: report + implementation plan • Phases 0–4 implemented in-tree • Scope: host `MODULE`/`PROGRAM` code • Tested target: GNU/Linux AMD64 (System V) • Intended targets: also Windows AMD64 and ARM Linux (AArch64)
 
 ## Implementation status
 
@@ -32,6 +32,19 @@ By-value aggregates were validated differentially against clang across the eight
 classes (1- and 2-eightbyte integer structs, `double`/`<2 x float>` SSE structs, mixed
 SSE+INTEGER, and >16-byte MEMORY structs), for both arguments and returns. Coverage is
 in `tests/test_c_ffi.py`.
+- **Phase 4 (scalar extension and return-type fidelity).** Sub-32-bit scalar parameters
+  and return types on `[C]` routines now carry `signext` or `zeroext` LLVM parameter
+  attributes, closing the latent dirty-bit gap that caused intermittent wrong answers
+  for negative `char`/`short` return values and unsigned `short`/`WORD` arguments.
+  Signed narrow types (`INTEGER` i16, `CHAR` i8, `CCHAR`, `CSHORT`) get `signext`;
+  unsigned/boolean types (`WORD` i16, `BOOLEAN` i8) get `zeroext`.  Attributes appear
+  on both the `declare` (so the LLVM backend generates correct register handling) and
+  the call-site argument list (via `arg_attrs`).  `[C]` `EXTERN` procedures are now
+  declared as `void`-returning rather than the internal `i32` convention, exactly
+  matching a C `void` function signature.  (`codegen/c_abi.py`: `CParamPlan.sign_attr`,
+  `CCallPlan.ret_sign_attr`, `build_c_abi_plan` sign-attr threading,
+  `_c_abi_variadic_promote`; `codegen/decls.py`: `_c_abi_sign_attr` helper,
+  `_codegen_c_abi_decl` sign-attr and void-return emission.)
 - **Phase 3 (variadic foreign functions).** A `[VARARGS]` attribute (contextual, like
   `[C]`) on a `[C] EXTERN` routine marks the declaration variadic. The compiler emits
   `var_arg=True` in the LLVM `ir.FunctionType`, so the LLVM backend handles all
@@ -182,11 +195,12 @@ Two conventions are baked in and worth noting:
 - **Procedures are emitted as `i32`-returning**, not `void` (a harmless internal
   convention; the result is discarded). Against a C `void` function this is a technical
   return-type mismatch that is benign on x86-64 because the caller ignores `eax`.
-- **No parameter attributes are ever attached** for host calls — no `signext`,
-  `zeroext`, `byval`, or `sret`. (`byval`/`sret`/`signext`/`zeroext` appear *nowhere* in
-  `src/`; the only `var_arg=True` in the tree is the compiler-internal `printf` and
-  `pas_write_fmt` declarations used by `WRITE` lowering, in `codegen/base.py`, which are
-  not reachable from Pascal source.)
+- **No parameter attributes are ever attached** for plain (non-`[C]`) host calls.
+  `[C]` routines do carry `signext`/`zeroext`/`byval`/`sret` on their declarations and
+  call sites (Phases 2 and 4). (`byval`/`sret`/`signext`/`zeroext` for plain calls
+  appear nowhere in `src/`; the only `var_arg=True` in the tree outside `[VARARGS]`
+  is the compiler-internal `printf` and `pas_write_fmt` declarations used by `WRITE`
+  lowering, in `codegen/base.py`, which are not reachable from Pascal source.)
 
 ### The scalar type map
 
@@ -231,13 +245,14 @@ the top.
 | `double addd(double,double)`                 | ✅           | `addd(1.5,2.25) = 3.75` ✓                    |
 | `int16_t f(int16_t*)` ↔ `VAR x: INTEGER`     | ✅           | correct ✓                                    |
 | `int addi(int,int)` mapped to `INTEGER`      | ⚠️ latent    | declared `i16`, mismatches C `i32`; "works" by luck for constants |
-| `int f(int)` with negative/dirty bits        | ⚠️ latent    | missing `signext`; intermittently correct    |
+| `int f(int)` with negative/dirty bits        | ✅ `[C]`     | Phase 4: `signext`/`zeroext` on sub-32-bit params/returns |
+| `char f(int)` negative return                | ✅ `[C]`     | Phase 4: `signext i8` on return              |
 | `int32_t sumpt(struct{int32_t x,y})` by value| ✅ `[C]`     | now fixed in Phase 2: `sumpt({10,32}) = 42` ✓ |
 | `struct{int32_t a,b} makepair(int32_t)`      | ✅ `[C]`     | now fixed in Phase 2: `a=5, b=10` ✓          |
 | `struct point*` by reference (`VAR p`)       | ✅           | `42` ✓ — the supported aggregate path        |
 | `printf`-style variadic (`[VARARGS]`)         | ✅ `[C][VARARGS]` | Phase 3: `[VARARGS]` attribute + default-arg promotions |
 | Variadic with integer tail (`i16` promoted)  | ✅ `[C][VARARGS]` | Phase 3: `i8`/`i16` → `i32` sext at call site |
-| `void cnoise(void)` ↔ extern `PROCEDURE`     | ⚠️ benign    | runs; IR declares `i32` return, C is `void`  |
+| `void cnoise(void)` ↔ extern `PROCEDURE`     | ✅ `[C]`     | Phase 4: `[C]` procedures declare `void`, not `i32` |
 
 ### The decisive case: struct by value
 
@@ -463,19 +478,32 @@ gate, `[C]` requirement, device exclusion, variadic call-site arity), `type_syst
 Coverage: `tests/test_c_ffi.py::TestVariadicParsing`, `TestVariadicTypecheck`,
 `TestVariadicBuildAndRun`.
 
-### Phase 4 — Scalar extension and return-type fidelity
+### Phase 4 — Scalar extension and return-type fidelity — IMPLEMENTED
 
 Goal: close the latent `signext`/`zeroext`/`void` gaps so width-edge cases stop being
 luck.
 
-- For `[C]` routines, attach `signext`/`zeroext` to sub-32-bit integer parameters and
-  returns per signedness (`INTEGER`/`CHAR` → `signext`, `WORD`/unsigned → `zeroext`).
-- Emit `[C]` `EXTERN` procedures as genuine `void`-returning functions rather than the
-  internal `i32` convention, so the declaration matches a C `void` exactly.
-- Treat `BOOLEAN` ↔ C `_Bool` deliberately (C `_Bool` is one byte, value 0/1; our `i8`
-  matches if we guarantee normalization).
+- **`signext`/`zeroext` on sub-32-bit scalar parameters and returns.** On `[C]` routines,
+  integer types narrower than 32 bits carry the appropriate extension attribute on both
+  the `declare` and the call-site `arg_attrs`:
+  - `INTEGER` (i16), `CHAR` (i8), `CCHAR`, `CSHORT` → `signext` (signed).
+  - `WORD` (i16), `BOOLEAN` (i8) → `zeroext` (unsigned/boolean).
+  - 32-bit-and-wider types (CINT, CLONG, CDOUBLE, …) → no attribute needed.
+  The `signext`/`zeroext` on the `declare` is what the LLVM backend uses to generate
+  correct register-fill code; the call-site attribute is also emitted (via `arg_attrs`)
+  for full LLVM IR well-formedness, matching what clang emits.
+- **`[C]` `EXTERN` procedures emit `void`**, not the internal `i32` convention, so the
+  declaration exactly matches a C `void` function type.
+- **`BOOLEAN` ↔ C `_Bool`**: `BOOLEAN` (i8) is tagged `zeroext` so it zero-extends into
+  the 32-bit register slot. C `_Bool` is guaranteed 0/1, so the contract holds for
+  well-formed C callees.
 
-Touchpoints: `decls.py`, `coerce_arg`. Cost: low. Risk: low.
+Touchpoints: `codegen/c_abi.py` (`CParamPlan.sign_attr`, `CCallPlan.ret_sign_attr`,
+`build_c_abi_plan` sign-attr threading, call-site attr emit in `codegen_c_abi_call`);
+`codegen/decls.py` (`_c_abi_sign_attr` static helper, sign-attr and void-return
+emission in `_codegen_c_abi_decl`). Cost: low. Risk: low.
+Coverage: `tests/test_c_ffi.py::TestPhase4ScalarExtensionIR` (IR-level, no toolchain),
+`TestPhase4BuildAndRun` (negative char return, void procedure, WORD zeroext).
 
 ### Phasing summary
 
@@ -485,13 +513,21 @@ Touchpoints: `decls.py`, `coerce_arg`. Cost: low. Risk: low.
 | 1 | `[C]` attribute + exact C type names | low–med | low | yes | done |
 | 2 | Struct by value/return (per-target classifier, SysV first) | med–high | med | yes | done |
 | 3 | Variadic calls (`printf`) via `[VARARGS]`; default-arg promotions | low–med | low | yes | done |
-| 4 | `signext`/`zeroext`/`void` fidelity | low | low | yes | planned |
+| 4 | `signext`/`zeroext`/`void` fidelity for sub-32-bit scalars + procedures | low | low | yes | done |
 
-Phases 0, 1, 2, and 3 are all shipped. A practical first cut was **0 + 1 + 4** (scalar/
-pointer/by-ref world, correct and ergonomic); Phase 2 added by-value aggregates (the
-larger investment); Phase 3 added variadics. Phase 4 (scalar extension fidelity) is
-the remaining planned item. Windows AMD64 and AArch64 targets are reachable via the
-per-target seam in `codegen/c_abi.py` without touching call sites.
+All four phases (0–4) are now shipped. The plan is complete.
+
+Remaining aspirational items:
+- **Windows AMD64** and **AArch64** target ABI classifiers (add implementations in
+  `codegen/c_abi.py`; call sites and marshalling are target-neutral and need no changes).
+- **A dedicated `c-ffi` feature flag** (finer-grained than the umbrella `extended`;
+  described in *Dialect gating*) if future users want C interop without all other
+  extended features.
+- **Function-pointer variadics** (`var_arg` function pointers held in Pascal `ADRMEM`
+  slots) if dynamic dispatch into variadic C callbacks ever becomes needed.
+
+These are enhancements, not correctness gaps. The shipped phases cover all the cases
+the original analysis identified as broken or impossible.
 
 ---
 

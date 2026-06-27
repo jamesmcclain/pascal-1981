@@ -131,6 +131,7 @@ class CParamPlan:
     kind: str                       # 'ref' | 'scalar' | 'coerced' | 'memory'
     llvm_type: Optional[ir.Type] = None    # ref/scalar: the single LLVM arg type
     agg: Optional[AggLowering] = None      # coerced/memory
+    sign_attr: Optional[str] = None        # 'signext' | 'zeroext' | None (Phase 4)
 
 
 @dataclass
@@ -140,6 +141,7 @@ class CCallPlan:
     ret_llvm: Optional[ir.Type] = None     # scalar: the LLVM return type
     ret_agg: Optional[AggLowering] = None  # coerced/memory
     is_variadic: bool = False       # True when the declaration has [VARARGS]
+    ret_sign_attr: Optional[str] = None    # 'signext' | 'zeroext' | None (Phase 4)
 
 
 # ---------------------------------------------------------------------------
@@ -236,14 +238,21 @@ class CAbiMixin:
     def _c_abi(self):
         return c_abi_for_triple(getattr(self, 'host_triple', 'x86_64-pc-linux-gnu'))
 
-    def build_c_abi_plan(self, decl, flat_param_types, flat_modes, return_llvm, is_variadic=False):
+    def build_c_abi_plan(self, decl, flat_param_types, flat_modes, return_llvm,
+                         is_variadic=False, flat_sign_attrs=None, ret_sign_attr=None):
         """Compute the coerced LLVM signature and the per-call marshalling plan.
 
         ``flat_param_types`` / ``flat_modes`` are already flattened per parameter
         name (the same lists the normal path builds).  ``return_llvm`` is None for
         procedures.  Returns ``(ir_arg_types, ir_return_type, sret, arg_attrs, plan)``
         where ``arg_attrs`` maps LLVM-arg index -> ArgumentAttributes for the
-        declaration's byval/sret.
+        declaration's byval/sret/signext/zeroext.
+
+        ``flat_sign_attrs`` (Phase 4): optional list parallel to ``flat_param_types``;
+        each entry is ``'signext'``, ``'zeroext'``, or ``None``.  When non-None, the
+        attribute is added to both the declaration's arg attrs and the call-site plan.
+        ``ret_sign_attr`` (Phase 4): ``'signext'``, ``'zeroext'``, or ``None`` for the
+        scalar return type; callers apply it to the function's return-value attrs.
         """
         abi = self._c_abi()
         ir_args: List[ir.Type] = []
@@ -266,11 +275,16 @@ class CAbiMixin:
             else:
                 ret_kind, ir_ret = 'scalar', return_llvm
 
-        for llvm_t, mode in zip(flat_param_types, flat_modes):
+        for i, (llvm_t, mode) in enumerate(zip(flat_param_types, flat_modes)):
+            sattr = flat_sign_attrs[i] if flat_sign_attrs and i < len(flat_sign_attrs) else None
             by_ref = mode in {'VAR', 'VARS', 'CONST', 'CONSTS'}
             if by_ref or not abi.is_aggregate(llvm_t):
                 kind = 'ref' if by_ref else 'scalar'
-                params.append(CParamPlan(kind, llvm_type=llvm_t))
+                params.append(CParamPlan(kind, llvm_type=llvm_t, sign_attr=sattr))
+                # Attach signext/zeroext to the declaration arg attrs for sub-32-bit
+                # scalars (not references -- references are pointers, no extension).
+                if sattr and not by_ref and isinstance(llvm_t, ir.IntType) and llvm_t.width < 32:
+                    arg_attrs[len(ir_args)] = ((sattr,), None)
                 ir_args.append(llvm_t)
                 continue
             agg = abi.classify_aggregate(llvm_t)
@@ -282,7 +296,11 @@ class CAbiMixin:
                 params.append(CParamPlan('coerced', agg=agg))
                 ir_args.extend(agg.pieces)
 
-        plan = CCallPlan(params, ret_kind, ret_llvm=(ir_ret if ret_kind == 'scalar' else None), ret_agg=ret_agg, is_variadic=is_variadic)
+        plan = CCallPlan(params, ret_kind,
+                         ret_llvm=(ir_ret if ret_kind == 'scalar' else None),
+                         ret_agg=ret_agg,
+                         is_variadic=is_variadic,
+                         ret_sign_attr=ret_sign_attr if ret_kind == 'scalar' else None)
         return ir_args, ir_ret, (ret_kind == 'memory'), arg_attrs, plan
 
     # -- call-site marshalling ------------------------------------------------
@@ -357,7 +375,13 @@ class CAbiMixin:
             expr = arg_exprs[i]
             if pp.kind in ('ref', 'scalar'):
                 v = self.codegen_actual_arg(expr, modes[i])
-                call_args.append(self.coerce_arg(v, pp.llvm_type))
+                v = self.coerce_arg(v, pp.llvm_type)
+                # Phase 4: attach signext/zeroext to sub-32-bit scalar call-site args.
+                if pp.sign_attr and isinstance(pp.llvm_type, ir.IntType) and pp.llvm_type.width < 32:
+                    aa = ir.ArgumentAttributes()
+                    aa.add(pp.sign_attr)
+                    arg_attrs[len(call_args)] = aa
+                call_args.append(v)
             elif pp.kind == 'memory':
                 src = self._c_abi_arg_ptr(expr, pp.agg.agg_type)
                 tmp = self.builder.alloca(pp.agg.agg_type)

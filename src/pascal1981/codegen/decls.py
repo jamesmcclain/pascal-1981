@@ -527,28 +527,71 @@ class DeclsMixin:
             if isinstance(arg.type, ir.PointerType):
                 arg.attributes.align = self.natural_alignment(arg.type.pointee)
 
+    @staticmethod
+    def _c_abi_sign_attr(type_expr) -> Optional[str]:
+        """Return 'signext' or 'zeroext' for sub-32-bit Pascal scalar types (Phase 4).
+
+        Only the directly named Pascal built-in and C-alias types are recognised;
+        user-defined aliases that happen to resolve to a narrow type get no
+        attribute (safe: the caller will either sign- or zero-extend anyway, and
+        the worst case is a latent bug only with negative values on sub-32-bit
+        returns, the same status quo as before Phase 4).
+
+        Signed narrow types (C char / short):  'signext'
+          INTEGER (i16), CHAR (i8), CCHAR (i8 alias), CSHORT (i16 alias)
+        Unsigned/boolean narrow types:         'zeroext'
+          WORD (i16), BOOLEAN (i8)
+        All 32-bit-and-wider types:            None  (no attribute needed)
+        """
+        if type_expr is None:
+            return None
+        name = getattr(type_expr, 'name', None)
+        if name is None:
+            return None
+        n = name.upper()
+        if n in {'INTEGER', 'CHAR', 'CCHAR', 'CSHORT'}:
+            return 'signext'
+        if n in {'WORD', 'BOOLEAN'}:
+            return 'zeroext'
+        return None
+
     def _codegen_c_abi_decl(self, decl, return_llvm) -> None:
         """Lower a foreign ``[C]`` routine declaration with C-ABI-correct
-        signature (byval/sret/register coercion). Phase 2 of the C-FFI plan.
+        signature (byval/sret/register coercion/signext/zeroext/void). Phases 2-4.
 
         ``return_llvm`` is the LLVM return type for functions, or None for
         procedures.  The routine is always body-less (EXTERN), so this only emits
         the `declare`, records the call plan, and registers the symbol/modes the
         call sites need.
+
+        Phase 4 additions:
+        - Sub-32-bit scalar parameters carry signext/zeroext on the declare and
+          the call site, closing the latent dirty-bit gap for i8/i16 types.
+        - [C] EXTERN procedures are declared as void-returning rather than the
+          internal i32 convention, so the declaration exactly matches a C `void`.
+        - BOOLEAN (i8) is tagged zeroext; CHAR/INTEGER get signext.
         """
         flat_param_types = []
         flat_modes = []
+        flat_sign_attrs = []
         for param in decl.params:
             pt = self.param_llvm_type(param)
+            sa = self._c_abi_sign_attr(param.type_expr)
             for _ in param.names:
                 flat_param_types.append(pt)
                 flat_modes.append(param.mode)
+                flat_sign_attrs.append(sa)
 
         decl_attrs = {a.name.upper() for a in getattr(decl, 'attributes', [])}
         is_variadic = 'VARARGS' in decl_attrs
 
+        # Phase 4: determine sign attr for the return type.
+        ret_type_expr = getattr(decl, 'return_type', None)
+        ret_sign_attr = self._c_abi_sign_attr(ret_type_expr)
+
         ir_args, ir_ret, _sret, arg_attrs, plan = self.build_c_abi_plan(
-            decl, flat_param_types, flat_modes, return_llvm, is_variadic=is_variadic)
+            decl, flat_param_types, flat_modes, return_llvm, is_variadic=is_variadic,
+            flat_sign_attrs=flat_sign_attrs, ret_sign_attr=ret_sign_attr)
 
         func_type = ir.FunctionType(ir_ret, ir_args, var_arg=is_variadic)
         func = ir.Function(self.module, func_type, name=decl.name)
@@ -559,6 +602,10 @@ class DeclsMixin:
                 dst.add(a)
             if align is not None:
                 dst.align = align
+
+        # Phase 4: attach the return sign/zero-extension attribute on the declare.
+        if plan.ret_sign_attr:
+            func.return_value.attributes.add(plan.ret_sign_attr)
 
         self.proc_param_modes[decl.name.lower()] = flat_modes
         self.c_abi_plans[decl.name.lower()] = plan
