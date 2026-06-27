@@ -19,15 +19,44 @@ The important point: you can inspect the generated PTX on a development VM that
 has no NVIDIA GPU and no CUDA runtime installed, as long as the Python/LLVM stack
 has an NVPTX backend.
 
+> **Now also a full example.** `fill_host.pas` is a Pascal host PROGRAM that does
+> the device orchestration — `DEVALLOC` / `DEVCOPYTO` / `LAUNCH` / `DEVCOPYFROM` —
+> and the `Makefile` builds and runs it. The orchestration is compiler-generated;
+> only the leaf runtime shim (CPU stand-in or real CUDA driver) is C. See
+> "Building and running the full example" below. The PTX-inspection path in the
+> rest of this document is still valid and useful on its own.
+
+## Building and running the full example
+
+```bash
+cd examples/device_ptx/fill_indices
+make DEVICE=cuda run     # build the host + device, run on the GPU
+```
+
+`DEVICE` selects the device-orchestration runtime shim at build time:
+
+- `DEVICE=cuda` — the real GPU path (CUDA Driver API shim + embedded PTX). Needs
+  the CUDA toolkit headers, `-lcuda`, and an NVIDIA device.
+- `DEVICE=cpu` (the default) — the CPU-device stand-in, **not yet wired for this
+  example**; see [`../CPU_DEVICE_TODO.md`](../CPU_DEVICE_TODO.md). The host
+  orchestration already works on the CPU shim; what it needs is a grid-stride
+  kernel, which is a deferred kernel change.
+
+A correct GPU run prints the first eight buffer elements (`0 1 2 3 4 5 6 7`) and
+`OK: all 256 indices correct`. The build rules live in
+[`../device-example.mk`](../device-example.mk).
+
 ---
 
 ## Files
 
 ```text
-fill.inc   # DEVICE INTERFACE; declares the exported kernel entry
-fill.pas   # DEVICE IMPLEMENTATION OF FILL; contains the kernel body
-README.md  # this document
-RUNNING_PTX.md  # detailed external-launch test plan
+fill.inc        # DEVICE INTERFACE; declares the exported kernel entry
+fill.pas        # DEVICE IMPLEMENTATION OF FILL; contains the kernel body
+fill_host.pas   # host PROGRAM: device orchestration in Pascal (alloc/copy/launch)
+Makefile        # builds + runs the full example (DEVICE=cpu|cuda)
+README.md       # this document
+RUNNING_PTX.md  # older external-launch test plan (pre-host-orchestration)
 ```
 
 The interface exports one procedure:

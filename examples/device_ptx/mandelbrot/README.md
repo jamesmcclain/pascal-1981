@@ -11,13 +11,43 @@ and parameter-for-parameter.
 ## Files
 
 ```text
-mandelbrot.inc   # DEVICE INTERFACE; exports mandelbrot_f32 and mandelbrot_f64
-mandelbrot.pas   # DEVICE IMPLEMENTATION OF MANDELBROT; the two kernel bodies
-README.md        # this document
+mandelbrot.inc        # DEVICE INTERFACE; exports mandelbrot_f32 and mandelbrot_f64
+mandelbrot.pas        # DEVICE IMPLEMENTATION OF MANDELBROT; the two kernel bodies
+mandelbrot_host.pas   # host PROGRAM: orchestration + fixed palette + ASCII render
+Makefile              # builds + runs the full example (DEVICE=cpu|cuda)
+README.md             # this document
 ```
 
 (By repository convention the interface file uses the `.inc` extension; the
 compiler does not require it.)
+
+## Building and running the full example
+
+`mandelbrot_host.pas` is a Pascal host PROGRAM that does the device orchestration
+(`DEVALLOC` / `LAUNCH` / `DEVCOPYFROM`), launches `mandelbrot_f64` over a fixed
+view, turns the returned escape counts into an in-memory RGB image with a fixed
+"fire" palette, and prints an ASCII reduction so a run is observably correct
+(nothing is written to disk). It is a deliberately minimal cousin of the host in
+the companion *mandelbrot-gpu* repository.
+
+```bash
+cd examples/device_ptx/mandelbrot
+make DEVICE=cuda run     # build the host + device, run on the GPU
+```
+
+`DEVICE` selects the device-orchestration runtime shim at build time:
+
+- `DEVICE=cuda` — the real GPU path (CUDA Driver API shim + embedded PTX). Needs
+  the CUDA toolkit headers, `-lcuda`, and an NVIDIA device. `SM` defaults to
+  `sm_86` to mirror `mandelbrot.cu`.
+- `DEVICE=cpu` (the default) — the CPU-device stand-in, **not yet wired for this
+  example**; see [`../CPU_DEVICE_TODO.md`](../CPU_DEVICE_TODO.md) (it needs a
+  grid-stride kernel, a deferred kernel change).
+
+The host orchestration is compiler-generated from the Pascal source; only the
+leaf runtime shim is C. The kernels are unchanged, so the emitted PTX remains the
+drop-in described next. Build rules live in
+[`../device-example.mk`](../device-example.mk).
 
 ## The ABI being matched
 
