@@ -527,8 +527,45 @@ class DeclsMixin:
             if isinstance(arg.type, ir.PointerType):
                 arg.attributes.align = self.natural_alignment(arg.type.pointee)
 
+    def _codegen_c_abi_decl(self, decl, return_llvm) -> None:
+        """Lower a foreign ``[C]`` routine declaration with C-ABI-correct
+        signature (byval/sret/register coercion). Phase 2 of the C-FFI plan.
+
+        ``return_llvm`` is the LLVM return type for functions, or None for
+        procedures.  The routine is always body-less (EXTERN), so this only emits
+        the `declare`, records the call plan, and registers the symbol/modes the
+        call sites need.
+        """
+        flat_param_types = []
+        flat_modes = []
+        for param in decl.params:
+            pt = self.param_llvm_type(param)
+            for _ in param.names:
+                flat_param_types.append(pt)
+                flat_modes.append(param.mode)
+
+        ir_args, ir_ret, _sret, arg_attrs, plan = self.build_c_abi_plan(
+            decl, flat_param_types, flat_modes, return_llvm)
+
+        func_type = ir.FunctionType(ir_ret, ir_args)
+        func = ir.Function(self.module, func_type, name=decl.name)
+        func.linkage = 'external'
+        for idx, (names, align) in arg_attrs.items():
+            dst = func.args[idx].attributes
+            for a in names:
+                dst.add(a)
+            if align is not None:
+                dst.align = align
+
+        self.proc_param_modes[decl.name.lower()] = flat_modes
+        self.c_abi_plans[decl.name.lower()] = plan
+        self.scope.define(decl.name, func, getattr(decl, 'return_type', None))
+
     def codegen_proc_decl(self, decl: ProcDecl) -> None:
         """Codegen for PROCEDURE declaration."""
+        if self.is_c_abi_foreign(decl):
+            self._codegen_c_abi_decl(decl, None)
+            return
         effective_decl = decl
         iface_decl = self.current_interface_decls.get(decl.name.lower()) if decl.name else None
         if iface_decl and not decl.params:
@@ -615,6 +652,9 @@ class DeclsMixin:
 
     def codegen_func_decl(self, decl: FuncDecl) -> None:
         """Codegen for FUNCTION declaration."""
+        if self.is_c_abi_foreign(decl):
+            self._codegen_c_abi_decl(decl, self.llvm_type(decl.return_type))
+            return
         effective_decl = decl
         iface_decl = self.current_interface_decls.get(decl.name.lower()) if decl.name else None
         if iface_decl and not decl.params:

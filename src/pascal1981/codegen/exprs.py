@@ -573,6 +573,10 @@ class ExprsMixin:
 
         if symbol:
             fn = symbol.llvm_value
+            c_plan = self.c_abi_plans.get(expr.name.lower())
+            if c_plan is not None:
+                modes = self.proc_param_modes.get(expr.name.lower(), [])
+                return self.codegen_c_abi_call(fn, c_plan, expr.args, modes)
             param_types = fn.function_type.args
             param_modes = self.proc_param_modes.get(expr.name.lower(), [])
             args = []

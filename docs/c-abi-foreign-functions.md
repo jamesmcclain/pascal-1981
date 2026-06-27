@@ -1,27 +1,37 @@
 # Calling C-ABI Foreign Functions from Host Pascal
 
-Status: report + implementation plan • Phases 0–1 implemented in-tree • Scope: host `MODULE`/`PROGRAM` code • Tested target: GNU/Linux AMD64 (System V) • Intended targets: also Windows AMD64 and ARM Linux (AArch64)
+Status: report + implementation plan • Phases 0–2 implemented in-tree • Scope: host `MODULE`/`PROGRAM` code • Tested target: GNU/Linux AMD64 (System V) • Intended targets: also Windows AMD64 and ARM Linux (AArch64)
 
 ## Implementation status
 
-Phases 0 and 1 of the plan below have shipped:
+Phases 0, 1, and 2 of the plan below have shipped:
 
-- **Phase 0 (foreign-ABI guard).** The type checker now rejects by-value aggregate
-  parameters and aggregate return types on `EXTERN`/`EXTERNAL` routines, converting the
-  former silent miscompile into a clear compile-time error that points at `CONST`/`VAR`.
-  A non-fatal warning fires when a bare 16-bit `INTEGER` is used in a foreign signature.
-  (`type_checker.py`: `_check_foreign_abi` / `_is_foreign_routine`.)
+- **Phase 0 (foreign-ABI guard).** The type checker rejects by-value aggregate parameters
+  and aggregate return types on plain `EXTERN`/`EXTERNAL` routines (no `[C]`), converting
+  the former silent miscompile into a clear compile-time error that points at
+  `CONST`/`VAR` or the `[C]` marker. A non-fatal warning fires on a bare 16-bit `INTEGER`
+  in a foreign signature. (`type_checker.py`: `_check_foreign_abi` / `_is_foreign_routine`.)
 - **Phase 1 (C-ABI surface).** A `[C]` attribute (with `[CDECL]` as an accepted synonym)
-  parses in attribute position, and a set of predeclared fixed-width C type aliases —
-  `CCHAR`, `CSHORT`, `CINT`, `CLONG`, `CSIZE_T`, `CDOUBLE`, `CPTR` — let foreign
-  declarations spell exact C widths independent of the vintage 16-bit `INTEGER`, with no
-  feature flag required. (`parser.py`, `builtins_registry.py::C_ABI_TYPE_ALIASES`,
-  `codegen/base.py` alias seeding.)
+  parses in attribute position, and predeclared fixed-width C type aliases — `CCHAR`,
+  `CSHORT`, `CINT`, `CLONG`, `CSIZE_T`, `CDOUBLE`, `CPTR` — let foreign declarations spell
+  exact C widths independent of the vintage 16-bit `INTEGER`, with no feature flag
+  required. (`parser.py`, `builtins_registry.py::C_ABI_TYPE_ALIASES`, `codegen/base.py`.)
+- **Phase 2 (aggregate classifier).** A System V AMD64 classifier reproduces clang's
+  eightbyte INTEGER/SSE/MEMORY lowering: small aggregates are coerced into register-sized
+  pieces (`i64`, `<2 x float>`, `double`, expanded multi-eightbyte args, …) and large or
+  MEMORY-class aggregates use `byval`/`sret`. It is keyed on the host triple behind a
+  per-target seam (`c_abi_for_triple`); an unimplemented triple raises rather than
+  mislowering. A `[C]` routine that passes or returns a struct **by value** now links and
+  runs correctly against an unmodified clang callee — the two cases the original analysis
+  showed broken. (`codegen/c_abi.py`, wired into `decls.py`/`stmts.py`/`exprs.py`.)
 
-A scalar/pointer `[C]` extern using the aliases type-checks, lowers, links against a
-`clang`-compiled object, and runs correctly today; by-reference (`CONST`/`VAR`) aggregates
-work as before. By-value aggregates and variadics remain unsupported and are the subject of
-Phases 2–3. Coverage is in `tests/test_c_ffi.py`.
+By-value aggregates were validated differentially against clang across the eightbyte size
+classes (1- and 2-eightbyte integer structs, `double`/`<2 x float>` SSE structs, mixed
+SSE+INTEGER, and >16-byte MEMORY structs), for both arguments and returns. Variadics
+remain unsupported (Phase 3). The gate is the `[C]` attribute; gating behind the
+`extended` dialect was considered and left optional, since the attribute is a more
+local opt-in and the classifier work is identical either way. Coverage is in
+`tests/test_c_ffi.py`.
 
 ## TL;DR — what's the verdict?
 
@@ -174,6 +184,10 @@ the reference for "correct."
 
 ### Capability matrix
 
+This matrix records the **pre-Phase-2 baseline** that motivated the work; rows marked
+"(now fixed in Phase 2)" were resolved by the classifier — see *Implementation status* at
+the top.
+
 | C signature pattern                          | Works today? | Observed result                              |
 |----------------------------------------------|:------------:|----------------------------------------------|
 | `int32_t cube(int32_t)`                      | ✅           | `cube(3) = 27` ✓                             |
@@ -181,10 +195,10 @@ the reference for "correct."
 | `int16_t f(int16_t*)` ↔ `VAR x: INTEGER`     | ✅           | correct ✓                                    |
 | `int addi(int,int)` mapped to `INTEGER`      | ⚠️ latent    | declared `i16`, mismatches C `i32`; "works" by luck for constants |
 | `int f(int)` with negative/dirty bits        | ⚠️ latent    | missing `signext`; intermittently correct    |
-| `int32_t sumpt(struct{int32_t x,y})` by value| ❌           | `sumpt({10,32}) = 10` (expected 42)          |
-| `struct{int32_t a,b} makepair(int32_t)`      | ❌           | `a=5, b=<garbage>` (expected 5,10)           |
+| `int32_t sumpt(struct{int32_t x,y})` by value| ✅ `[C]`     | now fixed in Phase 2: `sumpt({10,32}) = 42` ✓ |
+| `struct{int32_t a,b} makepair(int32_t)`      | ✅ `[C]`     | now fixed in Phase 2: `a=5, b=10` ✓          |
 | `struct point*` by reference (`VAR p`)       | ✅           | `42` ✓ — the supported aggregate path        |
-| `printf`-style variadic                      | 🚫 impossible| no `...` in the parameter grammar            |
+| `printf`-style variadic                      | 🚫 impossible| no `...` in the parameter grammar (Phase 3)  |
 | `void cnoise(void)` ↔ extern `PROCEDURE`     | ⚠️ benign    | runs; IR declares `i32` return, C is `void`  |
 
 ### The decisive case: struct by value
@@ -319,10 +333,11 @@ Touchpoints: `parser.py` (attribute keyword), `ast_nodes.py` (flag),
 `builtins_registry.py` (C aliases). No new feature flag — the `[C]` attribute is the gate.
 Cost: low–medium. Risk: low.
 
-### Phase 2 — Aggregate classifier (the core), behind a per-target seam
+### Phase 2 — Aggregate classifier (the core), behind a per-target seam — IMPLEMENTED
 
 Goal: pass and return structs by value correctly; this is what unlocks unmodified
-third-party libraries.
+third-party libraries. Implemented for System V AMD64 in `codegen/c_abi.py`
+(`SysVAmd64Abi` + `CAbiMixin`), selected via `c_abi_for_triple`.
 
 Structure the classifier as a small *interface* keyed on the target triple, with one
 implementation per supported ABI. The interface is the same everywhere — given an LLVM
@@ -412,7 +427,7 @@ Touchpoints: `decls.py`, `coerce_arg`. Cost: low. Risk: low.
 |-------|---------|------|------|--------------|--------|
 | 0 | No more silent wrong answers; docs; no new flag | low | low | yes | done |
 | 1 | `[C]` attribute + exact C type names | low–med | low | yes | done |
-| 2 | Struct by value/return (per-target classifier, SysV first) | med–high | med | yes | planned |
+| 2 | Struct by value/return (per-target classifier, SysV first) | med–high | med | yes | done |
 | 3 | Variadic calls (`printf`) | low–med | low | yes | planned |
 | 4 | `signext`/`zeroext`/`void` fidelity | low | low | yes | planned |
 

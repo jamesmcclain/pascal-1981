@@ -176,6 +176,10 @@ class CodegenBase:
             self.type_aliases[_alias] = NamedType(_base, None)
         self.current_interface_decls: Dict[str, Declaration] = {}
         self.proc_param_modes: Dict[str, List[Optional[str]]] = {}
+        # Per-routine C-ABI call plan for foreign [C] routines (Phase 2). Keyed
+        # lower-case name -> CCallPlan; present only for [C] EXTERN routines, and
+        # consulted at the call sites to marshal aggregates per the host C ABI.
+        self.c_abi_plans: Dict[str, object] = {}
         self.loop_stack: List[LoopContext] = []
         # Per-routine map of (normalized) label id -> the LLVM block that the
         # corresponding labeled statement begins.  Blocks are pre-created for

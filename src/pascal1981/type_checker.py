@@ -952,27 +952,30 @@ class PascalTypeChecker(TypeChecker):
         """
         if not self._is_foreign_routine(decl):
             return
+        # The [C]/[CDECL] marker opts into C-ABI-correct lowering of by-value
+        # aggregates (Phase 2 classifier). Plain EXTERN routines still reject
+        # them, since without [C] the aggregate is passed as a raw LLVM value.
+        has_c = 'C' in {a.name.upper() for a in getattr(decl, 'attributes', [])}
         for param in getattr(decl, 'params', []):
             by_reference = getattr(param, 'mode', None) in {'VAR', 'VARS', 'CONST', 'CONSTS'}
             param_type = self.resolve_type(param.type_expr) if param.type_expr else None
             names = ', '.join(param.names)
-            if not by_reference and isinstance(param_type, self._C_ABI_AGGREGATE_TYPES):
+            if not by_reference and not has_c and isinstance(param_type, self._C_ABI_AGGREGATE_TYPES):
                 self.error(
                     f"foreign routine '{decl.name}': by-value aggregate parameter '{names}' "
                     f"is not C-ABI compatible; pass it by CONST or VAR and declare the C side "
-                    f"to take a pointer. By-value aggregates will be supported via the [C] "
-                    f"attribute once the aggregate classifier ships.", decl)
+                    f"to take a pointer, or mark the routine [C] to pass it by value under the "
+                    f"C ABI.", decl)
             elif not by_reference and isinstance(param.type_expr, NamedType) and param.type_expr.name.upper() == 'INTEGER':
                 self.warning(
                     f"foreign routine '{decl.name}': parameter '{names}' is a 16-bit INTEGER, "
                     f"but C 'int' is 32-bit; use CINT/INTEGER32 (or CSHORT for a C 'short') to "
                     f"match the intended C width.", decl)
-        if isinstance(return_type, self._C_ABI_AGGREGATE_TYPES):
+        if not has_c and isinstance(return_type, self._C_ABI_AGGREGATE_TYPES):
             self.error(
                 f"foreign function '{decl.name}': by-value aggregate return is not C-ABI "
-                f"compatible; return it through a CONST/VAR pointer parameter instead. "
-                f"By-value aggregate returns will be supported via the [C] attribute once "
-                f"the aggregate classifier ships.", decl)
+                f"compatible; return it through a CONST/VAR pointer parameter instead, or mark "
+                f"the routine [C] to return it by value under the C ABI.", decl)
 
     def check_func_decl(self, decl: FuncDecl) -> None:
         """Type check a function declaration."""

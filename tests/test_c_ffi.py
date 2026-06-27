@@ -80,21 +80,37 @@ class TestForeignAbiDiagnostics(unittest.TestCase):
 
     _POINT = "TYPE point = RECORD x: CINT; y: CINT END;\n"
 
-    def test_byvalue_aggregate_param_rejected(self):
+    def test_byvalue_aggregate_param_rejected_without_c(self):
+        # Plain EXTERN (no [C]) still rejects by-value aggregates.
         result = typecheck_source(
             "PROGRAM P(output);\n" + self._POINT +
-            "FUNCTION sumpt(p: point): CINT [C]; EXTERN;\n"
+            "FUNCTION sumpt(p: point): CINT; EXTERN;\n"
             "BEGIN END.")
         self.assertFalse(result.success)
         self.assertTrue(any('by-value aggregate parameter' in m for m in _errors(result)))
 
-    def test_byvalue_aggregate_return_rejected(self):
+    def test_byvalue_aggregate_return_rejected_without_c(self):
+        result = typecheck_source(
+            "PROGRAM P(output);\n" + self._POINT +
+            "FUNCTION mk(v: CINT): point; EXTERN;\n"
+            "BEGIN END.")
+        self.assertFalse(result.success)
+        self.assertTrue(any('by-value aggregate return' in m for m in _errors(result)))
+
+    def test_byvalue_aggregate_param_accepted_with_c(self):
+        # Phase 2: the [C] marker opts into C-ABI-correct by-value lowering.
+        result = typecheck_source(
+            "PROGRAM P(output);\n" + self._POINT +
+            "FUNCTION sumpt(p: point): CINT [C]; EXTERN;\n"
+            "BEGIN END.")
+        self.assertTrue(result.success, msg=_errors(result))
+
+    def test_byvalue_aggregate_return_accepted_with_c(self):
         result = typecheck_source(
             "PROGRAM P(output);\n" + self._POINT +
             "FUNCTION mk(v: CINT): point [C]; EXTERN;\n"
             "BEGIN END.")
-        self.assertFalse(result.success)
-        self.assertTrue(any('by-value aggregate return' in m for m in _errors(result)))
+        self.assertTrue(result.success, msg=_errors(result))
 
     def test_byvalue_string_param_rejected(self):
         result = typecheck_source(
@@ -189,6 +205,120 @@ class TestCFfiBuildAndRun(unittest.TestCase):
         )
         self.assertEqual(rc, 0, msg=err)
         self.assertEqual([ln.strip() for ln in out.splitlines() if ln.strip()], ['42'])
+
+
+class TestSysVClassifier(unittest.TestCase):
+    """Phase 2: the System V AMD64 eightbyte classifier (pure, no toolchain).
+
+    Coerced register shapes are asserted against the documented clang lowering.
+    """
+
+    def setUp(self):
+        import llvmlite.ir as ir
+        from pascal1981.codegen.c_abi import SysVAmd64Abi
+        self.ir = ir
+        self.abi = SysVAmd64Abi()
+
+    def _st(self, *elems):
+        return self.ir.LiteralStructType(list(elems))
+
+    def test_two_i32_coerces_to_one_i64(self):
+        ir = self.ir
+        low = self.abi.classify_aggregate(self._st(ir.IntType(32), ir.IntType(32)))
+        self.assertEqual(low.kind, 'coerced')
+        self.assertEqual([str(p) for p in low.pieces], ['i64'])
+
+    def test_three_i32_coerces_to_i64_i32(self):
+        ir = self.ir
+        low = self.abi.classify_aggregate(self._st(ir.IntType(32), ir.IntType(32), ir.IntType(32)))
+        self.assertEqual([str(p) for p in low.pieces], ['i64', 'i32'])
+
+    def test_two_doubles_stay_two_sse(self):
+        ir = self.ir
+        low = self.abi.classify_aggregate(self._st(ir.DoubleType(), ir.DoubleType()))
+        self.assertEqual([str(p) for p in low.pieces], ['double', 'double'])
+
+    def test_double_then_int_is_sse_int(self):
+        ir = self.ir
+        low = self.abi.classify_aggregate(self._st(ir.DoubleType(), ir.IntType(32)))
+        self.assertEqual([str(p) for p in low.pieces], ['double', 'i32'])
+
+    def test_two_floats_pack_into_vector(self):
+        ir = self.ir
+        low = self.abi.classify_aggregate(self._st(ir.FloatType(), ir.FloatType()))
+        self.assertEqual([str(p) for p in low.pieces], ['<2 x float>'])
+
+    def test_oversize_struct_is_memory(self):
+        ir = self.ir
+        low = self.abi.classify_aggregate(self._st(ir.IntType(64), ir.IntType(64), ir.IntType(64)))
+        self.assertEqual(low.kind, 'memory')
+
+    def test_non_sysv_triple_raises(self):
+        from pascal1981.codegen.base import CodegenError
+        from pascal1981.codegen.c_abi import c_abi_for_triple
+        c_abi_for_triple('x86_64-pc-linux-gnu')  # ok
+        with self.assertRaises(CodegenError):
+            c_abi_for_triple('aarch64-unknown-linux-gnu')
+
+
+@requires_exe
+class TestCAbiAggregateBuildAndRun(unittest.TestCase):
+    """Phase 2 end-to-end: by-value aggregates cross the C ABI correctly.
+
+    Covers the cases the original analysis showed broken (struct-by-value arg and
+    struct return) plus the MEMORY (>16B) byval/sret path.
+    """
+
+    _C = ("#include <stdint.h>\n"
+          "struct point { int32_t x, y; };\n"
+          "struct big { int64_t a, b, c; };\n"
+          "int32_t sumpt(struct point p){return p.x + p.y;}\n"
+          "struct point makep(int32_t v){struct point s={v, v*2}; return s;}\n"
+          "int64_t sumbig(struct big p){return p.a + p.b + p.c;}\n"
+          "struct big makebig(int64_t v){struct big s={v, v*2, v*3}; return s;}\n")
+
+    def _run(self, pas, exe):
+        rc, out, err = build_and_run_pascal_project(
+            files={'m.pas': pas, 'c.c': self._C},
+            compile_pairs=[('m.pas', 'm.ll')],
+            link_ir_relpaths=['m.ll', 'c.c'],
+            exe_name=exe,
+            features={'wide-integers': True},
+        )
+        self.assertEqual(rc, 0, msg=err)
+        return [ln.strip() for ln in out.splitlines() if ln.strip()]
+
+    def test_struct_by_value_argument(self):
+        lines = self._run(
+            "PROGRAM P(output);\n"
+            "TYPE point = RECORD x: CINT; y: CINT END;\n"
+            "FUNCTION sumpt(p: point): CINT [C]; EXTERN;\n"
+            "VAR pt: point;\n"
+            "BEGIN pt.x := 10; pt.y := 32; WRITELN(sumpt(pt)) END.",
+            'c-abi-byval-arg')
+        self.assertEqual(lines, ['42'])
+
+    def test_struct_return_by_value(self):
+        lines = self._run(
+            "PROGRAM P(output);\n"
+            "TYPE point = RECORD x: CINT; y: CINT END;\n"
+            "FUNCTION makep(v: CINT): point [C]; EXTERN;\n"
+            "VAR q: point;\n"
+            "BEGIN q := makep(5); WRITELN(q.x); WRITELN(q.y) END.",
+            'c-abi-ret')
+        self.assertEqual(lines, ['5', '10'])
+
+    def test_memory_class_struct_by_value_and_return(self):
+        lines = self._run(
+            "PROGRAM P(output);\n"
+            "TYPE big = RECORD a: CLONG; b: CLONG; c: CLONG END;\n"
+            "FUNCTION sumbig(p: big): CLONG [C]; EXTERN;\n"
+            "FUNCTION makebig(v: CLONG): big [C]; EXTERN;\n"
+            "VAR g, h: big;\n"
+            "BEGIN g.a := 10; g.b := 20; g.c := 30; WRITELN(sumbig(g));\n"
+            "  h := makebig(7); WRITELN(h.a); WRITELN(h.b); WRITELN(h.c) END.",
+            'c-abi-memory')
+        self.assertEqual(lines, ['60', '7', '14', '21'])
 
 
 if __name__ == '__main__':
