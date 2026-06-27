@@ -1,6 +1,41 @@
 # Plan: collapse the GPU device-build pipeline to three commands
 
-Status: PROPOSED. No code changed yet — this is the design.
+Status: IMPLEMENTED (commit 47ba728), with one deliberately-deferred optional
+item. See §7 for the as-built status against this design.
+
+## 7. As-built status
+
+Landed as planned:
+
+- **§3.1 — `dev.ll` killed.** `--device-backend cuda` suppresses the
+  `__pas_klaunch_*` thunk and registry and passes a null registry pointer; host
+  `.ll` carries no kernel-symbol reference, so no second device compile is
+  linked. Verified by grep + `ld -r` resolution.
+- **§3.2 — PTX decoupled.** Host references an external `__pas_device_ptx`
+  symbol; the PTX text is packaged as a NUL-terminated `*_blob.o` via an
+  `.incbin` assembly stub. `--embed-device-ptx` retained as a legacy opt-in.
+- **§3.5 — both runtime archives prebuilt** (`libpascalrt_{cpu,cuda}.a`, two
+  full archives in one `make`; the "simpler" variant). `runtime-cuda`
+  clean-rebuild phony deleted.
+- **§4 / §5 — build files + migration.** `device-example.mk` and
+  `build-cuda-host.sh` reduced to the three-command flow; `compile_to_ptx`,
+  `--embed-device-ptx`, and the CPU path all still work; PTX ABI unchanged.
+- **§6 — validation (2 of 3 rungs).** New `--target ptx` output is byte-identical
+  to the pre-change tree (diffed against 571c9bb); a regression test pins
+  "no thunk / no kernel ref / external PTX symbol" on the cuda backend.
+
+Deviations / not done:
+
+- **§3.3 (optional `ptxas`/cubin route) — NOT implemented.** Marked optional; no
+  `ptxas` driving or cubin embedding was added. Future add-on.
+- **§3.4 — built in the reverse direction.** Rather than making `compile_to_ptx`
+  forward to `--target ptx`, `--target ptx` calls into
+  `compile_to_ptx.compile_file_to_ptx` and the old CLI is kept intact as the
+  alias. Functionally identical (single driver, shared flags, byte-identical
+  PTX); only the dependency direction differs from the text above.
+- **§6 on-GPU run — environmentally blocked.** No NVIDIA device/`ptxas` in the
+  dev VM, so the final "link + run on a GPU box" rung and the `ptxas` text
+  checks remain unexecuted here.
 
 ## 1. Where the bodies are buried (current state)
 
