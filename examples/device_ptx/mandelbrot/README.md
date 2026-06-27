@@ -32,7 +32,8 @@ the companion *mandelbrot-gpu* repository.
 
 ```bash
 cd examples/device_ptx/mandelbrot
-make DEVICE=cuda run     # build the host + device, run on the GPU
+make DEVICE=cpu run      # no GPU needed
+make DEVICE=cuda run     # real GPU
 ```
 
 `DEVICE` selects the device-orchestration runtime shim at build time:
@@ -40,9 +41,17 @@ make DEVICE=cuda run     # build the host + device, run on the GPU
 - `DEVICE=cuda` — the real GPU path (CUDA Driver API shim + embedded PTX). Needs
   the CUDA toolkit headers, `-lcuda`, and an NVIDIA device. `SM` defaults to
   `sm_86` to mirror `mandelbrot.cu`.
-- `DEVICE=cpu` (the default) — the CPU-device stand-in, **not yet wired for this
-  example**; see [`../CPU_DEVICE_TODO.md`](../CPU_DEVICE_TODO.md) (it needs a
-  grid-stride kernel, a deferred kernel change).
+- `DEVICE=cpu` — the CPU-device stand-in. No GPU or CUDA toolkit required. The
+  CPU shim emulates a full GPU launch: `pas_dev_launch` loops over the complete
+  launch geometry (`gx×gy×gz` blocks × `bx×by×bz` threads), setting thread-local
+  index registers (`__pas_tid_x` etc.) before each kernel call so the kernel sees
+  the correct `THREADIDX_*`/`BLOCKIDX_*` values. Produces correct output
+  identical to the CUDA path.
+
+Prerequisites by device:
+- **cpu**: Python + llvmlite, clang, `make -C runtime` (cpu archive, built by default).
+- **cuda**: all of the above plus CUDA toolkit headers, `-lcuda`, and an NVIDIA device;
+  `make -C runtime cuda` for the cuda archive.
 
 The host orchestration is compiler-generated from the Pascal source; only the
 leaf runtime shim is C. The kernels are unchanged, so the emitted PTX remains the

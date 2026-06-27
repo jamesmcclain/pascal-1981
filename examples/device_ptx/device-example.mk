@@ -6,13 +6,17 @@
 # DEVICE variable. The host Pascal is identical for both devices; only the build
 # differs -- which is the whole point of the shim design.
 #
-#   make                 # DEVICE=cpu  (CPU stand-in -- see CPU_DEVICE_TODO.md)
+#   make                 # DEVICE=cpu  (CPU stand-in -- emulates the full grid)
 #   make DEVICE=cuda      # real GPU via the CUDA Driver API shim + embedded PTX
 #   make run [DEVICE=...] # build, then run
 #   make clean
 #
 # The including Makefile sets: DEVICE_UNIT, HOST_SRC, EXE, FEATURES
 # (and may override SM or CUDA_HOME).
+#
+# On the CPU device the shim emulates a full GPU launch: pas_dev_launch loops
+# over the whole gx*gy*gz x bx*by*bz geometry, setting thread-local index
+# registers (__pas_tid_x etc.) before each kernel call. See runtime/cpu_device_shim.c.
 
 DEVICE ?= cpu
 

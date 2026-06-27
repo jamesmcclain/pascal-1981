@@ -378,9 +378,11 @@ class StmtsMixin:
 
         The thunk ``void __pas_klaunch_<name>(i8** argv)`` unpacks ``argv`` into
         ``fn``'s parameter types and calls ``fn``.  This is the CPU-device launch
-        dispatch: ``pas_dev_launch`` invokes it as a single-thread grid, so a
-        grid-stride kernel still covers the whole buffer.  On a GPU the shim
-        dispatches the kernel by name out of the loaded module and the thunk is
+        dispatch: the CPU shim's ``pas_dev_launch`` loops over the full launch
+        geometry, setting thread-local index registers (``__pas_tid_x`` etc.)
+        before each thunk call, so the kernel sees the correct indices.  On a
+        GPU the shim dispatches the kernel by name out of the loaded module and
+        the thunk is
         never called -- but it is harmless to emit, and LAUNCH only ever appears
         in host code (never a device compiland), so the thunk never collides with
         a ``ptx_kernel`` calling convention.
@@ -420,8 +422,10 @@ class StmtsMixin:
         launch ABI: it marshals the kernel arguments into a ``void**`` array (the
         shape ``cuLaunchKernel`` consumes) and calls ``pas_dev_launch`` with the
         kernel-name string, a per-kernel dispatch thunk, the six geometry values,
-        and that array.  On the CPU device ``pas_dev_launch`` runs the thunk
-        (single-thread grid); swapping the shim for the CUDA driver path reuses
+        and that array.  On the CPU device ``pas_dev_launch`` loops over the
+        full launch geometry, setting thread-local index registers before each
+        thunk call (so the kernel sees the correct indices); swapping the shim
+        for the CUDA driver path reuses
         this exact call site -- it dispatches by name and ignores the thunk -- so
         no codegen change is needed to run the same program on a GPU (§5.2/§5.4).
 

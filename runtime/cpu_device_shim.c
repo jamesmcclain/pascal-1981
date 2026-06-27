@@ -71,8 +71,8 @@ void pas_dev_free(void *dev_ptr) {
  *     pas_dev_launch(entry, gx,gy,gz, bx,by,bz, argv);  // cuLaunchKernel
  *
  * On the CPU device the "module" is the registry, get_function is a by-name
- * lookup returning the thunk, and launch invokes the thunk as a single-thread
- * grid (so a grid-stride kernel still covers the whole buffer).  Swapping this
+ * lookup returning the thunk, and launch drives it across the full launch
+ * geometry (see pas_dev_launch).  Swapping this
  * file for CUDA Driver API wrappers turns the *same* compiler output into a real
  * GPU launch with no Pascal-side change: load takes the embedded PTX blob,
  * get_function returns a CUfunction, launch is cuLaunchKernel.  (A CUDA shim
