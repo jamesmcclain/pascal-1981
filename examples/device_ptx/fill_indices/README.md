@@ -106,14 +106,16 @@ From the repository root:
 
 ```bash
 cd examples/device_ptx/fill_indices
-PYTHONPATH=../../../src python3 -m pascal1981.compile_to_ptx \
+PYTHONPATH=../../../src python3 -m pascal1981 --target ptx \
   fill.pas \
   fill.ptx \
   --emit-llvm fill.ll \
-  --cpu sm_70
+  --sm sm_70
 ```
 
-Outputs:
+`--target ptx` on the single `pascal1981` driver replaces the old
+`python -m pascal1981.compile_to_ptx` (still accepted as a deprecated alias;
+`--sm` replaces `--cpu`). Outputs:
 
 ```text
 fill.ll   # intermediate LLVM IR

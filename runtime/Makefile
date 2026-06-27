@@ -1,8 +1,23 @@
 # Makefile for the Pascal-1981 C runtime static library.
 #
 # Usage:
-#   make            Build libpascalrt.a in build/
+#   make            Build the CPU-shim archive (libpascalrt_cpu.a) + the
+#                   back-compat alias libpascalrt.a, in build/.  No GPU/CUDA
+#                   headers required.
+#   make cuda       Also build the CUDA-shim archive (libpascalrt_cuda.a).
+#                   Requires the CUDA toolkit headers ($CUDA_HOME/include).
+#   make both       Build both archives.
 #   make clean      Remove build artifacts
+#
+# The cpu and cuda device shims define the SAME pas_dev_* symbols, so they
+# cannot coexist in one archive.  Rather than rebuild-on-switch (the old
+# DEVICE_SHIM clean-rebuild dance), we compile the shared core once and emit one
+# archive per shim.  Consumers pick the archive at link time; the core objects
+# are never recompiled to switch devices.  A consumer linking libpascalrt_cuda.a
+# must add -lcuda on its final link line.
+#
+# DEVICE_SHIM is still accepted for backward compatibility: `make
+# DEVICE_SHIM=cuda` builds the cuda archive as libpascalrt.a, as before.
 
 CC      := clang
 CFLAGS  := -c -O2 -Wall -Wextra
@@ -11,36 +26,45 @@ ARFLAGS := rcs
 
 SRCDIR  := .
 BUILDDIR:= build
-TARGET  := $(BUILDDIR)/libpascalrt.a
+CUDA_HOME ?= /usr/local/cuda
 
-# Device-orchestration shim selector: cpu (default, CPU stand-in, no GPU) or
-# cuda (real CUDA Driver API).  Both shims define the same pas_dev_* symbols, so
-# exactly one must be in the archive.  The cuda shim needs the CUDA headers to
-# compile; consumers linking the cuda archive must add -lcuda on their final
-# link line (or use the scripts/build-cuda-host.sh recipe).
-DEVICE_SHIM ?= cpu
+# Shared core: every .c file except the two device shims (built once, reused by
+# both archives).
+CORE_SRCS := $(filter-out $(SRCDIR)/cpu_device_shim.c $(SRCDIR)/cuda_launch.c,$(wildcard $(SRCDIR)/*.c))
+CORE_OBJS := $(patsubst $(SRCDIR)/%.c,$(BUILDDIR)/%.o,$(CORE_SRCS))
 
+CPU_SHIM_OBJ  := $(BUILDDIR)/cpu_device_shim.o
+CUDA_SHIM_OBJ := $(BUILDDIR)/cuda_launch.o
+
+CPU_LIB   := $(BUILDDIR)/libpascalrt_cpu.a
+CUDA_LIB  := $(BUILDDIR)/libpascalrt_cuda.a
+ALIAS_LIB := $(BUILDDIR)/libpascalrt.a
+
+.PHONY: all cuda both clean cleaner
+
+# ---- Backward-compatible DEVICE_SHIM override ------------------------------
+# `make DEVICE_SHIM=cuda` builds the cuda archive as the legacy libpascalrt.a.
 ifeq ($(DEVICE_SHIM),cuda)
-SHIM_EXCLUDE := cpu_device_shim.c
-CUDA_HOME    ?= /usr/local/cuda
-CFLAGS       += -I$(CUDA_HOME)/include
-else ifeq ($(DEVICE_SHIM),cpu)
-SHIM_EXCLUDE := cuda_launch.c
+all: $(CUDA_LIB)
+	cp $(CUDA_LIB) $(ALIAS_LIB)
 else
-$(error DEVICE_SHIM must be 'cpu' or 'cuda', got '$(DEVICE_SHIM)')
+# Default: CPU archive + the back-compat alias name (libpascalrt.a == cpu).
+all: $(CPU_LIB)
+	cp $(CPU_LIB) $(ALIAS_LIB)
 endif
 
-# Every .c file in this directory is part of the runtime, except the shim that
-# was not selected.
-SRCS    := $(filter-out $(SRCDIR)/$(SHIM_EXCLUDE),$(wildcard $(SRCDIR)/*.c))
-OBJS    := $(patsubst $(SRCDIR)/%.c,$(BUILDDIR)/%.o,$(SRCS))
+cuda: $(CUDA_LIB)
+both: $(CPU_LIB) $(CUDA_LIB)
 
-.PHONY: all clean
-
-all: $(TARGET)
-
-$(TARGET): $(OBJS) | $(BUILDDIR)
+$(CPU_LIB): $(CORE_OBJS) $(CPU_SHIM_OBJ) | $(BUILDDIR)
 	$(AR) $(ARFLAGS) $@ $^
+
+$(CUDA_LIB): $(CORE_OBJS) $(CUDA_SHIM_OBJ) | $(BUILDDIR)
+	$(AR) $(ARFLAGS) $@ $^
+
+# The cuda shim is the only object that needs the CUDA headers.
+$(CUDA_SHIM_OBJ): $(SRCDIR)/cuda_launch.c pascalrt.h | $(BUILDDIR)
+	$(CC) $(CFLAGS) -I$(CUDA_HOME)/include -o $@ $<
 
 $(BUILDDIR)/%.o: $(SRCDIR)/%.c pascalrt.h | $(BUILDDIR)
 	$(CC) $(CFLAGS) -o $@ $<
@@ -52,4 +76,3 @@ clean:
 	rm -rf $(BUILDDIR)
 
 cleaner: clean
-	rm -f $(TARGET)

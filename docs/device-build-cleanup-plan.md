@@ -63,8 +63,8 @@ pascal1981 --target ptx  mandelbrot.pas  mandelbrot.ptx  --sm sm_86  -f wide-int
 # 2. one command against the host file -> .ll  (no PTX coupling)
 pascal1981 --target host --device-backend cuda  mandelbrot_host.pas  mandelbrot_host.ll  -f wide-integers
 
-# 3. one clang command to link the host
-clang mandelbrot_host.ll mandelbrot.ptx.o  libpascalrt_cuda.a  -L$CUDA/lib64/stubs -lcuda -o mandelbrot_host
+# 3. one clang command to link the host (after objectifying the PTX blob)
+clang mandelbrot_host.ll mandelbrot_ptx_blob.o  libpascalrt_cuda.a  -L$CUDA/lib64/stubs -lcuda -o mandelbrot_host
 ```
 
 `ptxas`/`cubin` stays optional (a stronger check, or an `.o` route — see §3.3).
@@ -101,21 +101,42 @@ or links `dev.ll`.
 ### 3.2 Decouple PTX embedding from host compile (fixes J3)
 
 Stop baking PTX into `host.ll`. Instead, the host references an *external*
-`__pas_device_ptx` symbol, and the PTX blob becomes its own object linked at
-step 3. Two ways to produce that object from `mandelbrot.ptx`; pick one:
+`__pas_device_ptx` symbol (`codegen/stmts.py::_device_ptx_ptr` now declares
+`@__pas_device_ptx = external constant [0 x i8]` on the cuda backend), and the
+PTX blob becomes its own object linked at step 3.
 
-- **(a) emit it from the device command.** `--target ptx` also writes
-  `mandelbrot.ptx.o` (or `.s`) defining `const char __pas_device_ptx[]` via an
-  `.incbin`-style stub or `llvm-mc`. Keeps "one command against the device file"
-  literally true and the link a single `clang ... mandelbrot.ptx.o ...`.
+**What that object is — and is NOT.** It is an object file defining ONE data
+symbol, `__pas_device_ptx`, holding the PTX **text bytes, NUL-terminated**,
+because the CUDA shim reads it as a `const char *` C-string
+(`runtime/cuda_launch.c` checks `ptx[0]=='\0'` then `cuModuleLoadData`s it). It
+is **not** `ptxas`/cubin output. Name it for what it is —
+`mandelbrot_ptx_blob.o` — **never `.ptx.o`**, which invites feeding it to the
+wrong tool. Two correctness traps the naming hid:
 
-- **(b) objectify at link time** with a documented one-liner
-  (`ld -r -b binary`, or a 3-line `.s` using `.incbin "mandelbrot.ptx"`). The
-  clang link line gains one input; the host `.ll` stays pure.
+1. **NUL termination.** A bare `.incbin "mandelbrot.ptx"` is *not*
+   NUL-terminated; the stub must append a `.byte 0` or the shim reads past the
+   blob.
+2. The object carries no code, just `.rodata`; it is produced by the assembler,
+   not a compiler pass.
 
-Either way `codegen/stmts.py::_device_ptx_ptr` changes from "embed the text" to
-"declare `external global` `__pas_device_ptx`," and `--embed-device-ptx`
-becomes optional/legacy. Host compile no longer depends on the device artifact.
+The objectifier is a 4-line assembly stub assembled with `clang -c`:
+
+```asm
+        .section .rodata
+        .globl  __pas_device_ptx
+__pas_device_ptx:
+        .incbin "mandelbrot.ptx"
+        .byte 0                  # the C-string NUL the shim requires
+```
+
+The example Makefile / `build-cuda-host.sh` generate this stub from `dev.ptx`.
+`--embed-device-ptx` stays as a legacy opt-in (host-embeds, two-input link).
+With the default decoupled path, host compile no longer depends on the device
+artifact.
+
+**Verified:** `host.o` built with `--device-backend cuda` shows `U
+__pas_device_ptx` and no `__pas_klaunch_*` / kernel symbol; `ld -r host.o
+mandelbrot_ptx_blob.o` resolves it to a defined `R __pas_device_ptx`.
 
 If we would rather not add a link input, the legacy `--embed-device-ptx` path
 can stay as an opt-in for a strictly two-input link — but the default clean path

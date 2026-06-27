@@ -502,7 +502,15 @@ class StmtsMixin:
         # get_function returns the thunk, and launch calls it; on the GPU the
         # same three calls become cuModuleLoadData(ptx) / cuModuleGetFunction /
         # cuLaunchKernel, with no change here.
-        self._record_launched_kernel(fn.name, self._kernel_launch_thunk(fn))
+        # On the CPU-device backend the launch is dispatched in-process through a
+        # per-kernel thunk recorded in this compiland's registry; that thunk
+        # statically references the kernel symbol, which is what forces the
+        # separate host-ABI device compile (dev.ll) at link time.  On the CUDA
+        # backend the kernel is the loaded PTX module and the shim dispatches it
+        # by name, so we emit neither thunk nor registry -- the host .ll then has
+        # no undefined kernel symbol and needs no dev.ll.
+        if self.device_backend != 'cuda':
+            self._record_launched_kernel(fn.name, self._kernel_launch_thunk(fn))
         module = self.builder.call(
             self.runtime_extern('pas_dev_module_load'),
             [self._launch_registry_ptr(), self._device_ptx_ptr()])
@@ -527,6 +535,12 @@ class StmtsMixin:
         """
         i8p = ir.IntType(8).as_pointer()
         i64 = ir.IntType(64)
+        # CUDA backend: there is no in-process registry (the kernel is the loaded
+        # PTX module and the shim ignores this argument), so pass a null pointer
+        # rather than referencing an external registry global that nothing
+        # defines -- which would otherwise be an undefined symbol at link.
+        if self.device_backend == 'cuda':
+            return ir.Constant(i8p, None)
         if self._launch_registry_gv is None:
             reg_ty = ir.LiteralStructType([i8p.as_pointer(), i8p.as_pointer(), i64])
             self._launch_registry_gv = ir.GlobalVariable(
@@ -545,7 +559,20 @@ class StmtsMixin:
         """
         i8 = ir.IntType(8)
         i8p = i8.as_pointer()
+        zero = ir.Constant(ir.IntType(32), 0)
         if self._device_ptx_gv is None:
+            if self.device_backend == 'cuda' and not self._embed_device_ptx_text:
+                # CUDA backend, decoupled packaging: the PTX blob is its own
+                # object (built from the .ptx at link time), referenced here as
+                # an external `const char __pas_device_ptx[]`.  The host .ll no
+                # longer needs the kernel text baked in, so host compile does not
+                # depend on the device artifact.
+                gv = ir.GlobalVariable(self.module, ir.ArrayType(i8, 0),
+                                       name='__pas_device_ptx')
+                gv.global_constant = True
+                gv.linkage = 'external'
+                self._device_ptx_gv = gv
+                return self.builder.bitcast(gv, i8p)
             text = self._embed_device_ptx_text or ''
             data = bytearray(text.encode('utf-8') + b'\0')
             const = ir.Constant(ir.ArrayType(i8, len(data)), data)
@@ -553,7 +580,9 @@ class StmtsMixin:
             gv.global_constant = True
             gv.initializer = const
             self._device_ptx_gv = gv
-        zero = ir.Constant(ir.IntType(32), 0)
+        if isinstance(self._device_ptx_gv.type.pointee, ir.ArrayType) and \
+                self._device_ptx_gv.type.pointee.count == 0:
+            return self.builder.bitcast(self._device_ptx_gv, i8p)
         return self.builder.gep(self._device_ptx_gv, [zero, zero])
 
     def _emit_launch_registry(self) -> None:

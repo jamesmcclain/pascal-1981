@@ -45,6 +45,28 @@ def main() -> int:
                         help='LLVM target triple for DEVICE MODULE units; e.g. nvptx64-nvidia-cuda or '
                         'amdgcn-amd-amdhsa. Defaults to the host x86 triple (CPU-device: address '
                         'spaces collapse to addrspace 0).')
+    parser.add_argument('--target',
+                        choices=['host', 'ptx'],
+                        default='host',
+                        help='Output target: host LLVM IR (.ll, default) or device NVPTX assembly '
+                        '(.ptx). --target ptx selects the NVPTX device triple and honors --sm; it '
+                        'is the single-CLI replacement for python -m pascal1981.compile_to_ptx.')
+    parser.add_argument('--sm',
+                        default='sm_70',
+                        metavar='ARCH',
+                        help='NVPTX target CPU for --target ptx, e.g. sm_70, sm_86 (default: sm_70).')
+    parser.add_argument('--emit-llvm',
+                        default=None,
+                        metavar='PATH',
+                        help='With --target ptx, also write the intermediate NVPTX LLVM IR to PATH.')
+    parser.add_argument('--device-backend',
+                        choices=['cpu', 'cuda'],
+                        default='cpu',
+                        help='Host launch backend for LAUNCH lowering. cpu (default): emit the '
+                        'in-process dispatch thunk + registry (CPU-device stand-in). cuda: target '
+                        'the CUDA Driver API shim -- the kernel is the loaded PTX module, so no '
+                        'thunk/registry and no dead kernel-symbol reference are emitted (no dev.ll '
+                        'needed at link).')
     parser.add_argument('--embed-device-ptx',
                         default=None,
                         metavar='PTX_FILE',
@@ -83,6 +105,42 @@ def main() -> int:
     if args.print_runtime_path:
         print(runtime_lib_path())
         return 0
+
+    if args.target == 'ptx':
+        # Single-CLI device path: parse/check/lower to NVPTX IR, then PTX.
+        from .compile_to_ptx import compile_file_to_ptx
+        try:
+            features = resolve_features(args.dialect, args.feature)
+        except ValueError as exc:
+            parser.error(str(exc))
+        if not args.source_file:
+            parser.error('--target ptx requires a source file')
+        try:
+            device_triple = args.device_triple
+            if device_triple == 'x86_64-pc-linux-gnu':
+                device_triple = 'nvptx64-nvidia-cuda'
+            ptx = compile_file_to_ptx(
+                args.source_file,
+                host_triple=args.host_triple,
+                device_triple=device_triple,
+                cpu=args.sm,
+                features=features,
+                emit_llvm_path=args.emit_llvm,
+            )
+            if args.output_file:
+                with open(args.output_file, 'w') as f:
+                    f.write(ptx)
+                print(f'Wrote {args.output_file}', file=sys.stderr)
+            else:
+                print(ptx)
+            return 0
+        except Exception as exc:
+            print(f'Error: {exc}', file=sys.stderr)
+            if args.verbose:
+                traceback.print_exc()
+            else:
+                print('(re-run with -v for a full traceback)', file=sys.stderr)
+            return 1
 
     if args.list_features:
         for feature in all_features():
@@ -164,7 +222,8 @@ def main() -> int:
                              features=features,
                              host_triple=args.host_triple,
                              device_triple=args.device_triple,
-                             embed_device_ptx_text=embed_device_ptx_text)
+                             embed_device_ptx_text=embed_device_ptx_text,
+                             device_backend=args.device_backend)
 
         # Output
         if output_file:

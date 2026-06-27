@@ -21,6 +21,7 @@ THIS_MK     := $(lastword $(MAKEFILE_LIST))
 REPO        := $(abspath $(dir $(THIS_MK))/../..)
 RUNTIME     := $(REPO)/runtime
 RUNTIME_LIB := $(RUNTIME)/build/libpascalrt.a
+RUNTIME_CUDA:= $(RUNTIME)/build/libpascalrt_cuda.a
 
 PAS := PYTHONPATH=$(REPO)/src python3 -m pascal1981
 PTX := PYTHONPATH=$(REPO)/src python3 -m pascal1981.compile_to_ptx
@@ -40,29 +41,32 @@ $(BUILD):
 	mkdir -p $(BUILD)
 
 ifeq ($(DEVICE),cuda)
-# ---- real GPU: CUDA Driver API shim + embedded PTX (Strategy 1) -------------
-# The device kernel is compiled twice, on purpose:
-#   * to PTX, embedded into the host so the CUDA shim cuModuleLoadData's it;
-#   * to a host .ll, which defines the kernel symbol the host's launch thunk
-#     links against (dead at run time -- the real kernel is the loaded PTX).
+# ---- real GPU: CUDA Driver API shim, three commands ------------------------
+# The device kernel is compiled ONCE, to PTX (the real kernel).  The host is
+# compiled with --device-backend cuda, so it emits no in-process launch thunk
+# and no kernel-symbol reference -- there is no second 'dev.ll' device compile.
+# The PTX text is packaged as its own object (a NUL-terminated __pas_device_ptx
+# byte blob the host references as an external symbol); the CUDA shim
+# cuModuleLoadData's it at run time.  Build the cuda runtime archive once with
+#   make -C runtime cuda
+# (this Makefile does not rebuild it on every example build).
 $(BUILD)/dev.ptx: $(DEVICE_UNIT) | $(BUILD)
-	$(PTX) $< $@ --cpu $(SM) $(FEATURES)
+	$(PAS) --target ptx $< $@ --sm $(SM) $(FEATURES)
 
-$(BUILD)/dev.ll: $(DEVICE_UNIT) | $(BUILD)
-	$(PAS) $(FEATURES) $< $@
+# Objectify the PTX into a single data symbol the host links against.  This is a
+# data blob (PTX *text* + a trailing NUL for the shim's C-string read), NOT
+# ptxas/cubin output -- hence the _blob.o name, never .ptx.o.
+$(BUILD)/dev_ptx_blob.s: $(BUILD)/dev.ptx | $(BUILD)
+	printf '\t.section .rodata\n\t.globl __pas_device_ptx\n__pas_device_ptx:\n\t.incbin "$(BUILD)/dev.ptx"\n\t.byte 0\n' > $@
 
-$(BUILD)/host.ll: $(HOST_SRC) $(BUILD)/dev.ptx | $(BUILD)
-	$(PAS) $(FEATURES) --embed-device-ptx $(BUILD)/dev.ptx $< $@
+$(BUILD)/dev_ptx_blob.o: $(BUILD)/dev_ptx_blob.s
+	clang -c $< -o $@
 
-# The runtime archive must carry the CUDA shim (cuda_launch.c). The cpu and cuda
-# shims define the same symbols, so the archive is rebuilt cleanly for this mode.
-.PHONY: runtime-cuda
-runtime-cuda:
-	$(MAKE) -C $(RUNTIME) clean
-	$(MAKE) -C $(RUNTIME) DEVICE_SHIM=cuda
+$(BUILD)/host.ll: $(HOST_SRC) | $(BUILD)
+	$(PAS) $(FEATURES) --device-backend cuda $< $@
 
-$(EXE): $(BUILD)/host.ll $(BUILD)/dev.ll runtime-cuda
-	clang $(BUILD)/host.ll $(BUILD)/dev.ll $(RUNTIME_LIB) \
+$(EXE): $(BUILD)/host.ll $(BUILD)/dev_ptx_blob.o
+	clang $(BUILD)/host.ll $(BUILD)/dev_ptx_blob.o $(RUNTIME_CUDA) \
 	      -L$(CUDA_HOME)/lib64/stubs -lcuda -o $@
 
 else ifeq ($(DEVICE),cpu)
