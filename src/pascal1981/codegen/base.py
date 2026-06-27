@@ -453,6 +453,10 @@ class CodegenBase:
             'pas_file_close': _mk('pas_file_close', ir.FunctionType(void, [fcb_ptr])),
             'pas_file_discard': _mk('pas_file_discard', ir.FunctionType(void, [fcb_ptr])),
             'pas_file_assign': _mk('pas_file_assign', ir.FunctionType(void, [fcb_ptr, i8p, i32])),
+            # ---- program-parameter command-line binding (cmdline.c) -------
+            'pas_args_init': _mk('pas_args_init', ir.FunctionType(void, [i32, i8p.as_pointer()])),
+            'pas_arg_begin': _mk('pas_arg_begin', ir.FunctionType(i32, [i32, i8p])),
+            'pas_arg_end': _mk('pas_arg_end', ir.FunctionType(void, [])),
             'pas_file_attach_std': _mk('pas_file_attach_std', ir.FunctionType(void, [fcb_ptr, fcb_ptr])),
             'pas_file_eof': _mk('pas_file_eof', ir.FunctionType(i32, [fcb_ptr])),
             'pas_file_eoln': _mk('pas_file_eoln', ir.FunctionType(i32, [fcb_ptr])),

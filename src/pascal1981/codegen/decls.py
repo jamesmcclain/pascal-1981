@@ -58,8 +58,15 @@ class DeclsMixin:
 
         # Create main function if not already defined
         if 'main' not in [f.name for f in self.module.functions]:
-            main_type = ir.FunctionType(ir.IntType(32), [])
+            # main takes (argc, argv) so program-heading parameters can be bound
+            # from the command line (vintage program-parameter model); ordinary
+            # programs that ignore them are unaffected (C main(void) vs
+            # main(int,char**) are link-compatible).
+            i8pp = ir.IntType(8).as_pointer().as_pointer()
+            main_type = ir.FunctionType(ir.IntType(32), [ir.IntType(32), i8pp])
             main_func = ir.Function(self.module, main_type, name='main')
+            main_func.args[0].name = 'argc'
+            main_func.args[1].name = 'argv'
             entry_block = main_func.append_basic_block(name='entry')
             self.builder = IRBuilder(entry_block)
             self.current_function = main_func
@@ -71,6 +78,8 @@ class DeclsMixin:
             for sym in list(self.scope.symbols.values()):
                 if isinstance(self.resolve_type_alias(sym.type_expr), FileType):
                     self._init_file_storage(sym.llvm_value, sym.type_expr)
+            # Bind program-heading parameters from the command line.
+            self._codegen_program_parameters(unit)
             # Execute the program body
             prev_labels = self.setup_function_labels(unit.block.body)
             self.codegen_stmt_list(unit.block.body)
@@ -82,6 +91,86 @@ class DeclsMixin:
 
         self._emit_launch_registry()
         return self.module
+
+    def _emit_cstring_ptr(self, text: str) -> ir.Value:
+        """Create a NUL-terminated global C string and return an i8* to it."""
+        data = bytearray(text.encode('utf-8') + b'\0')
+        const = ir.Constant(ir.ArrayType(ir.IntType(8), len(data)), data)
+        gv = ir.GlobalVariable(self.module, const.type, name=self.unique_name('argname'))
+        gv.initializer = const
+        gv.global_constant = True
+        zero = ir.Constant(ir.IntType(32), 0)
+        return self.builder.gep(gv, [zero, zero])
+
+    def _codegen_program_parameters(self, unit) -> None:
+        """Populate program-heading parameters from the command line.
+
+        Faithful to the vintage model (IBM Pascal manual 13-5..13-7): each
+        heading parameter other than INPUT/OUTPUT is read, in heading order,
+        from successive command-line tokens, prompting at the keyboard when a
+        token is absent.  Reading reuses the ordinary READ parsers via stdin
+        redirection (see runtime/cmdline.c), so a parameter parses exactly as it
+        would interactively.  INPUT/OUTPUT are bound to the keyboard/display and
+        occupy no command-line position.
+        """
+        from ..ast_nodes import Identifier
+        params = list(getattr(unit, 'params', None) or [])
+        # INPUT/OUTPUT are bound to the keyboard/display and occupy no
+        # command-line position; if every heading parameter is one of those (or
+        # there are none), emit nothing -- programs that take no command-line
+        # input keep their previous, runtime-free main.
+        bindable = [p for p in params if p.upper() not in {'INPUT', 'OUTPUT'}]
+        if not bindable:
+            return
+        i32 = ir.IntType(32)
+        argc, argv = self.current_function.args[0], self.current_function.args[1]
+        self.builder.call(self.runtime_extern('pas_args_init'), [argc, argv])
+
+        position = 0  # command-line position among bindable parameters
+        for pname in params:
+            if pname.upper() in {'INPUT', 'OUTPUT'}:
+                continue  # not set from the command line; not positional
+            sym = self.scope.lookup(pname) or self.scope.lookup(pname.upper())
+            if sym is not None and getattr(sym, 'llvm_value', None) is not None:
+                name_ptr = self._emit_cstring_ptr(pname)
+                self.builder.call(self.runtime_extern('pas_arg_begin'),
+                                  [ir.Constant(i32, position), name_ptr])
+                resolved = self.resolve_type_alias(sym.type_expr)
+                if isinstance(resolved, FileType):
+                    self._bind_file_parameter(sym)
+                else:
+                    self._emit_read_target(Identifier(pname), None)
+                # Consume the rest of the line. On the command-line token stream
+                # this is harmless (the stream is discarded next); on the
+                # keyboard-prompt fallback it advances past the just-typed line
+                # so the next parameter reads cleanly.
+                self.builder.call(self._read_helper('pas_readln_skip', ir.VoidType()), [])
+                self.builder.call(self.runtime_extern('pas_arg_end'), [])
+            position += 1
+
+    def _bind_file_parameter(self, sym) -> None:
+        """Bind a FILE program parameter's filename from the command line.
+
+        Reads the filename token as an LSTRING (reusing the ordinary reader
+        under the active stdin redirect), then ASSIGNs it to the file's control
+        block so a later RESET/REWRITE opens it -- the canonical vintage use of
+        a file program parameter.
+        """
+        i8 = ir.IntType(8)
+        i32 = ir.IntType(32)
+        zero = ir.Constant(i32, 0)
+        cap = 255
+        buf = self.builder.alloca(ir.ArrayType(i8, cap + 1), name='arg_filename')
+        buf_i8 = self.builder.bitcast(buf, i8.as_pointer())
+        self.builder.call(self._read_helper('pas_read_lstring', i8.as_pointer(), [i32]),
+                          [buf_i8, ir.Constant(i32, cap)])
+        # LSTRING layout: byte 0 is the length, bytes 1.. are the characters.
+        length = self.builder.zext(self.builder.load(buf_i8), i32)
+        name_ptr = self.builder.bitcast(
+            self.builder.gep(buf, [zero, ir.Constant(i32, 1)]), i8.as_pointer())
+        handle = self.builder.load(sym.llvm_value)
+        fcb = self.builder.bitcast(handle, self.file_fcb_type().as_pointer())
+        self.builder.call(self.runtime_extern('pas_file_assign'), [fcb, name_ptr, length])
 
     def codegen_module(self, unit: ModuleUnit) -> ir.Module:
         """Codegen for MODULE unit."""
