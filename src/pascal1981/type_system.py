@@ -330,6 +330,7 @@ class FunctionType(Type):
     name: str
     params: List[Tuple[str, Type]]  # List of (param_name, param_type)
     return_type: Type
+    is_variadic: bool = False  # True for [VARARGS] C-ABI foreign functions
 
     def __str__(self) -> str:
         param_str = ", ".join(f"{name}: {typ}" for name, typ in self.params)

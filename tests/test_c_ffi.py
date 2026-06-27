@@ -378,5 +378,182 @@ class TestCAbiAggregateBuildAndRun(unittest.TestCase):
         self.assertEqual(lines, ['60', '7', '14', '21'])
 
 
+# =============================================================================
+# Phase 3: Variadic foreign functions
+# =============================================================================
+
+class TestVariadicParsing(unittest.TestCase):
+    """Phase 3: the [VARARGS] attribute parses in attribute position."""
+
+    def test_varargs_attribute_parses_on_procedure(self):
+        ast = parse_source(
+            "PROGRAM P(output);\n"
+            "PROCEDURE vprintf(fmt: CPTR) [C, VARARGS]; EXTERN;\n"
+            "BEGIN END.")
+        self.assertIsNotNone(ast)
+
+    def test_varargs_attribute_parses_on_function(self):
+        ast = parse_source(
+            "PROGRAM P(output);\n"
+            "FUNCTION printf(fmt: CPTR): CINT [C, VARARGS]; EXTERN;\n"
+            "BEGIN END.")
+        self.assertIsNotNone(ast)
+
+    def test_varargs_attribute_normalizes(self):
+        ast = parse_source(
+            "PROGRAM P(output);\n"
+            "FUNCTION printf(fmt: CPTR): CINT [C, VARARGS]; EXTERN;\n"
+            "BEGIN END.")
+        func = next(d for d in ast.block.decls if getattr(d, 'name', '') == 'printf')
+        attr_names = [a.name for a in func.attributes]
+        self.assertIn('VARARGS', attr_names)
+        self.assertIn('C', attr_names)
+
+
+class TestVariadicTypecheck(unittest.TestCase):
+    """Phase 3: type-checker gates for [VARARGS]."""
+
+    def test_varargs_accepted_with_c_and_extern(self):
+        result = _tc(
+            "PROGRAM P(output);\n"
+            "FUNCTION printf(fmt: CPTR): CINT [C, VARARGS]; EXTERN;\n"
+            "BEGIN END.")
+        self.assertTrue(result.success, msg=_errors(result))
+
+    def test_varargs_without_c_rejected(self):
+        result = _tc(
+            "PROGRAM P(output);\n"
+            "FUNCTION f(x: CINT): CINT [VARARGS]; EXTERN;\n"
+            "BEGIN END.")
+        self.assertFalse(result.success)
+        self.assertTrue(any('[VARARGS]' in m and '[C]' in m for m in _errors(result)),
+                        msg=_errors(result))
+
+    def test_varargs_rejected_in_vintage_dialect(self):
+        result = typecheck_source(
+            "PROGRAM P(output);\n"
+            "FUNCTION f(x: INTEGER32): CINT [C, VARARGS]; EXTERN;\n"
+            "BEGIN END.")
+        self.assertFalse(result.success)
+        # Will hit either [C] or [VARARGS] extended-dialect gate first.
+        self.assertTrue(any('extended' in m for m in _errors(result)),
+                        msg=_errors(result))
+
+    def test_varargs_with_no_fixed_params_accepted(self):
+        # Degenerate: only a format pointer, then varargs.
+        result = _tc(
+            "PROGRAM P(output);\n"
+            "FUNCTION printf(fmt: CPTR): CINT [C, VARARGS]; EXTERN;\n"
+            "BEGIN END.")
+        self.assertTrue(result.success, msg=_errors(result))
+
+
+@requires_exe
+class TestVariadicBuildAndRun(unittest.TestCase):
+    """Phase 3 end-to-end: variadic C functions called from Pascal."""
+
+    def _run(self, files, compile_pairs, link_ir, exe):
+        rc, out, err = build_and_run_pascal_project(
+            files=files,
+            compile_pairs=compile_pairs,
+            link_ir_relpaths=link_ir,
+            exe_name=exe,
+            features=EXT,
+        )
+        self.assertEqual(rc, 0, msg=err)
+        return [ln.strip() for ln in out.splitlines() if ln.strip()]
+
+    def test_variadic_sum_integers(self):
+        """Call a variadic C function that sums N integer args."""
+        files = {
+            'v.pas': (
+                "PROGRAM P(output);\n"
+                "FUNCTION sum_n(count: CINT): CINT [C, VARARGS]; EXTERN;\n"
+                "VAR r: CINT;\n"
+                "BEGIN r := sum_n(3, 10, 20, 30); WRITELN(r) END."),
+            'vimpl.c': (
+                "#include <stdarg.h>\n"
+                "#include <stdint.h>\n"
+                "int32_t sum_n(int32_t count, ...) {\n"
+                "  va_list ap; va_start(ap, count);\n"
+                "  int32_t s = 0;\n"
+                "  for (int i = 0; i < count; i++) s += va_arg(ap, int32_t);\n"
+                "  va_end(ap); return s;\n"
+                "}"),
+        }
+        lines = self._run(files, [('v.pas', 'v.ll')], ['v.ll', 'vimpl.c'], 'varargs-sum')
+        self.assertEqual(lines, ['60'])
+
+    def test_variadic_float_promotion(self):
+        """REAL32 (float) args in the variadic tail must be promoted to double.
+
+        C default argument promotions: float -> double.  Pass two REAL32 vars
+        in the variadic tail; the C callee reads them as `double`.  If
+        promotion is missing the callee reads garbage (4-byte float bits
+        interpreted as 8-byte double).
+        """
+        files = {
+            'fp.pas': (
+                "PROGRAM P(output);\n"
+                "FUNCTION sum_floats(count: CINT): CDOUBLE [C, VARARGS]; EXTERN;\n"
+                "VAR r: CDOUBLE; x, y: REAL32;\n"
+                "BEGIN\n"
+                "  x := 1.5; y := 2.5;\n"
+                "  r := sum_floats(2, x, y);\n"
+                "  WRITELN(r)\n"
+                "END."),
+            'fpimpl.c': (
+                "#include <stdarg.h>\n"
+                "#include <stdint.h>\n"
+                "double sum_floats(int32_t count, ...) {\n"
+                "  va_list ap; va_start(ap, count);\n"
+                "  double s = 0.0;\n"
+                "  for (int i = 0; i < count; i++) s += va_arg(ap, double);\n"
+                "  va_end(ap); return s;\n"
+                "}"),
+        }
+        lines = self._run(files, [('fp.pas', 'fp.ll')], ['fp.ll', 'fpimpl.c'], 'varargs-float')
+        self.assertEqual(len(lines), 1)
+        val = float(lines[0].replace('E', 'e').replace('+', ''))
+        self.assertAlmostEqual(val, 4.0, places=5)
+
+    def test_variadic_mixed_args(self):
+        """Variadic call with mixed integer and double args."""
+        files = {
+            'mx.pas': (
+                "PROGRAM P(output);\n"
+                "FUNCTION mix(n: CINT): CLONG [C, VARARGS]; EXTERN;\n"
+                "VAR r: CLONG;\n"
+                "BEGIN r := mix(3, 7, 2.5, 100); WRITELN(r) END."),
+            'mximpl.c': (
+                "#include <stdarg.h>\n"
+                "#include <stdint.h>\n"
+                "int64_t mix(int32_t n, ...) {\n"
+                "  va_list ap; va_start(ap, n);\n"
+                "  int64_t a = va_arg(ap, int64_t);\n"
+                "  double  b = va_arg(ap, double);\n"
+                "  int64_t c = va_arg(ap, int64_t);\n"
+                "  va_end(ap); return a + (int64_t)b + c;\n"
+                "}"),
+        }
+        lines = self._run(files, [('mx.pas', 'mx.ll')], ['mx.ll', 'mximpl.c'], 'varargs-mixed')
+        # 7 + 2 + 100 = 109
+        self.assertEqual(lines, ['109'])
+
+    def test_regression_non_varargs_c_extern_unchanged(self):
+        """A [C] EXTERN without [VARARGS] must still work identically (Phase 1/2 regression)."""
+        files = {
+            'r.pas': (
+                "PROGRAM P(output);\n"
+                "FUNCTION cube(x: CINT): CINT [C]; EXTERN;\n"
+                "BEGIN WRITELN(cube(4)) END."),
+            'rimpl.c': (
+                "#include <stdint.h>\n"
+                "int32_t cube(int32_t x){return x*x*x;}"),
+        }
+        lines = self._run(files, [('r.pas', 'r.ll')], ['r.ll', 'rimpl.c'], 'varargs-regression')
+        self.assertEqual(lines, ['64'])
+
+
 if __name__ == '__main__':
     unittest.main()

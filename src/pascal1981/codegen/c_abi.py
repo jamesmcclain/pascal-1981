@@ -139,6 +139,7 @@ class CCallPlan:
     ret_kind: str                   # 'void' | 'scalar' | 'coerced' | 'memory'
     ret_llvm: Optional[ir.Type] = None     # scalar: the LLVM return type
     ret_agg: Optional[AggLowering] = None  # coerced/memory
+    is_variadic: bool = False       # True when the declaration has [VARARGS]
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +236,7 @@ class CAbiMixin:
     def _c_abi(self):
         return c_abi_for_triple(getattr(self, 'host_triple', 'x86_64-pc-linux-gnu'))
 
-    def build_c_abi_plan(self, decl, flat_param_types, flat_modes, return_llvm):
+    def build_c_abi_plan(self, decl, flat_param_types, flat_modes, return_llvm, is_variadic=False):
         """Compute the coerced LLVM signature and the per-call marshalling plan.
 
         ``flat_param_types`` / ``flat_modes`` are already flattened per parameter
@@ -281,7 +282,7 @@ class CAbiMixin:
                 params.append(CParamPlan('coerced', agg=agg))
                 ir_args.extend(agg.pieces)
 
-        plan = CCallPlan(params, ret_kind, ret_llvm=(ir_ret if ret_kind == 'scalar' else None), ret_agg=ret_agg)
+        plan = CCallPlan(params, ret_kind, ret_llvm=(ir_ret if ret_kind == 'scalar' else None), ret_agg=ret_agg, is_variadic=is_variadic)
         return ir_args, ir_ret, (ret_kind == 'memory'), arg_attrs, plan
 
     # -- call-site marshalling ------------------------------------------------
@@ -310,6 +311,27 @@ class CAbiMixin:
     def _c_abi_memcpy(self, dst_ptr, src_ptr, nbytes):
         self.builder.call(self.memcpy_func(),
                           [self._i8p(dst_ptr), self._i8p(src_ptr), ir.Constant(ir.IntType(64), nbytes)])
+
+    def _c_abi_variadic_promote(self, v: ir.Value) -> ir.Value:
+        """Apply C default argument promotions to one variadic-tail value.
+
+        Rules (C11 §6.5.2.2 ¶7):
+        - ``float`` → ``double`` (fpext).
+        - Integer types narrower than ``int`` (i1, i8, i16) → ``i32`` (sext for
+          signed types; zext for i1 which is boolean).  At the IR level we cannot
+          distinguish signed from unsigned i8/i16, so we follow clang: i8/i16
+          use sext (``char``/``short`` are signed in C); i1 uses zext (``_Bool``).
+        - i32, i64, double, pointer: passed as-is.
+        """
+        t = v.type
+        if isinstance(t, ir.FloatType):
+            return self.builder.fpext(v, ir.DoubleType())
+        if isinstance(t, ir.IntType):
+            if t.width == 1:
+                return self.builder.zext(v, ir.IntType(32))
+            if t.width < 32:
+                return self.builder.sext(v, ir.IntType(32))
+        return v
 
     def codegen_c_abi_call(self, fn, plan: CCallPlan, arg_exprs, modes):
         """Emit an ABI-correct call to a foreign ``[C]`` routine.
@@ -353,6 +375,14 @@ class CAbiMixin:
                     ld = self.builder.load(gep)
                     ld.align = pp.agg.align
                     call_args.append(ld)
+
+        # Variadic tail: arguments beyond the fixed parameters.
+        # Apply C default argument promotions: float->double, i1/i8/i16->i32.
+        if plan.is_variadic:
+            for expr in arg_exprs[len(plan.params):]:
+                v = self.codegen_expr(expr)
+                v = self._c_abi_variadic_promote(v)
+                call_args.append(v)
 
         call = self.builder.call(fn, call_args, arg_attrs=(arg_attrs or None))
 

@@ -476,6 +476,14 @@ class Parser:
         if cur.kind == 'IDENTIFIER' and cur.lexeme.upper() in {'C', 'CDECL'}:
             self.pos += 1
             return Attribute('C')
+        # VARARGS: trailing variadic-tail marker for [C] EXTERN routines (Phase 3
+        # of the C-FFI plan, docs/c-abi-foreign-functions.md).  Contextual like
+        # SPACE/C -- recognized from an IDENTIFIER lexeme only, so vintage
+        # `varargs` identifiers survive.  Must accompany [C]/[CDECL]; the type
+        # checker enforces that constraint.
+        if cur.kind == 'IDENTIFIER' and cur.lexeme.upper() == 'VARARGS':
+            self.pos += 1
+            return Attribute('VARARGS')
         self.error('expected attribute item')
 
     def parse_compound_statement(self) -> CompoundStmt:

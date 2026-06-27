@@ -544,10 +544,13 @@ class DeclsMixin:
                 flat_param_types.append(pt)
                 flat_modes.append(param.mode)
 
-        ir_args, ir_ret, _sret, arg_attrs, plan = self.build_c_abi_plan(
-            decl, flat_param_types, flat_modes, return_llvm)
+        decl_attrs = {a.name.upper() for a in getattr(decl, 'attributes', [])}
+        is_variadic = 'VARARGS' in decl_attrs
 
-        func_type = ir.FunctionType(ir_ret, ir_args)
+        ir_args, ir_ret, _sret, arg_attrs, plan = self.build_c_abi_plan(
+            decl, flat_param_types, flat_modes, return_llvm, is_variadic=is_variadic)
+
+        func_type = ir.FunctionType(ir_ret, ir_args, var_arg=is_variadic)
         func = ir.Function(self.module, func_type, name=decl.name)
         func.linkage = 'external'
         for idx, (names, align) in arg_attrs.items():

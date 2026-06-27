@@ -1,6 +1,6 @@
 # Calling C-ABI Foreign Functions from Host Pascal
 
-Status: report + implementation plan • Phases 0–2 implemented in-tree • Scope: host `MODULE`/`PROGRAM` code • Tested target: GNU/Linux AMD64 (System V) • Intended targets: also Windows AMD64 and ARM Linux (AArch64)
+Status: report + implementation plan • Phases 0–3 implemented in-tree • Scope: host `MODULE`/`PROGRAM` code • Tested target: GNU/Linux AMD64 (System V) • Intended targets: also Windows AMD64 and ARM Linux (AArch64)
 
 ## Implementation status
 
@@ -30,8 +30,21 @@ Phases 0, 1, and 2 of the plan below have shipped:
 
 By-value aggregates were validated differentially against clang across the eightbyte size
 classes (1- and 2-eightbyte integer structs, `double`/`<2 x float>` SSE structs, mixed
-SSE+INTEGER, and >16-byte MEMORY structs), for both arguments and returns. Variadics
-remain unsupported (Phase 3). Coverage is in `tests/test_c_ffi.py`.
+SSE+INTEGER, and >16-byte MEMORY structs), for both arguments and returns. Coverage is
+in `tests/test_c_ffi.py`.
+- **Phase 3 (variadic foreign functions).** A `[VARARGS]` attribute (contextual, like
+  `[C]`) on a `[C] EXTERN` routine marks the declaration variadic. The compiler emits
+  `var_arg=True` in the LLVM `ir.FunctionType`, so the LLVM backend handles all
+  platform-specific register accounting (`al` on System V, etc.) automatically. C default
+  argument promotions are applied to the variadic tail at each call site: `float`
+  (`REAL32`) is widened to `double` via `fpext`; integer types narrower than 32 bits
+  (`i1`, `i8`, `i16`) are widened to `i32` via `sext`/`zext`. The `[VARARGS]` surface
+  is gated the same way as `[C]`: requires the extended dialect and is rejected in
+  `DEVICE` code. The type checker allows any number of call-site arguments ≥ the fixed
+  parameter count for variadic routines; fixed-parameter types are still validated.
+  Aggregate passing in the variadic tail flows through the existing Phase 2 classifier
+  on `[C]` calls. (`parser.py`, `type_checker.py`, `type_system.py`, `codegen/c_abi.py`,
+  `codegen/decls.py`.)
 
 ### Dialect gating
 
@@ -74,7 +87,7 @@ broken or impossible right now:
 
 - aggregates passed or returned **by value** — silently produce wrong results;
 - **width-sensitive** scalar mappings (`INTEGER` is 16-bit, C `int` is 32-bit) — a latent ABI mismatch;
-- **variadic** functions (`printf`-style) — not expressible in the source grammar at all.
+- **variadic** functions (`printf`-style) — now supported via the `[VARARGS]` attribute (Phase 3).
 
 This document explains the current state with reproducible evidence, then lays out a
 phased plan to reach genuine arbitrary-C-ABI support. If the goal is only "call my own
@@ -222,7 +235,8 @@ the top.
 | `int32_t sumpt(struct{int32_t x,y})` by value| ✅ `[C]`     | now fixed in Phase 2: `sumpt({10,32}) = 42` ✓ |
 | `struct{int32_t a,b} makepair(int32_t)`      | ✅ `[C]`     | now fixed in Phase 2: `a=5, b=10` ✓          |
 | `struct point*` by reference (`VAR p`)       | ✅           | `42` ✓ — the supported aggregate path        |
-| `printf`-style variadic                      | 🚫 impossible| no `...` in the parameter grammar (Phase 3)  |
+| `printf`-style variadic (`[VARARGS]`)         | ✅ `[C][VARARGS]` | Phase 3: `[VARARGS]` attribute + default-arg promotions |
+| Variadic with integer tail (`i16` promoted)  | ✅ `[C][VARARGS]` | Phase 3: `i8`/`i16` → `i32` sext at call site |
 | `void cnoise(void)` ↔ extern `PROCEDURE`     | ⚠️ benign    | runs; IR declares `i32` return, C is `void`  |
 
 ### The decisive case: struct by value
@@ -418,23 +432,36 @@ into `decls.py`, `stmts.py`, `exprs.py`. Cost: medium–high for the first targe
 classifier is fiddly but well-specified and finite); low–medium per additional target.
 Risk: medium — contained behind `[C]`.
 
-### Phase 3 — Variadic foreign functions
+### Phase 3 — Variadic foreign functions — IMPLEMENTED
 
 Goal: call `printf`, `open`, etc.
 
-- Grammar: allow a trailing `...` (or a `[VARARGS]` attribute) in a `[C]` `EXTERN`
-  parameter list. Lower to `ir.FunctionType(ret, fixed_params, var_arg=True)` — the
-  builder already supports this (it's how the internal `printf` is declared).
-- Default argument promotions on the variadic tail (C promotes `float`→`double`,
-  small ints→`int`); apply them in `coerce_arg` for the variadic positions.
-- Variadic register accounting (System V's `al` vector-count, AArch64's separate
-  variadic save area, Microsoft x64's spill rules): the LLVM backend handles this per
-  target for `var_arg` calls, so no manual work beyond emitting the call against the
-  variadic type. Note varargs aggregate passing also flows through the Phase 2 classifier
-  on each target.
+A `[VARARGS]` attribute on a `[C] EXTERN` routine marks it variadic. The compiler emits
+`ir.FunctionType(ret, fixed_params, var_arg=True)` — the LLVM backend handles all
+platform-specific register accounting (`al` on System V, etc.) automatically. C default
+argument promotions are applied to the variadic tail at each call site: `float` →
+`double` via `fpext`; `i1`/`i8`/`i16` → `i32` via `zext`/`sext`. The `[VARARGS]`
+surface shares the same dialect gate as `[C]` (extended dialect only, rejected in
+`DEVICE` code), and `[VARARGS]` without `[C]` is a type-check error. The type checker
+permits any number of call-site arguments ≥ the fixed parameter count; the variadic tail
+is validated for expression well-formedness but not type-matched against a declared type
+(there is none). Aggregate passing in the variadic tail flows through the existing Phase
+2 classifier on `[C]` calls.
 
-Touchpoints: `parser.py`, `ast_nodes.py`, `decls.py`, `coerce_arg`. Cost: low–medium.
-Risk: low.
+Example:
+
+```pascal
+FUNCTION printf(fmt: CPTR): CINT [C, VARARGS]; EXTERN;
+FUNCTION sum_n(count: CINT): CINT [C, VARARGS]; EXTERN;
+```
+
+Touchpoints: `parser.py` (`[VARARGS]` contextual attribute), `type_checker.py` (dialect
+gate, `[C]` requirement, device exclusion, variadic call-site arity), `type_system.py`
+(`FunctionType.is_variadic`), `codegen/c_abi.py` (`CCallPlan.is_variadic`,
+`_c_abi_variadic_promote`, variadic tail in `codegen_c_abi_call`),
+`codegen/decls.py` (`var_arg=True` in `ir.FunctionType`). Cost: low–medium. Risk: low.
+Coverage: `tests/test_c_ffi.py::TestVariadicParsing`, `TestVariadicTypecheck`,
+`TestVariadicBuildAndRun`.
 
 ### Phase 4 — Scalar extension and return-type fidelity
 
@@ -457,14 +484,14 @@ Touchpoints: `decls.py`, `coerce_arg`. Cost: low. Risk: low.
 | 0 | No more silent wrong answers; docs; no new flag | low | low | yes | done |
 | 1 | `[C]` attribute + exact C type names | low–med | low | yes | done |
 | 2 | Struct by value/return (per-target classifier, SysV first) | med–high | med | yes | done |
-| 3 | Variadic calls (`printf`) | low–med | low | yes | planned |
+| 3 | Variadic calls (`printf`) via `[VARARGS]`; default-arg promotions | low–med | low | yes | done |
 | 4 | `signext`/`zeroext`/`void` fidelity | low | low | yes | planned |
 
-A practical first cut is **0 + 1 + 4**, which makes the *scalar/pointer/by-ref* world
-correct, safe, and ergonomic without the classifier. Phase 2 is the larger investment, is
-only required for by-value aggregates, and is where the per-target work concentrates
-(SysV AMD64 first; Windows AMD64 and AArch64 as added implementations behind the same
-seam).
+Phases 0, 1, 2, and 3 are all shipped. A practical first cut was **0 + 1 + 4** (scalar/
+pointer/by-ref world, correct and ergonomic); Phase 2 added by-value aggregates (the
+larger investment); Phase 3 added variadics. Phase 4 (scalar extension fidelity) is
+the remaining planned item. Windows AMD64 and AArch64 targets are reachable via the
+per-target seam in `codegen/c_abi.py` without touching call sites.
 
 ---
 
