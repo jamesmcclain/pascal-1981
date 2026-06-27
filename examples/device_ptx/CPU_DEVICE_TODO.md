@@ -1,4 +1,4 @@
-# CPU device support for the `device_ptx` examples — future work
+# CPU device support for the `device_ptx` examples — DONE
 
 The Makefiles in `fill_indices/` and `mandelbrot/` accept `DEVICE=cpu` and
 `DEVICE=cuda`. Only `DEVICE=cuda` is wired today; `DEVICE=cpu` prints a pointer
@@ -31,7 +31,28 @@ Both example kernels are one-thread-per-element:
 
 This is a property of the kernels, not the orchestration or the shim.
 
-## What enabling CPU needs: grid-stride kernels
+## How it was fixed (implemented)
+
+Rather than changing the kernels, the CPU shim was made to actually emulate GPU
+execution:
+
+1. **Compiler (`codegen/exprs.py`)**: on the CPU triple, `THREADIDX_*`,
+   `BLOCKIDX_*`, `BLOCKDIM_*`, `GRIDDIM_*` now lower to **loads from
+   thread-local globals** (`__pas_tid_x`, `__pas_ctaid_x`, etc.) instead of
+   baked-in constants. The runtime defines these.
+
+2. **CPU shim (`runtime/cpu_device_shim.c`)**: `pas_dev_launch` now loops over
+   the full launch geometry (`gx*gy*gz` blocks × `bx*by*bz` threads), setting
+   the TLS index registers before each thunk call. `BLOCKDIM_*`/`GRIDDIM_*`
+   default to 1 so direct (non-LAUNCH) kernel calls still work.
+
+3. **Makefile (`device-example.mk`)**: the `DEVICE=cpu` stub now builds and
+   links `dev.ll` + `host.ll` against `libpascalrt_cpu.a`.
+
+The kernels are unchanged. `make DEVICE=cpu run` now produces correct output for
+both `fill_indices` (all 256 indices correct) and `mandelbrot` (full image).
+
+## What was previously needed (now moot): grid-stride kernels
 
 Make each kernel iterate its whole index space with a grid-stride loop instead of
 handling a single element. For a 1-D kernel:

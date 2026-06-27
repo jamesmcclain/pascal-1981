@@ -70,15 +70,23 @@ $(EXE): $(BUILD)/host.ll $(BUILD)/dev_ptx_blob.o
 	      -L$(CUDA_HOME)/lib64/stubs -lcuda -o $@
 
 else ifeq ($(DEVICE),cpu)
-# ---- CPU device: FUTURE WORK (see CPU_DEVICE_TODO.md) -----------------------
-# The host orchestration already works on the CPU shim; what's missing is kernel
-# coverage. The CPU device runs a single-thread grid, so a one-thread-per-element
-# kernel computes only element 0. Enabling this is a kernel change, deferred.
-$(EXE):
-	@echo "DEVICE=cpu is not yet wired for this example."                    >&2
-	@echo "See examples/device_ptx/CPU_DEVICE_TODO.md for why and what it"   >&2
-	@echo "needs. For now, build and run on a GPU with:  make DEVICE=cuda"   >&2
-	@false
+# ---- CPU device: full-grid emulation via thread-local index registers -------
+# The CPU shim now emulates a GPU launch: pas_dev_launch loops over the full
+# gx*gy*gz x bx*by*bz grid, setting thread-local __pas_tid_*/  __pas_ctaid_*
+# globals before each thunk call so the kernel sees the correct indices.
+# The device unit compiles to the host triple (no PTX), and links alongside
+# the host .ll against libpascalrt_cpu.a. No GPU or CUDA toolkit required.
+#
+# Build the cpu runtime archive once with:  make -C runtime
+# (this Makefile does not rebuild it on every example build).
+$(BUILD)/dev.ll: $(DEVICE_UNIT) | $(BUILD)
+	$(PAS) $(FEATURES) $< $@
+
+$(BUILD)/host.ll: $(HOST_SRC) | $(BUILD)
+	$(PAS) $(FEATURES) $< $@
+
+$(EXE): $(BUILD)/host.ll $(BUILD)/dev.ll
+	clang $(BUILD)/host.ll $(BUILD)/dev.ll $(RUNTIME_LIB) -lm -o $@
 
 else
 $(error DEVICE must be 'cpu' or 'cuda', got '$(DEVICE)')
