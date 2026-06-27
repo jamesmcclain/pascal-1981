@@ -10,9 +10,12 @@ on the GPU is a pure runtime-library swap; this test proves it.
 
 Gated by ``@requires_gpu`` so it skips cleanly on CPU-only machines.
 
-The device kernel is compiled to PTX (NVPTX backend) and embedded into the host
-compiland via ``--embed-device-ptx``; the host links the CUDA shim archive plus
-``-lcuda``.  Asserts the result is ``0 3 6 … 21``.
+The device kernel is compiled to PTX (NVPTX backend) and packaged as a
+NUL-terminated ``__pas_device_ptx`` data object that the host (compiled with
+``--device-backend cuda``) references as an external symbol; the host links
+that blob + the CUDA shim archive plus ``-lcuda``.  The host emits no
+in-process launch thunk and no kernel-symbol reference, so no device-unit
+``.ll`` is linked.  Asserts the result is ``0 3 6 … 21``.
 """
 
 import os
@@ -23,7 +26,7 @@ import unittest
 
 from pascal1981.compile_to_ptx import compile_file_to_ptx
 from pascal1981.features import resolve_features
-from tests.support import (RUNTIME_DIR, compile_pascal_file, requires_gpu,
+from tests.support import (RUNTIME_DIR, requires_gpu,
                            temporary_pascal_project)
 
 _WIDE = resolve_features(overrides=['wide-integers'])
@@ -154,7 +157,6 @@ class TestDeviceOrchestrationVectorAddGPU(unittest.TestCase):
         }
         cuda_home = os.environ.get("CUDA_HOME", "/usr/local/cuda")
         with temporary_pascal_project(files) as proj:
-            inc = os.path.join(proj, 'vadd.inc')
             dev = os.path.join(proj, 'vadd.pas')
             main = os.path.join(proj, 'main.pas')
 
@@ -165,15 +167,13 @@ class TestDeviceOrchestrationVectorAddGPU(unittest.TestCase):
             with open(ptx_path, 'w') as f:
                 f.write(ptx)
 
-            # 2/3. device unit + interface -> host x86 .ll (the device .ll
-            # defines the kernel symbol the host launch thunk references; the
-            # real kernel comes from the embedded PTX at run time).
-            dev_ll = compile_pascal_file(dev, os.path.join(proj, 'vadd.ll'),
-                                         features=_WIDE)
-            compile_pascal_file(inc, os.path.join(proj, 'vadd-iface.ll'),
-                                features=_WIDE)
-
-            # 4. host program -> .ll, embedding the PTX.
+            # 2. host program -> .ll with the cuda device backend.  This emits
+            # no in-process launch thunk and no kernel-symbol reference, so the
+            # host .ll needs no device-unit .ll to link against -- the real
+            # kernel comes from the PTX loaded at run time.  The PTX text is
+            # packaged as its own NUL-terminated __pas_device_ptx data object
+            # that the host references as an external symbol (the blob the CUDA
+            # shim reads as a C-string and cuModuleLoadData's).
             from pascal1981.codegen import compile_to_llvm
             from pascal1981.parser import parse_file
             from pascal1981.type_checker import PascalTypeChecker
@@ -183,12 +183,27 @@ class TestDeviceOrchestrationVectorAddGPU(unittest.TestCase):
             main_ll = os.path.join(proj, 'main.ll')
             with open(main_ll, 'w') as f:
                 f.write(compile_to_llvm(ast, source_file=main, features=_WIDE,
-                                        embed_device_ptx_text=ptx))
+                                        device_backend='cuda'))
 
-            # 5. link host + device .ll + CUDA shim + -lcuda.
+            # 3. objectify the PTX text into a __pas_device_ptx data blob
+            # (PTX *text* + trailing NUL; NOT ptxas/cubin output).  incbin uses
+            # the absolute ptx_path so it resolves regardless of assembler CWD.
+            blob_s = os.path.join(proj, 'dev_ptx_blob.s')
+            with open(blob_s, 'w') as f:
+                f.write('\t.section .rodata\n'
+                        '\t.globl __pas_device_ptx\n'
+                        '__pas_device_ptx:\n'
+                        f'\t.incbin "{ptx_path}"\n'
+                        '\t.byte 0\n')
+            blob_o = os.path.join(proj, 'dev_ptx_blob.o')
+            asm = subprocess.run(['clang', '-c', blob_s, '-o', blob_o],
+                                 capture_output=True, text=True)
+            self.assertEqual(asm.returncode, 0, msg=asm.stderr)
+
+            # 4. link host .ll + PTX blob + CUDA shim + -lcuda.
             exe = os.path.join(proj, 'vadd-gpu')
             link = subprocess.run(
-                ['clang', main_ll, dev_ll, self.runtime_lib,
+                ['clang', main_ll, blob_o, self.runtime_lib,
                  '-L' + os.path.join(cuda_home, 'lib64', 'stubs'), '-lcuda',
                  '-o', exe],
                 capture_output=True, text=True)
