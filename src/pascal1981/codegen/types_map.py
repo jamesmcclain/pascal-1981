@@ -37,6 +37,14 @@ class TypesMapMixin:
                 return ir.IntType(8)  # one byte, so adr/sizeof/fillc agree on layout
             elif type_expr.name == 'WORD':
                 return ir.IntType(16)
+            elif type_expr.name == 'WORD16':
+                return ir.IntType(16)
+            elif type_expr.name == 'WORD32':
+                return ir.IntType(32)
+            elif type_expr.name == 'WORD64':
+                return ir.IntType(64)
+            elif type_expr.name == 'INTEGER16':
+                return ir.IntType(16)
             elif type_expr.name == 'CHAR':
                 return ir.IntType(8)
             elif type_expr.name == 'REAL':
@@ -69,6 +77,8 @@ class TypesMapMixin:
                 return ir.LiteralStructType([ir.PointerType(ir.IntType(8)), ir.IntType(16)])
             elif name_up == 'INTEGER':
                 return ir.IntType(16)
+            elif name_up == 'INTEGER16':
+                return ir.IntType(16)
             elif name_up == 'INTEGER32':
                 return ir.IntType(32)
             elif name_up == 'INTEGER64':
@@ -77,6 +87,12 @@ class TypesMapMixin:
                 return ir.IntType(8)
             elif name_up == 'WORD':
                 return ir.IntType(16)
+            elif name_up == 'WORD16':
+                return ir.IntType(16)
+            elif name_up == 'WORD32':
+                return ir.IntType(32)
+            elif name_up == 'WORD64':
+                return ir.IntType(64)
             elif name_up == 'REAL':
                 return ir.DoubleType()
             elif name_up == 'REAL64':

@@ -252,12 +252,13 @@ This compiler implements the full IBM Pascal 2.0 language, including all semanti
 
 ### Types
 - `INTEGER` (16-bit signed, matching IBM Pascal 2.0; range `-32767..32767`, i.e. `-MAXINT..MAXINT` with `MAXINT = 32767`; per the manual `-32768` is *not* a valid `INTEGER` — that bit pattern belongs to `WORD`)
-- `INTEGER32` / `INTEGER64` (opt-in extension types enabled with `-f wide-integers`; also enables `MAXINT32` and `MAXINT64`)
+- `INTEGER32` / `INTEGER64` (opt-in signed extension types enabled with `-f wide-integers`; also enables `MAXINT32` and `MAXINT64`)
 - `BOOLEAN` (one byte; stored as `i8` so address-of / `sizeof` / fills are byte-consistent)
 - `REAL` (64-bit float; constants, division, unary minus, and mixed arithmetic are codegen-hardened, and the default `WRITE` format matches the manual's 14-wide exponential, e.g. `WRITE(123.456)` prints ` 1.2345600E+02`)
 - `REAL32` / `REAL64` (opt-in extension real types enabled with `-f wide-reals`; `REAL32` is a 32-bit float lowering to LLVM `float`, `REAL64` is a 64-bit synonym for `REAL`. Always available inside `DEVICE` code regardless of the flag — `REAL32` is what gives device kernels true `.f32` parameter ABI.)
 - `WORD` (16-bit unsigned)
-- `CHAR` (8-bit)
+- `WORD32` / `WORD64` (opt-in *unsigned* extension types enabled with `-f wide-integers`, the unsigned siblings of `INTEGER32`/`INTEGER64`; they zero-extend when widened and `WRITE` them unsigned. `WORD` widens implicitly to `WORD32` and `WORD64`; a signed `INTEGER` does not — convert with `WRD(...)` into `WORD` first)
+- `WORD16` (= `WORD`) and `INTEGER16` (= `INTEGER`) — width-explicit synonyms enabled with `-f wide-integers` (or inside `DEVICE` code), alongside the other wide integer types
 - `ARRAY[low..high] OF type` — bounds may be constant expressions, including named `CONST`s
 - `RECORD ... END`
 - `SET OF type` — 256-bit bitvector representation; constant constructors fold at compile time

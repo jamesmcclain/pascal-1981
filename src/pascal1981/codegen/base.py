@@ -73,12 +73,16 @@ def _is_gpu_triple(triple: str) -> bool:
 
 _SCALAR_SIZES = {
     'INTEGER': 2,
+    'INTEGER16': 2,
     'INTEGER32': 4,
     'INTEGER64': 8,
     'REAL': 8,
     'REAL64': 8,
     'REAL32': 4,
     'WORD': 2,
+    'WORD16': 2,
+    'WORD32': 4,
+    'WORD64': 8,
     'CHAR': 1,
     'BOOLEAN': 1,  # vintage Pascal BOOLEAN is one byte
     'ADRMEM': 8,  # 64-bit pointer

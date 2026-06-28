@@ -34,7 +34,7 @@ from .ast_nodes import (TypeDecl, UnaryOp, UpperExpr, UseClause, ValueDecl, VarD
 from .builtins_registry import (DEVICE_INDEX_BUILTIN_FUNCTIONS, DEVICE_SYNC_BUILTIN_PROCEDURES, register_builtins)
 from .parser import parse_file
 from .symbol_table import SourceLocation, Symbol, SymbolTable
-from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL32_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, EnumType, FileType, FunctionType,
+from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL32_TYPE, REAL_TYPE, WORD_TYPE, WORD32_TYPE, WORD64_TYPE, ArrayType, EnumType, FileType, FunctionType,
                           LStringType, PointerType, ProcedureType, RecordType, SetType, StringType, Type, binary_op_result_type, can_assign, is_fixed_char_array,
                           unary_op_result_type)
 
@@ -1835,7 +1835,7 @@ class PascalTypeChecker(TypeChecker):
         # source, not whether a live typed value (e.g. returned from an imported
         # device function) can be passed to WRITE.
         wide_real = (type(REAL32_TYPE), ) if (self.feature_enabled('wide-reals') or self.in_device_module) else ()
-        return isinstance(t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), type(INTEGER32_TYPE), type(INTEGER64_TYPE), EnumType, StringType, LStringType) +
+        return isinstance(t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), type(WORD32_TYPE), type(WORD64_TYPE), type(INTEGER32_TYPE), type(INTEGER64_TYPE), EnumType, StringType, LStringType) +
                           wide_real) or is_fixed_char_array(t)
 
     def _is_readable_type(self, t: Type) -> bool:
@@ -1844,7 +1844,7 @@ class PascalTypeChecker(TypeChecker):
         # under -f symbolic-enum-io).
         # INTEGER32/INTEGER64 are always readable for the same reason they are
         # always writable: the type object is valid regardless of how it arrived.
-        return isinstance(t, (type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), type(INTEGER32_TYPE), type(INTEGER64_TYPE), EnumType, StringType, LStringType))
+        return isinstance(t, (type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), type(WORD32_TYPE), type(WORD64_TYPE), type(INTEGER32_TYPE), type(INTEGER64_TYPE), EnumType, StringType, LStringType))
 
     def _check_concat_args(self, stmt: ProcCallStmt) -> None:
         """Type check CONCAT(VAR D: LSTRING; CONST S: STRING).
@@ -2228,6 +2228,10 @@ class PascalTypeChecker(TypeChecker):
             return (-32767, 32767)
         if t == WORD_TYPE:
             return (0, 65535)
+        if t == WORD32_TYPE:
+            return (0, 4294967295)
+        if t == WORD64_TYPE:
+            return (0, 18446744073709551615)
         if t == INTEGER32_TYPE:
             return (-2147483648, 2147483647)
         if t == INTEGER64_TYPE:
@@ -2341,7 +2345,7 @@ class PascalTypeChecker(TypeChecker):
         """Infer the type of an expression."""
         if isinstance(expr, IntLiteral):
             self._check_integer_literal_range(expr, context_type)
-            resolved = context_type if context_type in (INTEGER_TYPE, WORD_TYPE, INTEGER32_TYPE, INTEGER64_TYPE) else INTEGER_TYPE
+            resolved = context_type if context_type in (INTEGER_TYPE, WORD_TYPE, WORD32_TYPE, WORD64_TYPE, INTEGER32_TYPE, INTEGER64_TYPE) else INTEGER_TYPE
             setattr(expr, 'resolved_type', resolved)
             return resolved
         elif isinstance(expr, RealLiteral):
@@ -2525,7 +2529,7 @@ class PascalTypeChecker(TypeChecker):
                 return sym.type.return_type
             return sym.type
         elif isinstance(expr, BinOp):
-            literal_context = context_type if context_type in (INTEGER_TYPE, WORD_TYPE, INTEGER32_TYPE, INTEGER64_TYPE) else None
+            literal_context = context_type if context_type in (INTEGER_TYPE, WORD_TYPE, WORD32_TYPE, WORD64_TYPE, INTEGER32_TYPE, INTEGER64_TYPE) else None
             left_context = literal_context if isinstance(expr.left, (IntLiteral, UnaryOp)) else None
             right_context = literal_context if isinstance(expr.right, (IntLiteral, UnaryOp)) else None
             # A REAL32 result context flows into real-literal operands so that a
@@ -2567,7 +2571,7 @@ class PascalTypeChecker(TypeChecker):
         elif isinstance(expr, UnaryOp):
             self._check_integer_literal_range(expr, context_type)
             if expr.op in ('PLUS', 'MINUS') and isinstance(expr.operand, IntLiteral):
-                operand_type = context_type if context_type in (INTEGER_TYPE, WORD_TYPE, INTEGER32_TYPE, INTEGER64_TYPE) else INTEGER_TYPE
+                operand_type = context_type if context_type in (INTEGER_TYPE, WORD_TYPE, WORD32_TYPE, WORD64_TYPE, INTEGER32_TYPE, INTEGER64_TYPE) else INTEGER_TYPE
                 setattr(expr, 'resolved_type', operand_type)
                 setattr(expr.operand, 'resolved_type', operand_type)
             else:
@@ -3017,6 +3021,11 @@ class PascalTypeChecker(TypeChecker):
             name = type_expr.name.upper()
             if name == 'INTEGER':
                 return INTEGER_TYPE
+            elif name == 'INTEGER16' and (self.feature_enabled('wide-integers') or self.in_device_module):
+                # INTEGER16 is a synonym for INTEGER, gated on the wide-integer
+                # surface (like INTEGER32), so it is available exactly when the
+                # other wide integer types are.
+                return INTEGER_TYPE
             elif name == 'INTEGER32' and (self.feature_enabled('wide-integers') or self.in_device_module):
                 return INTEGER32_TYPE
             elif name == 'INTEGER64' and self.feature_enabled('wide-integers'):
@@ -3032,6 +3041,17 @@ class PascalTypeChecker(TypeChecker):
                 return REAL32_TYPE
             elif name == 'WORD':
                 return WORD_TYPE
+            elif name == 'WORD16' and (self.feature_enabled('wide-integers') or self.in_device_module):
+                # WORD16 is a synonym for WORD, gated on the wide-integer surface
+                # (like WORD32), so it is available exactly when the other wide
+                # integer types are.
+                return WORD_TYPE
+            elif name == 'WORD32' and (self.feature_enabled('wide-integers') or self.in_device_module):
+                # WORD32 is the unsigned sibling of INTEGER32 (32-bit unsigned).
+                return WORD32_TYPE
+            elif name == 'WORD64' and self.feature_enabled('wide-integers'):
+                # WORD64 is the unsigned sibling of INTEGER64 (64-bit unsigned).
+                return WORD64_TYPE
             elif name == 'CHAR':
                 return CHAR_TYPE
             elif name == 'ADRMEM':
