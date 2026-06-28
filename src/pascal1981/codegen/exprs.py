@@ -89,8 +89,10 @@ class ExprsMixin:
                 if symbol is not None and symbol.type_expr is not None:
                     size_val = self.get_type_size(symbol.type_expr)
                 else:
-                    # Not a variable: treat the name as a built-in type name
-                    size_val = self._scalar_size(expr.target)
+                    # Not a variable: treat the name as a type. get_type_size
+                    # resolves builtin scalars, user TYPE names (records/arrays),
+                    # and C aliases alike, so SIZEOF(typename) works too.
+                    size_val = self.get_type_size(NamedType(expr.target, None))
             else:
                 # An AST Type node was supplied directly
                 size_val = self.get_type_size(expr.target)
