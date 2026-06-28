@@ -489,7 +489,7 @@ class StmtsMixin:
         if kernel_actuals:
             argv = self.builder.alloca(ir.ArrayType(i8p, len(kernel_actuals)), name='launch_argv')
             for i, actual in enumerate(kernel_actuals):
-                v = self.coerce_arg(self.codegen_expr(actual), param_types[i])
+                v = self.coerce_arg(self.codegen_expr(actual), param_types[i], src_expr=actual)
                 cell = self.builder.alloca(param_types[i], name=f'launch_arg{i}')
                 self.builder.store(v, cell)
                 slot = self.builder.gep(argv, [i32(0), i32(i)], inbounds=True)
@@ -734,7 +734,7 @@ class StmtsMixin:
                 mode = param_modes[i] if i < len(param_modes) else None
                 v = self.codegen_actual_arg(arg, mode)
                 if i < len(param_types):
-                    v = self.coerce_arg(v, param_types[i])
+                    v = self.coerce_arg(v, param_types[i], src_expr=arg)
                 args.append(v)
             self.builder.call(fn, args)
 

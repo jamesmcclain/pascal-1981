@@ -122,6 +122,19 @@ pascal1981 -f wide-integers myprogram.pas myprogram.ll
 pascal1981 -f symbolic-enum-io myprogram.pas myprogram.ll
 ```
 
+By default the dialect already enforces the vintage WORD/INTEGER rules: a signed
+`INTEGER` variable is not assignment-compatible with `WORD` (convert with
+`WRD(...)`; use `ORD(...)` for the reverse), and mixing `WORD` with a
+non-constant `INTEGER` in an expression is a warning. The `strict-word-int`
+feature promotes that mix warning to a hard error. It is a policy flag,
+orthogonal to `--dialect`: enabling or disabling it never moves a program in or
+out of the extended dialect.
+
+```bash
+# Make every non-constant WORD/INTEGER expression mix a hard error
+pascal1981 -f strict-word-int myprogram.pas myprogram.ll
+```
+
 If no output file is specified, LLVM IR is written to stdout:
 
 ```bash
@@ -238,7 +251,7 @@ The grammar this dialect implements is formally specified in [`docs/ebnf_grammar
 This compiler implements the full IBM Pascal 2.0 language, including all semantic rules and dialectal extensions.
 
 ### Types
-- `INTEGER` (16-bit signed, matching IBM Pascal 2.0; range `-32768..32767`; `MAXINT = 32767`)
+- `INTEGER` (16-bit signed, matching IBM Pascal 2.0; range `-32767..32767`, i.e. `-MAXINT..MAXINT` with `MAXINT = 32767`; per the manual `-32768` is *not* a valid `INTEGER` — that bit pattern belongs to `WORD`)
 - `INTEGER32` / `INTEGER64` (opt-in extension types enabled with `-f wide-integers`; also enables `MAXINT32` and `MAXINT64`)
 - `BOOLEAN` (one byte; stored as `i8` so address-of / `sizeof` / fills are byte-consistent)
 - `REAL` (64-bit float; constants, division, unary minus, and mixed arithmetic are codegen-hardened, and the default `WRITE` format matches the manual's 14-wide exponential, e.g. `WRITE(123.456)` prints ` 1.2345600E+02`)

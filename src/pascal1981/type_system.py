@@ -307,6 +307,7 @@ class ProcedureType(Type):
 
     name: str
     params: List[Tuple[str, Type]]  # List of (param_name, param_type)
+    is_variadic: bool = False  # True for [VARARGS] C-ABI foreign procedures
 
     def __str__(self) -> str:
         param_str = ", ".join(f"{name}: {typ}" for name, typ in self.params)
@@ -452,7 +453,14 @@ def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optiona
                 return INTEGER64_TYPE
             if rank == 1:
                 return INTEGER32_TYPE
-            if isinstance(left_type, WordType) and isinstance(right_type, WordType):
+            # Rank 0: INTEGER and/or WORD.  A pure-INTEGER result stays INTEGER;
+            # any WORD participation makes the result WORD.  Per the manual a
+            # WORD/INTEGER mix is "arbitrarily signed or unsigned"; choosing
+            # unsigned (WORD) keeps the common ``w := w + i`` idiom a *warning*
+            # (the mix is flagged in the type checker) rather than forcing it
+            # through the INTEGER->WORD assignment error on the way back to a WORD
+            # destination.
+            if isinstance(left_type, WordType) or isinstance(right_type, WordType):
                 return WORD_TYPE
             return INTEGER_TYPE
         if op in COMPARE:

@@ -312,9 +312,9 @@ class StringsMixin:
             if isinstance(val.type, ir.IntType) and val.type.width < 32:
                 val = self.builder.sext(val, ir.IntType(32))
             if value_arg.width is not None:
-                width = self.coerce_arg(self.codegen_expr(value_arg.width), ir.IntType(32))
+                width = self.coerce_arg(self.codegen_expr(value_arg.width), ir.IntType(32), src_expr=value_arg.width)
             if value_arg.precision is not None:
-                precision = self.coerce_arg(self.codegen_expr(value_arg.precision), ir.IntType(32))
+                precision = self.coerce_arg(self.codegen_expr(value_arg.precision), ir.IntType(32), src_expr=value_arg.precision)
         else:
             val = self.codegen_expr(value_arg)
             if isinstance(val.type, ir.IntType) and val.type.width < 32:

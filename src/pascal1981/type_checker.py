@@ -1108,8 +1108,14 @@ class PascalTypeChecker(TypeChecker):
                         for name in param.names:
                             param_types.append((name, param_type))
 
-        # Create procedure type
-        proc_type = ProcedureType(decl.name, param_types)
+        # Create procedure type.  [VARARGS] makes a [C] foreign procedure
+        # variadic; without threading it onto the type, the call-site arity
+        # check (which reads sym.type.is_variadic) rejected every variadic
+        # *procedure* call -- variadic FUNCTIONS already worked because
+        # FunctionType carried the flag.  (Finding 3.)
+        _proc_attrs = {a.name.upper() for a in getattr(decl, 'attributes', [])}
+        proc_type = ProcedureType(decl.name, param_types,
+                                  is_variadic='VARARGS' in _proc_attrs)
 
         # Phase 0 C-FFI guard: reject ABI-incompatible foreign signatures
         # (procedures have no return type, so only by-value aggregate params).
@@ -1345,6 +1351,8 @@ class PascalTypeChecker(TypeChecker):
             value_type = self.infer_expression_type(stmt.value)
             if value_type and not can_assign(value_type, self.current_function_return_type):
                 self.error(f"RETURN type mismatch: expected {self.current_function_return_type}, got {value_type}", stmt)
+            elif value_type:
+                self._check_word_int_assign(value_type, self.current_function_return_type, stmt.value, stmt)
 
     def check_assign_stmt(self, stmt: AssignStmt) -> None:
         """Type check an assignment statement."""
@@ -1382,6 +1390,8 @@ class PascalTypeChecker(TypeChecker):
                 value_type = self.infer_expression_type(stmt.expr, target_type)
                 if value_type and not can_assign(value_type, target_type):
                     self.error(f"Cannot assign {value_type} to {target_type}", stmt)
+                elif value_type:
+                    self._check_word_int_assign(value_type, target_type, stmt.expr, stmt)
                 return
             else:
                 # Error already reported by infer_designator_type
@@ -1415,6 +1425,8 @@ class PascalTypeChecker(TypeChecker):
         if value_type:
             if not can_assign(value_type, target_type):
                 self.error(f"Cannot assign {value_type} to {target_type}", stmt)
+            else:
+                self._check_word_int_assign(value_type, target_type, stmt.expr, stmt)
 
     def check_proc_call_stmt(self, stmt: ProcCallStmt) -> None:
         """Type check a procedure call statement."""
@@ -1542,6 +1554,8 @@ class PascalTypeChecker(TypeChecker):
                         _, param_type = sym.type.params[i]
                         if not self._can_pass_value_argument(arg_type, param_type):
                             self.error(f"Argument {i+1} type mismatch: expected {param_type}, got {arg_type}", stmt)
+                        else:
+                            self._check_word_int_assign(arg_type, param_type, value_arg, stmt)
             return
 
     def _check_file_primitive_args(self, stmt: ProcCallStmt, name: str) -> None:
@@ -2206,7 +2220,12 @@ class PascalTypeChecker(TypeChecker):
 
     def _integer_range_for_type(self, t: Type) -> Optional[tuple[int, int]]:
         if t == INTEGER_TYPE:
-            return (-32768, 32767)
+            # IBM Pascal 2.0 manual (Elementary Types, p.6-5): INTEGER ranges
+            # -MAXINT..MAXINT with MAXINT = 32767, and "-32768 is not a valid
+            # INTEGER".  The two's-complement bit pattern 0x8000 belongs to WORD,
+            # not INTEGER -- one of the motivations the manual gives for having a
+            # separate WORD type at all.
+            return (-32767, 32767)
         if t == WORD_TYPE:
             return (0, 65535)
         if t == INTEGER32_TYPE:
@@ -2223,6 +2242,88 @@ class PascalTypeChecker(TypeChecker):
             if inner is not None:
                 return -inner if expr.op == 'MINUS' else inner
         return None
+
+    # ------------------------------------------------------------------
+    # WORD / INTEGER strictness (IBM Pascal 2.0 manual, Elementary Types, p.6-5)
+    #
+    #   "INTEGER type constants change to WORD type if necessary, but not
+    #    INTEGER variables."
+    #   "WORD and INTEGER values cannot be mixed in an expression (unless one is
+    #    a constant INTEGER), and are not assignment compatible.  Mixing INTEGER
+    #    and WORD values results in a warning instead of an error ..."
+    #
+    # So a signed INTEGER *variable/expression* is NOT assignment compatible with
+    # WORD (and vice versa: WORD->INTEGER is already rejected by can_assign, which
+    # forces ORD(...)).  Here we additionally reject a non-constant INTEGER value
+    # flowing into a WORD target (forcing WRD(...)), and we warn (or, under
+    # -f strict-word-int, error) on a WORD/INTEGER expression mix.  In every case
+    # an INTEGER *constant* is exempt -- it "changes to WORD" per the manual.
+    #
+    # !!! TECH DEBT -- CONSTANT DETECTION IS LITERAL-ONLY FOR NOW !!!
+    # `_is_constant_integer_expr` recognizes integer *literals* (including unary
+    # +/-) and direct references to named integer CONSTs.  It does NOT fold
+    # constant *expressions* such as `k + 1`, `2 * SIZE`, or `SUCC(k)`, so those
+    # are currently treated as non-constant and require an explicit WRD(...) when
+    # crossing into WORD.  This is stricter than the vintage compiler (which would
+    # accept any compile-time-constant INTEGER).  Folding general constant
+    # expressions here is tracked as follow-up work in docs/followups.md
+    # ("WORD/INTEGER constant exemption: fold constant expressions").
+    # ------------------------------------------------------------------
+    def _is_constant_integer_expr(self, expr: Expression) -> bool:
+        """True if expr is a *constant* INTEGER for the manual's WORD exemption.
+
+        Literal-only for now (see the big TECH DEBT note above): integer literals
+        (incl. unary +/-) and references to named integer CONSTs.
+        """
+        if self._fold_int_literal_value(expr) is not None:
+            return True
+        if isinstance(expr, Identifier):
+            sym = self.symbol_table.lookup(expr.name)
+            if (sym and getattr(sym, 'kind', None) == 'const'
+                    and sym.type in (INTEGER_TYPE, INTEGER32_TYPE, INTEGER64_TYPE)):
+                return True
+        return False
+
+    def _check_word_int_assign(self, value_type, target_type, value_expr, node) -> None:
+        """Reject a non-constant INTEGER value assigned/passed into a WORD target.
+
+        WORD->INTEGER is already rejected upstream by can_assign (use ORD); this
+        adds the reciprocal vintage rule for INTEGER->WORD (use WRD), with the
+        INTEGER-constant exemption.  Applies to assignment, value-argument
+        passing, and function return -- every assignment-compatibility context.
+        """
+        if value_type == INTEGER_TYPE and target_type == WORD_TYPE:
+            if value_expr is None or not self._is_constant_integer_expr(value_expr):
+                self.error(
+                    "INTEGER is not assignment compatible with WORD: only INTEGER "
+                    "constants change to WORD; convert a signed INTEGER value with "
+                    "WRD(...)", node)
+
+    def _check_word_int_mix(self, left_type, right_type, left_expr, right_expr, op, node) -> None:
+        """Diagnose a WORD/INTEGER mix in an arithmetic or bitwise expression.
+
+        Allowed when the INTEGER operand is a constant (it changes to WORD).
+        Otherwise a warning by default (the vintage compiler arbitrarily picks
+        signed or unsigned arithmetic), promoted to a hard error under
+        -f strict-word-int.
+        """
+        ARITH_BITWISE = {'PLUS', 'MINUS', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR'}
+        if op not in ARITH_BITWISE:
+            return
+        for a_t, b_t, b_e in ((left_type, right_type, right_expr),
+                              (right_type, left_type, left_expr)):
+            if a_t == WORD_TYPE and b_t == INTEGER_TYPE:
+                if self._is_constant_integer_expr(b_e):
+                    return  # constant INTEGER changes to WORD: clean
+                msg = ("WORD and INTEGER values cannot be mixed in an expression "
+                       "unless the INTEGER operand is a constant; convert "
+                       "explicitly with WRD(...) or ORD(...)")
+                if self.feature_enabled('strict-word-int'):
+                    self.error(msg, node)
+                else:
+                    self.warning(msg + " (the compiler would arbitrarily use "
+                                 "signed or unsigned arithmetic)", node)
+                return
 
     def _check_integer_literal_range(self, expr: Expression, context_type: Optional[Type]) -> None:
         value = self._fold_int_literal_value(expr)
@@ -2459,6 +2560,8 @@ class PascalTypeChecker(TypeChecker):
                 result = binary_op_result_type(left_type, expr.op, right_type)
                 if result is None:
                     self.error(f"Operator '{expr.op}' cannot be applied to operands of type {left_type} and {right_type}", expr)
+                else:
+                    self._check_word_int_mix(left_type, right_type, expr.left, expr.right, expr.op, expr)
                 return result
             return None
         elif isinstance(expr, UnaryOp):
@@ -2502,6 +2605,8 @@ class PascalTypeChecker(TypeChecker):
                             arg_type = self.infer_expression_type(arg)
                             if arg_type and not self._can_pass_value_argument(arg_type, param_type):
                                 self.error(f"Argument {i+1} type mismatch: expected {param_type}, got {arg_type}", expr)
+                            elif arg_type:
+                                self._check_word_int_assign(arg_type, param_type, arg, expr)
                         # Type-check variadic tail args too (just for expression validity)
                         for arg in (expr.args[expected_args:] if _is_variadic_fn else []):
                             self.infer_expression_type(arg)

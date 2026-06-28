@@ -48,3 +48,58 @@ GPU allocator calls unless a real device heap design is approved.
 heap recission. Add new differential probes before expanding beyond the current
 subset, especially for multi-dimensional super arrays, `UPPER(p^)`, and any
 variant-record long-form `NEW` behavior.
+
+---
+
+## 3. WORD/INTEGER constant exemption: fold constant expressions [OPEN]
+
+**Where.** `type_checker.py::_is_constant_integer_expr` (consulted by
+`_check_word_int_assign` and `_check_word_int_mix`).
+
+**What.** The IBM Pascal 2.0 manual (Elementary Types, p.6-5) exempts INTEGER
+*constants* from the WORD/INTEGER assignment and expression-mix restrictions:
+"INTEGER type constants change to WORD type if necessary, but not INTEGER
+variables." Our constant detector currently recognizes only integer *literals*
+(including unary `+`/`-`) and direct references to named integer `CONST`s. It
+does **not** fold constant *expressions* such as `k + 1`, `2 * SIZE`, or
+`SUCC(k)`, so those are treated as non-constant and require an explicit `WRD(...)`
+when crossing into WORD.
+
+**Why it matters.** This is slightly *stricter* than the vintage compiler, which
+would accept any compile-time-constant INTEGER in a WORD context. It is a
+conservative, safe deviation (it never accepts something it should reject), but
+it can force a `WRD(...)` the genuine 1981 compiler would not have required.
+
+**Suggested resolution.** Reuse/extend a single constant-folding pass for
+integers (the array-bound and literal-range paths already fold pieces of this)
+and have `_is_constant_integer_expr` return True whenever the expression folds to
+a compile-time integer constant. Keep the literal/named-CONST fast path.
+
+**How to verify.** Add rows to `tests/test_conversion_matrix.py` for
+`w := k + 1` and `f(k + 1)` (constant expression into WORD) asserting ACCEPT, and
+confirm `tests/test_word_int_strictness.py` still rejects genuine variables.
+
+---
+
+## 4. ODD(WORD) is rejected but should be accepted [OPEN]
+
+**Where.** `builtins_registry.py` registers `ODD` as `FunctionType('ODD',
+[('n', INTEGER_TYPE)], BOOLEAN_TYPE)`; the argument check rejects a WORD actual.
+
+**What.** The manual states "the ODD function for INTEGER and WORD values"
+(Elementary Types, BOOLEAN, p.6-6), but `ODD(w)` for `w: WORD` is currently a
+type error ("expected INTEGER, got WORD").
+
+**Why it matters.** A small vintage-conformance gap: a faithful program that
+calls `ODD` on a WORD is wrongly rejected. It is intentionally left out of the
+WORD/INTEGER strictness change set to keep that change coherent, and is pinned as
+a KNOWN GAP in `tests/test_conversion_matrix.py::TestManualKnownGaps`.
+
+**Suggested resolution.** Accept INTEGER and WORD for `ODD` (special-case it like
+the other ordinal-flexible intrinsics, or widen its registered parameter type to
+the integer family). `ODD` only needs the low bit, so the lowering is
+signedness-independent.
+
+**How to verify.** Flip `TestManualKnownGaps::test_odd_accepts_word_is_a_known_gap`
+to assert ACCEPT (and add a build-and-run parity check for `ODD(WORD)` vs
+`ODD(INTEGER)`).

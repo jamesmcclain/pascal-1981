@@ -586,7 +586,7 @@ class ExprsMixin:
                 mode = param_modes[i] if i < len(param_modes) else None
                 v = self.codegen_actual_arg(arg, mode)
                 if i < len(param_types):
-                    v = self.coerce_arg(v, param_types[i])
+                    v = self.coerce_arg(v, param_types[i], src_expr=arg)
                 args.append(v)
             return self.builder.call(fn, args)
 
