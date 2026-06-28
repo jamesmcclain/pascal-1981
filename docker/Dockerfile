@@ -20,8 +20,9 @@ RUN apt-get update \
  && apt-get install -y \
         clang-20 \
         curl \
+        libpng-dev \
         python3-venv \
-	unzip \
+        unzip \
  && rm -rf /var/lib/apt/lists/* \
  && ln /usr/bin/clang-20 /usr/bin/clang
 

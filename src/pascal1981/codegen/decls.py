@@ -638,9 +638,9 @@ class DeclsMixin:
         if name is None:
             return None
         n = name.upper()
-        if n in {'INTEGER', 'CHAR', 'CCHAR', 'CSHORT'}:
+        if n in {'INTEGER', 'INTEGER16', 'CHAR', 'CCHAR', 'CSHORT'}:
             return 'signext'
-        if n in {'WORD', 'BOOLEAN'}:
+        if n in {'WORD', 'WORD16', 'BOOLEAN'}:
             return 'zeroext'
         return None
 

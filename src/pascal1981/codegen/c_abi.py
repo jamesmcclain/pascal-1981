@@ -330,15 +330,19 @@ class CAbiMixin:
         self.builder.call(self.memcpy_func(),
                           [self._i8p(dst_ptr), self._i8p(src_ptr), ir.Constant(ir.IntType(64), nbytes)])
 
-    def _c_abi_variadic_promote(self, v: ir.Value) -> ir.Value:
+    def _c_abi_variadic_promote(self, v: ir.Value, src_expr=None) -> ir.Value:
         """Apply C default argument promotions to one variadic-tail value.
 
-        Rules (C11 §6.5.2.2 ¶7):
-        - ``float`` → ``double`` (fpext).
-        - Integer types narrower than ``int`` (i1, i8, i16) → ``i32`` (sext for
-          signed types; zext for i1 which is boolean).  At the IR level we cannot
-          distinguish signed from unsigned i8/i16, so we follow clang: i8/i16
-          use sext (``char``/``short`` are signed in C); i1 uses zext (``_Bool``).
+        Rules (C11 6.5.2.2 p7):
+        - ``float`` -> ``double`` (fpext).
+        - Integer types narrower than ``int`` (i1, i8, i16) -> ``i32``.  The
+          extension follows the C default-promotion of the *source* type: an
+          unsigned type whose values all fit in ``int`` zero-extends, a signed
+          type sign-extends.  At the IR level i8/i16 alone cannot tell WORD from
+          INTEGER, so we consult the Pascal source expression (Finding 2): a WORD
+          (unsigned) zero-extends -- the previous unconditional ``sext`` turned a
+          WORD like 60000 into -5536 in the variadic tail -- while signed
+          INTEGER/CHAR sign-extend.  i1 (BOOLEAN) is always zero-extended.
         - i32, i64, double, pointer: passed as-is.
         """
         t = v.type
@@ -348,6 +352,8 @@ class CAbiMixin:
             if t.width == 1:
                 return self.builder.zext(v, ir.IntType(32))
             if t.width < 32:
+                if src_expr is not None and self._expr_is_unsigned_word(src_expr):
+                    return self.builder.zext(v, ir.IntType(32))
                 return self.builder.sext(v, ir.IntType(32))
         return v
 
@@ -375,7 +381,7 @@ class CAbiMixin:
             expr = arg_exprs[i]
             if pp.kind in ('ref', 'scalar'):
                 v = self.codegen_actual_arg(expr, modes[i])
-                v = self.coerce_arg(v, pp.llvm_type)
+                v = self.coerce_arg(v, pp.llvm_type, src_expr=expr)
                 # Phase 4: attach signext/zeroext to sub-32-bit scalar call-site args.
                 if pp.sign_attr and isinstance(pp.llvm_type, ir.IntType) and pp.llvm_type.width < 32:
                     aa = ir.ArgumentAttributes()
@@ -405,7 +411,7 @@ class CAbiMixin:
         if plan.is_variadic:
             for expr in arg_exprs[len(plan.params):]:
                 v = self.codegen_expr(expr)
-                v = self._c_abi_variadic_promote(v)
+                v = self._c_abi_variadic_promote(v, src_expr=expr)
                 call_args.append(v)
 
         call = self.builder.call(fn, call_args, arg_attrs=(arg_attrs or None))

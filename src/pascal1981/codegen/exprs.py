@@ -14,7 +14,7 @@ from llvmlite.ir import IRBuilder
 
 from ..ast_nodes import *
 from ..builtins_registry import DEVICE_INDEX_BUILTIN_FUNCTIONS
-from ..type_system import (INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL32_TYPE, WORD_TYPE)
+from ..type_system import (INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL32_TYPE, WORD_TYPE, WORD32_TYPE, WORD64_TYPE)
 from ..type_system import LStringType as ResolvedLStringType
 from ..type_system import StringType as ResolvedStringType
 from .base import CodegenError, _is_gpu_triple
@@ -27,9 +27,9 @@ class ExprsMixin:
         """Codegen an expression."""
         if isinstance(expr, IntLiteral):
             resolved = getattr(expr, 'resolved_type', INTEGER_TYPE)
-            if resolved == INTEGER64_TYPE:
+            if resolved == INTEGER64_TYPE or resolved == WORD64_TYPE:
                 return ir.Constant(ir.IntType(64), expr.value)
-            if resolved == INTEGER32_TYPE:
+            if resolved == INTEGER32_TYPE or resolved == WORD32_TYPE:
                 return ir.Constant(ir.IntType(32), expr.value)
             return ir.Constant(ir.IntType(16), expr.value)
         elif isinstance(expr, RealLiteral):
@@ -324,16 +324,18 @@ class ExprsMixin:
     def _expr_is_unsigned_word(self, expr: Expression) -> bool:
         """Best-effort Pascal signedness query for checked integer arithmetic.
 
-        INTEGER stays at i32, and signedness is not derived from LLVM
-        width. WORD is the only unsigned arithmetic scalar in the vintage core;
-        later INTEGER-family i16/i32/i64 values remain signed.
+        The unsigned scalars are the WORD family: WORD/WORD16 (i16), WORD32
+        (i32), and WORD64 (i64).  INTEGER/INTEGER16/INTEGER32/INTEGER64 are
+        signed.  Signedness is taken from the Pascal type, not the LLVM width, so
+        that widening picks zext (unsigned) vs sext (signed) correctly.
         """
+        unsigned_names = {'WORD', 'WORD16', 'WORD32', 'WORD64'}
         if isinstance(expr, Identifier):
             sym = self.scope.lookup(expr.name)
-            return bool(sym and self._type_expr_name(sym.type_expr) == 'WORD')
+            return bool(sym and self._type_expr_name(sym.type_expr) in unsigned_names)
         if isinstance(expr, Designator):
             sym = self.scope.lookup(expr.name)
-            return bool(sym and self._type_expr_name(sym.type_expr) == 'WORD' and not expr.selectors)
+            return bool(sym and self._type_expr_name(sym.type_expr) in unsigned_names and not expr.selectors)
         if isinstance(expr, UnaryOp):
             return self._expr_is_unsigned_word(expr.operand)
         if isinstance(expr, BinOp):
@@ -586,7 +588,7 @@ class ExprsMixin:
                 mode = param_modes[i] if i < len(param_modes) else None
                 v = self.codegen_actual_arg(arg, mode)
                 if i < len(param_types):
-                    v = self.coerce_arg(v, param_types[i])
+                    v = self.coerce_arg(v, param_types[i], src_expr=arg)
                 args.append(v)
             return self.builder.call(fn, args)
 

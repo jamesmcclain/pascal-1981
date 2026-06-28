@@ -115,7 +115,14 @@ END.
         self.assertFalse(result.success)
         self.assertIn("out of range", " ".join(str(e) for e in result.errors))
 
-        ok = typecheck_source("PROGRAM P; BEGIN WRITELN(-32768) END.")
+        # IBM Pascal 2.0 manual (Elementary Types, p.6-5): "-32768 is not a valid
+        # INTEGER" -- INTEGER is -MAXINT..MAXINT = -32767..32767; the 0x8000 bit
+        # pattern belongs to WORD.
+        bad_low = typecheck_source("PROGRAM P; BEGIN WRITELN(-32768) END.")
+        self.assertFalse(bad_low.success)
+        self.assertIn("out of range", " ".join(str(e) for e in bad_low.errors))
+
+        ok = typecheck_source("PROGRAM P; BEGIN WRITELN(-32767) END.")
         self.assertTrue(ok.success, msg=" ".join(str(e) for e in ok.errors))
 
         bad = typecheck_source("PROGRAM P; VAR x: INTEGER; BEGIN x := 32768 END.")

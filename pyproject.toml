@@ -37,4 +37,4 @@ packages = ["pascal1981", "pascal1981.codegen"]
 include-package-data = true
 
 [tool.setuptools.package-data]
-pascal1981 = ["libpascalrt.a"]
+pascal1981 = ["libpascalrt.a", "libpascalrt_cpu.a", "libpascalrt_cuda.a"]

@@ -13,7 +13,7 @@ import llvmlite.ir as ir
 from ..ast_nodes import EnumType as ASTEnumType
 from ..ast_nodes import LStringType as ASTLStringType
 from ..ast_nodes import *
-from ..type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE)
+from ..type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, WORD32_TYPE, WORD64_TYPE)
 from ..type_system import EnumType as ResolvedEnumType
 from ..type_system import FileType as ResolvedFileType
 from ..type_system import LStringType, StringType
@@ -178,16 +178,18 @@ class IoWriteReadMixin:
                 val = self.builder.zext(val, ir.IntType(32))
             elif str(val.type) == 'i16':
                 ty_name = pas_ty.name.upper() if isinstance(pas_ty, (NamedType, BuiltinType)) else ''
-                if pas_ty is WORD_TYPE or ty_name == 'WORD':
+                if pas_ty is WORD_TYPE or ty_name in ('WORD', 'WORD16'):
                     conv = 'u'
                     val = self.builder.zext(val, ir.IntType(32))
                 else:
                     conv = 'd'
                     val = self.builder.sext(val, ir.IntType(32))
             elif str(val.type) == 'i32':
-                conv = 'd'
+                ty_name = pas_ty.name.upper() if isinstance(pas_ty, (NamedType, BuiltinType)) else ''
+                conv = 'u' if (pas_ty is WORD32_TYPE or ty_name == 'WORD32') else 'd'
             elif str(val.type) == 'i64':
-                conv = 'lld'
+                ty_name = pas_ty.name.upper() if isinstance(pas_ty, (NamedType, BuiltinType)) else ''
+                conv = 'llu' if (pas_ty is WORD64_TYPE or ty_name == 'WORD64') else 'lld'
             else:
                 conv = 's'
 

@@ -1,9 +1,9 @@
 """
 Setup script for pascal1981.
 
-A custom ``build_py`` command compiles the C runtime static library
-(libpascalrt.a) via ``make -C runtime`` and copies it into the package
-directory so that it travels with the wheel.
+A custom ``build_py`` command compiles the C runtime static libraries via
+``make -C runtime`` and copies any produced archives into the package directory
+so that they travel with the wheel.
 
 All project metadata lives in pyproject.toml; this file only exists to
 register the custom build command.
@@ -40,11 +40,19 @@ class BuildPyWithRuntime(_build_py):
             )
             sys.exit(1)
 
-        # -- Copy the archive into the package directory ---------------------
-        src = os.path.join(RUNTIME_DIR, "build", "libpascalrt.a")
-        dst = os.path.join(PACKAGE_DIR, "libpascalrt.a")
-        print(f"* copying {src} -> {dst}", file=sys.stderr)
-        shutil.copy2(src, dst)
+        # -- Copy produced archives into the package directory ---------------
+        for archive in ("libpascalrt.a", "libpascalrt_cpu.a", "libpascalrt_cuda.a"):
+            src = os.path.join(RUNTIME_DIR, "build", archive)
+            dst = os.path.join(PACKAGE_DIR, archive)
+
+            if not os.path.exists(src):
+                if archive != "libpascalrt.a" and os.path.exists(dst):
+                    os.remove(dst)
+                print(f"* skipping missing optional runtime archive {src}", file=sys.stderr)
+                continue
+
+            print(f"* copying {src} -> {dst}", file=sys.stderr)
+            shutil.copy2(src, dst)
 
         # -- Proceed with normal Python build --------------------------------
         super().run()

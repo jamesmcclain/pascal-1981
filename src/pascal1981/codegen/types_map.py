@@ -37,6 +37,14 @@ class TypesMapMixin:
                 return ir.IntType(8)  # one byte, so adr/sizeof/fillc agree on layout
             elif type_expr.name == 'WORD':
                 return ir.IntType(16)
+            elif type_expr.name == 'WORD16':
+                return ir.IntType(16)
+            elif type_expr.name == 'WORD32':
+                return ir.IntType(32)
+            elif type_expr.name == 'WORD64':
+                return ir.IntType(64)
+            elif type_expr.name == 'INTEGER16':
+                return ir.IntType(16)
             elif type_expr.name == 'CHAR':
                 return ir.IntType(8)
             elif type_expr.name == 'REAL':
@@ -69,6 +77,8 @@ class TypesMapMixin:
                 return ir.LiteralStructType([ir.PointerType(ir.IntType(8)), ir.IntType(16)])
             elif name_up == 'INTEGER':
                 return ir.IntType(16)
+            elif name_up == 'INTEGER16':
+                return ir.IntType(16)
             elif name_up == 'INTEGER32':
                 return ir.IntType(32)
             elif name_up == 'INTEGER64':
@@ -77,6 +87,12 @@ class TypesMapMixin:
                 return ir.IntType(8)
             elif name_up == 'WORD':
                 return ir.IntType(16)
+            elif name_up == 'WORD16':
+                return ir.IntType(16)
+            elif name_up == 'WORD32':
+                return ir.IntType(32)
+            elif name_up == 'WORD64':
+                return ir.IntType(64)
             elif name_up == 'REAL':
                 return ir.DoubleType()
             elif name_up == 'REAL64':
@@ -244,12 +260,20 @@ class TypesMapMixin:
             return ir.Constant(llvm_type, 0)
         return ir.Constant(llvm_type, None)
 
-    def coerce_arg(self, value: ir.Value, target_type: ir.Type) -> ir.Value:
+    def coerce_arg(self, value: ir.Value, target_type: ir.Type, src_expr=None) -> ir.Value:
         """Coerce a call argument to the callee's declared parameter type.
 
         Handles the two cases the vintage benchmark needs: any-pointer-to-any
         -pointer (adrmem) via bitcast, and integer width adjustment (e.g. an
         i32 expression into a WORD/i16 parameter).
+
+        ``src_expr`` (optional) is the Pascal source expression being coerced.
+        When an integer is *widened*, the correct extension depends on the
+        Pascal source signedness, not the LLVM width: a signed INTEGER/INTEGER32
+        must sign-extend, an unsigned WORD must zero-extend.  Passing ``src_expr``
+        lets us consult ``_expr_is_unsigned_word`` and pick ``sext``/``zext``
+        accordingly (Finding 1: this path used to always ``zext``, silently
+        turning a negative INTEGER positive when widened into a wider parameter).
         """
         vt = value.type
         if vt == target_type:
@@ -304,6 +328,18 @@ class TypesMapMixin:
             if vt.width > target_type.width:
                 return self.builder.trunc(value, target_type)
             elif vt.width < target_type.width:
+                # Widening: choose the extension from the Pascal source signedness.
+                # WORD (and unsigned-WORD expressions) zero-extend; every signed
+                # integer type (INTEGER/INTEGER32/INTEGER64) sign-extends.
+                if src_expr is not None and self._expr_is_unsigned_word(src_expr):
+                    return self.builder.zext(value, target_type)
+                if src_expr is not None:
+                    return self.builder.sext(value, target_type)
+                # No source expression (internal/runtime coercions): preserve the
+                # historical zero-extend.  After the WORD/INTEGER strictness gate
+                # in the type checker, a signedness-crossing widening cannot reach
+                # here implicitly from user code, and every user-facing argument
+                # call site below passes src_expr.
                 return self.builder.zext(value, target_type)
         _floats = (ir.FloatType, ir.DoubleType)
         # Integer -> floating (REAL/REAL32): sitofp into the target float width.
@@ -568,10 +604,19 @@ class TypesMapMixin:
     # ------------------------------------------------------------------
 
     def coerce_printf_int(self, val: ir.Value) -> ir.Value:
-        """printf dynamic width/precision arguments must be C int-sized."""
+        """printf dynamic width/precision arguments must be C int-sized.
+
+        These operands (field widths, precisions, string positions/counts/
+        indices) are derived from signed Pascal INTEGER/INTEGER32 expressions and
+        are semantically non-negative.  Sign-extend rather than zero-extend when
+        widening (Finding 4): a non-negative value is identical either way, but a
+        negative value stays a small negative i32 instead of becoming a huge
+        positive field width.  (A WORD width >= 32768 is meaningless here, so no
+        realistic case regresses.)
+        """
         if isinstance(val.type, ir.IntType):
             if val.type.width < 32:
-                return self.builder.zext(val, ir.IntType(32))
+                return self.builder.sext(val, ir.IntType(32))
             if val.type.width > 32:
                 return self.builder.trunc(val, ir.IntType(32))
         return val

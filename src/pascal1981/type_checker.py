@@ -34,7 +34,7 @@ from .ast_nodes import (TypeDecl, UnaryOp, UpperExpr, UseClause, ValueDecl, VarD
 from .builtins_registry import (DEVICE_INDEX_BUILTIN_FUNCTIONS, DEVICE_SYNC_BUILTIN_PROCEDURES, register_builtins)
 from .parser import parse_file
 from .symbol_table import SourceLocation, Symbol, SymbolTable
-from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL32_TYPE, REAL_TYPE, WORD_TYPE, ArrayType, EnumType, FileType, FunctionType,
+from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL32_TYPE, REAL_TYPE, WORD_TYPE, WORD32_TYPE, WORD64_TYPE, ArrayType, EnumType, FileType, FunctionType,
                           LStringType, PointerType, ProcedureType, RecordType, SetType, StringType, Type, binary_op_result_type, can_assign, is_fixed_char_array,
                           unary_op_result_type)
 
@@ -1108,8 +1108,14 @@ class PascalTypeChecker(TypeChecker):
                         for name in param.names:
                             param_types.append((name, param_type))
 
-        # Create procedure type
-        proc_type = ProcedureType(decl.name, param_types)
+        # Create procedure type.  [VARARGS] makes a [C] foreign procedure
+        # variadic; without threading it onto the type, the call-site arity
+        # check (which reads sym.type.is_variadic) rejected every variadic
+        # *procedure* call -- variadic FUNCTIONS already worked because
+        # FunctionType carried the flag.  (Finding 3.)
+        _proc_attrs = {a.name.upper() for a in getattr(decl, 'attributes', [])}
+        proc_type = ProcedureType(decl.name, param_types,
+                                  is_variadic='VARARGS' in _proc_attrs)
 
         # Phase 0 C-FFI guard: reject ABI-incompatible foreign signatures
         # (procedures have no return type, so only by-value aggregate params).
@@ -1345,6 +1351,8 @@ class PascalTypeChecker(TypeChecker):
             value_type = self.infer_expression_type(stmt.value)
             if value_type and not can_assign(value_type, self.current_function_return_type):
                 self.error(f"RETURN type mismatch: expected {self.current_function_return_type}, got {value_type}", stmt)
+            elif value_type:
+                self._check_word_int_assign(value_type, self.current_function_return_type, stmt.value, stmt)
 
     def check_assign_stmt(self, stmt: AssignStmt) -> None:
         """Type check an assignment statement."""
@@ -1382,6 +1390,8 @@ class PascalTypeChecker(TypeChecker):
                 value_type = self.infer_expression_type(stmt.expr, target_type)
                 if value_type and not can_assign(value_type, target_type):
                     self.error(f"Cannot assign {value_type} to {target_type}", stmt)
+                elif value_type:
+                    self._check_word_int_assign(value_type, target_type, stmt.expr, stmt)
                 return
             else:
                 # Error already reported by infer_designator_type
@@ -1415,6 +1425,8 @@ class PascalTypeChecker(TypeChecker):
         if value_type:
             if not can_assign(value_type, target_type):
                 self.error(f"Cannot assign {value_type} to {target_type}", stmt)
+            else:
+                self._check_word_int_assign(value_type, target_type, stmt.expr, stmt)
 
     def check_proc_call_stmt(self, stmt: ProcCallStmt) -> None:
         """Type check a procedure call statement."""
@@ -1542,6 +1554,8 @@ class PascalTypeChecker(TypeChecker):
                         _, param_type = sym.type.params[i]
                         if not self._can_pass_value_argument(arg_type, param_type):
                             self.error(f"Argument {i+1} type mismatch: expected {param_type}, got {arg_type}", stmt)
+                        else:
+                            self._check_word_int_assign(arg_type, param_type, value_arg, stmt)
             return
 
     def _check_file_primitive_args(self, stmt: ProcCallStmt, name: str) -> None:
@@ -1821,7 +1835,7 @@ class PascalTypeChecker(TypeChecker):
         # source, not whether a live typed value (e.g. returned from an imported
         # device function) can be passed to WRITE.
         wide_real = (type(REAL32_TYPE), ) if (self.feature_enabled('wide-reals') or self.in_device_module) else ()
-        return isinstance(t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), type(INTEGER32_TYPE), type(INTEGER64_TYPE), EnumType, StringType, LStringType) +
+        return isinstance(t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), type(WORD32_TYPE), type(WORD64_TYPE), type(INTEGER32_TYPE), type(INTEGER64_TYPE), EnumType, StringType, LStringType) +
                           wide_real) or is_fixed_char_array(t)
 
     def _is_readable_type(self, t: Type) -> bool:
@@ -1830,7 +1844,7 @@ class PascalTypeChecker(TypeChecker):
         # under -f symbolic-enum-io).
         # INTEGER32/INTEGER64 are always readable for the same reason they are
         # always writable: the type object is valid regardless of how it arrived.
-        return isinstance(t, (type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), type(INTEGER32_TYPE), type(INTEGER64_TYPE), EnumType, StringType, LStringType))
+        return isinstance(t, (type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), type(WORD32_TYPE), type(WORD64_TYPE), type(INTEGER32_TYPE), type(INTEGER64_TYPE), EnumType, StringType, LStringType))
 
     def _check_concat_args(self, stmt: ProcCallStmt) -> None:
         """Type check CONCAT(VAR D: LSTRING; CONST S: STRING).
@@ -2206,9 +2220,18 @@ class PascalTypeChecker(TypeChecker):
 
     def _integer_range_for_type(self, t: Type) -> Optional[tuple[int, int]]:
         if t == INTEGER_TYPE:
-            return (-32768, 32767)
+            # IBM Pascal 2.0 manual (Elementary Types, p.6-5): INTEGER ranges
+            # -MAXINT..MAXINT with MAXINT = 32767, and "-32768 is not a valid
+            # INTEGER".  The two's-complement bit pattern 0x8000 belongs to WORD,
+            # not INTEGER -- one of the motivations the manual gives for having a
+            # separate WORD type at all.
+            return (-32767, 32767)
         if t == WORD_TYPE:
             return (0, 65535)
+        if t == WORD32_TYPE:
+            return (0, 4294967295)
+        if t == WORD64_TYPE:
+            return (0, 18446744073709551615)
         if t == INTEGER32_TYPE:
             return (-2147483648, 2147483647)
         if t == INTEGER64_TYPE:
@@ -2223,6 +2246,88 @@ class PascalTypeChecker(TypeChecker):
             if inner is not None:
                 return -inner if expr.op == 'MINUS' else inner
         return None
+
+    # ------------------------------------------------------------------
+    # WORD / INTEGER strictness (IBM Pascal 2.0 manual, Elementary Types, p.6-5)
+    #
+    #   "INTEGER type constants change to WORD type if necessary, but not
+    #    INTEGER variables."
+    #   "WORD and INTEGER values cannot be mixed in an expression (unless one is
+    #    a constant INTEGER), and are not assignment compatible.  Mixing INTEGER
+    #    and WORD values results in a warning instead of an error ..."
+    #
+    # So a signed INTEGER *variable/expression* is NOT assignment compatible with
+    # WORD (and vice versa: WORD->INTEGER is already rejected by can_assign, which
+    # forces ORD(...)).  Here we additionally reject a non-constant INTEGER value
+    # flowing into a WORD target (forcing WRD(...)), and we warn (or, under
+    # -f strict-word-int, error) on a WORD/INTEGER expression mix.  In every case
+    # an INTEGER *constant* is exempt -- it "changes to WORD" per the manual.
+    #
+    # !!! TECH DEBT -- CONSTANT DETECTION IS LITERAL-ONLY FOR NOW !!!
+    # `_is_constant_integer_expr` recognizes integer *literals* (including unary
+    # +/-) and direct references to named integer CONSTs.  It does NOT fold
+    # constant *expressions* such as `k + 1`, `2 * SIZE`, or `SUCC(k)`, so those
+    # are currently treated as non-constant and require an explicit WRD(...) when
+    # crossing into WORD.  This is stricter than the vintage compiler (which would
+    # accept any compile-time-constant INTEGER).  Folding general constant
+    # expressions here is tracked as follow-up work in docs/followups.md
+    # ("WORD/INTEGER constant exemption: fold constant expressions").
+    # ------------------------------------------------------------------
+    def _is_constant_integer_expr(self, expr: Expression) -> bool:
+        """True if expr is a *constant* INTEGER for the manual's WORD exemption.
+
+        Literal-only for now (see the big TECH DEBT note above): integer literals
+        (incl. unary +/-) and references to named integer CONSTs.
+        """
+        if self._fold_int_literal_value(expr) is not None:
+            return True
+        if isinstance(expr, Identifier):
+            sym = self.symbol_table.lookup(expr.name)
+            if (sym and getattr(sym, 'kind', None) == 'const'
+                    and sym.type in (INTEGER_TYPE, INTEGER32_TYPE, INTEGER64_TYPE)):
+                return True
+        return False
+
+    def _check_word_int_assign(self, value_type, target_type, value_expr, node) -> None:
+        """Reject a non-constant INTEGER value assigned/passed into a WORD target.
+
+        WORD->INTEGER is already rejected upstream by can_assign (use ORD); this
+        adds the reciprocal vintage rule for INTEGER->WORD (use WRD), with the
+        INTEGER-constant exemption.  Applies to assignment, value-argument
+        passing, and function return -- every assignment-compatibility context.
+        """
+        if value_type == INTEGER_TYPE and target_type == WORD_TYPE:
+            if value_expr is None or not self._is_constant_integer_expr(value_expr):
+                self.error(
+                    "INTEGER is not assignment compatible with WORD: only INTEGER "
+                    "constants change to WORD; convert a signed INTEGER value with "
+                    "WRD(...)", node)
+
+    def _check_word_int_mix(self, left_type, right_type, left_expr, right_expr, op, node) -> None:
+        """Diagnose a WORD/INTEGER mix in an arithmetic or bitwise expression.
+
+        Allowed when the INTEGER operand is a constant (it changes to WORD).
+        Otherwise a warning by default (the vintage compiler arbitrarily picks
+        signed or unsigned arithmetic), promoted to a hard error under
+        -f strict-word-int.
+        """
+        ARITH_BITWISE = {'PLUS', 'MINUS', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR'}
+        if op not in ARITH_BITWISE:
+            return
+        for a_t, b_t, b_e in ((left_type, right_type, right_expr),
+                              (right_type, left_type, left_expr)):
+            if a_t == WORD_TYPE and b_t == INTEGER_TYPE:
+                if self._is_constant_integer_expr(b_e):
+                    return  # constant INTEGER changes to WORD: clean
+                msg = ("WORD and INTEGER values cannot be mixed in an expression "
+                       "unless the INTEGER operand is a constant; convert "
+                       "explicitly with WRD(...) or ORD(...)")
+                if self.feature_enabled('strict-word-int'):
+                    self.error(msg, node)
+                else:
+                    self.warning(msg + " (the compiler would arbitrarily use "
+                                 "signed or unsigned arithmetic)", node)
+                return
 
     def _check_integer_literal_range(self, expr: Expression, context_type: Optional[Type]) -> None:
         value = self._fold_int_literal_value(expr)
@@ -2240,7 +2345,7 @@ class PascalTypeChecker(TypeChecker):
         """Infer the type of an expression."""
         if isinstance(expr, IntLiteral):
             self._check_integer_literal_range(expr, context_type)
-            resolved = context_type if context_type in (INTEGER_TYPE, WORD_TYPE, INTEGER32_TYPE, INTEGER64_TYPE) else INTEGER_TYPE
+            resolved = context_type if context_type in (INTEGER_TYPE, WORD_TYPE, WORD32_TYPE, WORD64_TYPE, INTEGER32_TYPE, INTEGER64_TYPE) else INTEGER_TYPE
             setattr(expr, 'resolved_type', resolved)
             return resolved
         elif isinstance(expr, RealLiteral):
@@ -2424,7 +2529,7 @@ class PascalTypeChecker(TypeChecker):
                 return sym.type.return_type
             return sym.type
         elif isinstance(expr, BinOp):
-            literal_context = context_type if context_type in (INTEGER_TYPE, WORD_TYPE, INTEGER32_TYPE, INTEGER64_TYPE) else None
+            literal_context = context_type if context_type in (INTEGER_TYPE, WORD_TYPE, WORD32_TYPE, WORD64_TYPE, INTEGER32_TYPE, INTEGER64_TYPE) else None
             left_context = literal_context if isinstance(expr.left, (IntLiteral, UnaryOp)) else None
             right_context = literal_context if isinstance(expr.right, (IntLiteral, UnaryOp)) else None
             # A REAL32 result context flows into real-literal operands so that a
@@ -2459,12 +2564,14 @@ class PascalTypeChecker(TypeChecker):
                 result = binary_op_result_type(left_type, expr.op, right_type)
                 if result is None:
                     self.error(f"Operator '{expr.op}' cannot be applied to operands of type {left_type} and {right_type}", expr)
+                else:
+                    self._check_word_int_mix(left_type, right_type, expr.left, expr.right, expr.op, expr)
                 return result
             return None
         elif isinstance(expr, UnaryOp):
             self._check_integer_literal_range(expr, context_type)
             if expr.op in ('PLUS', 'MINUS') and isinstance(expr.operand, IntLiteral):
-                operand_type = context_type if context_type in (INTEGER_TYPE, WORD_TYPE, INTEGER32_TYPE, INTEGER64_TYPE) else INTEGER_TYPE
+                operand_type = context_type if context_type in (INTEGER_TYPE, WORD_TYPE, WORD32_TYPE, WORD64_TYPE, INTEGER32_TYPE, INTEGER64_TYPE) else INTEGER_TYPE
                 setattr(expr, 'resolved_type', operand_type)
                 setattr(expr.operand, 'resolved_type', operand_type)
             else:
@@ -2502,6 +2609,8 @@ class PascalTypeChecker(TypeChecker):
                             arg_type = self.infer_expression_type(arg)
                             if arg_type and not self._can_pass_value_argument(arg_type, param_type):
                                 self.error(f"Argument {i+1} type mismatch: expected {param_type}, got {arg_type}", expr)
+                            elif arg_type:
+                                self._check_word_int_assign(arg_type, param_type, arg, expr)
                         # Type-check variadic tail args too (just for expression validity)
                         for arg in (expr.args[expected_args:] if _is_variadic_fn else []):
                             self.infer_expression_type(arg)
@@ -2912,6 +3021,11 @@ class PascalTypeChecker(TypeChecker):
             name = type_expr.name.upper()
             if name == 'INTEGER':
                 return INTEGER_TYPE
+            elif name == 'INTEGER16' and (self.feature_enabled('wide-integers') or self.in_device_module):
+                # INTEGER16 is a synonym for INTEGER, gated on the wide-integer
+                # surface (like INTEGER32), so it is available exactly when the
+                # other wide integer types are.
+                return INTEGER_TYPE
             elif name == 'INTEGER32' and (self.feature_enabled('wide-integers') or self.in_device_module):
                 return INTEGER32_TYPE
             elif name == 'INTEGER64' and self.feature_enabled('wide-integers'):
@@ -2927,6 +3041,17 @@ class PascalTypeChecker(TypeChecker):
                 return REAL32_TYPE
             elif name == 'WORD':
                 return WORD_TYPE
+            elif name == 'WORD16' and (self.feature_enabled('wide-integers') or self.in_device_module):
+                # WORD16 is a synonym for WORD, gated on the wide-integer surface
+                # (like WORD32), so it is available exactly when the other wide
+                # integer types are.
+                return WORD_TYPE
+            elif name == 'WORD32' and (self.feature_enabled('wide-integers') or self.in_device_module):
+                # WORD32 is the unsigned sibling of INTEGER32 (32-bit unsigned).
+                return WORD32_TYPE
+            elif name == 'WORD64' and self.feature_enabled('wide-integers'):
+                # WORD64 is the unsigned sibling of INTEGER64 (64-bit unsigned).
+                return WORD64_TYPE
             elif name == 'CHAR':
                 return CHAR_TYPE
             elif name == 'ADRMEM':

@@ -95,13 +95,45 @@ class Real32Type(Type):
 
 
 class WordType(Type):
-    """The WORD type (16-bit unsigned)."""
+    """The WORD type (16-bit unsigned).
+
+    ``WORD16`` is an accepted spelling of this same type (a synonym), gated on
+    the same mode that enables ``REAL64``; like ``REAL64`` it resolves to this
+    singleton, so there is no separate Word16Type.
+    """
 
     def __str__(self) -> str:
         return "WORD"
 
     def equivalent_to(self, other: Type) -> bool:
         return isinstance(other, WordType)
+
+
+class Word32Type(Type):
+    """The WORD32 extension type (32-bit unsigned).
+
+    The unsigned sibling of INTEGER32, gated on ``wide-integers``.  Widens to
+    WORD64 and zero-extends (never sign-extends) when widened.
+    """
+
+    def __str__(self) -> str:
+        return "WORD32"
+
+    def equivalent_to(self, other: Type) -> bool:
+        return isinstance(other, Word32Type)
+
+
+class Word64Type(Type):
+    """The WORD64 extension type (64-bit unsigned).
+
+    The unsigned sibling of INTEGER64, gated on ``wide-integers``.
+    """
+
+    def __str__(self) -> str:
+        return "WORD64"
+
+    def equivalent_to(self, other: Type) -> bool:
+        return isinstance(other, Word64Type)
 
 
 class CharType(Type):
@@ -307,6 +339,7 @@ class ProcedureType(Type):
 
     name: str
     params: List[Tuple[str, Type]]  # List of (param_name, param_type)
+    is_variadic: bool = False  # True for [VARARGS] C-ABI foreign procedures
 
     def __str__(self) -> str:
         param_str = ", ".join(f"{name}: {typ}" for name, typ in self.params)
@@ -355,6 +388,8 @@ BOOLEAN_TYPE = BooleanType()
 REAL_TYPE = RealType()
 REAL32_TYPE = Real32Type()
 WORD_TYPE = WordType()
+WORD32_TYPE = Word32Type()
+WORD64_TYPE = Word64Type()
 CHAR_TYPE = CharType()
 
 
@@ -392,7 +427,7 @@ def can_assign(from_type: Type, to_type: Type) -> bool:
     # INTEGER->REAL widening above. REAL32 in turn widens into REAL (f32->f64),
     # but the reverse (REAL->REAL32) is a narrowing and is NOT implicit; write
     # REAL32 literals/values in a REAL32 context instead.
-    if isinstance(from_type, (IntegerType, Integer32Type, Integer64Type, WordType)) and isinstance(to_type, Real32Type):
+    if isinstance(from_type, (IntegerType, Integer32Type, Integer64Type, WordType, Word32Type, Word64Type)) and isinstance(to_type, Real32Type):
         return True
     if isinstance(from_type, Real32Type) and isinstance(to_type, RealType):
         return True
@@ -403,6 +438,15 @@ def can_assign(from_type: Type, to_type: Type) -> bool:
     if isinstance(from_type, Integer32Type) and isinstance(to_type, Integer64Type):
         return True
     if isinstance(from_type, WordType) and isinstance(to_type, (Integer32Type, Integer64Type)):
+        return True
+    # Unsigned widening: WORD -> WORD32 -> WORD64 (value-preserving zero-extend).
+    # Narrowing the other way is NOT implicit, exactly like INTEGER32 -> INTEGER.
+    # A signed INTEGER does not implicitly become an unsigned WORD32/WORD64
+    # either (the WORD/INTEGER signedness wall extends to the wide unsigned
+    # types); convert via WRD(...) into WORD first, then widen.
+    if isinstance(from_type, WordType) and isinstance(to_type, (Word32Type, Word64Type)):
+        return True
+    if isinstance(from_type, Word32Type) and isinstance(to_type, Word64Type):
         return True
     if isinstance(from_type, SetType) and isinstance(to_type, SetType):
         return from_type.element_type.equivalent_to(to_type.element_type)
@@ -441,20 +485,33 @@ def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optiona
         if op in COMPARE:
             return BOOLEAN_TYPE
 
-    # Wide signed integer extension family.
-    int_rank = {IntegerType: 0, WordType: 0, Integer32Type: 1, Integer64Type: 2}
+    # Wide integer extension family (signed INTEGER/INTEGER32/INTEGER64 and
+    # unsigned WORD/WORD32/WORD64).  The result width is the wider of the two
+    # operands.  Signedness: when the operands differ in width, the wider
+    # operand's signedness wins (so WORD + INTEGER32 -> INTEGER32 and the WORD
+    # value zero-extends into the i32); when they are the SAME width, an unsigned
+    # operand makes the result unsigned (WORD + INTEGER -> WORD, WORD32 +
+    # INTEGER32 -> WORD32), consistent with the vintage rank-0 WORD/INTEGER rule.
+    # The vintage WORD/INTEGER (16-bit) mix is additionally diagnosed in the type
+    # checker; the wide-type mixes are extension territory and are not diagnosed.
+    int_rank = {IntegerType: 0, WordType: 0,
+                Integer32Type: 1, Word32Type: 1,
+                Integer64Type: 2, Word64Type: 2}
+    _signed_by_rank = {0: INTEGER_TYPE, 1: INTEGER32_TYPE, 2: INTEGER64_TYPE}
+    _unsigned_by_rank = {0: WORD_TYPE, 1: WORD32_TYPE, 2: WORD64_TYPE}
+    _unsigned_types = (WordType, Word32Type, Word64Type)
     if type(left_type) in int_rank and type(right_type) in int_rank:
         if op == 'SLASH':
             return REAL_TYPE
         if op in ARITH or op in BITWISE:
-            rank = max(int_rank[type(left_type)], int_rank[type(right_type)])
-            if rank == 2:
-                return INTEGER64_TYPE
-            if rank == 1:
-                return INTEGER32_TYPE
-            if isinstance(left_type, WordType) and isinstance(right_type, WordType):
-                return WORD_TYPE
-            return INTEGER_TYPE
+            lr, rr = int_rank[type(left_type)], int_rank[type(right_type)]
+            rank = max(lr, rr)
+            if lr == rr:
+                unsigned = isinstance(left_type, _unsigned_types) or isinstance(right_type, _unsigned_types)
+            else:
+                higher = left_type if lr > rr else right_type
+                unsigned = isinstance(higher, _unsigned_types)
+            return (_unsigned_by_rank if unsigned else _signed_by_rank)[rank]
         if op in COMPARE:
             return BOOLEAN_TYPE
 
