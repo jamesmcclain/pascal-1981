@@ -23,6 +23,7 @@ from ..type_system import LStringType as ResolvedLStringType
 from ..type_system import StringType as ResolvedStringType
 # Import base classes and support classes
 from .base import (_SCALAR_SIZES, CodegenBase, CodegenError, LoopContext, Scope, Symbol, _is_gpu_triple)
+from .c_abi import CAbiMixin
 from .constfold import ConstFoldMixin
 from .decls import DeclsMixin
 from .exprs import ExprsMixin
@@ -36,7 +37,7 @@ from .strings import StringsMixin
 from .types_map import TypesMapMixin
 
 
-class Codegen(CodegenBase, TypesMapMixin, ConstFoldMixin, RuntimeBuiltinsMixin, FilesMixin, SetsMixin, StringsMixin, IoWriteReadMixin, StmtsMixin, DeclsMixin, ExprsMixin):
+class Codegen(CodegenBase, TypesMapMixin, ConstFoldMixin, RuntimeBuiltinsMixin, FilesMixin, SetsMixin, StringsMixin, IoWriteReadMixin, StmtsMixin, DeclsMixin, ExprsMixin, CAbiMixin):
     """LLVM IR code generator."""
 
     def __init__(self,

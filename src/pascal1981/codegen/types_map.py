@@ -170,6 +170,12 @@ class TypesMapMixin:
 
     def get_type_size(self, t: Type) -> int:
         """Size in bytes of an AST type node (consults constants for bounds)."""
+        # Resolve named aliases first. A variable declared with a user TYPE name
+        # (record, array, wide-int alias) or a C alias (CINT/CLONG/...) reaches
+        # here as a NamedType; without unwrapping it, the NamedType branch below
+        # falls through to _scalar_size, whose default is 4 -- the long-standing
+        # "SIZEOF(record) == 4" bug, which also hit named arrays and CLONG.
+        t = self.resolve_type_alias(t)
         if isinstance(t, BuiltinType):
             return self._scalar_size(t.name)
         elif isinstance(t, NamedType):
@@ -190,11 +196,12 @@ class TypesMapMixin:
         elif isinstance(t, PointerType):
             return 8  # 64-bit pointer
         elif isinstance(t, RecordType):
-            # AST RecordType.fields is a list of (name_list, type) pairs
-            total = 0
-            for names, ftype in t.fields:
-                total += len(names) * self.get_type_size(ftype)
-            return total
+            # Size the record exactly as it is laid out in memory -- field
+            # alignment and tail padding included -- using the same layout helper
+            # the C-ABI marshaller trusts, so SIZEOF agrees with both the
+            # allocation and the C ABI rather than a naive field-byte sum.
+            from .c_abi import _size_of
+            return _size_of(self.llvm_type(t))
         else:
             return 4  # fallback
 

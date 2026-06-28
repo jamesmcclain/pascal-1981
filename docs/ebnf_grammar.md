@@ -753,6 +753,9 @@ character = (* any printable ASCII character in the range 0x20–0x7E,
 | `module_unit` — optional contextual `DEVICE` modifier added (`DEVICE MODULE`) for GPU device-dialect code | ADDED (ADS memory-spaces) | docs/ads-memory-spaces-design.md S1.2; tests/test_ads_space_*.py |
 | `attribute_item` — `"SPACE" "(" constant ")"` added (pointer-space residence; DEVICE MODULE only) | ADDED (ADS memory-spaces) | design S4.1; tests/test_ads_space_parse.py |
 | `pointer_type` — `"ADS" "(" constant ")" "OF" type` added (explicit pointee address space) | ADDED (ADS memory-spaces) | design S4.2; tests/test_ads_space_parse.py |
+| `attribute_item` — `"C"` / `"CDECL"` added as calling-convention markers; gated on extended dialect; only valid on `EXTERN`/`EXTERNAL` routine declarations | ADDED (C-FFI Phase 0) | docs/c-abi-foreign-functions.md; tests/test_c_ffi.py |
+| `attribute_item` — `"VARARGS"` added; requires `[C]`; allows variadic C foreign functions | ADDED (C-FFI Phase 3) | docs/c-abi-foreign-functions.md; tests/test_c_ffi.py::TestVariadicParsing |
+| C-type aliases — `CCHAR` (i8 signed), `CSHORT` (i16 signed), `CINT` (i32), `CLONG` (i64), `CFLOAT` (`REAL32`, f32), `CDOUBLE` (`REAL`, f64) added as built-in type names in extended dialect; map to the C ABI’s fundamental types | ADDED (C-FFI Phase 0) | docs/c-abi-foreign-functions.md; tests/test_c_ffi.py::TestCTypeAliases |
 
 ---
 

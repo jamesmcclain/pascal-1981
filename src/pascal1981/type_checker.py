@@ -917,6 +917,94 @@ class PascalTypeChecker(TypeChecker):
         setattr(symbol, 'type_expr', decl.type_expr)
         self.symbol_table.define(decl.name, symbol)
 
+    # Aggregate Pascal types that cannot cross the C ABI by value with the
+    # current lowering (no per-target aggregate classifier exists yet).  Passed
+    # or returned by value, they are silently mislowered, so a foreign routine
+    # using them is rejected at type-check time.  See Phase 0 of
+    # docs/c-abi-foreign-functions.md.
+    _C_ABI_AGGREGATE_TYPES = (RecordType, ArrayType, SetType, StringType, LStringType)
+
+    @staticmethod
+    def _is_foreign_routine(decl) -> bool:
+        """True if a routine is an EXTERN/EXTERNAL (foreign) import.
+
+        Recognizes both the directive form (`; EXTERN;`) and the attribute form
+        (`[EXTERN]`).  PUBLIC exports are intentionally out of scope: they are
+        defined here, and the cross-ABI concern for them runs the other
+        direction (C calling Pascal).
+        """
+        directive = (getattr(decl, 'directive', None) or '').upper()
+        attrs = {a.name.upper() for a in getattr(decl, 'attributes', [])}
+        return directive in {'EXTERN', 'EXTERNAL'} or bool(attrs & {'EXTERN', 'EXTERNAL'})
+
+    def _check_foreign_abi(self, decl, return_type) -> None:
+        """C-FFI guard: gate the [C] surface and reject ABI-incompatible signatures.
+
+        First, the [C]/[CDECL] foreign-ABI marker is part of the C-FFI surface,
+        which is available only under the extended dialect (the wide widths it
+        implies are themselves extended types); it is rejected in the faithful
+        1981 dialect, so a vintage program cannot opt into C-ABI lowering.
+
+        Then, for foreign routines: by-value aggregate parameters and aggregate
+        return types are rejected on plain EXTERN routines (no [C]) instead of
+        being silently mislowered; with [C] they are lowered correctly by the
+        Phase 2 classifier.  By-reference (CONST/VAR/CONSTS/VARS) aggregates are
+        fine -- they lower to a pointer, which is ABI-safe as long as the C side
+        also takes a pointer.
+
+        Also emits a non-fatal warning when a bare 16-bit INTEGER is used in a
+        foreign signature, since C `int` is 32-bit; CINT/INTEGER32 (or CSHORT for
+        a genuine C `short`) is almost always what was meant.
+        """
+        from .features import is_extended
+        attr_names = {a.name.upper() for a in getattr(decl, 'attributes', [])}
+        has_c = 'C' in attr_names
+        has_varargs = 'VARARGS' in attr_names
+        if has_c and not is_extended(self.features):
+            self.error(
+                f"routine '{decl.name}': the [C] (C-ABI) attribute requires the "
+                f"extended dialect and is not available in the faithful 1981 dialect.",
+                decl)
+        if has_varargs and not is_extended(self.features):
+            self.error(
+                f"routine '{decl.name}': the [VARARGS] attribute requires the "
+                f"extended dialect and is not available in the faithful 1981 dialect.",
+                decl)
+        if has_varargs and not has_c:
+            self.error(
+                f"routine '{decl.name}': [VARARGS] requires the [C] attribute; "
+                f"variadic calls are only supported on C-ABI foreign routines.",
+                decl)
+        if has_varargs and getattr(self, 'in_device_module', False):
+            self.error(
+                f"routine '{decl.name}': [VARARGS] is not permitted in DEVICE code.",
+                decl)
+        if not self._is_foreign_routine(decl):
+            return
+        # The [C]/[CDECL] marker opts into C-ABI-correct lowering of by-value
+        # aggregates (Phase 2 classifier). Plain EXTERN routines still reject
+        # them, since without [C] the aggregate is passed as a raw LLVM value.
+        for param in getattr(decl, 'params', []):
+            by_reference = getattr(param, 'mode', None) in {'VAR', 'VARS', 'CONST', 'CONSTS'}
+            param_type = self.resolve_type(param.type_expr) if param.type_expr else None
+            names = ', '.join(param.names)
+            if not by_reference and not has_c and isinstance(param_type, self._C_ABI_AGGREGATE_TYPES):
+                self.error(
+                    f"foreign routine '{decl.name}': by-value aggregate parameter '{names}' "
+                    f"is not C-ABI compatible; pass it by CONST or VAR and declare the C side "
+                    f"to take a pointer, or mark the routine [C] to pass it by value under the "
+                    f"C ABI.", decl)
+            elif not by_reference and isinstance(param.type_expr, NamedType) and param.type_expr.name.upper() == 'INTEGER':
+                self.warning(
+                    f"foreign routine '{decl.name}': parameter '{names}' is a 16-bit INTEGER, "
+                    f"but C 'int' is 32-bit; use CINT/INTEGER32 (or CSHORT for a C 'short') to "
+                    f"match the intended C width.", decl)
+        if not has_c and isinstance(return_type, self._C_ABI_AGGREGATE_TYPES):
+            self.error(
+                f"foreign function '{decl.name}': by-value aggregate return is not C-ABI "
+                f"compatible; return it through a CONST/VAR pointer parameter instead, or mark "
+                f"the routine [C] to return it by value under the C ABI.", decl)
+
     def check_func_decl(self, decl: FuncDecl) -> None:
         """Type check a function declaration."""
         if not decl.name:
@@ -952,7 +1040,11 @@ class PascalTypeChecker(TypeChecker):
                 return_type = INTEGER_TYPE
 
         # Create function type
-        func_type = FunctionType(decl.name, param_types, return_type)
+        _decl_attrs = {a.name.upper() for a in getattr(decl, 'attributes', [])}
+        func_type = FunctionType(decl.name, param_types, return_type, is_variadic='VARARGS' in _decl_attrs)
+
+        # Phase 0 C-FFI guard: reject ABI-incompatible foreign signatures.
+        self._check_foreign_abi(decl, return_type)
 
         # Check for redeclaration. A FORWARD declaration is completed (not
         # redeclared) by a later body definition.
@@ -1018,6 +1110,10 @@ class PascalTypeChecker(TypeChecker):
 
         # Create procedure type
         proc_type = ProcedureType(decl.name, param_types)
+
+        # Phase 0 C-FFI guard: reject ABI-incompatible foreign signatures
+        # (procedures have no return type, so only by-value aggregate params).
+        self._check_foreign_abi(decl, None)
 
         # Check for redeclaration. A FORWARD declaration is completed (not
         # redeclared) by a later body definition -- this is what makes forward
@@ -1417,10 +1513,17 @@ class PascalTypeChecker(TypeChecker):
             # skip count/type checks but still check that the arguments are valid
             # expressions (e.g., defined variables)
             if not is_builtin or stmt.name.upper() not in ['WRITELN', 'WRITE', 'READLN', 'NEW', 'DISPOSE']:
-                # For user-defined procedures, check argument count
+                # For user-defined procedures, check argument count.
+                # Variadic ([VARARGS]) routines accept any number of args >= the
+                # fixed parameter count.
                 expected_args = len(sym.type.params)
                 actual_args = len(stmt.args)
-                if actual_args != expected_args:
+                _is_variadic_proc = getattr(sym.type, 'is_variadic', False)
+                if _is_variadic_proc:
+                    if actual_args < expected_args:
+                        self.error(f"Procedure '{stmt.name}' expects at least {expected_args} arguments, got {actual_args}", stmt)
+                        return
+                elif actual_args != expected_args:
                     self.error(f"Procedure '{stmt.name}' expects {expected_args} arguments, got {actual_args}", stmt)
                     return
 
@@ -2383,17 +2486,25 @@ class PascalTypeChecker(TypeChecker):
                     self.error(f"Undefined function: {expr.name}", expr)
                     return None
                 if isinstance(sym.type, FunctionType):
-                    # Check argument count
+                    # Check argument count.  Variadic functions accept any number
+                    # of args >= the fixed parameter count.
                     expected_args = len(sym.type.params)
                     actual_args = len(expr.args) if expr.args else 0
-                    if actual_args != expected_args:
+                    _is_variadic_fn = getattr(sym.type, 'is_variadic', False)
+                    if _is_variadic_fn:
+                        if actual_args < expected_args:
+                            self.error(f"Function '{expr.name}' expects at least {expected_args} arguments, got {actual_args}", expr)
+                    elif actual_args != expected_args:
                         self.error(f"Function '{expr.name}' expects {expected_args} arguments, got {actual_args}", expr)
-                    # Check argument types
+                    # Check argument types (fixed params only)
                     if expr.args:
                         for i, (arg, (param_name, param_type)) in enumerate(zip(expr.args, sym.type.params)):
                             arg_type = self.infer_expression_type(arg)
                             if arg_type and not self._can_pass_value_argument(arg_type, param_type):
                                 self.error(f"Argument {i+1} type mismatch: expected {param_type}, got {arg_type}", expr)
+                        # Type-check variadic tail args too (just for expression validity)
+                        for arg in (expr.args[expected_args:] if _is_variadic_fn else []):
+                            self.infer_expression_type(arg)
                     return sym.type.return_type
                 return None
 
@@ -2605,17 +2716,25 @@ class PascalTypeChecker(TypeChecker):
                 self.error(f"Undefined function: {expr.name}", expr)
                 return None
             if isinstance(sym.type, FunctionType):
-                # Check argument count
+                # Check argument count.  Variadic functions accept any number
+                # of args >= the fixed parameter count.
                 expected_args = len(sym.type.params)
                 actual_args = len(expr.args) if expr.args else 0
-                if actual_args != expected_args:
+                _is_variadic_fn2 = getattr(sym.type, 'is_variadic', False)
+                if _is_variadic_fn2:
+                    if actual_args < expected_args:
+                        self.error(f"Function '{expr.name}' expects at least {expected_args} arguments, got {actual_args}", expr)
+                elif actual_args != expected_args:
                     self.error(f"Function '{expr.name}' expects {expected_args} arguments, got {actual_args}", expr)
-                # Check argument types
+                # Check argument types (fixed params only)
                 if expr.args:
                     for i, (arg, (param_name, param_type)) in enumerate(zip(expr.args, sym.type.params)):
                         arg_type = self.infer_expression_type(arg)
                         if arg_type and not self._can_pass_value_argument(arg_type, param_type):
                             self.error(f"Argument {i+1} type mismatch: expected {param_type}, got {arg_type}", expr)
+                    # Type-check variadic tail args too (just for expression validity)
+                    for arg in (expr.args[expected_args:] if _is_variadic_fn2 else []):
+                        self.infer_expression_type(arg)
                 return sym.type.return_type
             return None
         elif isinstance(expr, Designator):

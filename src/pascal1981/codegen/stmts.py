@@ -722,6 +722,11 @@ class StmtsMixin:
             if symbol.llvm_value is None:
                 raise CodegenError(f'Undefined procedure: {stmt.name}')
             fn = symbol.llvm_value
+            c_plan = self.c_abi_plans.get(stmt.name.lower())
+            if c_plan is not None:
+                modes = self.proc_param_modes.get(stmt.name.lower(), [])
+                self.codegen_c_abi_call(fn, c_plan, stmt.args, modes)
+                return
             param_types = fn.function_type.args
             param_modes = self.proc_param_modes.get(stmt.name.lower(), [])
             args = []

@@ -20,7 +20,7 @@ extends it with a device/GPU sublanguage. That origin matters in two ways:
 2. **The device dialect is an *extension*, not a replacement.** Device modules
    (`DEVICE INTERFACE` / `DEVICE IMPLEMENTATION OF`) are a new layer built on
    top of the vintage base. They lose a specific set of host features (I/O,
-   heap, recursion, initializer blocks — see `cuda-kernel-prescription.md §2.3`)
+   heap, recursion, initializer blocks — see `docs/old/cuda-kernel-prescription.md §2.3`)
    and gain address-space types (`ADS(GLOBAL) OF T`) and execution-model
    builtins (`THREADIDX_X`, `SYNCTHREADS`, …). Everything that is not explicitly
    rescinded or added still follows vintage IBM Pascal rules. If your mental
@@ -199,7 +199,7 @@ dimensions except through the intrinsics.
 ## Quick reference: working device kernel shape
 
 This template compiles and has been validated against real hardware
-(see `cuda-kernel-prescription.md` and `examples/device_ptx/`):
+(see `docs/old/cuda-kernel-prescription.md` and `examples/device_ptx/`):
 
 ```pascal
 { ── interface file (e.g. kernel.inc) ─────────────────────────────── }
@@ -247,4 +247,4 @@ Key rules distilled:
 - Bounded-size parameters are also valid: `ADS(GLOBAL) OF ARRAY [0..255] OF T`.
 
 For host orchestration, PTX emission, and the full CUDA launch path see
-`docs/cuda-kernel-prescription.md`.
+`docs/old/cuda-kernel-prescription.md` (archived — all milestones A–D complete).

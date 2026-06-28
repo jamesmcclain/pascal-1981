@@ -165,8 +165,24 @@ class CodegenBase:
             self.constants['MAXINT32'] = 2147483647
             self.constants['MAXINT64'] = 9223372036854775807
         self.type_aliases: Dict[str, Type] = {}  # compile-time type aliases, keyed UPPER
+        # Seed the C-ABI fixed-width aliases (Phase 1 of the C-FFI plan) so a
+        # foreign `[C]` routine spelled with CINT/CLONG/CPTR/etc. lowers through
+        # the existing INTEGER32/INTEGER64/ADRMEM paths.  Gated on the extended
+        # dialect to mirror builtins_registry: the C-FFI surface (and the wide
+        # widths it names) exists only under extended, so the two never drift.
+        # A user TYPE decl of the same name overwrites the seed (line ~259),
+        # preserving shadowing.
+        from .. import features as _features
+        if _features.is_extended(self.features):
+            from ..builtins_registry import C_ABI_TYPE_ALIASES
+            for _alias, _base in C_ABI_TYPE_ALIASES.items():
+                self.type_aliases[_alias] = NamedType(_base, None)
         self.current_interface_decls: Dict[str, Declaration] = {}
         self.proc_param_modes: Dict[str, List[Optional[str]]] = {}
+        # Per-routine C-ABI call plan for foreign [C] routines (Phase 2). Keyed
+        # lower-case name -> CCallPlan; present only for [C] EXTERN routines, and
+        # consulted at the call sites to marshal aggregates per the host C ABI.
+        self.c_abi_plans: Dict[str, object] = {}
         self.loop_stack: List[LoopContext] = []
         # Per-routine map of (normalized) label id -> the LLVM block that the
         # corresponding labeled statement begins.  Blocks are pre-created for
@@ -437,6 +453,10 @@ class CodegenBase:
             'pas_file_close': _mk('pas_file_close', ir.FunctionType(void, [fcb_ptr])),
             'pas_file_discard': _mk('pas_file_discard', ir.FunctionType(void, [fcb_ptr])),
             'pas_file_assign': _mk('pas_file_assign', ir.FunctionType(void, [fcb_ptr, i8p, i32])),
+            # ---- program-parameter command-line binding (cmdline.c) -------
+            'pas_args_init': _mk('pas_args_init', ir.FunctionType(void, [i32, i8p.as_pointer()])),
+            'pas_arg_begin': _mk('pas_arg_begin', ir.FunctionType(i32, [i32, i8p])),
+            'pas_arg_end': _mk('pas_arg_end', ir.FunctionType(void, [])),
             'pas_file_attach_std': _mk('pas_file_attach_std', ir.FunctionType(void, [fcb_ptr, fcb_ptr])),
             'pas_file_eof': _mk('pas_file_eof', ir.FunctionType(i32, [fcb_ptr])),
             'pas_file_eoln': _mk('pas_file_eoln', ir.FunctionType(i32, [fcb_ptr])),

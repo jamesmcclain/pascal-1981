@@ -69,6 +69,22 @@ def extended_features() -> Dict[str, bool]:
     return {name: True for name in _FEATURES}
 
 
+def is_extended(features: Dict[str, bool] | None) -> bool:
+    """True iff every registered feature is enabled: the 'extended' umbrella.
+
+    The C-FFI surface -- the ``[C]``/``[CDECL]`` attribute and the
+    ``CINT``/``CLONG``/``CSIZE_T``/... fixed-width aliases -- is available only
+    under this umbrella, so the wide C widths and the interface that needs them
+    arrive together rather than letting ``[C]`` smuggle wide types into an
+    otherwise-vintage program.  Read deliberately as "all of
+    ``extended_features()`` is on"; a finer-grained ``c-ffi`` gate could replace
+    this later without changing callers.
+    """
+    if not features:
+        return False
+    return all(features.get(name, False) for name in _FEATURES)
+
+
 # ---------------------------------------------------------------------------
 # Device dialect (DEVICE compiland) feature set.
 #

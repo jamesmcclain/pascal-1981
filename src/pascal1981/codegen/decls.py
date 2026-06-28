@@ -58,8 +58,15 @@ class DeclsMixin:
 
         # Create main function if not already defined
         if 'main' not in [f.name for f in self.module.functions]:
-            main_type = ir.FunctionType(ir.IntType(32), [])
+            # main takes (argc, argv) so program-heading parameters can be bound
+            # from the command line (vintage program-parameter model); ordinary
+            # programs that ignore them are unaffected (C main(void) vs
+            # main(int,char**) are link-compatible).
+            i8pp = ir.IntType(8).as_pointer().as_pointer()
+            main_type = ir.FunctionType(ir.IntType(32), [ir.IntType(32), i8pp])
             main_func = ir.Function(self.module, main_type, name='main')
+            main_func.args[0].name = 'argc'
+            main_func.args[1].name = 'argv'
             entry_block = main_func.append_basic_block(name='entry')
             self.builder = IRBuilder(entry_block)
             self.current_function = main_func
@@ -71,6 +78,8 @@ class DeclsMixin:
             for sym in list(self.scope.symbols.values()):
                 if isinstance(self.resolve_type_alias(sym.type_expr), FileType):
                     self._init_file_storage(sym.llvm_value, sym.type_expr)
+            # Bind program-heading parameters from the command line.
+            self._codegen_program_parameters(unit)
             # Execute the program body
             prev_labels = self.setup_function_labels(unit.block.body)
             self.codegen_stmt_list(unit.block.body)
@@ -82,6 +91,86 @@ class DeclsMixin:
 
         self._emit_launch_registry()
         return self.module
+
+    def _emit_cstring_ptr(self, text: str) -> ir.Value:
+        """Create a NUL-terminated global C string and return an i8* to it."""
+        data = bytearray(text.encode('utf-8') + b'\0')
+        const = ir.Constant(ir.ArrayType(ir.IntType(8), len(data)), data)
+        gv = ir.GlobalVariable(self.module, const.type, name=self.unique_name('argname'))
+        gv.initializer = const
+        gv.global_constant = True
+        zero = ir.Constant(ir.IntType(32), 0)
+        return self.builder.gep(gv, [zero, zero])
+
+    def _codegen_program_parameters(self, unit) -> None:
+        """Populate program-heading parameters from the command line.
+
+        Faithful to the vintage model (IBM Pascal manual 13-5..13-7): each
+        heading parameter other than INPUT/OUTPUT is read, in heading order,
+        from successive command-line tokens, prompting at the keyboard when a
+        token is absent.  Reading reuses the ordinary READ parsers via stdin
+        redirection (see runtime/cmdline.c), so a parameter parses exactly as it
+        would interactively.  INPUT/OUTPUT are bound to the keyboard/display and
+        occupy no command-line position.
+        """
+        from ..ast_nodes import Identifier
+        params = list(getattr(unit, 'params', None) or [])
+        # INPUT/OUTPUT are bound to the keyboard/display and occupy no
+        # command-line position; if every heading parameter is one of those (or
+        # there are none), emit nothing -- programs that take no command-line
+        # input keep their previous, runtime-free main.
+        bindable = [p for p in params if p.upper() not in {'INPUT', 'OUTPUT'}]
+        if not bindable:
+            return
+        i32 = ir.IntType(32)
+        argc, argv = self.current_function.args[0], self.current_function.args[1]
+        self.builder.call(self.runtime_extern('pas_args_init'), [argc, argv])
+
+        position = 0  # command-line position among bindable parameters
+        for pname in params:
+            if pname.upper() in {'INPUT', 'OUTPUT'}:
+                continue  # not set from the command line; not positional
+            sym = self.scope.lookup(pname) or self.scope.lookup(pname.upper())
+            if sym is not None and getattr(sym, 'llvm_value', None) is not None:
+                name_ptr = self._emit_cstring_ptr(pname)
+                self.builder.call(self.runtime_extern('pas_arg_begin'),
+                                  [ir.Constant(i32, position), name_ptr])
+                resolved = self.resolve_type_alias(sym.type_expr)
+                if isinstance(resolved, FileType):
+                    self._bind_file_parameter(sym)
+                else:
+                    self._emit_read_target(Identifier(pname), None)
+                # Consume the rest of the line. On the command-line token stream
+                # this is harmless (the stream is discarded next); on the
+                # keyboard-prompt fallback it advances past the just-typed line
+                # so the next parameter reads cleanly.
+                self.builder.call(self._read_helper('pas_readln_skip', ir.VoidType()), [])
+                self.builder.call(self.runtime_extern('pas_arg_end'), [])
+            position += 1
+
+    def _bind_file_parameter(self, sym) -> None:
+        """Bind a FILE program parameter's filename from the command line.
+
+        Reads the filename token as an LSTRING (reusing the ordinary reader
+        under the active stdin redirect), then ASSIGNs it to the file's control
+        block so a later RESET/REWRITE opens it -- the canonical vintage use of
+        a file program parameter.
+        """
+        i8 = ir.IntType(8)
+        i32 = ir.IntType(32)
+        zero = ir.Constant(i32, 0)
+        cap = 255
+        buf = self.builder.alloca(ir.ArrayType(i8, cap + 1), name='arg_filename')
+        buf_i8 = self.builder.bitcast(buf, i8.as_pointer())
+        self.builder.call(self._read_helper('pas_read_lstring', i8.as_pointer(), [i32]),
+                          [buf_i8, ir.Constant(i32, cap)])
+        # LSTRING layout: byte 0 is the length, bytes 1.. are the characters.
+        length = self.builder.zext(self.builder.load(buf_i8), i32)
+        name_ptr = self.builder.bitcast(
+            self.builder.gep(buf, [zero, ir.Constant(i32, 1)]), i8.as_pointer())
+        handle = self.builder.load(sym.llvm_value)
+        fcb = self.builder.bitcast(handle, self.file_fcb_type().as_pointer())
+        self.builder.call(self.runtime_extern('pas_file_assign'), [fcb, name_ptr, length])
 
     def codegen_module(self, unit: ModuleUnit) -> ir.Module:
         """Codegen for MODULE unit."""
@@ -527,8 +616,95 @@ class DeclsMixin:
             if isinstance(arg.type, ir.PointerType):
                 arg.attributes.align = self.natural_alignment(arg.type.pointee)
 
+    @staticmethod
+    def _c_abi_sign_attr(type_expr) -> Optional[str]:
+        """Return 'signext' or 'zeroext' for sub-32-bit Pascal scalar types (Phase 4).
+
+        Only the directly named Pascal built-in and C-alias types are recognised;
+        user-defined aliases that happen to resolve to a narrow type get no
+        attribute (safe: the caller will either sign- or zero-extend anyway, and
+        the worst case is a latent bug only with negative values on sub-32-bit
+        returns, the same status quo as before Phase 4).
+
+        Signed narrow types (C char / short):  'signext'
+          INTEGER (i16), CHAR (i8), CCHAR (i8 alias), CSHORT (i16 alias)
+        Unsigned/boolean narrow types:         'zeroext'
+          WORD (i16), BOOLEAN (i8)
+        All 32-bit-and-wider types:            None  (no attribute needed)
+        """
+        if type_expr is None:
+            return None
+        name = getattr(type_expr, 'name', None)
+        if name is None:
+            return None
+        n = name.upper()
+        if n in {'INTEGER', 'CHAR', 'CCHAR', 'CSHORT'}:
+            return 'signext'
+        if n in {'WORD', 'BOOLEAN'}:
+            return 'zeroext'
+        return None
+
+    def _codegen_c_abi_decl(self, decl, return_llvm) -> None:
+        """Lower a foreign ``[C]`` routine declaration with C-ABI-correct
+        signature (byval/sret/register coercion/signext/zeroext/void). Phases 2-4.
+
+        ``return_llvm`` is the LLVM return type for functions, or None for
+        procedures.  The routine is always body-less (EXTERN), so this only emits
+        the `declare`, records the call plan, and registers the symbol/modes the
+        call sites need.
+
+        Phase 4 additions:
+        - Sub-32-bit scalar parameters carry signext/zeroext on the declare and
+          the call site, closing the latent dirty-bit gap for i8/i16 types.
+        - [C] EXTERN procedures are declared as void-returning rather than the
+          internal i32 convention, so the declaration exactly matches a C `void`.
+        - BOOLEAN (i8) is tagged zeroext; CHAR/INTEGER get signext.
+        """
+        flat_param_types = []
+        flat_modes = []
+        flat_sign_attrs = []
+        for param in decl.params:
+            pt = self.param_llvm_type(param)
+            sa = self._c_abi_sign_attr(param.type_expr)
+            for _ in param.names:
+                flat_param_types.append(pt)
+                flat_modes.append(param.mode)
+                flat_sign_attrs.append(sa)
+
+        decl_attrs = {a.name.upper() for a in getattr(decl, 'attributes', [])}
+        is_variadic = 'VARARGS' in decl_attrs
+
+        # Phase 4: determine sign attr for the return type.
+        ret_type_expr = getattr(decl, 'return_type', None)
+        ret_sign_attr = self._c_abi_sign_attr(ret_type_expr)
+
+        ir_args, ir_ret, _sret, arg_attrs, plan = self.build_c_abi_plan(
+            decl, flat_param_types, flat_modes, return_llvm, is_variadic=is_variadic,
+            flat_sign_attrs=flat_sign_attrs, ret_sign_attr=ret_sign_attr)
+
+        func_type = ir.FunctionType(ir_ret, ir_args, var_arg=is_variadic)
+        func = ir.Function(self.module, func_type, name=decl.name)
+        func.linkage = 'external'
+        for idx, (names, align) in arg_attrs.items():
+            dst = func.args[idx].attributes
+            for a in names:
+                dst.add(a)
+            if align is not None:
+                dst.align = align
+
+        # Phase 4: attach the return sign/zero-extension attribute on the declare.
+        if plan.ret_sign_attr:
+            func.return_value.attributes.add(plan.ret_sign_attr)
+
+        self.proc_param_modes[decl.name.lower()] = flat_modes
+        self.c_abi_plans[decl.name.lower()] = plan
+        self.scope.define(decl.name, func, getattr(decl, 'return_type', None))
+
     def codegen_proc_decl(self, decl: ProcDecl) -> None:
         """Codegen for PROCEDURE declaration."""
+        if self.is_c_abi_foreign(decl):
+            self._codegen_c_abi_decl(decl, None)
+            return
         effective_decl = decl
         iface_decl = self.current_interface_decls.get(decl.name.lower()) if decl.name else None
         if iface_decl and not decl.params:
@@ -615,6 +791,9 @@ class DeclsMixin:
 
     def codegen_func_decl(self, decl: FuncDecl) -> None:
         """Codegen for FUNCTION declaration."""
+        if self.is_c_abi_foreign(decl):
+            self._codegen_c_abi_decl(decl, self.llvm_type(decl.return_type))
+            return
         effective_decl = decl
         iface_decl = self.current_interface_decls.get(decl.name.lower()) if decl.name else None
         if iface_decl and not decl.params:

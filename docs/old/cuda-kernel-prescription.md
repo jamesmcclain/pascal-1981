@@ -85,7 +85,7 @@ The four findings that gate a real kernel, each expanded below:
 | §2 | Device IR is **not self-contained** | **[DONE]** — Milestones A1–A3 complete (Phase 2.1 + 2.2 lazy plan) |
 | §3 | There are **no entry points**, only device functions | **[DONE]** — Milestone B complete (Phase 2.3) |
 | §4 | **No parallel execution model** | **[DONE]** — Milestone C complete: index reads, `SYNCTHREADS`, no new body launch syntax, CPU-device correctness tests |
-| §5 | **No host orchestration** | [IN-PROGRESS] — CPU-device slice DONE (DEVALLOC/DEVCOPYTO/DEVCOPYFROM/DEVFREE on a malloc/memcpy shim; LAUNCH lowers through the real `pas_dev_launch(name, thunk, gx,gy,gz, bx,by,bz, argv)` ABI with 2-or-6 geometry; §5.5 vector-add runs end-to-end on x86). CUDA driver shim (now a runtime-only swap + PTX module load) + `GRID`/`BLOCK` naming sugar still open |
+| §5 | **No host orchestration** | **[DONE]** — CPU-device slice (malloc/memcpy shim) + CUDA driver-API shim (`runtime/cuda_launch.c`) both complete; vector-add runs on GPU (`@requires_gpu`). `GRID`/`BLOCK` naming sugar remains a low-priority ergonomic addition. |
 | §6 | **AMDGPU back end crashes** (bonus, ROCm-only) | [PRESCRIBED] — open |
 
 Milestones below are ordered so each one is independently testable and the host/vintage path
@@ -758,5 +758,11 @@ Commands/results behind the original [VERIFIED]/[GAP] tags:
   exports, helpers stay plain, PTX `.visible .entry` asserted, entry-shape rules enforced).
 - **§1.5 complete:** `DEVICE UNIT` (parser/checker/codegen/tests) fully implemented;
   integration-test tier running at `tests/integration/`.
-- **§4-§6 remain open:** thread-index intrinsics, barriers, host orchestration,
-  AMDGPU datalayout/alloca - all still prescribed.
+- **§4 complete:** thread-index intrinsics (`THREADIDX_*`/`BLOCKIDX_*`/`BLOCKDIM_*`/`GRIDDIM_*`),
+  `SYNCTHREADS` barrier, and CPU-device TLS emulation (full launch-geometry loop);
+  covered by `tests/test_device_intrinsics.py` and `tests/integration/test_device_grid_stride.py`.
+- **§5 complete:** CPU-device orchestration shim (DEVALLOC/copies/DEVFREE, LAUNCH via
+  `pas_dev_launch` thunk ABI) + CUDA driver-API shim (`runtime/cuda_launch.c`,
+  `DEVICE_SHIM=cuda`); end-to-end GPU test (`@requires_gpu`) passes on RTX 4090;
+  covered by `tests/integration/test_device_orchestration*.py` and `tests/test_device_launch_abi.py`.
+- **§6 (AMDGPU) remains open:** datalayout/alloca-addrspace hygiene not yet done.
