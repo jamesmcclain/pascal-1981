@@ -1,10 +1,8 @@
-howto.md
-pascal-code/
 __pycache__/
+howto.md
 tests/*.pyc
 *.ll
 runtime/build/
-
 build/
-src/pascal1981/libpascalrt.a
+src/pascal1981/libpascalrt*.a
 src/*.egg-info/
