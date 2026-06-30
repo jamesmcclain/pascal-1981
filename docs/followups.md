@@ -55,7 +55,7 @@ variant-record long-form `NEW` behavior.
 
 ---
 
-## 3. WORD/INTEGER constant exemption: fold constant expressions [OPEN]
+## 2. WORD/INTEGER constant exemption: fold constant expressions [OPEN]
 
 **Where.** `type_checker.py::_is_constant_integer_expr` (consulted by
 `_check_word_int_assign` and `_check_word_int_mix`).
@@ -85,7 +85,7 @@ confirm `tests/test_word_int_strictness.py` still rejects genuine variables.
 
 ---
 
-## 4. ODD(WORD) is rejected but should be accepted [OPEN]
+## 3. ODD(WORD) is rejected but should be accepted [OPEN]
 
 **Where.** `builtins_registry.py` registers `ODD` as `FunctionType('ODD',
 [('n', INTEGER_TYPE)], BOOLEAN_TYPE)`; the argument check rejects a WORD actual.
