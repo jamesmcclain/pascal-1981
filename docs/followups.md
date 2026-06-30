@@ -7,10 +7,12 @@ IN-PROGRESS / DONE.
 
 These are not bugs that produce wrong output today; they are seams worth
 closing when the surrounding code is next touched. Resolved items are moved to
-`docs/old/old-followups.md` once they ship (most recently the wide same-width
-WORD/INTEGER signedness mix, which was item 6 here — `_check_word_int_mix` now
-covers `WORD32`/`INTEGER32` and `WORD64`/`INTEGER64` at equal rank under the same
-`strict-word-int` discipline).
+`docs/old/old-followups.md` once they ship (most recently the MAXWORD32 /
+MAXWORD64 parity constants, which was item 5 here — the wide unsigned types now
+predeclare `MAXWORD32` / `MAXWORD64` alongside `MAXINT32` / `MAXINT64`, gated on
+`wide-integers`; before that, the wide same-width WORD/INTEGER signedness mix,
+item 6, where `_check_word_int_mix` now covers `WORD32`/`INTEGER32` and
+`WORD64`/`INTEGER64` at equal rank under the same `strict-word-int` discipline).
 
 
 ---
@@ -105,28 +107,3 @@ signedness-independent.
 **How to verify.** Flip `TestManualKnownGaps::test_odd_accepts_word_is_a_known_gap`
 to assert ACCEPT (and add a build-and-run parity check for `ODD(WORD)` vs
 `ODD(INTEGER)`).
-
----
-
-## 5. MAXWORD32 / MAXWORD64 parity constants [OPEN]
-
-**Where.** `builtins_registry.py` (constant registration) and
-`codegen/base.py` (`self.constants` seeding), alongside `MAXINT32`/`MAXINT64`.
-
-**What.** The wide *signed* types ship with `MAXINT32`/`MAXINT64`, but the new
-wide *unsigned* types `WORD32`/`WORD64` do not yet have `MAXWORD32`
-(`4294967295`) / `MAXWORD64` (`18446744073709551615`) predeclared constants.
-
-**Why it matters.** Minor parity gap only. The types are fully usable without
-them (literals, variables, widening, arithmetic, and unsigned `WRITE` all work);
-this is a convenience constant, deferred to avoid the unsigned-constant width
-selection in the codegen const path (`MAXWORD64` needs an i64 whose value exceeds
-the signed i64 max).
-
-**Suggested resolution.** Seed `MAXWORD32`/`MAXWORD64` in both the checker
-registry (gated on `wide-integers`, as `MAXINT32`/`MAXINT64` are) and the codegen
-constants, verifying `_const_ir` emits them at i32/i64 with the correct unsigned
-bit pattern (follow how `MAXWORD = 65535` is already emitted as an i16).
-
-**How to verify.** Add a build-and-run check that `WRITELN(MAXWORD32)` prints
-`4294967295` and `WRITELN(MAXWORD64)` prints `18446744073709551615`.

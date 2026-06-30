@@ -27,7 +27,10 @@ class ConstFoldMixin:
             return ir.Constant(ir.DoubleType(), v)
         if name_upper == 'MAXINT':
             return ir.Constant(ir.IntType(16), int(v))
-        if name_upper == 'MAXINT64':
+        if name_upper in ('MAXINT64', 'MAXWORD64'):
+            # MAXWORD64 = 2**64-1 exceeds the signed i64 max; it must be emitted
+            # at i64 width (the bit pattern is all-ones) rather than falling
+            # through to the i32 default, which would not hold the value.
             return ir.Constant(ir.IntType(64), int(v))
         return ir.Constant(ir.IntType(32), int(v))
 
