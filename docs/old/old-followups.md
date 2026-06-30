@@ -369,3 +369,44 @@ already rejects an addrspace mismatch), and it is now hardened to raise loudly
 under `is_device_module` instead of silently dropping a segment — implementing
 this item's "treat the seg→flat path as a type error in device context"
 resolution. Covered by `tests/test_device_ads_no_segment.py`.
+
+---
+
+## 6. WORD32/INTEGER32 (same-width) signedness mix is undiagnosed [DONE]
+
+**Where.** `type_checker.py::_check_word_int_mix` (the same-width unsigned/signed
+diagnostic) and `type_system.py::binary_op_result_type` (which resolves a
+same-width mix to the unsigned type).
+
+**What.** The vintage WORD/INTEGER (16-bit) expression mix warned (and errored
+under `-f strict-word-int`), but the analogous *wide* same-width mixes
+(`WORD32`/`INTEGER32`, `WORD64`/`INTEGER64`) silently resolved to the unsigned
+type with no diagnostic — even under `strict-word-int`. The check was hard-wired
+to the rank-0 pair (`a_t == WORD_TYPE and b_t == INTEGER_TYPE`), so it never fired
+for the wide extension types.
+
+**Why it mattered.** The wide types are extensions outside the 1981 manual, so
+leaving them undiagnosed was a safe default rather than a wrong result. But a
+same-width unsigned/signed mix carries the identical "which signedness does the
+arithmetic use?" ambiguity at every width, and a user who opted into
+`-f strict-word-int` could reasonably expect the same signedness discipline
+across the whole integer family.
+
+**Resolution.** `_check_word_int_mix` now generalizes to the full
+WORD-family/INTEGER-family at **equal rank** (WORD/INTEGER, WORD32/INTEGER32,
+WORD64/INTEGER64) via small `_WORD_FAMILY_RANK`/`_INT_FAMILY_RANK` maps. The
+behavior is uniform across widths: a warning by default, a hard error under
+`-f strict-word-int`, and the INTEGER-constant exemption preserved at every
+width. Unequal-width mixes are deliberately **not** flagged — there the wider
+operand's signedness wins unambiguously (e.g. `WORD(16) + INTEGER32 ->
+INTEGER32`), so there is no coin-flip to warn about. The 16-bit behavior is
+byte-for-byte unchanged. The stale "wide-type mixes are not diagnosed" comment in
+`binary_op_result_type` was corrected.
+
+**How verified.** New rows in `tests/test_conversion_matrix.py`
+(`word32_plus_int32_var_default` ACCEPT-with-warning, `word32_plus_int32_var_strict`
+REJECT, `word64_plus_int64_var_strict` REJECT, the constant-exemption row, and an
+unequal-width clean row) plus a new `TestWideSameWidthMix` class in
+`tests/test_word_int_strictness.py` (warns by default, errors under strict, holds
+the constant exemption, leaves unequal-width mixes clean). The existing 16-bit
+WORD/INTEGER strictness tests remain green, confirming no regression.

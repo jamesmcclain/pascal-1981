@@ -7,8 +7,10 @@ IN-PROGRESS / DONE.
 
 These are not bugs that produce wrong output today; they are seams worth
 closing when the surrounding code is next touched. Resolved items are moved to
-`docs/old/old-followups.md` once they ship (most recently the device codegen-
-quality gap vs `nvcc` — predication, FMA, alignment — which was item 2 here).
+`docs/old/old-followups.md` once they ship (most recently the wide same-width
+WORD/INTEGER signedness mix, which was item 6 here — `_check_word_int_mix` now
+covers `WORD32`/`INTEGER32` and `WORD64`/`INTEGER64` at equal rank under the same
+`strict-word-int` discipline).
 
 
 ---
@@ -128,28 +130,3 @@ bit pattern (follow how `MAXWORD = 65535` is already emitted as an i16).
 
 **How to verify.** Add a build-and-run check that `WRITELN(MAXWORD32)` prints
 `4294967295` and `WRITELN(MAXWORD64)` prints `18446744073709551615`.
-
----
-
-## 6. WORD32/INTEGER32 (same-width) signedness mix is undiagnosed [OPEN]
-
-**Where.** `type_checker.py::_check_word_int_mix` (fires only for the 16-bit
-`WORD`/`INTEGER` pair); `type_system.py::binary_op_result_type` resolves a
-same-width unsigned/signed mix to the unsigned type.
-
-**What.** The vintage WORD/INTEGER (16-bit) expression mix warns (and errors
-under `-f strict-word-int`). The analogous *wide* same-width mixes
-(`WORD32`/`INTEGER32`, `WORD64`/`INTEGER64`) silently resolve to the unsigned
-type with no diagnostic.
-
-**Why it matters.** These are extension types outside the 1981 manual, so there
-is no vintage rule to conform to; leaving them undiagnosed is a deliberate, safe
-default. But a user who opted into `-f strict-word-int` might reasonably expect
-the same signedness discipline at all widths.
-
-**Suggested resolution.** If desired, generalize `_check_word_int_mix` to the
-full WORD-family/INTEGER-family at equal rank, keeping the INTEGER-constant
-exemption, behind the existing `strict-word-int` flag.
-
-**How to verify.** Add matrix rows for `WORD32 + INTEGER32 variable` asserting a
-warning by default and an error under `strict-word-int`.
