@@ -453,3 +453,25 @@ WORD64->WORD32 narrow REJECT) and `TestWideMaxConstantsRun` (build-and-run:
 `18446744073709551615`, and a round-trip through WORD32/WORD64 variables) in
 `tests/test_wide_unsigned_types.py`. Full suite green: `971 passed, 1 skipped,
 115 subtests passed`.
+
+---
+
+## Duplicate parser-fixture number: two `16_*` files in should_pass [DONE]
+
+**Where.** `tests/fixtures/parser/should_pass/16_concat_string_procedure.pas`
+and (formerly) `tests/fixtures/parser/should_pass/16_for_static.pas`.
+
+**What.** The should_pass corpus is otherwise numbered uniquely; `16_` was used
+twice (the string-procedure trio 16/17/18 collided with an earlier `16_for_static`).
+
+**Why it mattered.** Cosmetic, but the numbering is meant as a stable index for
+referring to fixtures in notes and reviews; a duplicated index invited "fixture
+16" ambiguity in docs and commit messages.
+
+**Resolution.** `git mv` renumbered `16_for_static.pas` to `19_for_static.pas`
+(19 was the next free slot; 17/18 already belonged to the string-procedure
+trio). Updated the one reference in `tests/test_parser.py`
+(`test_for_loop_with_static_bounds` or equivalent fixture path).
+
+**How verified.** `ls tests/fixtures/parser/should_pass | cut -d_ -f1 | sort |
+uniq -d` prints nothing. `pytest -k parser` green (75 passed).

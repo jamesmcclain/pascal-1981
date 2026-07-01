@@ -7,12 +7,15 @@ IN-PROGRESS / DONE.
 
 These are not bugs that produce wrong output today; they are seams worth
 closing when the surrounding code is next touched. Resolved items are moved to
-`docs/old/old-followups.md` once they ship (most recently the MAXWORD32 /
-MAXWORD64 parity constants, which was item 5 here — the wide unsigned types now
-predeclare `MAXWORD32` / `MAXWORD64` alongside `MAXINT32` / `MAXINT64`, gated on
-`wide-integers`; before that, the wide same-width WORD/INTEGER signedness mix,
-item 6, where `_check_word_int_mix` now covers `WORD32`/`INTEGER32` and
-`WORD64`/`INTEGER64` at equal rank under the same `strict-word-int` discipline).
+`docs/old/old-followups.md` once they ship (most recently the duplicate
+parser-fixture number, item 7 here — `16_for_static.pas` was renumbered to
+`19_for_static.pas` so the should_pass corpus indexes uniquely again; before
+that, the MAXWORD32 / MAXWORD64 parity constants, which was item 5 here — the
+wide unsigned types now predeclare `MAXWORD32` / `MAXWORD64` alongside
+`MAXINT32` / `MAXINT64`, gated on `wide-integers`; before that, the wide
+same-width WORD/INTEGER signedness mix, item 6, where `_check_word_int_mix`
+now covers `WORD32`/`INTEGER32` and `WORD64`/`INTEGER64` at equal rank under
+the same `strict-word-int` discipline).
 
 
 ---
@@ -194,27 +197,6 @@ README's test instructions.
 **How to verify.** `git clean -xfd runtime/build && pytest tests` on a fresh
 checkout either passes or produces a single clear diagnostic instead of 61
 opaque link failures.
-
----
-
-## 7. Duplicate parser-fixture number: two `16_*` files in should_pass [OPEN]
-
-**Where.** `tests/fixtures/parser/should_pass/16_concat_string_procedure.pas`
-and `tests/fixtures/parser/should_pass/16_for_static.pas`.
-
-**What.** The should_pass corpus is otherwise numbered uniquely; `16_` is used
-twice (the string-procedure trio 16/17/18 collided with an earlier `16_for_static`).
-
-**Why it matters.** Cosmetic, but the numbering is clearly meant as a stable
-index for referring to fixtures in notes and reviews; a duplicated index invites
-"fixture 16" ambiguity in docs and commit messages.
-
-**Suggested resolution.** Renumber `16_for_static.pas` (e.g. to `19_for_static.pas`)
-or move the string-procedure trio up; update any doc references.
-
-**How to verify.** `ls tests/fixtures/parser/should_pass | cut -d_ -f1 | sort |
-uniq -d` prints nothing; parser fixture tests still pass (the harness globs, so
-renaming is safe).
 
 ---
 
