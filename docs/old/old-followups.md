@@ -504,3 +504,33 @@ of listing it as a required manual step.
 pytest tests/ -q` on a checkout with no prebuilt archive: the archive is built
 automatically and the full suite passes (`971 passed, 1 skipped, 115 subtests
 passed`).
+
+---
+
+## PTX golden-text assertions are brittle across llvmlite/LLVM versions [DONE]
+
+**Where.** `tests/test_compile_to_ptx.py` (`st.global.u32`, and by extension the
+other exact-mnemonic asserts), `tests/integration/test_device_ptx_artifact.py`,
+`tests/integration/test_device_mandelbrot_ptx.py`.
+
+**What.** These tests asserted the exact NVPTX mnemonic `st.global.u32`. With
+llvmlite 0.48 (LLVM 20), which satisfies the declared `llvmlite>=0.47.0` range,
+the backend emits `st.global.b32` instead, so 3 tests failed on a fresh,
+in-range install even though the generated kernel was correct (the store,
+guard, and index math were all present in the emitted PTX).
+
+**Why it mattered.** CI/users tracking the newest llvmlite saw spurious
+failures; the failures asserted nothing wrong with the compiler itself. There
+is still no upper bound on llvmlite in `pyproject.toml`, so a resilient
+assertion was preferred over a version pin.
+
+**Resolution.** All three `assertIn('st.global.u32', ...)` call sites were
+replaced with `assertRegex(..., r'st\.global\.[ub]32')`, matching either the
+size-typed (`u32`) or bit-typed (`b32`) spelling — the tests check "a global
+32-bit store to the buffer exists," not the exact type suffix.
+
+**How verified.** Full suite green under both llvmlite 0.47.0 and 0.48.0
+(`pip install --no-deps --force-reinstall llvmlite==0.47.0` /
+`llvmlite==0.48.0`, then `PYTHONPATH=src python3 -m pytest tests/ -q`: `971
+passed, 1 skipped, 115 subtests passed` under each). Environment restored to
+0.47.0 afterward.
