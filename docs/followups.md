@@ -107,3 +107,135 @@ signedness-independent.
 **How to verify.** Flip `TestManualKnownGaps::test_odd_accepts_word_is_a_known_gap`
 to assert ACCEPT (and add a build-and-run parity check for `ODD(WORD)` vs
 `ODD(INTEGER)`).
+
+---
+
+## 4. Packaging metadata claims Python 3.8+ but the package cannot run below 3.10 [OPEN]
+
+**Where.** `pyproject.toml` (`requires-python = ">=3.8"` plus the 3.8/3.9
+classifiers) and `src/pascal1981/compile_to_ptx.py`.
+
+**What.** Two independent facts pin the real floor at Python 3.10. First, the
+declared dependency `llvmlite>=0.47.0` itself requires Python >= 3.10 on PyPI, so
+`pip install pascal1981` on 3.8/3.9 cannot resolve. Second,
+`compile_to_ptx.py` uses PEP 604 union syntax in a function signature
+(`emit_llvm_path: str | None = None`) without `from __future__ import
+annotations` (the other modules that use `X | None`, e.g. `features.py`, do have
+the future import), so merely importing that module raises `TypeError` on
+3.8/3.9 even if llvmlite were somehow satisfied.
+
+**Why it matters.** The metadata advertises support the package does not have;
+users on 3.8/3.9 get a confusing resolver or import-time failure instead of a
+clear "unsupported Python" message from pip.
+
+**Suggested resolution.** Set `requires-python = ">=3.10"`, drop the 3.8/3.9
+classifiers, and (for uniformity) add `from __future__ import annotations` to
+`compile_to_ptx.py`. Alternatively, if 3.8 support is genuinely desired, lower
+the llvmlite floor and replace PEP 604 annotations — but the simpler metadata fix
+matches reality.
+
+**How to verify.** `pip install .` in a 3.9 environment should be refused up
+front by pip with a requires-python error rather than failing mid-resolution;
+`python3 -c "import pascal1981.compile_to_ptx"` succeeds on every advertised
+version.
+
+---
+
+## 5. PTX golden-text assertions are brittle across llvmlite/LLVM versions [OPEN]
+
+**Where.** `tests/test_compile_to_ptx.py` (`st.global.u32`, and by extension the
+other exact-mnemonic asserts), `tests/integration/test_device_ptx_artifact.py:46`,
+`tests/integration/test_device_mandelbrot_ptx.py:113`.
+
+**What.** These tests assert exact NVPTX mnemonics such as `st.global.u32`.
+With llvmlite 0.48 (LLVM 20), which satisfies the declared `llvmlite>=0.47.0`
+range, the backend emits `st.global.b32` instead, so 3 tests fail on a fresh,
+in-range install even though the generated kernel is correct (verified by
+reading the emitted PTX: the store, guard, and index math are all present).
+
+**Why it matters.** CI/users tracking the newest llvmlite see spurious failures;
+the failures assert nothing wrong with the compiler itself. There is also no
+upper bound on llvmlite in `pyproject.toml`, so this class of drift will recur
+with each LLVM major bump.
+
+**Suggested resolution.** Either (a) relax the assertions to accept the
+size-typed and bit-typed spellings, e.g. match `st.global.[ub]32` (a small
+regex or `assertRegex`), or (b) pin an llvmlite upper bound and bump it
+deliberately. Option (a) is preferred: the tests are checking "a global 32-bit
+store to the buffer exists," not the exact type suffix.
+
+**How to verify.** Full suite green under both llvmlite 0.47 and 0.48
+(`pip install llvmlite==0.47.0` / `==0.48.0`, `pytest tests/test_compile_to_ptx.py
+tests/integration/test_device_ptx_artifact.py
+tests/integration/test_device_mandelbrot_ptx.py`).
+
+---
+
+## 6. Build-and-run tests hard-fail unless `make -C runtime` was run manually [OPEN]
+
+**Where.** `tests/support.py` (`RUNTIME_LIB = runtime/build/libpascalrt.a`, used
+by the clang link step around line 274) and the README's testing instructions.
+
+**What.** On a fresh checkout, `pytest tests` fails 61 build-and-run tests with
+`clang failed: no such file or directory: .../runtime/build/libpascalrt.a`.
+After `make -C runtime`, the same suite is green (modulo item 5). Nothing in the
+test harness builds the runtime or explains the failure.
+
+**Why it matters.** New contributors see a wall of 61 failures whose root cause
+(missing prerequisite) is buried inside a clang stderr string; the natural
+misread is "the compiler is broken."
+
+**Suggested resolution.** In `tests/support.py`, when `RUNTIME_LIB` is missing,
+either (a) run `make -C runtime` once per session (cheap, idempotent, clang is
+already a prerequisite for these tests), or (b) `pytest.skip`/fail fast with an
+explicit message: "run `make -C runtime` first." Also add the prerequisite to the
+README's test instructions.
+
+**How to verify.** `git clean -xfd runtime/build && pytest tests` on a fresh
+checkout either passes or produces a single clear diagnostic instead of 61
+opaque link failures.
+
+---
+
+## 7. Duplicate parser-fixture number: two `16_*` files in should_pass [OPEN]
+
+**Where.** `tests/fixtures/parser/should_pass/16_concat_string_procedure.pas`
+and `tests/fixtures/parser/should_pass/16_for_static.pas`.
+
+**What.** The should_pass corpus is otherwise numbered uniquely; `16_` is used
+twice (the string-procedure trio 16/17/18 collided with an earlier `16_for_static`).
+
+**Why it matters.** Cosmetic, but the numbering is clearly meant as a stable
+index for referring to fixtures in notes and reviews; a duplicated index invites
+"fixture 16" ambiguity in docs and commit messages.
+
+**Suggested resolution.** Renumber `16_for_static.pas` (e.g. to `19_for_static.pas`)
+or move the string-procedure trio up; update any doc references.
+
+**How to verify.** `ls tests/fixtures/parser/should_pass | cut -d_ -f1 | sort |
+uniq -d` prints nothing; parser fixture tests still pass (the harness globs, so
+renaming is safe).
+
+---
+
+## 8. CLI progress chatter is emitted even without --verbose [OPEN]
+
+**Where.** `src/pascal1981/compile_to_llvm.py::main` (the `Parsing ...`,
+`Type checking...`, `Generating LLVM IR...`, `Wrote ...` prints to stderr).
+
+**What.** Every invocation prints four progress lines to stderr regardless of
+`-v`. The `-v/--verbose` help text says it enables per-declaration logging and
+tracebacks, implying the default is quiet.
+
+**Why it matters.** Harmless interactively, but noisy in Makefiles and scripted
+pipelines (e.g. the examples' Makefiles), and it makes stderr unusable as a
+pure diagnostics channel — a wrapper cannot distinguish "warnings" from routine
+chatter without pattern matching.
+
+**Suggested resolution.** Gate the progress lines behind `-v` (or add a
+`--quiet` flag if the default chatter is considered a feature). Keep the final
+`Wrote <path>` if desired, but route it consistently.
+
+**How to verify.** `pascal1981 ok.pas out.ll 2>err.txt` leaves `err.txt` empty on
+success without `-v`; with `-v` the progress lines (and tracebacks on failure)
+appear.
