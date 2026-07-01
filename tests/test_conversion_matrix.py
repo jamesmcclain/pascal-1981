@@ -36,6 +36,9 @@ REJECT = "REJECT"
 VINTAGE = None  # faithful 1981 dialect: no flags
 WIDE = {"wide-integers": True, "wide-reals": True}
 STRICT = {"strict-word-int": True}
+# The wide extension types only exist under wide-integers; pairing that surface
+# with strict-word-int is how we exercise the wide same-width signedness rule.
+WIDE_STRICT = {"wide-integers": True, "wide-reals": True, "strict-word-int": True}
 
 
 def verdict(src, features=VINTAGE):
@@ -160,6 +163,18 @@ class TestArithmeticMatrix(unittest.TestCase):
          "constant exemption holds even under strict-word-int"),
         ("int_plus_int32", "INTEGER32", "i: INTEGER;", "i", "j: INTEGER32;", "j", "+", WIDE, ACCEPT,
          "ext: rank promotion to INTEGER32"),
+        # --- wide same-width signedness mix: same rule as 16-bit WORD/INTEGER ---
+        ("word32_plus_int32_var_default", "WORD32", "w: WORD32;", "w", "i: INTEGER32;", "i", "+", WIDE, ACCEPT,
+         "ext: WORD32+INTEGER32-var warns by default, resolves to WORD32 so it compiles"),
+        ("word32_plus_int32_var_strict", "WORD32", "w: WORD32;", "w", "i: INTEGER32;", "i", "+", WIDE_STRICT, REJECT,
+         "ext: strict-word-int promotes the wide same-width mix to an error"),
+        ("word32_plus_int32_const_strict", "WORD32", "w: WORD32;", "w", "", "1", "+", WIDE_STRICT, ACCEPT,
+         "ext: INTEGER constant exemption holds at width 32 even under strict"),
+        ("word64_plus_int64_var_strict", "WORD64", "w: WORD64;", "w", "i: INTEGER64;", "i", "+", WIDE_STRICT, REJECT,
+         "ext: strict-word-int promotes the WORD64/INTEGER64 mix to an error"),
+        # --- unequal width is NOT a signedness coin-flip: wider signed wins ---
+        ("word_plus_int32_unequal_clean", "INTEGER32", "w: WORD;", "w", "i: INTEGER32;", "i", "+", WIDE_STRICT, ACCEPT,
+         "ext: WORD(16)+INTEGER32 widens unambiguously to INTEGER32; not flagged even under strict"),
         ("real_plus_int", "REAL", "r: REAL;", "r", "i: INTEGER;", "i", "*", VINTAGE, ACCEPT,
          "manual: INTEGER widens to REAL"),
     ]
@@ -178,6 +193,30 @@ class TestArithmeticMatrix(unittest.TestCase):
     def test_word_int_const_mix_is_clean(self):
         src = arith_prog("WORD", "w: WORD;", "w", "", "1", "+")
         self.assertFalse(has_word_int_warning(src), "constant INTEGER mix should be clean")
+
+    def test_wide_same_width_mix_emits_warning_by_default(self):
+        # The wide same-width unsigned/signed mix carries the same vintage-style
+        # warning the 16-bit pair does (it resolves to the unsigned type, so the
+        # signedness of the arithmetic is otherwise a silent coin-flip).
+        for dst, ad, bd in (("WORD32", "w: WORD32;", "i: INTEGER32;"),
+                            ("WORD64", "w: WORD64;", "i: INTEGER64;")):
+            with self.subTest(dst=dst):
+                src = arith_prog(dst, ad, "w", bd, "i", "+")
+                self.assertTrue(has_word_int_warning(src, WIDE),
+                                f"expected a {dst}/signed mix warning")
+
+    def test_wide_same_width_const_mix_is_clean(self):
+        # INTEGER-constant exemption carries to the wide types.
+        src = arith_prog("WORD32", "w: WORD32;", "w", "", "1", "+")
+        self.assertFalse(has_word_int_warning(src, WIDE),
+                         "constant INTEGER mix should be clean at width 32 too")
+
+    def test_unequal_width_mix_is_not_flagged(self):
+        # WORD(16) + INTEGER32: the wider signed operand wins unambiguously, so
+        # there is no signedness ambiguity and no diagnostic -- even under strict.
+        src = arith_prog("INTEGER32", "w: WORD;", "w", "i: INTEGER32;", "i", "+")
+        self.assertFalse(has_word_int_warning(src, WIDE),
+                         "unequal-width mix must not warn")
 
 
 class TestManualKnownGaps(unittest.TestCase):

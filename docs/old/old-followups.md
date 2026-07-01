@@ -369,3 +369,87 @@ already rejects an addrspace mismatch), and it is now hardened to raise loudly
 under `is_device_module` instead of silently dropping a segment — implementing
 this item's "treat the seg→flat path as a type error in device context"
 resolution. Covered by `tests/test_device_ads_no_segment.py`.
+
+---
+
+## 6. WORD32/INTEGER32 (same-width) signedness mix is undiagnosed [DONE]
+
+**Where.** `type_checker.py::_check_word_int_mix` (the same-width unsigned/signed
+diagnostic) and `type_system.py::binary_op_result_type` (which resolves a
+same-width mix to the unsigned type).
+
+**What.** The vintage WORD/INTEGER (16-bit) expression mix warned (and errored
+under `-f strict-word-int`), but the analogous *wide* same-width mixes
+(`WORD32`/`INTEGER32`, `WORD64`/`INTEGER64`) silently resolved to the unsigned
+type with no diagnostic — even under `strict-word-int`. The check was hard-wired
+to the rank-0 pair (`a_t == WORD_TYPE and b_t == INTEGER_TYPE`), so it never fired
+for the wide extension types.
+
+**Why it mattered.** The wide types are extensions outside the 1981 manual, so
+leaving them undiagnosed was a safe default rather than a wrong result. But a
+same-width unsigned/signed mix carries the identical "which signedness does the
+arithmetic use?" ambiguity at every width, and a user who opted into
+`-f strict-word-int` could reasonably expect the same signedness discipline
+across the whole integer family.
+
+**Resolution.** `_check_word_int_mix` now generalizes to the full
+WORD-family/INTEGER-family at **equal rank** (WORD/INTEGER, WORD32/INTEGER32,
+WORD64/INTEGER64) via small `_WORD_FAMILY_RANK`/`_INT_FAMILY_RANK` maps. The
+behavior is uniform across widths: a warning by default, a hard error under
+`-f strict-word-int`, and the INTEGER-constant exemption preserved at every
+width. Unequal-width mixes are deliberately **not** flagged — there the wider
+operand's signedness wins unambiguously (e.g. `WORD(16) + INTEGER32 ->
+INTEGER32`), so there is no coin-flip to warn about. The 16-bit behavior is
+byte-for-byte unchanged. The stale "wide-type mixes are not diagnosed" comment in
+`binary_op_result_type` was corrected.
+
+**How verified.** New rows in `tests/test_conversion_matrix.py`
+(`word32_plus_int32_var_default` ACCEPT-with-warning, `word32_plus_int32_var_strict`
+REJECT, `word64_plus_int64_var_strict` REJECT, the constant-exemption row, and an
+unequal-width clean row) plus a new `TestWideSameWidthMix` class in
+`tests/test_word_int_strictness.py` (warns by default, errors under strict, holds
+the constant exemption, leaves unequal-width mixes clean). The existing 16-bit
+WORD/INTEGER strictness tests remain green, confirming no regression.
+
+---
+
+## 5. MAXWORD32 / MAXWORD64 parity constants [DONE]
+
+**Where.** `builtins_registry.py` (constant registration), `codegen/base.py`
+(`self.constants` / `self.constant_types` seeding), `codegen/constfold.py`
+(`_const_ir` width selection), and `codegen/io_write_read.py` (`_pas_type`, the
+WRITE signed/unsigned format selector).
+
+**What.** The wide *signed* types shipped with `MAXINT32`/`MAXINT64`, but the wide
+*unsigned* types `WORD32`/`WORD64` had no `MAXWORD32` (`4294967295`) /
+`MAXWORD64` (`18446744073709551615`) predeclared constants. They are now seeded
+on both the checker and codegen sides, gated on `wide-integers` exactly like
+`MAXINT32`/`MAXINT64`, and carry full `WORD32`/`WORD64` type identity.
+
+**Why it mattered.** Minor parity gap only — the types were already fully usable
+without them. The deferral was about the unsigned-constant width selection in the
+codegen const path: `MAXWORD64` is `2**64-1`, which exceeds the signed i64 max,
+so it cannot fall through to the i32 default in `_const_ir`.
+
+**Resolution.** `_is...`/registration mirrors `MAXINT32`/`MAXINT64`:
+`builtins_registry.py` registers both constants under `wide-integers` (with the
+WORD32/WORD64 types now imported), and `codegen/base.py` seeds their magnitudes
+into `self.constants`. `_const_ir` emits `MAXWORD64` at i64 alongside `MAXINT64`
+(the all-ones bit pattern); `MAXWORD32` emits at the i32 default, which already
+held its value. One step beyond the original touchpoints was required: WRITE
+picks signed vs unsigned formatting from the argument's Pascal type via
+`_pas_type`, and builtin constants are not seeded into the codegen scope, so
+`_pas_type` returned `None` and both constants formatted signed (printing `-1`).
+A small `self.constant_types` tag map (seeded alongside `self.constants`, gated
+identically) now lets `_pas_type` recover the `WORD32`/`WORD64` tag so the wide
+unsigned max constants print unsigned. (`MAXWORD` only ever printed correctly by
+luck — `65535` fits in a positive signed i32 — which is why the high-bit-set wide
+constants exposed the gap.)
+
+**How verified.** New `TestWideMaxConstants` (gating + WORD32/WORD64 type
+identity: same-type ACCEPT, WORD32->WORD64 widen ACCEPT, INTEGER assign REJECT,
+WORD64->WORD32 narrow REJECT) and `TestWideMaxConstantsRun` (build-and-run:
+`WRITELN(MAXWORD32)` prints `4294967295`, `WRITELN(MAXWORD64)` prints
+`18446744073709551615`, and a round-trip through WORD32/WORD64 variables) in
+`tests/test_wide_unsigned_types.py`. Full suite green: `971 passed, 1 skipped,
+115 subtests passed`.

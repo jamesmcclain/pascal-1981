@@ -492,8 +492,10 @@ def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optiona
     # value zero-extends into the i32); when they are the SAME width, an unsigned
     # operand makes the result unsigned (WORD + INTEGER -> WORD, WORD32 +
     # INTEGER32 -> WORD32), consistent with the vintage rank-0 WORD/INTEGER rule.
-    # The vintage WORD/INTEGER (16-bit) mix is additionally diagnosed in the type
-    # checker; the wide-type mixes are extension territory and are not diagnosed.
+    # Every such same-width unsigned/signed mix (the vintage 16-bit pair and the
+    # wide WORD32/INTEGER32, WORD64/INTEGER64 pairs alike) is additionally
+    # diagnosed in the type checker (_check_word_int_mix): a warning by default,
+    # an error under -f strict-word-int, with the INTEGER-constant exemption.
     int_rank = {IntegerType: 0, WordType: 0,
                 Integer32Type: 1, Word32Type: 1,
                 Integer64Type: 2, Word64Type: 2}

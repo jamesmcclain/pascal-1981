@@ -168,6 +168,21 @@ class CodegenBase:
         if self.feature_enabled('wide-integers'):
             self.constants['MAXINT32'] = 2147483647
             self.constants['MAXINT64'] = 9223372036854775807
+            # Unsigned wide max constants (see builtins_registry).  Stored as
+            # their true positive magnitudes; _const_ir emits MAXWORD64 at i64
+            # (the value exceeds the signed i64 max, so it must not fall through
+            # to the i32 default) and MAXWORD32 at i32.
+            self.constants['MAXWORD32'] = 4294967295
+            self.constants['MAXWORD64'] = 18446744073709551615
+        # Pascal-type tags for builtin constants that are not seeded into the
+        # codegen scope as symbols.  Consulted by the WRITE path (_pas_type) to
+        # pick signed vs unsigned formatting: MAXWORD32/MAXWORD64 have the high
+        # bit set, so they must format unsigned or they print as -1.  Keyed
+        # UPPER; values are Pascal type names matched by the formatter.
+        self.constant_types: Dict[str, str] = {}
+        if self.feature_enabled('wide-integers'):
+            self.constant_types['MAXWORD32'] = 'WORD32'
+            self.constant_types['MAXWORD64'] = 'WORD64'
         self.type_aliases: Dict[str, Type] = {}  # compile-time type aliases, keyed UPPER
         # Seed the C-ABI fixed-width aliases (Phase 1 of the C-FFI plan) so a
         # foreign `[C]` routine spelled with CINT/CLONG/CPTR/etc. lowers through

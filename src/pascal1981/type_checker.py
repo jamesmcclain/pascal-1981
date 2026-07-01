@@ -2303,22 +2303,58 @@ class PascalTypeChecker(TypeChecker):
                     "constants change to WORD; convert a signed INTEGER value with "
                     "WRD(...)", node)
 
-    def _check_word_int_mix(self, left_type, right_type, left_expr, right_expr, op, node) -> None:
-        """Diagnose a WORD/INTEGER mix in an arithmetic or bitwise expression.
+    # Equal-rank unsigned/signed integer pairs that carry the WORD/INTEGER
+    # signedness ambiguity.  Rank == index into each tuple: rank 0 is the vintage
+    # 16-bit WORD/INTEGER pair the manual actually rules on; ranks 1 and 2 are the
+    # wide extension types (WORD32/INTEGER32, WORD64/INTEGER64), which the manual
+    # does not cover but which inherit the same "which signedness does the
+    # arithmetic use?" hazard.  `binary_op_result_type` resolves every one of
+    # these same-width mixes to the unsigned member, so the diagnostic below is
+    # what makes that silent choice visible (and, under -f strict-word-int,
+    # refusable).  Membership is tested with ``==`` rather than a dict keyed by
+    # type instance, because some operand types (e.g. SetType) are unhashable.
+    _WORD_FAMILY_BY_RANK = (WORD_TYPE, WORD32_TYPE, WORD64_TYPE)
+    _INT_FAMILY_BY_RANK = (INTEGER_TYPE, INTEGER32_TYPE, INTEGER64_TYPE)
 
-        Allowed when the INTEGER operand is a constant (it changes to WORD).
-        Otherwise a warning by default (the vintage compiler arbitrarily picks
-        signed or unsigned arithmetic), promoted to a hard error under
-        -f strict-word-int.
+    @staticmethod
+    def _family_rank(t, family) -> Optional[int]:
+        """Rank (0/1/2) of ``t`` within ``family``, or None if it is not a member.
+
+        Uses equality, not a hash lookup, so unhashable operand types (SetType,
+        ArrayType, ...) simply compare unequal instead of raising.
+        """
+        for rank, member in enumerate(family):
+            if t == member:
+                return rank
+        return None
+
+    def _check_word_int_mix(self, left_type, right_type, left_expr, right_expr, op, node) -> None:
+        """Diagnose an unsigned/signed (WORD-family/INTEGER-family) mix at equal
+        width in an arithmetic or bitwise expression.
+
+        Covers the vintage 16-bit WORD/INTEGER pair *and* the equal-width wide
+        extension pairs WORD32/INTEGER32 and WORD64/INTEGER64.  A mix at unequal
+        width is not flagged here: there the wider operand's signedness
+        unambiguously wins (see `binary_op_result_type`), so there is no
+        signedness coin-flip to warn about.
+
+        Allowed when the signed (INTEGER-family) operand is a constant (it
+        changes to the unsigned type).  Otherwise a warning by default (the
+        vintage compiler arbitrarily picks signed or unsigned arithmetic),
+        promoted to a hard error under -f strict-word-int.
         """
         ARITH_BITWISE = {'PLUS', 'MINUS', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR'}
         if op not in ARITH_BITWISE:
             return
         for a_t, b_t, b_e in ((left_type, right_type, right_expr),
                               (right_type, left_type, left_expr)):
-            if a_t == WORD_TYPE and b_t == INTEGER_TYPE:
+            # a_t is the unsigned (WORD-family) operand, b_t the signed
+            # (INTEGER-family) operand; only flag them at equal width/rank.
+            a_rank = self._family_rank(a_t, self._WORD_FAMILY_BY_RANK)
+            b_rank = self._family_rank(b_t, self._INT_FAMILY_BY_RANK)
+            if a_rank is not None and a_rank == b_rank:
                 if self._is_constant_integer_expr(b_e):
-                    return  # constant INTEGER changes to WORD: clean
+                    return  # constant INTEGER changes to the WORD type: clean
                 msg = ("WORD and INTEGER values cannot be mixed in an expression "
                        "unless the INTEGER operand is a constant; convert "
                        "explicitly with WRD(...) or ORD(...)")

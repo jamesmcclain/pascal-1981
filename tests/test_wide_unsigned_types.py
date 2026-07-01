@@ -127,5 +127,60 @@ class TestBuildAndRun(unittest.TestCase):
         self.assertEqual([l.strip() for l in out.splitlines() if l.strip()], ["60000", "-100"])
 
 
+class TestWideMaxConstants(unittest.TestCase):
+    """MAXWORD32 / MAXWORD64: the unsigned siblings of MAXINT32 / MAXINT64.
+
+    Gated on ``wide-integers`` exactly like the wide types and the signed wide
+    max constants.  They carry full WORD32 / WORD64 type identity (assignable to
+    their own type, widen WORD32 -> WORD64, but not assignment-compatible with
+    INTEGER and not narrowable).
+    """
+
+    def test_gated_on_wide_integers(self):
+        self.assertTrue(ok("PROGRAM P; VAR w: WORD32; BEGIN w := MAXWORD32 END.", WI))
+        self.assertTrue(ok("PROGRAM P; VAR w: WORD64; BEGIN w := MAXWORD64 END.", WI))
+        # Absent in the vintage dialect, and absent under wide-reals alone.
+        self.assertFalse(ok("PROGRAM P; VAR w: WORD32; BEGIN w := MAXWORD32 END.", None))
+        self.assertFalse(ok("PROGRAM P; VAR w: WORD64; BEGIN w := MAXWORD64 END.", None))
+        self.assertFalse(ok("PROGRAM P; VAR w: WORD32; BEGIN w := MAXWORD32 END.", WR))
+
+    def test_type_identity(self):
+        # WORD32 widens to WORD64; the constants follow the same rules as values.
+        self.assertTrue(ok("PROGRAM P; VAR w: WORD64; BEGIN w := MAXWORD32 END.", WI))
+        # WORD-family is not assignment-compatible with signed INTEGER.
+        self.assertFalse(ok("PROGRAM P; VAR i: INTEGER; BEGIN i := MAXWORD32 END.", WI))
+        # No implicit narrowing WORD64 -> WORD32.
+        self.assertFalse(ok("PROGRAM P; VAR w: WORD32; BEGIN w := MAXWORD64 END.", WI))
+
+
+@requires_exe
+class TestWideMaxConstantsRun(unittest.TestCase):
+    def test_maxword32_prints_unsigned(self):
+        # 2**32-1; has the high bit set, so it must print unsigned (not -1).
+        src = "PROGRAM P(output);\nBEGIN WRITELN(MAXWORD32) END."
+        rc, out, err = run(src, WI, "maxword32-print")
+        self.assertEqual(rc, 0, msg=err)
+        self.assertEqual(out.strip(), "4294967295")
+
+    def test_maxword64_prints_unsigned(self):
+        # 2**64-1; exceeds the signed i64 max, so _const_ir must emit it at i64
+        # and the formatter must print it unsigned (not -1).
+        src = "PROGRAM P(output);\nBEGIN WRITELN(MAXWORD64) END."
+        rc, out, err = run(src, WI, "maxword64-print")
+        self.assertEqual(rc, 0, msg=err)
+        self.assertEqual(out.strip(), "18446744073709551615")
+
+    def test_constants_match_type_maxima(self):
+        # The constant equals the widened max of its type: a WORD32 var set to
+        # its largest literal prints the same as MAXWORD32, and likewise WORD64.
+        src = ("PROGRAM P(output);\nVAR a: WORD32; b: WORD64;\n"
+               "BEGIN a := MAXWORD32; b := MAXWORD64;\n"
+               "WRITELN(a); WRITELN(b) END.")
+        rc, out, err = run(src, WI, "maxword-roundtrip")
+        self.assertEqual(rc, 0, msg=err)
+        self.assertEqual([l.strip() for l in out.splitlines() if l.strip()],
+                         ["4294967295", "18446744073709551615"])
+
+
 if __name__ == "__main__":
     unittest.main()

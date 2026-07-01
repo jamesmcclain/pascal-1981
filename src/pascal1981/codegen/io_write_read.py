@@ -41,6 +41,14 @@ class IoWriteReadMixin:
         if isinstance(expr, (Identifier, Designator)):
             sym = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
             ty = getattr(sym, 'type_expr', None) if sym else None
+            if ty is None and (not isinstance(expr, Designator) or not expr.selectors):
+                # Builtin constants (e.g. MAXWORD32/MAXWORD64) are not seeded
+                # into the codegen scope, so fall back to their recorded Pascal
+                # type tag.  This drives unsigned WRITE formatting for the wide
+                # unsigned max constants, which would otherwise print as -1.
+                tag = self.constant_types.get(expr.name.upper())
+                if tag is not None:
+                    return NamedType(tag, None)
             if isinstance(expr, Designator) and expr.selectors and ty is not None:
                 cur = ty
                 for sel in expr.selectors:

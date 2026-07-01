@@ -105,6 +105,60 @@ class TestWordIntStrictness(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Wide same-width signedness mix (extension types, but same discipline)
+# ---------------------------------------------------------------------------
+
+class TestWideSameWidthMix(unittest.TestCase):
+    """The wide extension pairs WORD32/INTEGER32 and WORD64/INTEGER64 inherit the
+    vintage WORD/INTEGER same-width signedness rule: warn by default, error under
+    -f strict-word-int, with the INTEGER-constant exemption.  They are not in the
+    1981 manual, but a same-width unsigned/signed mix has the identical
+    "which signedness does the arithmetic use?" ambiguity at every width.
+    """
+
+    WIDE = {"wide-integers": True}
+    WIDE_STRICT = {"wide-integers": True, "strict-word-int": True}
+
+    def test_word32_int32_mix_warns_by_default(self):
+        for dst, decl in (("WORD32", "w: WORD32; i: INTEGER32;"),
+                          ("WORD64", "w: WORD64; i: INTEGER64;")):
+            with self.subTest(dst=dst):
+                r = typecheck_source(
+                    f"PROGRAM P; VAR d: {dst}; {decl} BEGIN d := w + i END.",
+                    features=self.WIDE)
+                self.assertTrue(r.success)
+                self.assertTrue(any("WORD and INTEGER" in m for m in _warnings(r)),
+                                f"{dst} mix should warn by default")
+
+    def test_word32_int32_mix_errors_under_strict(self):
+        for dst, decl in (("WORD32", "w: WORD32; i: INTEGER32;"),
+                          ("WORD64", "w: WORD64; i: INTEGER64;")):
+            with self.subTest(dst=dst):
+                r = typecheck_source(
+                    f"PROGRAM P; VAR d: {dst}; {decl} BEGIN d := w + i END.",
+                    features=self.WIDE_STRICT)
+                self.assertFalse(r.success)
+                self.assertTrue(any("WORD and INTEGER" in e.message for e in r.errors),
+                                f"{dst} mix should be a hard error under strict-word-int")
+
+    def test_wide_constant_exemption_holds(self):
+        # An INTEGER constant changes to the unsigned type at every width.
+        r = typecheck_source("PROGRAM P; VAR d: WORD32; w: WORD32; BEGIN d := w + 1 END.",
+                             features=self.WIDE_STRICT)
+        self.assertTrue(r.success)
+        self.assertFalse(any("WORD and INTEGER" in m for m in _warnings(r)))
+
+    def test_unequal_width_mix_is_not_flagged(self):
+        # WORD(16) + INTEGER32: the wider signed operand wins unambiguously, so
+        # there is no coin-flip and no diagnostic, even under strict-word-int.
+        r = typecheck_source(
+            "PROGRAM P; VAR d: INTEGER32; w: WORD; i: INTEGER32; BEGIN d := w + i END.",
+            features=self.WIDE_STRICT)
+        self.assertTrue(r.success, msg=str(r.errors))
+        self.assertFalse(any("WORD and INTEGER" in m for m in _warnings(r)))
+
+
+# ---------------------------------------------------------------------------
 # Flag orthogonality
 # ---------------------------------------------------------------------------
 

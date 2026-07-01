@@ -7,7 +7,7 @@ This is shared between the type checker and code generator to prevent
 
 from .symbol_table import Symbol
 from .features import is_extended
-from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, EnumType, FileType, FunctionType, LStringType, PointerType,
+from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL_TYPE, WORD32_TYPE, WORD64_TYPE, WORD_TYPE, EnumType, FileType, FunctionType, LStringType, PointerType,
                           ProcedureType, RecordType, StringType)
 
 # Lists of all built-in function and procedure names
@@ -150,6 +150,11 @@ def register_builtins(symbol_table, features=None) -> None:
     if features and features.get('wide-integers', False):
         define_builtin('MAXINT32', INTEGER32_TYPE, 'const')
         define_builtin('MAXINT64', INTEGER64_TYPE, 'const')
+        # Unsigned siblings of MAXINT32/MAXINT64 for the wide WORD types.
+        # MAXWORD32 = 2**32-1, MAXWORD64 = 2**64-1.  Gated identically so the
+        # wide signed/unsigned max-constant surfaces never drift apart.
+        define_builtin('MAXWORD32', WORD32_TYPE, 'const')
+        define_builtin('MAXWORD64', WORD64_TYPE, 'const')
     define_builtin('NULL', LStringType(0), 'const')
     filemodes_type = EnumType(['SEQUENTIAL', 'TERMINAL', 'DIRECT'], name='FILEMODES')
     define_builtin('SEQUENTIAL', filemodes_type, 'const')
