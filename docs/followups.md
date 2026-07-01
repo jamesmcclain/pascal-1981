@@ -174,32 +174,6 @@ tests/integration/test_device_mandelbrot_ptx.py`).
 
 ---
 
-## 6. Build-and-run tests hard-fail unless `make -C runtime` was run manually [OPEN]
-
-**Where.** `tests/support.py` (`RUNTIME_LIB = runtime/build/libpascalrt.a`, used
-by the clang link step around line 274) and the README's testing instructions.
-
-**What.** On a fresh checkout, `pytest tests` fails 61 build-and-run tests with
-`clang failed: no such file or directory: .../runtime/build/libpascalrt.a`.
-After `make -C runtime`, the same suite is green (modulo item 5). Nothing in the
-test harness builds the runtime or explains the failure.
-
-**Why it matters.** New contributors see a wall of 61 failures whose root cause
-(missing prerequisite) is buried inside a clang stderr string; the natural
-misread is "the compiler is broken."
-
-**Suggested resolution.** In `tests/support.py`, when `RUNTIME_LIB` is missing,
-either (a) run `make -C runtime` once per session (cheap, idempotent, clang is
-already a prerequisite for these tests), or (b) `pytest.skip`/fail fast with an
-explicit message: "run `make -C runtime` first." Also add the prerequisite to the
-README's test instructions.
-
-**How to verify.** `git clean -xfd runtime/build && pytest tests` on a fresh
-checkout either passes or produces a single clear diagnostic instead of 61
-opaque link failures.
-
----
-
 ## 8. CLI progress chatter is emitted even without --verbose [OPEN]
 
 **Where.** `src/pascal1981/compile_to_llvm.py::main` (the `Parsing ...`,

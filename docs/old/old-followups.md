@@ -475,3 +475,32 @@ trio). Updated the one reference in `tests/test_parser.py`
 
 **How verified.** `ls tests/fixtures/parser/should_pass | cut -d_ -f1 | sort |
 uniq -d` prints nothing. `pytest -k parser` green (75 passed).
+
+---
+
+## Build-and-run tests hard-fail unless `make -C runtime` was run manually [DONE]
+
+**Where.** `tests/support.py` (`RUNTIME_LIB = runtime/build/libpascalrt.a`, used
+by the clang link step) and the README's testing instructions.
+
+**What.** On a fresh checkout, `pytest tests` used to fail 61 build-and-run
+tests with `clang failed: no such file or directory:
+.../runtime/build/libpascalrt.a`. After `make -C runtime`, the same suite was
+green. Nothing in the test harness built the runtime or explained the failure.
+
+**Why it mattered.** New contributors saw a wall of 61 failures whose root
+cause (missing prerequisite) was buried inside a clang stderr string; the
+natural misread was "the compiler is broken."
+
+**Resolution.** `tests/support.py` now defines `_ensure_runtime_lib_built()`,
+called once at import time: if `RUNTIME_LIB` is missing and `clang` is
+available, it runs `make -C runtime` (the same idempotent build the README
+already documented) and only raises if that build itself fails, with an
+explicit message pointing at `make -C runtime` and the captured stderr. The
+README's testing section was updated to describe the automatic build instead
+of listing it as a required manual step.
+
+**How verified.** `git clean -xfd runtime/build && PYTHONPATH=src python3 -m
+pytest tests/ -q` on a checkout with no prebuilt archive: the archive is built
+automatically and the full suite passes (`971 passed, 1 skipped, 115 subtests
+passed`).
