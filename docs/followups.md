@@ -7,9 +7,14 @@ IN-PROGRESS / DONE.
 
 These are not bugs that produce wrong output today; they are seams worth
 closing when the surrounding code is next touched. Resolved items are moved to
-`docs/old/old-followups.md` once they ship (most recently the brittle PTX
-golden-text assertions, item 5 here — the exact-mnemonic asserts now accept
-both `st.global.u32` and `st.global.b32` via `assertRegex(r'st\.global\.[ub]32')`,
+`docs/old/old-followups.md` once they ship (most recently the Python
+version-floor packaging metadata, item 4 here — `pyproject.toml` now declares
+`requires-python = ">=3.10"` and only lists the 3.10-3.12 classifiers, matching
+the real floor set by `llvmlite>=0.47.0`;
+`compile_to_ptx.py` already carried `from __future__ import annotations`, so
+no source change was needed there; before that, the brittle PTX golden-text
+assertions, item 5 — the exact-mnemonic asserts now accept both
+`st.global.u32` and `st.global.b32` via `assertRegex(r'st\.global\.[ub]32')`,
 verified green under both llvmlite 0.47 and 0.48; before that, the duplicate
 parser-fixture number, item 7 — `16_for_static.pas` was renumbered to
 `19_for_static.pas` so the should_pass corpus indexes uniquely again; before
@@ -116,37 +121,6 @@ signedness-independent.
 **How to verify.** Flip `TestManualKnownGaps::test_odd_accepts_word_is_a_known_gap`
 to assert ACCEPT (and add a build-and-run parity check for `ODD(WORD)` vs
 `ODD(INTEGER)`).
-
----
-
-## 4. Packaging metadata claims Python 3.8+ but the package cannot run below 3.10 [OPEN]
-
-**Where.** `pyproject.toml` (`requires-python = ">=3.8"` plus the 3.8/3.9
-classifiers) and `src/pascal1981/compile_to_ptx.py`.
-
-**What.** Two independent facts pin the real floor at Python 3.10. First, the
-declared dependency `llvmlite>=0.47.0` itself requires Python >= 3.10 on PyPI, so
-`pip install pascal1981` on 3.8/3.9 cannot resolve. Second,
-`compile_to_ptx.py` uses PEP 604 union syntax in a function signature
-(`emit_llvm_path: str | None = None`) without `from __future__ import
-annotations` (the other modules that use `X | None`, e.g. `features.py`, do have
-the future import), so merely importing that module raises `TypeError` on
-3.8/3.9 even if llvmlite were somehow satisfied.
-
-**Why it matters.** The metadata advertises support the package does not have;
-users on 3.8/3.9 get a confusing resolver or import-time failure instead of a
-clear "unsupported Python" message from pip.
-
-**Suggested resolution.** Set `requires-python = ">=3.10"`, drop the 3.8/3.9
-classifiers, and (for uniformity) add `from __future__ import annotations` to
-`compile_to_ptx.py`. Alternatively, if 3.8 support is genuinely desired, lower
-the llvmlite floor and replace PEP 604 annotations — but the simpler metadata fix
-matches reality.
-
-**How to verify.** `pip install .` in a 3.9 environment should be refused up
-front by pip with a requires-python error rather than failing mid-resolution;
-`python3 -c "import pascal1981.compile_to_ptx"` succeeds on every advertised
-version.
 
 ---
 

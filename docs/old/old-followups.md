@@ -534,3 +534,38 @@ size-typed (`u32`) or bit-typed (`b32`) spelling — the tests check "a global
 `llvmlite==0.48.0`, then `PYTHONPATH=src python3 -m pytest tests/ -q`: `971
 passed, 1 skipped, 115 subtests passed` under each). Environment restored to
 0.47.0 afterward.
+
+---
+
+## Packaging metadata claims Python 3.8+ but the package cannot run below 3.10 [DONE]
+
+**Where.** `pyproject.toml` (`requires-python = ">=3.8"` plus the 3.8/3.9
+classifiers) and `src/pascal1981/compile_to_ptx.py`.
+
+**What.** Two independent facts pinned the real floor at Python 3.10. First,
+the declared dependency `llvmlite>=0.47.0` itself requires Python >= 3.10 on
+PyPI, so `pip install pascal1981` on 3.8/3.9 could not resolve. Second,
+`compile_to_ptx.py` uses PEP 604 union syntax in a function signature
+(`emit_llvm_path: str | None = None`); at the time this was filed it lacked
+`from __future__ import annotations` and would have raised `TypeError` on
+import under 3.8/3.9.
+
+**Why it mattered.** The metadata advertised support the package did not have;
+users on 3.8/3.9 would have gotten a confusing resolver or import-time failure
+instead of a clear "unsupported Python" message from pip.
+
+**Resolution.** `pyproject.toml` now declares `requires-python = ">=3.10"` and
+only lists the `Programming Language :: Python :: 3.10/3.11/3.12` classifiers
+(the 3.8/3.9 entries are gone). `compile_to_ptx.py` was found to already carry
+`from __future__ import annotations` (fixed independently before this item was
+picked up), so no source change was needed there — the only remaining gap was
+the metadata. A sweep of the rest of the tree for `X | None` annotations
+without the future import (`grep -rl '| None' ... | xargs grep -L 'from
+__future__'`) found only a false positive: `codegen/c_abi.py` has `| None`
+inside a comment string, not live PEP 604 syntax.
+
+**How verified.** `python3 -c "import tomllib; ...` confirms `requires-python
+== '>=3.10'` and the classifier list. `python3 -c "import
+pascal1981.compile_to_ptx"` succeeds. Full suite green:
+`PYTHONPATH=src python3 -m pytest tests/ -q` → `971 passed, 1 skipped, 115
+subtests passed`.
