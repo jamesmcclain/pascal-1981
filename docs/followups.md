@@ -124,7 +124,7 @@ to assert ACCEPT (and add a build-and-run parity check for `ODD(WORD)` vs
 
 ---
 
-## 8. CLI progress chatter is emitted even without --verbose [OPEN]
+## 4. CLI progress chatter is emitted even without --verbose [OPEN]
 
 **Where.** `src/pascal1981/compile_to_llvm.py::main` (the `Parsing ...`,
 `Type checking...`, `Generating LLVM IR...`, `Wrote ...` prints to stderr).
@@ -148,7 +148,7 @@ appear.
 
 ---
 
-## 9. PTX path runs no LLVM IR optimization pipeline [OPEN]
+## 5. PTX path runs no LLVM IR optimization pipeline [OPEN]
 
 **Where.** `src/pascal1981/compile_to_ptx.py::llvm_ir_to_ptx` (and the
 `--target ptx` path in `compile_to_llvm.py`).
@@ -180,7 +180,7 @@ existing device tests stay green (adjusting mnemonic-brittle asserts per item
 
 ---
 
-## 10. Kernel entries carry no parameter facts: noalias / readonly / align / dereferenceable [OPEN]
+## 6. Kernel entries carry no parameter facts: noalias / readonly / align / dereferenceable [OPEN]
 
 **Where.** `codegen/decls.py` (kernel-entry emission around
 `calling_convention = 'ptx_kernel'`); contrast with `codegen/c_abi.py`, which
@@ -213,7 +213,7 @@ confirming identical output.
 
 ---
 
-## 11. Device index intrinsics lack !range metadata [OPEN]
+## 7. Device index intrinsics lack !range metadata [OPEN]
 
 **Where.** `codegen/exprs.py` (~line 782), where `THREADIDX_*` / `BLOCKIDX_*` /
 `BLOCKDIM_*` / `GRIDDIM_*` lower to `llvm.nvvm.read.ptx.sreg.*` calls.
@@ -238,7 +238,7 @@ kernel at O2.
 
 ---
 
-## 12. No source-level channel for launch bounds or per-loop hints [OPEN]
+## 8. No source-level channel for launch bounds or per-loop hints [OPEN]
 
 **Where.** Kernel-entry emission in `codegen/decls.py` (no
 `!nvvm.annotations` beyond kernel marking); the `$`-metacommand tier in
@@ -268,7 +268,7 @@ and loop metadata; PTX test that `.maxntid` appears in the kernel directive.
 
 ---
 
-## 13. docs/device-code claims need evidence grading before they drive work [OPEN]
+## 9. docs/device-code claims need evidence grading before they drive work [OPEN]
 
 **Where.** `docs/device-code/KERNEL_ANALYSIS.md`,
 `docs/device-code/OPTIMIZATION_GUIDE.md`,
