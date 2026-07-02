@@ -222,7 +222,7 @@ class TestParserJudgmentCalls(unittest.TestCase):
 
     def test_for_static_passes(self):
         """The manual permits an optional STATIC after FOR."""
-        fixture = Path(__file__).parent / "fixtures" / "parser" / "should_pass" / "16_for_static.pas"
+        fixture = Path(__file__).parent / "fixtures" / "parser" / "should_pass" / "19_for_static.pas"
         try:
             ast = parse_source(fixture.read_text())
         except (LexerError, ParserError) as e:

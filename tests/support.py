@@ -109,6 +109,37 @@ RUNTIME_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 RUNTIME_LIB = os.path.join(RUNTIME_DIR, "build", "libpascalrt.a")
 
 
+def _ensure_runtime_lib_built() -> None:
+    """Build ``runtime/build/libpascalrt.a`` once per session if it's missing.
+
+    Build-and-run tests link against this archive. On a fresh checkout it
+    does not exist yet, and the link step used to fail with a raw clang
+    "no such file or directory" error that gave no hint the fix is simply
+    ``make -C runtime``. clang is already a hard prerequisite for these
+    tests (see CAN_BUILD_EXE), so running the same make the README
+    documents is a cheap, idempotent way to remove that trap.
+    """
+    if os.path.exists(RUNTIME_LIB) or not HAS_CLANG:
+        return
+    try:
+        subprocess.run(
+            ["make", "-C", RUNTIME_DIR],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (subprocess.CalledProcessError, OSError) as exc:
+        detail = getattr(exc, "stderr", None) or str(exc)
+        raise RuntimeError(
+            f"runtime library missing at {RUNTIME_LIB} and `make -C runtime` "
+            f"failed to build it automatically. Run `make -C runtime` "
+            f"manually and inspect the error below.\n{detail}"
+        ) from exc
+
+
+_ensure_runtime_lib_built()
+
+
 def _write_temp(src: str) -> str:
     """Write a source string to a temp file, return the path."""
     f = tempfile.NamedTemporaryFile(mode="w", suffix=".pas", delete=False)

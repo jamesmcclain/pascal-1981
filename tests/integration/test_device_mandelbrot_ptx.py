@@ -110,7 +110,7 @@ class TestDeviceMandelbrotPtxSubstitution(unittest.TestCase):
         for blk in (f32, f64):
             for sreg in ('%tid.x', '%tid.y', '%ctaid.x', '%ctaid.y', '%ntid.x', '%ntid.y'):
                 self.assertIn(sreg, blk)
-            self.assertIn('st.global.u32', blk)
+            self.assertRegex(blk, r'st\.global\.[ub]32', 'expected a global 32-bit store to the buffer (size- or bit-typed spelling)')
 
         # followups.md item 2 (pointer alignment): the output pointer param is
         # `ADS(GLOBAL) OF INTEGER32`, so its natural alignment is 4 (the i32

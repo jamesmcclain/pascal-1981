@@ -453,3 +453,119 @@ WORD64->WORD32 narrow REJECT) and `TestWideMaxConstantsRun` (build-and-run:
 `18446744073709551615`, and a round-trip through WORD32/WORD64 variables) in
 `tests/test_wide_unsigned_types.py`. Full suite green: `971 passed, 1 skipped,
 115 subtests passed`.
+
+---
+
+## Duplicate parser-fixture number: two `16_*` files in should_pass [DONE]
+
+**Where.** `tests/fixtures/parser/should_pass/16_concat_string_procedure.pas`
+and (formerly) `tests/fixtures/parser/should_pass/16_for_static.pas`.
+
+**What.** The should_pass corpus is otherwise numbered uniquely; `16_` was used
+twice (the string-procedure trio 16/17/18 collided with an earlier `16_for_static`).
+
+**Why it mattered.** Cosmetic, but the numbering is meant as a stable index for
+referring to fixtures in notes and reviews; a duplicated index invited "fixture
+16" ambiguity in docs and commit messages.
+
+**Resolution.** `git mv` renumbered `16_for_static.pas` to `19_for_static.pas`
+(19 was the next free slot; 17/18 already belonged to the string-procedure
+trio). Updated the one reference in `tests/test_parser.py`
+(`test_for_loop_with_static_bounds` or equivalent fixture path).
+
+**How verified.** `ls tests/fixtures/parser/should_pass | cut -d_ -f1 | sort |
+uniq -d` prints nothing. `pytest -k parser` green (75 passed).
+
+---
+
+## Build-and-run tests hard-fail unless `make -C runtime` was run manually [DONE]
+
+**Where.** `tests/support.py` (`RUNTIME_LIB = runtime/build/libpascalrt.a`, used
+by the clang link step) and the README's testing instructions.
+
+**What.** On a fresh checkout, `pytest tests` used to fail 61 build-and-run
+tests with `clang failed: no such file or directory:
+.../runtime/build/libpascalrt.a`. After `make -C runtime`, the same suite was
+green. Nothing in the test harness built the runtime or explained the failure.
+
+**Why it mattered.** New contributors saw a wall of 61 failures whose root
+cause (missing prerequisite) was buried inside a clang stderr string; the
+natural misread was "the compiler is broken."
+
+**Resolution.** `tests/support.py` now defines `_ensure_runtime_lib_built()`,
+called once at import time: if `RUNTIME_LIB` is missing and `clang` is
+available, it runs `make -C runtime` (the same idempotent build the README
+already documented) and only raises if that build itself fails, with an
+explicit message pointing at `make -C runtime` and the captured stderr. The
+README's testing section was updated to describe the automatic build instead
+of listing it as a required manual step.
+
+**How verified.** `git clean -xfd runtime/build && PYTHONPATH=src python3 -m
+pytest tests/ -q` on a checkout with no prebuilt archive: the archive is built
+automatically and the full suite passes (`971 passed, 1 skipped, 115 subtests
+passed`).
+
+---
+
+## PTX golden-text assertions are brittle across llvmlite/LLVM versions [DONE]
+
+**Where.** `tests/test_compile_to_ptx.py` (`st.global.u32`, and by extension the
+other exact-mnemonic asserts), `tests/integration/test_device_ptx_artifact.py`,
+`tests/integration/test_device_mandelbrot_ptx.py`.
+
+**What.** These tests asserted the exact NVPTX mnemonic `st.global.u32`. With
+llvmlite 0.48 (LLVM 20), which satisfies the declared `llvmlite>=0.47.0` range,
+the backend emits `st.global.b32` instead, so 3 tests failed on a fresh,
+in-range install even though the generated kernel was correct (the store,
+guard, and index math were all present in the emitted PTX).
+
+**Why it mattered.** CI/users tracking the newest llvmlite saw spurious
+failures; the failures asserted nothing wrong with the compiler itself. There
+is still no upper bound on llvmlite in `pyproject.toml`, so a resilient
+assertion was preferred over a version pin.
+
+**Resolution.** All three `assertIn('st.global.u32', ...)` call sites were
+replaced with `assertRegex(..., r'st\.global\.[ub]32')`, matching either the
+size-typed (`u32`) or bit-typed (`b32`) spelling — the tests check "a global
+32-bit store to the buffer exists," not the exact type suffix.
+
+**How verified.** Full suite green under both llvmlite 0.47.0 and 0.48.0
+(`pip install --no-deps --force-reinstall llvmlite==0.47.0` /
+`llvmlite==0.48.0`, then `PYTHONPATH=src python3 -m pytest tests/ -q`: `971
+passed, 1 skipped, 115 subtests passed` under each). Environment restored to
+0.47.0 afterward.
+
+---
+
+## Packaging metadata claims Python 3.8+ but the package cannot run below 3.10 [DONE]
+
+**Where.** `pyproject.toml` (`requires-python = ">=3.8"` plus the 3.8/3.9
+classifiers) and `src/pascal1981/compile_to_ptx.py`.
+
+**What.** Two independent facts pinned the real floor at Python 3.10. First,
+the declared dependency `llvmlite>=0.47.0` itself requires Python >= 3.10 on
+PyPI, so `pip install pascal1981` on 3.8/3.9 could not resolve. Second,
+`compile_to_ptx.py` uses PEP 604 union syntax in a function signature
+(`emit_llvm_path: str | None = None`); at the time this was filed it lacked
+`from __future__ import annotations` and would have raised `TypeError` on
+import under 3.8/3.9.
+
+**Why it mattered.** The metadata advertised support the package did not have;
+users on 3.8/3.9 would have gotten a confusing resolver or import-time failure
+instead of a clear "unsupported Python" message from pip.
+
+**Resolution.** `pyproject.toml` now declares `requires-python = ">=3.10"` and
+only lists the `Programming Language :: Python :: 3.10/3.11/3.12` classifiers
+(the 3.8/3.9 entries are gone). `compile_to_ptx.py` was found to already carry
+`from __future__ import annotations` (fixed independently before this item was
+picked up), so no source change was needed there — the only remaining gap was
+the metadata. A sweep of the rest of the tree for `X | None` annotations
+without the future import (`grep -rl '| None' ... | xargs grep -L 'from
+__future__'`) found only a false positive: `codegen/c_abi.py` has `| None`
+inside a comment string, not live PEP 604 syntax.
+
+**How verified.** `python3 -c "import tomllib; ...` confirms `requires-python
+== '>=3.10'` and the classifier list. `python3 -c "import
+pascal1981.compile_to_ptx"` succeeds. Full suite green:
+`PYTHONPATH=src python3 -m pytest tests/ -q` → `971 passed, 1 skipped, 115
+subtests passed`.

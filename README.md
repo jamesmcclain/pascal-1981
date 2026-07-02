@@ -486,16 +486,20 @@ One unified test suite built on `pytest`, with automatic detection of optional d
 ### Run the entire test suite
 
 ```bash
-# Build the C runtime archive once (link-requiring tests link against it).
-make -C runtime
 # All tests from a source checkout; codegen tests auto-skip if llvmlite/clang are unavailable
 PYTHONPATH=src python3 -m pytest tests/ -q
 ```
 
-`make -C runtime` is **required** for the integration/link tests: they link
-`runtime/build/libpascalrt.a` (hardcoded in `tests/support.py`), and without
-that archive they *fail* (they do not skip). Parser/typecheck tests need
-no dependencies at all; codegen IR-only tests need `llvmlite` but not the archive.
+The integration/link tests link against `runtime/build/libpascalrt.a`. On import,
+`tests/support.py` builds that archive automatically (once per session, via
+`make -C runtime`) if it is missing and `clang` is available, so a fresh
+checkout does not need a manual build step first. If the automatic build itself
+fails, `tests/support.py` raises a clear error naming `make -C runtime` as the
+fix instead of letting each test fail later with an opaque clang link error. You
+can still run `make -C runtime` yourself beforehand (e.g. to see build output,
+or after touching the C sources) — it is idempotent. Parser/typecheck tests
+need no dependencies at all; codegen IR-only tests need `llvmlite` but not the
+archive.
 
 If you installed the package into the active environment, `PYTHONPATH=src` is not
 needed.

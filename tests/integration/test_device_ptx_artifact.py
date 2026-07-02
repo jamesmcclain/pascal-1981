@@ -43,7 +43,7 @@ class TestDevicePtxArtifactIntegration(unittest.TestCase):
             self.assertIn('%tid.x', ptx)
             self.assertIn('%ctaid.x', ptx)
             self.assertIn('%ntid.x', ptx)
-            self.assertIn('st.global.u32', ptx)
+            self.assertRegex(ptx, r'st\.global\.[ub]32', 'expected a global 32-bit store to the buffer (size- or bit-typed spelling)')
         finally:
             for path in (ptx_path, ll_path):
                 try:
