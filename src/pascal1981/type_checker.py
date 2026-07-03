@@ -2827,6 +2827,24 @@ class PascalTypeChecker(TypeChecker):
                     return INTEGER_TYPE
                 self.error(f"Argument 1 type mismatch: ORD expects an ordinal type, got {arg_type}", expr)
                 return None
+            if lookup_name == 'ODD':
+                # Manual (Elementary Types, BOOLEAN, p.6-6): "the ODD function
+                # for INTEGER and WORD values".  ODD only tests the low bit, so
+                # it is signedness-independent; accept INTEGER and WORD (the
+                # faithful-dialect pair, matching HIBYTE/LOBYTE above).  Because
+                # this is a custom branch (not the generic builtin path), no
+                # WORD/INTEGER mix warning fires -- correct, as ODD does no
+                # signed arithmetic.  Codegen already lowers ODD as `val & 1`
+                # then `icmp != 0`, which is width/signedness-agnostic.
+                if len(expr.args) != 1:
+                    self.error(f"Function 'ODD' expects 1 argument, got {len(expr.args)}", expr)
+                    return None
+                arg_type = self.infer_expression_type(expr.args[0])
+                if arg_type in (INTEGER_TYPE, WORD_TYPE):
+                    return BOOLEAN_TYPE
+                if arg_type:
+                    self.error(f"Argument 1 type mismatch: expected INTEGER or WORD, got {arg_type}", expr)
+                return None
             if lookup_name in {'HIBYTE', 'LOBYTE'}:
                 if len(expr.args) != 1:
                     self.error(f"Function '{lookup_name}' expects 1 argument, got {len(expr.args)}", expr)

@@ -949,3 +949,45 @@ even under the full extended umbrella without the explicit feature flag,
 present (on every buffer param) only with `-f noalias-kernel-params`; a PTX
 round-trip test confirming `parse_assembly`/`verify`/`emit_assembly` accept
 the combined attribute set. Full suite green (1036 passed, 1 skipped).
+
+---
+
+## 3. ODD(WORD) is rejected but should be accepted [DONE]
+
+**Where.** `builtins_registry.py` registered `ODD` as
+`FunctionType('ODD', [('n', INTEGER_TYPE)], BOOLEAN_TYPE)`; the generic
+builtin-function argument check in `type_checker.py::infer_expression_type`
+rejected a WORD actual.
+
+**What.** The manual states "the ODD function for INTEGER and WORD values"
+(Elementary Types, BOOLEAN, p.6-6), but `ODD(w)` for `w: WORD` was a type error
+("expected INTEGER, got WORD").
+
+**Why it mattered.** A small vintage-conformance gap: a faithful program that
+calls `ODD` on a WORD was wrongly rejected. It was intentionally left out of
+the WORD/INTEGER strictness change set to keep that change coherent, and was
+pinned as a KNOWN GAP in `tests/test_conversion_matrix.py::TestManualKnownGaps`.
+
+**Resolution.** `ODD` is now special-cased in
+`type_checker.py::infer_expression_type`, modeled on the `HIBYTE`/`LOBYTE`
+siblings: it accepts `INTEGER_TYPE` and `WORD_TYPE`, returns `BOOLEAN_TYPE`,
+and rejects other types (REAL, CHAR, etc.) with a clear mismatch message.
+Because it is a custom branch (not the generic builtin path), no WORD/INTEGER
+mix warning fires -- correct, since `ODD` does no signed arithmetic; it only
+tests the low bit. The codegen lowering in `codegen/exprs.py` was already
+signedness-independent (`val & 1` then `icmp_signed('!=', 0)` -- the
+`!= 0` comparison is identical for signed and unsigned interpretation), so no
+lowering change was required. The registered `FunctionType` in
+`builtins_registry.py` is left as-is (INTEGER parameter); the special-case
+branch is what widens acceptance to WORD, matching how the other
+ordinal-flexible intrinsics (`ORD`, `SUCC`, `PRED`, `HIBYTE`, `LOBYTE`) are
+handled.
+
+**How verified.** `tests/test_conversion_matrix.py`: the pinned known-gap test
+was flipped from REJECT to ACCEPT and renamed to `test_odd_accepts_word`; a
+regression guard `test_odd_accepts_integer` and an over-widen guard
+`test_odd_rejects_real_and_char` were added. `tests/test_codegen.py` gained
+`test_odd_word_integer_parity`, a build-and-run test asserting `ODD(WORD)` and
+`ODD(INTEGER)` agree at runtime for the same bit pattern (7 -> odd). Suite
+green: `tests/test_conversion_matrix.py` (11 passed, 44 subtests passed),
+`tests/test_word_int_strictness.py` (25 passed), the new codegen test passes.

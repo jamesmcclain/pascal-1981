@@ -74,28 +74,17 @@ confirm `tests/test_word_int_strictness.py` still rejects genuine variables.
 
 ---
 
-## 3. ODD(WORD) is rejected but should be accepted [OPEN]
+## 3. ODD(WORD) is rejected but should be accepted [DONE]
 
-**Where.** `builtins_registry.py` registers `ODD` as `FunctionType('ODD',
-[('n', INTEGER_TYPE)], BOOLEAN_TYPE)`; the argument check rejects a WORD actual.
-
-**What.** The manual states "the ODD function for INTEGER and WORD values"
-(Elementary Types, BOOLEAN, p.6-6), but `ODD(w)` for `w: WORD` is currently a
-type error ("expected INTEGER, got WORD").
-
-**Why it matters.** A small vintage-conformance gap: a faithful program that
-calls `ODD` on a WORD is wrongly rejected. It is intentionally left out of the
-WORD/INTEGER strictness change set to keep that change coherent, and is pinned as
-a KNOWN GAP in `tests/test_conversion_matrix.py::TestManualKnownGaps`.
-
-**Suggested resolution.** Accept INTEGER and WORD for `ODD` (special-case it like
-the other ordinal-flexible intrinsics, or widen its registered parameter type to
-the integer family). `ODD` only needs the low bit, so the lowering is
-signedness-independent.
-
-**How to verify.** Flip `TestManualKnownGaps::test_odd_accepts_word_is_a_known_gap`
-to assert ACCEPT (and add a build-and-run parity check for `ODD(WORD)` vs
-`ODD(INTEGER)`).
+**Resolved.** `ODD` is now special-cased in `type_checker.py::infer_expression_type`
+(accepting `INTEGER` and `WORD`, returning `BOOLEAN`), modeled on the
+`HIBYTE`/`LOBYTE` siblings. Codegen was already signedness-independent
+(`val & 1` then `icmp != 0`), so no lowering change was needed. The known-gap
+test in `tests/test_conversion_matrix.py` was flipped from REJECT to ACCEPT,
+reject-rows added for REAL/CHAR, and a build-and-run parity test
+(`tests/test_codegen.py::test_odd_word_integer_parity`) confirms `ODD(WORD)`
+and `ODD(INTEGER)` agree at runtime for the same bit pattern. Full entry moved
+to `docs/old/old-followups.md`.
 
 ---
 

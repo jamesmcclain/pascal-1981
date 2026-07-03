@@ -255,6 +255,23 @@ END."""
         ir = compile_to_ir(src)
         self.assertIn("sub i16", ir)
 
+    def test_odd_word_integer_parity(self):
+        """ODD(WORD) and ODD(INTEGER) agree at runtime for the same bit pattern.
+
+        followups.md item 3: the manual says "the ODD function for INTEGER and
+        WORD values".  ODD is signedness-independent (it tests only the low
+        bit), so a WORD and an INTEGER holding the same bit pattern must yield
+        the same boolean.  Exercises both the type-checker acceptance and the
+        codegen lowering end-to-end.
+        """
+        src = ("PROGRAM P; VAR i: INTEGER; w: WORD; "
+               "BEGIN i := 7; w := 7; "
+               "IF ODD(i) THEN WRITELN('odd-int') ELSE WRITELN('even-int'); "
+               "IF ODD(w) THEN WRITELN('odd-word') ELSE WRITELN('even-word') END.")
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0, f"nonzero rc: {rc}")
+        self.assertEqual(out.strip(), "odd-int\nodd-word")
+
     def test_sqr_lowers_to_multiply(self):
         """SQR lowers to multiplication of the operand by itself."""
         src = "PROGRAM P; BEGIN WRITELN(SQR(3)) END."
