@@ -119,7 +119,8 @@ def main() -> int:
         if args.output_file:
             with open(args.output_file, 'w') as f:
                 f.write(ptx)
-            print(f'Wrote {args.output_file}', file=sys.stderr)
+            if args.verbose:
+                print(f'Wrote {args.output_file}', file=sys.stderr)
         else:
             print(ptx)
         return 0

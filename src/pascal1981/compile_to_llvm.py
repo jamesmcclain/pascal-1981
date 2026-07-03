@@ -142,7 +142,8 @@ def main() -> int:
             if args.output_file:
                 with open(args.output_file, 'w') as f:
                     f.write(ptx)
-                print(f'Wrote {args.output_file}', file=sys.stderr)
+                if args.verbose:
+                    print(f'Wrote {args.output_file}', file=sys.stderr)
             else:
                 print(ptx)
             return 0
@@ -177,11 +178,13 @@ def main() -> int:
 
     try:
         # Parse
-        print(f'Parsing {source_file}...', file=sys.stderr)
+        if verbose:
+            print(f'Parsing {source_file}...', file=sys.stderr)
         ast = parse_file(source_file)
 
         # Type check
-        print(f'Type checking...', file=sys.stderr)
+        if verbose:
+            print(f'Type checking...', file=sys.stderr)
         type_checker = PascalTypeChecker(source_file=source_file, features=features)
         check_result = type_checker.check(ast)
 
@@ -196,7 +199,8 @@ def main() -> int:
                 print(f'Warning: {warning}', file=sys.stderr)
 
         # Codegen
-        print(f'Generating LLVM IR...', file=sys.stderr)
+        if verbose:
+            print(f'Generating LLVM IR...', file=sys.stderr)
         # Build force_flags dict from CLI args.  Only flags explicitly set
         # to 'on' or 'off' (not 'source') enter the dict.
         _DEBUG_SUBS = ('ENTRY', 'INDEXCK', 'INITCK', 'MATHCK', 'NILCK', 'RANGECK', 'STACKCK')
@@ -241,7 +245,8 @@ def main() -> int:
         if output_file:
             with open(output_file, 'w') as f:
                 f.write(ir)
-            print(f'Wrote {output_file}', file=sys.stderr)
+            if verbose:
+                print(f'Wrote {output_file}', file=sys.stderr)
         else:
             print(ir)
 
