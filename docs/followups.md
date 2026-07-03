@@ -44,36 +44,6 @@ discipline).
 
 ---
 
-## 2. WORD/INTEGER constant exemption: fold constant expressions [DONE]
-
-**Resolved.** `_is_constant_integer_expr` now falls through from its
-literal/named-CONST fast paths to a new `_fold_const_int`, which folds constant
-integer expressions (`k + 1`, `2 * SIZE`, `SUCC(k)`, etc.) by reading named
-CONST values stashed on the Symbol in `check_const_decl`. `_check_word_int_assign`
-and `_check_word_int_mix` are unchanged and pick up the widening uniformly.
-Codegen was unaffected (its own `eval_const_expr` already folded these). New
-conversion-matrix rows (`k + 1`, `2 * SIZE`, `SUCC(k)`, const-expr arg) assert
-ACCEPT, a const-plus-variable row asserts REJECT, and
-`tests/test_word_int_strictness.py` adds constant-expression mix/assign tests
-plus a build-and-run parity test (`w := k + 1`, `k = 5` → 6). Full entry moved
-to `docs/old/old-followups.md`.
-
----
-
-## 3. ODD(WORD) is rejected but should be accepted [DONE]
-
-**Resolved.** `ODD` is now special-cased in `type_checker.py::infer_expression_type`
-(accepting `INTEGER` and `WORD`, returning `BOOLEAN`), modeled on the
-`HIBYTE`/`LOBYTE` siblings. Codegen was already signedness-independent
-(`val & 1` then `icmp != 0`), so no lowering change was needed. The known-gap
-test in `tests/test_conversion_matrix.py` was flipped from REJECT to ACCEPT,
-reject-rows added for REAL/CHAR, and a build-and-run parity test
-(`tests/test_codegen.py::test_odd_word_integer_parity`) confirms `ODD(WORD)`
-and `ODD(INTEGER)` agree at runtime for the same bit pattern. Full entry moved
-to `docs/old/old-followups.md`.
-
----
-
 ## 4. CLI progress chatter is emitted even without --verbose [OPEN]
 
 **Where.** `src/pascal1981/compile_to_llvm.py::main` (the `Parsing ...`,
