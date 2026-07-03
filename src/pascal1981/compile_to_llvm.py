@@ -59,6 +59,14 @@ def main() -> int:
                         default=None,
                         metavar='PATH',
                         help='With --target ptx, also write the intermediate NVPTX LLVM IR to PATH.')
+    parser.add_argument('--opt-level',
+                        type=int,
+                        choices=[0, 1, 2, 3],
+                        default=0,
+                        metavar='N',
+                        help='With --target ptx, run LLVM\'s O0-O3 mid-level IR pass pipeline before '
+                        'NVPTX codegen (default: 0, i.e. no pipeline). Only meaningful with '
+                        '--target ptx; an error with --target host.')
     parser.add_argument('--device-backend',
                         choices=['cpu', 'cuda'],
                         default='cpu',
@@ -106,6 +114,9 @@ def main() -> int:
         print(runtime_lib_path())
         return 0
 
+    if args.target != 'ptx' and args.opt_level:
+        parser.error('--opt-level is only meaningful with --target ptx')
+
     if args.target == 'ptx':
         # Single-CLI device path: parse/check/lower to NVPTX IR, then PTX.
         from .compile_to_ptx import compile_file_to_ptx
@@ -126,6 +137,7 @@ def main() -> int:
                 cpu=args.sm,
                 features=features,
                 emit_llvm_path=args.emit_llvm,
+                opt_level=args.opt_level,
             )
             if args.output_file:
                 with open(args.output_file, 'w') as f:

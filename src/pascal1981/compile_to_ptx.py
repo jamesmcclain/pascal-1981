@@ -18,8 +18,26 @@ from .parser import parse_file
 from .type_checker import PascalTypeChecker
 
 
-def llvm_ir_to_ptx(ir_text: str, *, triple: str = 'nvptx64-nvidia-cuda', cpu: str = 'sm_70') -> str:
-    """Emit PTX assembly from LLVM IR using llvmlite's NVPTX backend."""
+def llvm_ir_to_ptx(ir_text: str, *, triple: str = 'nvptx64-nvidia-cuda', cpu: str = 'sm_70', opt_level: int = 0) -> str:
+    """Emit PTX assembly from LLVM IR using llvmlite's NVPTX backend.
+
+    ``opt_level`` (0-3) optionally runs LLVM's mid-level O1/O2/O3 pass
+    pipeline over the module before handing it to the NVPTX backend
+    (followups.md item 5). 0 (default) is a no-op: the module goes straight
+    from `verify()` to `emit_assembly()`, exactly as before this flag existed,
+    so no caller's output changes unless it opts in. This matters because the
+    NVPTX backend's own instruction-selection/scheduling is a separate,
+    unconditional layer -- `opt_level` only controls whether a mid-level IR
+    pipeline (inlining, GVN, LICM, instcombine, vectorization, ...) runs first;
+    `ptxas` still performs final scheduling/register allocation downstream of
+    everything here regardless of this flag.
+
+    The pass-manager API used here (`create_pipeline_tuning_options` /
+    `create_pass_builder` / `ModulePassManager.run`) is llvmlite's "new pass
+    manager" binding, confirmed present under the repo's pinned
+    `llvmlite>=0.47.0`; it is the same API already exercised by
+    `tests/test_tuning_hints.py::test_unroll_hint_fires_under_o2`.
+    """
     try:
         import llvmlite.binding as llvm
     except Exception as exc:  # pragma: no cover - exercised only without llvmlite
@@ -37,6 +55,11 @@ def llvm_ir_to_ptx(ir_text: str, *, triple: str = 'nvptx64-nvidia-cuda', cpu: st
     llvm_mod.verify()
     target = llvm.Target.from_triple(triple)
     tm = target.create_target_machine(cpu=cpu)
+    if opt_level:
+        pto = llvm.create_pipeline_tuning_options(speed_level=opt_level, size_level=0)
+        pb = llvm.create_pass_builder(tm, pto)
+        pb.getModulePassManager().run(llvm_mod, pb)
+        llvm_mod.verify()
     return tm.emit_assembly(llvm_mod)
 
 
@@ -46,7 +69,8 @@ def compile_file_to_ptx(source_file: str,
                         device_triple: str = 'nvptx64-nvidia-cuda',
                         cpu: str = 'sm_70',
                         features=None,
-                        emit_llvm_path: str | None = None) -> str:
+                        emit_llvm_path: str | None = None,
+                        opt_level: int = 0) -> str:
     """Compile one Pascal source file to PTX text."""
     ast = parse_file(source_file)
     result = PascalTypeChecker(source_file=source_file, features=features).check(ast)
@@ -64,7 +88,7 @@ def compile_file_to_ptx(source_file: str,
     if emit_llvm_path:
         with open(emit_llvm_path, 'w') as f:
             f.write(ir)
-    return llvm_ir_to_ptx(ir, triple=device_triple, cpu=cpu)
+    return llvm_ir_to_ptx(ir, triple=device_triple, cpu=cpu, opt_level=opt_level)
 
 
 def main() -> int:
@@ -75,6 +99,7 @@ def main() -> int:
     parser.add_argument('--device-triple', default='nvptx64-nvidia-cuda')
     parser.add_argument('--cpu', default='sm_70', help='NVPTX target CPU, e.g. sm_70, sm_86 (default: sm_70)')
     parser.add_argument('--emit-llvm', default=None, metavar='PATH', help='Also write the intermediate LLVM IR')
+    parser.add_argument('--opt-level', type=int, choices=[0, 1, 2, 3], default=0, metavar='N', help='Run LLVM\'s O0-O3 mid-level IR pass pipeline before NVPTX codegen (default: 0, i.e. no pipeline; matches pre-existing behavior).')
     parser.add_argument('-f', '--feature', action='append', default=[], metavar='NAME', help='Enable extension feature NAME; use no-NAME to disable. Repeatable.')
     parser.add_argument('--dialect', choices=['vintage', 'extended'], default='vintage')
     parser.add_argument('-v', '--verbose', action='store_true', help='Print a full traceback on failure')
@@ -89,6 +114,7 @@ def main() -> int:
             cpu=args.cpu,
             features=features,
             emit_llvm_path=args.emit_llvm,
+            opt_level=args.opt_level,
         )
         if args.output_file:
             with open(args.output_file, 'w') as f:
