@@ -1,3 +1,26 @@
+## 4. CLI progress chatter is emitted even without --verbose [DONE]
+
+**Where.** `src/pascal1981/compile_to_llvm.py::main` (the `Parsing ...`,
+`Type checking...`, `Generating LLVM IR...`, `Wrote ...` prints to stderr) and
+`src/pascal1981/compile_to_ptx.py::main` (the `Wrote ...` print).
+
+**What.** Every invocation printed four progress lines to stderr regardless of
+`-v`. The `-v/--verbose` help text said it enabled per-declaration logging and
+tracebacks, implying the default was quiet.
+
+**Why it mattered.** Harmless interactively, but noisy in Makefiles and scripted
+pipelines, and it made stderr unusable as a pure diagnostics channel.
+
+**Resolution.** All four progress prints gated behind `-v` in `compile_to_llvm.py`;
+the `Wrote` print in `compile_to_ptx.py` similarly gated. `--target ptx` path in
+`compile_to_llvm.py` also updated. On success without `-v`, stderr is clean.
+
+**How verified.** `PYTHONPATH=src python3 -m pascal1981.compile_to_llvm ok.pas
+out.ll 2>err.txt` leaves `err.txt` empty on success. With `-v` the progress
+lines appear. Full suite green: `1045 passed, 1 skipped, 138 subtests passed`.
+
+---
+
 ## 1. `runtime_extern` has a dual function-creation path (and a linear-scan safety net) [DONE]
 
 **Where.** `codegen/base.py` — `runtime_extern(name)` and `_build_extern_factories`;

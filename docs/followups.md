@@ -7,7 +7,11 @@ IN-PROGRESS / DONE.
 
 These are not bugs that produce wrong output today; they are seams worth
 closing when the surrounding code is next touched. Resolved items are moved to
-`docs/old/old-followups.md` once they ship (most recently the launch-bound /
+`docs/old/old-followups.md` once they ship (most recently the CLI progress
+chatter, item 4 here — the `Parsing ...`, `Type checking...`, `Generating LLVM
+IR...`, and `Wrote ...` prints in `compile_to_llvm.py` and `compile_to_ptx.py`
+are now gated behind `-v`, leaving stderr clean on success; before that the
+launch-bound /
 loop-hint channel, item 8 here — the `tuning-hints` feature adds
 `[MAXNTID(x[,y[,z]])]` / `[REQNTID(x[,y[,z]])]` / `[MINCTASM(n)]` attributes on
 exported device kernel procedures, lowered to NVVM launch-bound facts that
@@ -44,27 +48,9 @@ discipline).
 
 ---
 
-## 4. CLI progress chatter is emitted even without --verbose [OPEN]
+## 4. CLI progress chatter is emitted even without --verbose [DONE]
 
-**Where.** `src/pascal1981/compile_to_llvm.py::main` (the `Parsing ...`,
-`Type checking...`, `Generating LLVM IR...`, `Wrote ...` prints to stderr).
-
-**What.** Every invocation prints four progress lines to stderr regardless of
-`-v`. The `-v/--verbose` help text says it enables per-declaration logging and
-tracebacks, implying the default is quiet.
-
-**Why it matters.** Harmless interactively, but noisy in Makefiles and scripted
-pipelines (e.g. the examples' Makefiles), and it makes stderr unusable as a
-pure diagnostics channel — a wrapper cannot distinguish "warnings" from routine
-chatter without pattern matching.
-
-**Suggested resolution.** Gate the progress lines behind `-v` (or add a
-`--quiet` flag if the default chatter is considered a feature). Keep the final
-`Wrote <path>` if desired, but route it consistently.
-
-**How to verify.** `pascal1981 ok.pas out.ll 2>err.txt` leaves `err.txt` empty on
-success without `-v`; with `-v` the progress lines (and tracebacks on failure)
-appear.
+*(Moved to `docs/old/old-followups.md` when shipped.)*
 
 ---
 
