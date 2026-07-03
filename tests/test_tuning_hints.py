@@ -211,16 +211,20 @@ class TestLoweringIR(unittest.TestCase):
         # Current-LLVM function string attributes...
         self.assertIn('"nvvm.maxntid"="256"', ir)
         self.assertIn('"nvvm.minctasm"="2"', ir)
-        # ...plus the legacy nvvm.annotations entries for older LLVM.
+        # ...plus the legacy nvvm.annotations entries for older LLVM. NOTE:
+        # the un-underscored spelling (`maxntidx`, not `maxntid_x`) is the one
+        # the LLVM 20.1.8 bundled with the pinned llvmlite==0.47.0 actually
+        # honors -- verified empirically outside this codebase; the
+        # underscored spelling silently produces no PTX directive at all.
         self.assertIn('nvvm.annotations', ir)
-        self.assertIn('!"maxntid_x", i32 256', ir)
+        self.assertIn('!"maxntidx", i32 256', ir)
         self.assertIn('!"minctasm", i32 2', ir)
 
     def test_multi_dimension_maxntid_joins_values(self):
         ir = _compile_device_ir(_IFACE, _impl(' [MAXNTID(16, 16)]'))
         self.assertIn('"nvvm.maxntid"="16,16"', ir)
-        self.assertIn('!"maxntid_x", i32 16', ir)
-        self.assertIn('!"maxntid_y", i32 16', ir)
+        self.assertIn('!"maxntidx", i32 16', ir)
+        self.assertIn('!"maxntidy", i32 16', ir)
 
     def test_cpu_device_triple_ignores_launch_bounds(self):
         """On the x86 CPU-device parity path there is no kernel entry, so the

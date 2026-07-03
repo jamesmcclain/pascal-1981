@@ -34,15 +34,35 @@ compile-time facts. [OBSERVED]
 Lowering (only at a real GPU kernel entry, alongside `ptx_kernel`): both
 encodings LLVM has used are emitted —
 
-- `"nvvm.maxntid"="x[,y,z]"`-style *function string attributes*, which the
-  LLVM 20 bundled with llvmlite 0.48 requires: on that LLVM, only this form
-  produces the `.maxntid` / `.reqntid` / `.minnctapersm` PTX directives; a
-  maxntid `!nvvm.annotations` entry alone is ignored. [OBSERVED — empirical
-  probes in the test suite's development; `.minnctapersm` still honors the
-  annotation form on LLVM 20, so the migration was partial]
-- the legacy per-dimension `!nvvm.annotations` entries (`maxntid_x`, ...),
-  which older LLVM reads. [DOCUMENTED — historical NVVM annotation scheme;
-  INFERRED that the llvmlite 0.47 floor still wants it]
+- `"nvvm.maxntid"="x[,y,z]"`-style *function string attributes*.
+- the legacy per-dimension `!nvvm.annotations` entries (`maxntidx`,
+  `maxntidy`, `maxntidz`, `reqntidx`, ..., `minctasm`) — note **no
+  underscore** between the name and the axis letter.
+
+**Corrected 2026-07 (docs/followups.md item 5/7/6 bundle).** The claim
+above that the string-attribute form is what LLM 20/llvmlite 0.48 requires,
+and that the legacy form uses an underscored key (`maxntid_x`), was wrong
+and shipped a real bug: on the LLVM 20.1.8 actually bundled with the pinned
+`llvmlite==0.47.0` wheel (re-verified with `pip freeze`), a minimal
+`parse_assembly`/`emit_assembly` probe *outside* this codebase shows the
+opposite —
+
+- the underscored legacy key (`maxntid_x`) silently produces **no** PTX
+  directive at all;
+- the correctly-spelled, un-underscored legacy key (`maxntidx`) alone is
+  sufficient and produces `.maxntid`;
+- the `"nvvm.maxntid"="..."` string attribute alone, with no legacy
+  annotation present, produces **nothing**.
+
+[OBSERVED — corrected; probes re-run and codegen fixed in `decls.py`'s
+`_LAUNCH_BOUND_KEYS`, `tests/test_tuning_hints.py`] `minnctapersm` was
+never affected (`minctasm` has no axis suffix, so both spellings coincide),
+which is exactly why it was the one directive that always worked and masked
+the bug in `.maxntid`/`.reqntid` for two axes. Both encodings are still
+emitted (harmless belt-and-suspenders for a different LLVM build that might
+prefer the string-attribute form), but the legacy, correctly-spelled
+annotation is the one carrying the correctness burden on this repo's pinned
+toolchain.
 
 With both present, each PTX directive appears exactly once. [OBSERVED]
 llvmlite has no string-attribute API, so the `key="value"` token is added by

@@ -620,8 +620,17 @@ class DeclsMixin:
     _LAUNCH_BOUND_KEYS = {
         # Attribute name -> (function-attribute key, per-dimension legacy
         # nvvm.annotations keys for x, y, z).
-        'MAXNTID': ('nvvm.maxntid', ('maxntid_x', 'maxntid_y', 'maxntid_z')),
-        'REQNTID': ('nvvm.reqntid', ('reqntid_x', 'reqntid_y', 'reqntid_z')),
+        #
+        # NOTE (bugfix, re-verified empirically against the LLVM 20.1.8
+        # bundled with the pinned `llvmlite==0.47.0` wheel): the legacy
+        # per-dimension keys have NO underscore -- `maxntidx`/`reqntidx`, not
+        # `maxntid_x`/`reqntid_x`. The underscored spelling silently produces
+        # no PTX directive at all (confirmed with a minimal parse_assembly +
+        # emit_assembly probe outside this codebase's own code). `minctasm`
+        # has no dimension suffix so both spellings coincide, which is why
+        # `.minnctapersm` was the only directive that ever actually appeared.
+        'MAXNTID': ('nvvm.maxntid', ('maxntidx', 'maxntidy', 'maxntidz')),
+        'REQNTID': ('nvvm.reqntid', ('reqntidx', 'reqntidy', 'reqntidz')),
         'MINCTASM': ('nvvm.minctasm', ('minctasm',)),
     }
 
@@ -634,14 +643,21 @@ class DeclsMixin:
         PTX discipline: modules without these attributes are byte-identical to
         before this feature existed).
 
-        Both encodings LLVM has used are emitted: the "nvvm.maxntid"="x[,y,z]"
-        style *function string attributes* current LLVM reads (verified: on the
-        LLVM 20 bundled with llvmlite 0.48, only this form produces the
-        `.maxntid`/`.reqntid`/`.minnctapersm` PTX directives), plus the legacy
-        per-dimension `!nvvm.annotations` entries older LLVM reads. With both
-        present each PTX directive still appears exactly once (verified).
-        These directives are how ptxas learns the block-size/occupancy budget
-        for register allocation.
+        Both encodings are emitted for forward/backward compatibility across
+        LLVM versions: the "nvvm.maxntid"="x[,y,z]" style *function string
+        attributes*, and the legacy per-dimension `!nvvm.annotations` entries.
+        Re-verified empirically (minimal parse_assembly/emit_assembly probes,
+        independent of this codebase) against the LLVM 20.1.8 bundled with the
+        pinned `llvmlite==0.47.0` wheel: on that build, ONLY the legacy
+        `!nvvm.annotations` form (with the correct un-underscored key spelling,
+        see `_LAUNCH_BOUND_KEYS`) produces `.maxntid`/`.reqntid`/`.minnctapersm`;
+        the string-attribute form alone produces nothing. Both are still
+        emitted -- harmless belt-and-suspenders in case some other LLVM build
+        reads the string-attribute form instead -- but the correctness-bearing
+        encoding on the toolchain this repo actually pins is the legacy one.
+        With both present each PTX directive still appears exactly once
+        (verified). These directives are how ptxas learns the block-size/
+        occupancy budget for register allocation.
 
         llvmlite's FunctionAttributes whitelists known enum attributes and has
         no string-attribute API, so the key="value" token is added by shadowing
