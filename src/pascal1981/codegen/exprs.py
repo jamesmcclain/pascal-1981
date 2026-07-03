@@ -102,6 +102,26 @@ class ExprsMixin:
             if not symbol or symbol.type_expr is None:
                 raise CodegenError(f'Undefined variable: {expr.name}')
             ty = self.resolve_type_alias(symbol.type_expr)
+            if getattr(expr, 'deref', False):
+                # UPPER(p^) / LOWER(p^): bounds of the pointee.
+                if not isinstance(ty, PointerType):
+                    raise CodegenError(f"{type(expr).__name__[:-4].upper()}: '{expr.name}^' requires a pointer variable")
+                pointee = self.resolve_type_alias(getattr(ty, 'target_type', None) or getattr(ty, 'base', None))
+                if isinstance(pointee, ArrayType) and getattr(pointee, 'super', False):
+                    lower = self.eval_const_expr(pointee.index_range.low)
+                    if isinstance(expr, LowerExpr):
+                        return ir.Constant(ir.IntType(32), lower)
+                    # Dynamic upper bound: read the i64 bound header that
+                    # long-form NEW stored immediately before the element data
+                    # (docs/super-array-bounds-abi.md).
+                    data_ptr = self.builder.load(self.resolve_designator_ptr(Designator(expr.name, [])))
+                    raw = self.builder.bitcast(data_ptr, ir.IntType(64).as_pointer())
+                    hdr = self.builder.gep(raw, [ir.Constant(ir.IntType(64), -1)])
+                    bound = self.builder.load(hdr)
+                    return self.builder.trunc(bound, ir.IntType(32))
+                # Fixed-bound pointee (array/string): static bounds, same
+                # resolution as the direct-variable form below.
+                ty = pointee
             if isinstance(ty, NamedType) and ty.name.upper() in {'STRING', 'LSTRING'}:
                 max_len = int(ty.param) if isinstance(ty.param, int) else 256
                 lower = 1 if ty.name.upper() == 'STRING' else 0
@@ -752,6 +772,44 @@ class ExprsMixin:
         'GRIDDIM_Z':   '__pas_nctaid_z',
     }
 
+    # Conservative architectural ceilings for CUDA compute capability 7.0+
+    # (`sm_70` and later; this repo's device examples target `sm_70`/`sm_86`,
+    # both well within this range) per the CUDA C Programming Guide's
+    # "Compute Capabilities" appendix. [DOCUMENTED — CUDA architectural
+    # limits, not measured against this repository's own code/tests]
+    # Format: (name-suffix) -> (max threads-per-block axis, max grid axis).
+    # threadIdx.{x,y}/blockDim.{x,y} <= 1024; threadIdx.z/blockDim.z <= 64.
+    # blockIdx/gridDim.x can address up to 2^31-1 blocks; y/z are capped at
+    # 65535 on all CUDA compute capabilities to date.
+    _NVVM_SREG_MAX = {
+        'X': {'tid': 1024, 'ctaid': 2**31 - 1},
+        'Y': {'tid': 1024, 'ctaid': 65535},
+        'Z': {'tid': 64, 'ctaid': 65535},
+    }
+
+    def _nvvm_sreg_range(self, upper: str) -> tuple[int, int]:
+        """Return the (lo, hi) !range bound [lo, hi) for one sreg intrinsic.
+
+        `tid`/`ctaid` (index registers) range over [0, max); `ntid`/`nctaid`
+        (dimension registers) range over [1, max+1) -- a block/grid always has
+        at least one thread/block along every axis. Conservative sm_70-era
+        ceilings (see `_NVVM_SREG_MAX`); this is frontend-only information no
+        launch-geometry proof is required for, since it bounds what the
+        *hardware* can ever produce in these registers, not what a particular
+        kernel launch happens to use.
+        """
+        axis = upper[-1]  # 'X', 'Y', or 'Z'
+        maxes = self._NVVM_SREG_MAX[axis]
+        if upper.startswith('THREADIDX_'):
+            return (0, maxes['tid'])
+        if upper.startswith('BLOCKIDX_'):
+            return (0, maxes['ctaid'])
+        if upper.startswith('BLOCKDIM_'):
+            return (1, maxes['tid'] + 1)
+        if upper.startswith('GRIDDIM_'):
+            return (1, maxes['ctaid'] + 1)
+        raise CodegenError(f'unrecognized device index builtin: {upper}')
+
     def codegen_device_index_builtin(self, name: str) -> ir.Value:
         """Lower DEVICE thread/block index reads.
 
@@ -797,7 +855,12 @@ class ExprsMixin:
                 fn = self.module.get_global(intrinsic_name)
             except KeyError:
                 fn = ir.Function(self.module, ir.FunctionType(ir.IntType(32), []), name=intrinsic_name)
-            return self.builder.call(fn, [])
+            call = self.builder.call(fn, [])
+            lo, hi = self._nvvm_sreg_range(upper)
+            call.set_metadata('range', self.module.add_metadata([
+                ir.Constant(ir.IntType(32), lo), ir.Constant(ir.IntType(32), hi),
+            ]))
+            return call
         if self.device_triple.startswith('amdgcn'):
             # C.1 keeps AMDGPU non-blocking; real grid/block dimension lowering
             # needs dispatch-ptr reads and is tracked by the plan.

@@ -194,10 +194,22 @@ attribute_item =
     | "OVERLAY"                     (* declare routine as overlay-loaded *)
     | "FORTRAN"                     (* use Fortran calling conventions *)
     | "ORIGIN" "(" constant ")"     (* bind EXTERN routine to absolute address *)
-    | "SPACE" "(" constant ")" ;    (* pointer-space residence: bind storage to a
+    | "SPACE" "(" constant ")"      (* pointer-space residence: bind storage to a
                                        SPACE member; DEVICE MODULE only. The
                                        constant must fold to a SPACE ordinal.
                                        SPACE is contextual, not reserved. *)
+    | ( "MAXNTID" | "REQNTID" ) "(" constant { "," constant } ")"
+                                    (* tuning-hints extension: launch bounds on an
+                                       exported device kernel procedure; 1-3
+                                       positive integer literal dimensions,
+                                       lowered to NVVM launch-bound facts
+                                       (docs/tuning-hints.md). Contextual, not
+                                       reserved. Commas inside these parentheses
+                                       are argument separators, unlike the
+                                       vintage single-argument rule below. *)
+    | "MINCTASM" "(" constant ")" ; (* tuning-hints extension: minimum CTAs per
+                                       SM occupancy bound; same placement rules
+                                       as MAXNTID/REQNTID. *)
 
 (* NOTE: Commas inside an attribute's parentheses (e.g. [ORIGIN(100,200)])
    are parsed as attribute separators, causing errors. All parameterized
@@ -372,7 +384,7 @@ factor =
     | "ADR" identifier                        (* 16-bit near offset of identifier *)
     | "ADS" identifier                        (* segmented address; pointee space inferred from operand's residence (HOST outside a DEVICE MODULE) *)
     | "SIZEOF" "(" ( identifier | type ) ")"  (* byte size of identifier or type  *)
-    | ( "LOWER" | "UPPER" ) "(" identifier ")" (* array/super-array/string bound *)
+    | ( "LOWER" | "UPPER" ) "(" identifier [ "^" ] ")" (* array/super-array/string bound; identifier^ queries the pointee — for a heap super array, the dynamic upper bound recorded by long-form NEW (docs/super-array-bounds-abi.md) *)
     | set_constructor ;
 
 (* [OBSERVED] A designator is an identifier followed by zero or more
@@ -582,6 +594,7 @@ io_data_param = expression [ ":" ( expression [ ":" expression ]
        | pop_cmd
        | message_cmd
        | inconst_cmd
+       | unroll_cmd
        | if_directive ;
 
    ON/OFF switches  ("$NAME+", "$NAME-", "$NAME:n", or bare "$NAME"):
@@ -626,6 +639,15 @@ io_data_param = expression [ ":" ( expression [ ":" expression ]
      message_cmd = "MESSAGE" ":" "'" { any_char } "'" ;
                               (* print text to stderr during compilation   *)
      inconst_cmd = "INCONST" ":" identifier ;
+     unroll_cmd  = "UNROLL" [ ":" ] ( integer_constant | identifier ) ;
+                              (* tuning-hints extension, not vintage: request
+                                 llvm.loop.unroll.count(n) on the FOR/WHILE/
+                                 REPEAT statement the comment immediately
+                                 precedes (docs/tuning-hints.md). An identifier
+                                 names an $INCONST meta-constant. A stamp not
+                                 immediately preceding a loop keyword is a
+                                 parse error rather than a silently dropped
+                                 hint. *)
                               (* prompt user for a WORD constant value;
                                  non-interactive builds use 0             *)
 

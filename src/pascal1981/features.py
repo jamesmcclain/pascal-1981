@@ -60,6 +60,13 @@ _FEATURES: Dict[str, Feature] = {
         help=
         "Accept an inline set-constructor literal (e.g. ['A'..'Z']) as the READSET set argument. The faithful 1981 default rejects it (Character Set Expected) and requires a declared SET OF CHAR value or a type-prefixed constructor.",
     ),
+    'tuning-hints':
+    Feature(
+        name='tuning-hints',
+        default=False,
+        help=
+        'Enable performance-hint plumbing: the [MAXNTID(x[,y[,z]])] / [REQNTID(x[,y[,z]])] / [MINCTASM(n)] launch-bound attributes on exported device kernel procedures (lowered to NVVM launch-bound facts that surface as .maxntid/.reqntid/.minnctapersm PTX directives) and the {$UNROLL n} loop metacommand (lowered to llvm.loop.unroll.count metadata on the loop it precedes). Hints only; all transforms remain LLVM\'s. Not vintage IBM Pascal.',
+    ),
     'strict-word-int':
     Feature(
         name='strict-word-int',
@@ -75,6 +82,23 @@ _FEATURES: Dict[str, Feature] = {
         # affect the assignment rule (already an error) or constants (always
         # exempt: INTEGER constants change to WORD per the manual).
         help='Promote the WORD/INTEGER expression-mix warning to a hard error (stricter than vintage). Orthogonal to --dialect; the assignment-compatibility error and the constant exemption apply regardless.',
+        in_extended=False,
+    ),
+    'noalias-kernel-params':
+    Feature(
+        name='noalias-kernel-params',
+        default=False,
+        # Policy/contract flag, orthogonal to the extended dialect
+        # (in_extended=False): unlike tuning-hints, this does NOT auto-enable
+        # inside DEVICE code, because it asserts a semantic contract about the
+        # caller (distinct ADS(GLOBAL)/ADS(CONSTANT) buffer parameters of a
+        # kernel entry do not overlap) that this compiler cannot itself prove
+        # or check at a LAUNCH call site -- it is a promise the launcher must
+        # keep. Getting it wrong is a silent miscompilation (the optimizer may
+        # reorder/vectorize loads and stores across what it believes are
+        # non-aliasing pointers), so it stays opt-in via `-f
+        # noalias-kernel-params` rather than riding the extended umbrella.
+        help='Assert that distinct ADS(GLOBAL)/ADS(CONSTANT) buffer parameters of an exported device kernel entry do not alias (LLVM `noalias`), per the LAUNCH contract documented in docs/device-kernel-orientation.md. Passing overlapping buffers with this enabled is undefined behavior. Off by default even in DEVICE code/--dialect extended; must be requested explicitly.',
         in_extended=False,
     ),
 }

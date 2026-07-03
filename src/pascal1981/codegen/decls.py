@@ -7,6 +7,7 @@ Declaration code generation
 
 from __future__ import annotations
 
+import dataclasses
 from contextlib import contextmanager
 from typing import Any, List, Optional, Tuple, Union
 
@@ -615,6 +616,190 @@ class DeclsMixin:
         for arg in func.args:
             if isinstance(arg.type, ir.PointerType):
                 arg.attributes.align = self.natural_alignment(arg.type.pointee)
+        self._apply_kernel_param_attrs(decl, func)
+        self._apply_launch_bound_attrs(decl, func)
+
+    def _kernel_readonly_param_names(self, decl) -> set:
+        """Names of `decl`'s parameters this procedure's own body never
+        writes through (docs/followups.md item 6, readonly/nocapture).
+
+        Unlike a host `[C]` foreign declaration, a kernel-entry buffer
+        parameter cannot be VAR/CONST-moded at all -- `_param_device_passable`
+        rejects reference-mode params outright, since VAR/CONST lower to
+        host-space (addrspace 0) pointers a device entry cannot dereference.
+        So there is no pre-existing mode flag to read off; this is a real,
+        if purely syntactic and deliberately conservative, analysis over the
+        procedure's own AST:
+
+        - An assignment whose target dereferences the parameter (any selector
+          chain containing a DEREF, e.g. `p^ := ...`, `p^[i] := ...`,
+          `p^.f := ...`) disqualifies it.
+        - The parameter appearing as a bare argument to any other call
+          (FuncCall or ProcCallStmt) disqualifies it too: this compiler does
+          not attempt an interprocedural proof that the callee itself never
+          writes through it, so passing it onward is conservatively treated
+          as a potential write.
+        - A body containing any WITH statement disqualifies every parameter
+          of that procedure: WITH's field designators are not tied back to
+          the originating pointer expression by this walk, so a write inside
+          a WITH block could go unnoticed; refuse to guess.
+
+        This only ever *withholds* readonly, never wrongly grants it, so a
+        gap in this analysis is a missed optimization, not a correctness bug.
+        """
+        param_names = {n for p in decl.params for n in p.names}
+        if not param_names or decl.body is None:
+            return set()
+
+        def iter_nodes(node):
+            if isinstance(node, list):
+                for item in node:
+                    yield from iter_nodes(item)
+                return
+            if not isinstance(node, ASTNode):
+                return
+            yield node
+            for f in dataclasses.fields(node):
+                yield from iter_nodes(getattr(node, f.name))
+
+        written: set = set()
+        passed_to_call: set = set()
+        has_with = False
+        for node in iter_nodes(decl.body):
+            if isinstance(node, WithStmt):
+                has_with = True
+            elif isinstance(node, AssignStmt):
+                tgt = node.target
+                if (isinstance(tgt, Designator) and tgt.name in param_names
+                        and any(sel.kind == 'DEREF' for sel in tgt.selectors)):
+                    written.add(tgt.name)
+            elif isinstance(node, (FuncCall, ProcCallStmt)):
+                for arg in node.args:
+                    if isinstance(arg, Identifier) and arg.name in param_names:
+                        passed_to_call.add(arg.name)
+                    elif isinstance(arg, Designator) and arg.name in param_names and not arg.selectors:
+                        passed_to_call.add(arg.name)
+        if has_with:
+            return set()
+        return param_names - written - passed_to_call
+
+    def _apply_kernel_param_attrs(self, decl, func: ir.Function) -> None:
+        """Attach readonly/nocapture/dereferenceable/(optionally) noalias
+        facts to kernel-entry buffer pointer parameters (docs/followups.md
+        item 6).
+
+        LLVM cannot infer any of these for a bare device pointer parameter --
+        they are facts only Pascal semantics (this procedure's own body) or
+        the LAUNCH contract (distinct-buffers-don't-overlap) can supply.
+        Called only from `_apply_kernel_entry`, so this fires exclusively for
+        a real GPU-triple kernel entry; inert everywhere else.
+        """
+        readonly_names = self._kernel_readonly_param_names(decl)
+        flat_names = [n for p in decl.params for n in p.names]
+        noalias_on = self.feature_enabled('noalias-kernel-params')
+        for arg, pname in zip(func.args, flat_names):
+            if not isinstance(arg.type, ir.PointerType):
+                continue
+            if pname in readonly_names:
+                # llvmlite's ArgumentAttributes whitelist has no `readonly`
+                # entry (only `noalias`/`nocapture` are native there); LLVM
+                # itself has carried a parameter-level `readonly` since long
+                # before this project's llvmlite floor. Shadow the instance's
+                # `_known` mapping (same trick `_apply_launch_bound_attrs`
+                # uses for function-level string attributes, adapted to the
+                # dict-shaped `_known` argument attributes use) so `.add`
+                # accepts it; round-trips through parse_assembly/verify
+                # (confirmed in test_kernel_param_attrs.py).
+                if 'readonly' not in arg.attributes._known:
+                    from types import MappingProxyType
+                    arg.attributes._known = MappingProxyType({**dict(arg.attributes._known), 'readonly': False})
+                arg.attributes.add('readonly')
+                arg.attributes.add('nocapture')
+            # dereferenceable(n): only for a statically-sized element type
+            # (a fixed ARRAY[lo..hi] OF T pointee lowers to ir.ArrayType with a
+            # known count). A `SUPER ARRAY [lo..*] OF T` pointee has no static
+            # count in the LLVM type -- deliberately out of scope: there is no
+            # compiler-enforced link between such a buffer parameter and
+            # whichever sibling parameter might carry its length, and guessing
+            # one would be exactly the kind of unproven inference this
+            # project's discipline avoids.
+            pointee = arg.type.pointee
+            if isinstance(pointee, ir.ArrayType):
+                from .c_abi import _size_of
+                arg.attributes.dereferenceable = _size_of(pointee)
+            if noalias_on:
+                arg.attributes.add('noalias')
+
+    _LAUNCH_BOUND_KEYS = {
+        # Attribute name -> (function-attribute key, per-dimension legacy
+        # nvvm.annotations keys for x, y, z).
+        #
+        # NOTE (bugfix, re-verified empirically against the LLVM 20.1.8
+        # bundled with the pinned `llvmlite==0.47.0` wheel): the legacy
+        # per-dimension keys have NO underscore -- `maxntidx`/`reqntidx`, not
+        # `maxntid_x`/`reqntid_x`. The underscored spelling silently produces
+        # no PTX directive at all (confirmed with a minimal parse_assembly +
+        # emit_assembly probe outside this codebase's own code). `minctasm`
+        # has no dimension suffix so both spellings coincide, which is why
+        # `.minnctapersm` was the only directive that ever actually appeared.
+        'MAXNTID': ('nvvm.maxntid', ('maxntidx', 'maxntidy', 'maxntidz')),
+        'REQNTID': ('nvvm.reqntid', ('reqntidx', 'reqntidy', 'reqntidz')),
+        'MINCTASM': ('nvvm.minctasm', ('minctasm',)),
+    }
+
+    def _apply_launch_bound_attrs(self, decl, func: ir.Function) -> None:
+        """Lower [MAXNTID]/[REQNTID]/[MINCTASM] to NVPTX launch-bound facts.
+
+        Called only from `_apply_kernel_entry`, so this fires exclusively for a
+        real GPU-triple kernel entry; on the x86 CPU-device parity path the
+        attributes are inert and the emitted module is unchanged (the drop-in
+        PTX discipline: modules without these attributes are byte-identical to
+        before this feature existed).
+
+        Both encodings are emitted for forward/backward compatibility across
+        LLVM versions: the "nvvm.maxntid"="x[,y,z]" style *function string
+        attributes*, and the legacy per-dimension `!nvvm.annotations` entries.
+        Re-verified empirically (minimal parse_assembly/emit_assembly probes,
+        independent of this codebase) against the LLVM 20.1.8 bundled with the
+        pinned `llvmlite==0.47.0` wheel: on that build, ONLY the legacy
+        `!nvvm.annotations` form (with the correct un-underscored key spelling,
+        see `_LAUNCH_BOUND_KEYS`) produces `.maxntid`/`.reqntid`/`.minnctapersm`;
+        the string-attribute form alone produces nothing. Both are still
+        emitted -- harmless belt-and-suspenders in case some other LLVM build
+        reads the string-attribute form instead -- but the correctness-bearing
+        encoding on the toolchain this repo actually pins is the legacy one.
+        With both present each PTX directive still appears exactly once
+        (verified). These directives are how ptxas learns the block-size/
+        occupancy budget for register allocation.
+
+        llvmlite's FunctionAttributes whitelists known enum attributes and has
+        no string-attribute API, so the key="value" token is added by shadowing
+        the instance's `_known` set; the token renders verbatim in the
+        `define` attribute list, which is exactly LLVM's string-attribute
+        syntax (round-trip through parse_assembly/verify is covered by tests).
+        """
+        launch_attrs = [a for a in (getattr(decl, 'attributes', []) or [])
+                        if a.name.upper() in self._LAUNCH_BOUND_KEYS]
+        if not launch_attrs:
+            return
+        if not self.device_triple.startswith('nvptx'):
+            # AMD launch bounds use different function attributes (e.g.
+            # amdgpu-flat-work-group-size), a separate lowering nobody has
+            # written yet; fail loudly rather than dropping the hint.
+            raise CodegenError(f"launch-bound attributes on '{decl.name}' are only supported for nvptx device "
+                               f"triples; got '{self.device_triple}'")
+        nvvm = self.module.add_named_metadata('nvvm.annotations')
+        for attr in launch_attrs:
+            fn_attr_key, legacy_keys = self._LAUNCH_BOUND_KEYS[attr.name.upper()]
+            args = attr.arg if isinstance(attr.arg, list) else [attr.arg]
+            values = [int(self.eval_const_expr(arg)) for arg in args]
+            token = '"{}"="{}"'.format(fn_attr_key, ",".join(str(v) for v in values))
+            func.attributes._known = frozenset(func.attributes._known) | {token}
+            func.attributes.add(token)
+            for key, value in zip(legacy_keys, values):
+                nvvm.add(self.module.add_metadata([
+                    func, key, ir.Constant(ir.IntType(32), value),
+                ]))
 
     @staticmethod
     def _c_abi_sign_attr(type_expr) -> Optional[str]:

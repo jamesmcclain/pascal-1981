@@ -98,6 +98,31 @@ class TestWordIntStrictness(unittest.TestCase):
                              features={"strict-word-int": True})
         self.assertTrue(r.success)
 
+    def test_constant_expression_exemption_is_clean(self):
+        # A constant *expression* (not just a literal or bare named CONST) is
+        # an INTEGER constant for the manual's WORD exemption, so `w + (k + 1)`
+        # is a clean mix (no warning) and compiles even under
+        # -f strict-word-int.
+        src = "PROGRAM P; CONST k = 5; VAR w: WORD; BEGIN w := w + (k + 1) END."
+        r = typecheck_source(src)
+        self.assertTrue(r.success)
+        self.assertFalse(any("WORD and INTEGER" in m for m in _warnings(r)))
+        r_strict = typecheck_source(src, features={"strict-word-int": True})
+        self.assertTrue(r_strict.success, msg=str(r_strict.errors))
+
+    def test_constant_expression_into_word_assign_is_clean(self):
+        # `w := k + 1` (constant expression into a WORD target) is accepted --
+        # the INTEGER constant changes to WORD.
+        r = typecheck_source("PROGRAM P; CONST k = 5; VAR w: WORD; BEGIN w := k + 1 END.")
+        self.assertTrue(r.success, msg=str(r.errors))
+
+    def test_const_plus_variable_is_not_constant(self):
+        # Regression guard: a constant plus a VARIABLE is not a compile-time
+        # constant, so `w := k + i` is still rejected.
+        r = typecheck_source("PROGRAM P; CONST k = 5; VAR i: INTEGER; w: WORD; "
+                             "BEGIN w := k + i END.")
+        self.assertFalse(r.success)
+
     def test_minus_32768_is_invalid_integer(self):
         # Manual p.6-5: -32768 is not a valid INTEGER.
         self.assertFalse(typecheck_source("PROGRAM P; VAR i: INTEGER; BEGIN i := -32768 END.").success)

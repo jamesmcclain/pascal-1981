@@ -82,11 +82,16 @@ class TestAssignmentMatrix(unittest.TestCase):
 
         # --- INTEGER -> WORD : constants change, variables do NOT ---
         ("int_literal_to_word", "WORD", "",            "5",   VINTAGE, ACCEPT, "manual: const changes to WORD"),
-        ("named_const_to_word", "WORD", "",            "5",   VINTAGE, ACCEPT, "manual: const changes to WORD"),
+        ("named_const_to_word", "WORD", "CONST k = 5;", "k",   VINTAGE, ACCEPT, "manual: named CONST changes to WORD"),
+        ("const_expr_to_word",  "WORD", "CONST k = 5;", "k + 1", VINTAGE, ACCEPT, "manual: constant *expression* changes to WORD"),
+        ("const_mul_expr_to_word", "WORD", "CONST size = 10;", "2 * size", VINTAGE, ACCEPT, "manual: constant *expression* changes to WORD"),
+        ("const_succ_expr_to_word", "WORD", "CONST k = 5;", "SUCC(k)", VINTAGE, ACCEPT, "manual: SUCC of CONST is a constant"),
         ("int_var_to_word",   "WORD", "i: INTEGER;", "i",   VINTAGE, REJECT,
          "manual: INTEGER variable NOT assignable to WORD; use WRD(i)"),
         ("int_expr_to_word",  "WORD", "i: INTEGER;", "i+i", VINTAGE, REJECT,
          "non-constant INTEGER expr requires WRD()"),
+        ("const_plus_var_to_word", "WORD", "CONST k = 5; i: INTEGER;", "k + i", VINTAGE, REJECT,
+         "const + variable is not a compile-time constant"),
         ("wrd_int_to_word",   "WORD", "i: INTEGER;", "WRD(i)", VINTAGE, ACCEPT, "explicit WRD"),
 
         # --- WORD -> INTEGER : not assignment compatible (need ORD) ---
@@ -133,6 +138,8 @@ class TestArgumentMatrix(unittest.TestCase):
          "INTEGER variable -> WORD param needs WRD(i)"),
         ("int_const_arg_to_word", "WORD", "", "5", "WORD", "WORD", VINTAGE, ACCEPT,
          "constant INTEGER -> WORD param stays implicit (manual)"),
+        ("const_expr_arg_to_word", "WORD", "CONST k = 5;", "k + 1", "WORD", "WORD", VINTAGE, ACCEPT,
+         "constant *expression* -> WORD param"),
         ("word_arg_to_int", "INTEGER", "w: WORD;", "w", "INTEGER", "INTEGER", VINTAGE, REJECT,
          "WORD -> INTEGER param needs ORD(w)"),
         ("wrd_arg_to_word", "WORD", "i: INTEGER;", "WRD(i)", "WORD", "WORD", VINTAGE, ACCEPT,
@@ -161,6 +168,8 @@ class TestArithmeticMatrix(unittest.TestCase):
          "manual: mix allowed when the INTEGER side is a constant"),
         ("word_plus_int_const_strict", "WORD", "w: WORD;", "w", "", "1", "+", STRICT, ACCEPT,
          "constant exemption holds even under strict-word-int"),
+        ("word_plus_const_expr_strict", "WORD", "w: WORD; CONST k = 5;", "w", "", "k + 1", "+", STRICT, ACCEPT,
+         "constant *expression* exemption holds under strict"),
         ("int_plus_int32", "INTEGER32", "i: INTEGER;", "i", "j: INTEGER32;", "j", "+", WIDE, ACCEPT,
          "ext: rank promotion to INTEGER32"),
         # --- wide same-width signedness mix: same rule as 16-bit WORD/INTEGER ---
@@ -222,14 +231,28 @@ class TestArithmeticMatrix(unittest.TestCase):
 class TestManualKnownGaps(unittest.TestCase):
     """Direct checks of individual manual rules; tracks remaining gaps explicitly."""
 
-    def test_odd_accepts_word_is_a_known_gap(self):
-        # Manual: "the ODD function for INTEGER and WORD values".  ODD(WORD) is
-        # still REJECTED.  This is a KNOWN CONFORMANCE GAP, tracked in
-        # docs/followups.md -- pinned here so a future fix flips a known row
-        # rather than surprising us, NOT an endorsement of the current behavior.
+    def test_odd_accepts_word(self):
+        # Manual: "the ODD function for INTEGER and WORD values"
+        # (Elementary Types, BOOLEAN, p.6-6).  ODD(WORD) is accepted --
+        # special-cased in type_checker.py, modeled on HIBYTE/LOBYTE.
         src = "PROGRAM P; VAR w: WORD; b: BOOLEAN; BEGIN b := ODD(w) END."
-        self.assertEqual(verdict(src), REJECT,
-                         "KNOWN GAP: ODD(WORD) should be accepted per the manual")
+        self.assertEqual(verdict(src), ACCEPT,
+                         "ODD(WORD) should be accepted per the manual")
+
+    def test_odd_accepts_integer(self):
+        # Regression guard: the faithful INTEGER case must keep working.
+        src = "PROGRAM P; VAR i: INTEGER; b: BOOLEAN; BEGIN b := ODD(i) END."
+        self.assertEqual(verdict(src), ACCEPT,
+                         "ODD(INTEGER) should be accepted")
+
+    def test_odd_rejects_real_and_char(self):
+        # ODD must not over-widen: REAL and CHAR are not INTEGER/WORD.
+        for decl, arg in (("r: REAL;", "r"), ("c: CHAR;", "c")):
+            with self.subTest(arg=arg):
+                src = ("PROGRAM P; VAR " + decl +
+                       " b: BOOLEAN; BEGIN b := ODD(" + arg + ") END.")
+                self.assertEqual(verdict(src), REJECT,
+                                 f"ODD({arg}) must be rejected")
 
 
 if __name__ == "__main__":

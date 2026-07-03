@@ -248,3 +248,45 @@ Key rules distilled:
 
 For host orchestration, PTX emission, and the full CUDA launch path see
 `docs/old/cuda-kernel-prescription.md` (archived — all milestones A–D complete).
+
+---
+
+## 3. Kernel-entry parameter facts and the LAUNCH contract
+
+Exported kernel-entry buffer parameters (`ADS(GLOBAL)`/`ADS(CONSTANT) OF T`)
+automatically carry whichever of these facts this compiler can establish
+without guessing:
+
+- **`align`** — the element type's natural alignment (always on).
+- **`dereferenceable(n)`** — only when the pointee is a statically-sized
+  `ARRAY[lo..hi] OF T` (always on for that case). A `SUPER ARRAY [lo..*] OF T`
+  buffer parameter gets none: there is no compiler-enforced link between such
+  a parameter and whichever sibling parameter might carry its runtime length,
+  so this compiler does not guess one.
+- **`readonly`/`nocapture`** — only when this procedure's own body
+  provably never writes through the parameter: no assignment target
+  dereferences it, and it is never passed as a bare argument to another call
+  (this compiler does not attempt an interprocedural proof that a callee
+  itself never writes through it — passing it onward conservatively costs the
+  attribute). A body containing any `WITH` statement withholds `readonly`
+  from every parameter of that procedure, since `WITH`'s field designators
+  are not tied back to the originating pointer by this analysis. This only
+  ever *withholds* the attribute, never wrongly grants it.
+- **`noalias`** — **opt-in only**, via `-f noalias-kernel-params`
+  (registered feature, not part of the `extended` umbrella — `--dialect
+  extended` alone does not turn it on). Enabling it asserts the **LAUNCH
+  contract**: *distinct `ADS(GLOBAL)`/`ADS(CONSTANT)` buffer parameters of a
+  kernel entry do not overlap in memory.* This is a promise about the
+  *caller* (whatever issues the `LAUNCH`/`cuLaunchKernel` call), which this
+  compiler cannot itself verify at a call site — get it wrong (alias two
+  `noalias`-tagged buffers at launch time) and the optimizer may reorder or
+  vectorize loads/stores across them, a silent miscompilation. That is why it
+  defaults off even inside `DEVICE` code (whose feature baseline is otherwise
+  the extended umbrella) and must be requested explicitly.
+
+None of this requires any source-level syntax; it is derived entirely from
+the existing parameter declaration and procedure body. See
+`docs/followups.md`'s archived "Kernel entries carry no parameter facts"
+entry in `docs/old/old-followups.md` for the full design/verification
+record, and `tests/test_kernel_param_attrs.py` for the attribute-shape
+tests.

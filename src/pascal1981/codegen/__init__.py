@@ -11,6 +11,8 @@ Walks the AST and emits LLVM IR. Supports:
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 
@@ -121,7 +123,39 @@ def compile_to_llvm(
                       embed_device_ptx_text=embed_device_ptx_text,
                       device_backend=device_backend)
     module = codegen.codegen(ast)
-    return str(module)
+    return _selfref_loop_metadata(str(module))
+
+
+_LOOP_MD_NULL_HEAD = re.compile(r'^(!\d+) = !\{ null, (.*)\}$', re.MULTILINE)
+
+
+def _selfref_loop_metadata(ir_text: str) -> str:
+    """Rewrite loop-ID metadata nodes to the self-referential form LLVM needs.
+
+    LLVM's loop passes identify a loop-ID node by skipping its first operand,
+    which by convention is a distinct self-reference; with a null first operand
+    the node verifies but llvm.loop.* hints are ignored (verified empirically:
+    an llvm.loop.unroll.count(4) hint fires only in the self-referential form).
+    llvmlite's uniqued metadata cannot express a cycle, so codegen emits the
+    node as `!{ null, ... }` and this pass rewrites exactly those nodes whose
+    payload references llvm.loop.* option strings into
+    `distinct !{ !N, ... }`. Nothing else in the module is touched; modules
+    without loop hints pass through byte-identical.
+    """
+    if 'llvm.loop' not in ir_text:
+        return ir_text
+    option_nodes = set(re.findall(r'(!\d+) = !\{ !"llvm\.loop\.', ir_text))
+    if not option_nodes:
+        return ir_text
+
+    def rewrite(match: 're.Match[str]') -> str:
+        node, payload = match.group(1), match.group(2)
+        refs = set(re.findall(r'!\d+', payload))
+        if not (refs & option_nodes):
+            return match.group(0)
+        return f'{node} = distinct !{{ {node}, {payload}}}'
+
+    return _LOOP_MD_NULL_HEAD.sub(rewrite, ir_text)
 
 
 __all__ = ['Codegen', 'CodegenError', 'Symbol', 'LoopContext', 'Scope', 'compile_to_llvm']

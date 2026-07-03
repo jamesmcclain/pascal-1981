@@ -1,3 +1,26 @@
+## 4. CLI progress chatter is emitted even without --verbose [DONE]
+
+**Where.** `src/pascal1981/compile_to_llvm.py::main` (the `Parsing ...`,
+`Type checking...`, `Generating LLVM IR...`, `Wrote ...` prints to stderr) and
+`src/pascal1981/compile_to_ptx.py::main` (the `Wrote ...` print).
+
+**What.** Every invocation printed four progress lines to stderr regardless of
+`-v`. The `-v/--verbose` help text said it enabled per-declaration logging and
+tracebacks, implying the default was quiet.
+
+**Why it mattered.** Harmless interactively, but noisy in Makefiles and scripted
+pipelines, and it made stderr unusable as a pure diagnostics channel.
+
+**Resolution.** All four progress prints gated behind `-v` in `compile_to_llvm.py`;
+the `Wrote` print in `compile_to_ptx.py` similarly gated. `--target ptx` path in
+`compile_to_llvm.py` also updated. On success without `-v`, stderr is clean.
+
+**How verified.** `PYTHONPATH=src python3 -m pascal1981.compile_to_llvm ok.pas
+out.ll 2>err.txt` leaves `err.txt` empty on success. With `-v` the progress
+lines appear. Full suite green: `1045 passed, 1 skipped, 138 subtests passed`.
+
+---
+
 ## 1. `runtime_extern` has a dual function-creation path (and a linear-scan safety net) [DONE]
 
 **Where.** `codegen/base.py` — `runtime_extern(name)` and `_build_extern_factories`;
@@ -569,3 +592,482 @@ inside a comment string, not live PEP 604 syntax.
 pascal1981.compile_to_ptx"` succeeds. Full suite green:
 `PYTHONPATH=src python3 -m pytest tests/ -q` → `971 passed, 1 skipped, 115
 subtests passed`.
+
+## Super-array remediation residue and device-heap boundary [DONE]
+
+*(Moved from `docs/followups.md` item 1 when the dynamic-bound ABI shipped;
+original text below, then the resolution.)*
+
+**Where.** The D-001/D-002 historical evidence now lives in
+`docs/old/discrepancies-super-array.md` and
+`docs/old/discrepancies-remediation-plan.md`. Current implementation touchpoints
+are `type_checker.py::_check_new_args`, `codegen/runtime_builtins.py::builtin_new`,
+string-bound lowering in expression codegen, and DEVICE recission checks in the
+type checker.
+
+**What.** The observed D-001/D-002 gaps are remediated for normal host code:
+`LOWER`/`UPPER` accept `STRING(n)` and `LSTRING(n)`, and one-dimensional
+`SUPER ARRAY` pointer referents accept long-form `NEW(p, upper_bound)`. DEVICE
+code intentionally does **not** support heap allocation; `NEW` and `DISPOSE` are
+rejected during type checking with a device-code dynamic-allocation diagnostic,
+including long-form `NEW(p, upper_bound)`.
+
+**Why it matters.** The shipped support is deliberately narrower than the full
+vintage surface. Long-form `NEW` currently covers the one-dimensional
+super-array allocation case needed by D-002; it does not imply variant-record
+long-form `NEW`, multi-dimensional super-array heap allocation, or GPU/device
+heap allocation. Also, allocation sizing for heap super arrays does not yet
+establish a general ABI for preserving dynamic upper-bound metadata for later
+`UPPER(p^)`-style queries.
+
+**Suggested resolution.** If future work expands super arrays, decide the runtime
+representation first: how dynamic bounds are stored, how dereferenced super-array
+bounds are recovered, and how kernel buffer bounds are passed. For DEVICE code,
+prefer caller-provided buffers and explicit bound metadata over backend-specific
+GPU allocator calls unless a real device heap design is approved.
+
+**Resolution.** Done by the dynamic-bound ABI, design record
+`docs/super-array-bounds-abi.md`:
+
+- Long-form `NEW(p, u)` now allocates an 8-byte header before the element
+  data, records `u` there as an i64, and points `p` at the data — so
+  indexing, dereference, parameter passing, and the pointer's LLVM type are
+  all unchanged.
+- The dereferenced bound queries `UPPER(p^)` / `LOWER(p^)` are implemented
+  end to end (parser-level `^` after the identifier in the intrinsic's
+  argument, AST `deref` flag, type checking, codegen). `UPPER(p^)` reads the
+  header back at run time for heap super arrays; `LOWER(p^)` and fixed-array
+  pointee bounds stay static.
+- `DISPOSE(p)` for super-array pointers frees from the header, not the data
+  pointer (verified under AddressSanitizer).
+- `$INDEXCK` on `p^[i]` previously aborted for any `i` above the declared
+  lower bound (the static-bound helper guessed `(low, low)` for `[low..*]`);
+  it now checks the static lower bound plus the dynamic header upper bound,
+  and super arrays are excluded from the static `(low, high)` check path.
+- The device-heap boundary is kept and sharpened: `NEW`/`DISPOSE` remain
+  rescinded in DEVICE code, and `UPPER(p^)` on a super array is now a
+  device-code type error directing the programmer to explicit bound
+  parameters — matching the drop-in CUDA pointer-ABI split recorded in
+  `docs/old/mandelbrot-ptx-substitution-plan.md`. No device codegen path
+  changed; the committed `fill_indices` PTX regenerates byte-identical.
+- Multi-dimensional super arrays, variant-record long-form `NEW`, and
+  super-array *parameter* bounds remain out of scope pending new differential
+  probes, per the original item; the design record carries the guidance.
+
+**How verified.** `tests/test_super_array_bounds.py` (parser, typecheck,
+IR-shape, and native run tests: bound round-trip, nonzero lower bounds,
+full-range writes, dynamic out-of-bounds aborts, independent bounds across
+allocations, header-relative DISPOSE, device-code rejection); existing
+regression suites for string bounds, long-form `NEW`, and DEVICE heap
+recission stay green; PTX artifact diff is empty.
+
+## No source-level channel for launch bounds or per-loop hints [DONE]
+
+*(Moved from `docs/followups.md` item 8 when the tuning-hints feature shipped;
+original text below, then the resolution. The original's cross-references to
+"item 9" mean the PTX optimization-pipeline item, still open.)*
+
+**Where.** Kernel-entry emission in `codegen/decls.py` (no
+`!nvvm.annotations` beyond kernel marking); the `$`-metacommand tier in
+`lexer.py`/parser (currently `$if`/`$message`/push-pop only).
+
+**What.** Two hint channels that LLVM cannot invent because they encode
+programmer intent: (a) launch bounds — `maxntid` / `reqntid` / `minctasm`
+annotations that let the backend budget registers for a known block size; and
+(b) per-loop transform hints — `llvm.loop.unroll.count` etc., the `#pragma
+unroll` equivalent. Neither has any surface syntax today.
+
+**Why it matters.** Occupancy tuning (OPTIMIZATION_GUIDE §5/§6) is impossible
+without (a); (b) gives users the guide's §1 unrolling benefits selectively
+without a bespoke unroller, once item 9 lands. Both are pure hint plumbing —
+the transforms remain LLVM's.
+
+**Suggested resolution.** Reuse existing extension syntax: a bracket attribute
+on exported device procedures (e.g. `[MAXNTID(256)]`, mirroring the current
+attribute grammar) lowered to `!nvvm.annotations`, and a `{$unroll N}`
+metacommand attaching `llvm.loop` metadata to the following loop. Gate both
+behind a registered feature (they are not vintage IBM Pascal), consistent with
+the `--dialect`/`-f` machinery.
+
+**Resolution.** Done by the `tuning-hints` feature; design note
+`docs/tuning-hints.md`:
+
+- `[MAXNTID(x[,y[,z]])]`, `[REQNTID(x[,y[,z]])]`, and `[MINCTASM(n)]` parse in
+  the existing bracket attribute grammar (contextual identifiers, so vintage
+  programs using those names as ordinary identifiers survive). The type
+  checker restricts them to exported device kernel PROCEDUREs with positive
+  integer literal dimensions.
+- One deviation from the suggested lowering, forced by evidence: the LLVM 20
+  bundled with llvmlite 0.48 no longer reads maxntid/reqntid from
+  `!nvvm.annotations` — only the newer `"nvvm.maxntid"="x[,y,z]"` function
+  string attributes produce the `.maxntid`/`.reqntid` PTX directives
+  (`.minnctapersm` still honors the annotation form). Codegen dual-emits both
+  encodings, so old and new LLVM each read the one they understand; with both
+  present, each PTX directive appears exactly once.
+- `{$UNROLL n}` joins the metacommand tier: the count is stamped one-shot onto
+  the next token and must immediately precede a FOR/WHILE/REPEAT (a misplaced
+  stamp is a parse error, not a silently dropped hint). Loops carry the count
+  on the AST; codegen attaches `llvm.loop.unroll.count(n)` metadata to the
+  back-edge branch.
+- llvmlite cannot express the *distinct self-referential* loop-ID node LLVM's
+  unroll pass requires (a null first operand verifies but the hint is
+  ignored — established empirically), so `compile_to_llvm` runs a targeted
+  textual pass rewriting exactly the null-headed loop-ID nodes into
+  `distinct !{ !N, ... }`. End to end, an `{$UNROLL 4}` loop calling an opaque
+  EXTERN shows 4 call sites after LLVM's O2 pipeline vs 1 without the hint.
+- Both channels sit behind the registered `tuning-hints` feature
+  (in-extended), so they are rejected under the faithful vintage default,
+  enabled by `-f tuning-hints` in host code, and on by default inside DEVICE
+  code, whose feature baseline is the extended umbrella.
+- Drop-in PTX discipline preserved: hint-free modules are byte-identical at
+  the IR and PTX level (the committed `fill_indices` artifact regenerates
+  unchanged), and on the x86 CPU-device parity path the attributes are inert.
+
+**How verified.** `tests/test_tuning_hints.py`: parser accept/reject
+(including the misplaced-`$UNROLL` and contextual-identifier cases),
+type-check gating (vintage reject / `-f` accept / device auto-accept) and
+placement/arity/value validation, IR-shape tests for both launch-bound
+encodings and the self-referential loop metadata, PTX tests asserting
+`.maxntid`/`.reqntid`/`.minnctapersm` (the item's stated verification), an
+O2-pipeline test proving the unroll hint fires, and hint-free byte-identity
+checks. Full suite green; `fill_indices` PTX diff empty.
+
+---
+
+## PTX path runs no LLVM IR optimization pipeline [DONE]
+
+**Where.** `src/pascal1981/compile_to_ptx.py::llvm_ir_to_ptx` (and the
+`--target ptx` path in `compile_to_llvm.py`).
+
+**What.** The device path is parse → verify → `create_target_machine(cpu=...)`
+→ `emit_assembly`. No mid-level pass pipeline (O2/O3) is ever run over the IR,
+so LLVM's loop unrolling, LICM, GVN, instruction combining, and load/store
+vectorization never fire. The recommendations in
+`docs/device-code/OPTIMIZATION_GUIDE.md` §1 (unrolling), §2 (software
+pipelining), and §4 (address hoisting) describe hand-implementing transforms
+that the stock LLVM pipeline already provides.
+
+**Why it matters.** The kernels we ship are effectively -O0 IR handed straight
+to the NVPTX backend. Most of the guide's projected wins are available for the
+cost of pipeline plumbing rather than weeks of bespoke backend passes — and a
+bespoke unroller/pipeliner would be a maintenance liability duplicating opt.
+
+**Suggested resolution.** After `parse_assembly`/`verify`, run llvmlite's new
+pass manager (`PipelineTuningOptions` + `PassBuilder`, O2 default, flag-tunable
+via e.g. `--opt-level`) before `emit_assembly`. Note that PTX is virtual
+assembly and `ptxas` performs final scheduling/register allocation, so IR-level
+cleanup is the right layer; do not hand-implement software pipelining or
+PTX-level scheduling (OPTIMIZATION_GUIDE §2/§5) — see the kernel-parameter-facts
+item for the frontend facts the pipeline needs to be effective on memory ops.
+
+**Resolution.** `llvm_ir_to_ptx()`/`compile_file_to_ptx()` in
+`compile_to_ptx.py` gained an `opt_level: int = 0` parameter, and both
+`compile_to_ptx.py`'s CLI and `compile_to_llvm.py`'s `--target ptx` branch
+gained `--opt-level {0,1,2,3}` (rejected with `--target host`, where it has no
+meaning). Default 0 is an exact no-op — verified byte-identical to the
+pre-flag output — so the existing exact-mnemonic PTX tests
+(`test_device_ptx_artifact.py`, `test_device_mandelbrot_ptx.py`) needed no
+changes. The implementation uses llvmlite's new-pass-manager binding
+(`create_pipeline_tuning_options` / `create_pass_builder` /
+`ModulePassManager.run`), the same API already exercised by
+`test_tuning_hints.py::test_unroll_hint_fires_under_o2` before this item
+existed — so no new API surface had to be discovered, only promoted from a
+test fixture to a real, flagged production path.
+
+While validating this item, a real pre-existing bug surfaced in the
+already-shipped launch-bounds feature (see the entry immediately above this
+one): the legacy `!nvvm.annotations` keys were misspelled with a spurious
+underscore (`maxntid_x` instead of `maxntidx`), silently dropping the
+`.maxntid`/`.reqntid` PTX directives on the LLVM 20.1.8 bundled with the
+pinned `llvmlite==0.47.0`. That bug is unrelated to this item's own scope but
+was fixed as part of the same working session since item "Device index
+intrinsics lack !range metadata" and "Kernel entries carry no parameter
+facts" both land adjacent NVVM-annotation-shaped metadata and depend on this
+pipeline to make their benefit observable.
+
+**How verified.** `tests/integration/test_device_ptx_o2.py`: byte-identity of
+`--opt-level 0` vs the pre-flag call signature; argparse choice validation;
+`--opt-level` rejected with `--target host`; the single-CLI `--target ptx`
+path exercises the flag too; a mandelbrot O0-vs-O2 diff proves the pipeline
+actually changes emitted PTX (register renumbering, guard hoisting) while
+ABI-level facts (entry names, void return, no `func_retval`, parameter shape)
+survive optimization. Deliberately does not pin exact O2 instruction
+selection — this repo already has one scar from asserting exact mnemonics
+across an LLVM version bump. Full suite green (1022 passed, 1 skipped).
+
+---
+
+## Device index intrinsics lack !range metadata [DONE]
+
+**Where.** `codegen/exprs.py`, where `THREADIDX_*` / `BLOCKIDX_*` /
+`BLOCKDIM_*` / `GRIDDIM_*` lower to `llvm.nvvm.read.ptx.sreg.*` calls.
+
+**What.** The intrinsic calls carry no `!range` metadata. Clang attaches ranges
+(e.g. tid.x ∈ [0, 1024), ntid.x ∈ [1, 1025)) so LLVM can prove grid-stride
+index math is non-negative and non-overflowing. Without them the backend must
+allow negative indices, blocking sign-extension elimination, `mul.wide.u32`
+selection, and trip-count reasoning in exactly the loops our kernels use.
+
+**Why it matters.** Frontend-only information, roughly ten lines of codegen,
+zero semantic risk, and it feeds every downstream pass.
+
+**Suggested resolution.** Attach `!range` to each sreg call using the CUDA
+architectural limits keyed off `--sm` (conservative sm_70 defaults are fine).
+Optionally emit `llvm.assume` for the derived global index when both factors
+are range-annotated.
+
+**How to verify.** IR test asserting `!range` on the sreg calls; PTX diff
+showing e.g. `mul.wide.u32`/dropped `cvt` instructions in the fill_indices
+kernel at O2.
+
+**Resolution.** `codegen_device_index_builtin`'s nvptx branch (`exprs.py`)
+attaches `set_metadata('range', ...)` to every sreg call: `tid`/`ctaid` reads
+get `[0, max)`, `ntid`/`nctaid` reads get `[1, max+1)`, using conservative
+CUDA-architectural ceilings graded DOCUMENTED (CUDA C Programming Guide
+"Compute Capabilities" appendix, not measured against this repo) —
+threadIdx/blockDim x,y ≤ 1024, z ≤ 64; blockIdx/gridDim x ≤ 2³¹−1, y,z ≤
+65535. Applies uniformly regardless of `--sm`, since these are the hardware's
+own register-width ceilings, not a property of a specific launch.
+
+**Anti-confabulation correction to the followup's own "how to verify."** The
+suggested verification (a PTX diff at O2 showing `mul.wide.u32` or dropped
+`cvt` instructions) was tested empirically — on both shipped examples
+(`fill_indices`, `mandelbrot`) *and* on a minimal synthetic repro built
+directly against llvmlite outside this codebase, replicating the exact
+`tid + ctaid*ntid` indexing pattern — and **did not hold** on the LLVM 20.1.8
+bundled with this repo's pinned `llvmlite==0.47.0`: PTX output at
+`--opt-level 2` is byte-identical with vs. without the `!range` metadata in
+all three cases. The metadata is present, valid (round-trips through
+`parse_assembly`/`verify`), and semantically correct, but this toolchain's
+default O2 pipeline does not visibly act on it for this specific
+instruction-selection question. This is recorded rather than hidden: the
+original followup's claim was INFERRED (a plausible expectation from how
+Clang/NVVM's own `!range` annotations are known to help elsewhere), not
+OBSERVED, and the empirical result falsifies the specific mechanism (not the
+metadata's correctness or its value as a frontend-only fact for other/future
+passes or other LLVM builds).
+
+**How verified.** `tests/test_device_index_intrinsics.py`: every sreg
+intrinsic call carries the correct `(lo, hi)` `!range` pair; the CPU-device
+TLS-global path carries none. `tests/integration/test_device_range_metadata_ptx.py`:
+the metadata survives IR→PTX emission at opt-level 0 and 2 on both examples
+without breaking the module; the mandelbrot O2 case is asserted to be
+*byte-for-byte identical* with vs. without the metadata, documenting the
+negative empirical result explicitly rather than silently dropping the
+followup's original (falsified) verification claim. Full suite green (1026
+passed, 1 skipped).
+
+---
+
+## Kernel entries carry no parameter facts: noalias / readonly / align / dereferenceable [DONE]
+
+**Where.** `codegen/decls.py` (kernel-entry emission around
+`calling_convention = 'ptx_kernel'`); contrast with `codegen/c_abi.py`, which
+already sets attributes on the host C-ABI path.
+
+**What.** Device kernel buffer parameters (`ADS(GLOBAL)` pointers) are emitted
+as bare pointers. LLVM cannot itself infer that two buffers do not alias, that
+a buffer is never written through, or its alignment — those are facts only the
+frontend (Pascal semantics + the LAUNCH contract) can assert. Without them the
+optimizer must stay conservative: no `ld.global.v4.f32` vectorization, no
+read-only-cache (`ld.global.nc`) selection, limited load reordering.
+
+**Why it matters.** This is the highest-leverage device codegen item and is
+orthogonal to LLVM: it is precisely the information LLVM lacks. It also
+multiplies the O2-pipeline item — an O2 pipeline over attribute-free pointers
+leaves most memory-op wins on the table.
+
+**Suggested resolution.** (a) `readonly`: the type checker can already prove a
+kernel never assigns through a given buffer parameter; plumb that through to a
+`readonly` (+ `nocapture`) attribute. (b) `align`/`dereferenceable(n)`: derive
+from element type and, where the launch contract fixes a length parameter,
+from bounds. (c) `noalias`: define it as part of the LAUNCH contract (distinct
+buffer arguments must not overlap), document it, gate behind a feature flag if
+there is any doubt about vintage-faithful semantics.
+
+**How to verify.** Unit tests asserting the attributes appear in kernel-entry
+IR; PTX-level test that a provably-readonly streamed buffer compiles to
+`ld.global.nc.*` at O2; differential run of the mandelbrot/fill examples
+confirming identical output.
+
+**Correction to the followup's own premise.** "The type checker can already
+prove a kernel never assigns through a given buffer parameter" turned out to
+be wrong as stated: `_param_device_passable` rejects VAR/CONST-moded
+parameters outright for a kernel entry (they lower to host-space addrspace-0
+pointers a device entry cannot dereference), so there is no pre-existing
+CONST-mode flag to read for a buffer parameter — kernel buffer parameters are
+always value-mode `ADS(space) OF T`. `(a)` therefore needed a real (if
+purely syntactic and deliberately conservative) analysis, not a lookup: see
+Resolution below.
+
+**Resolution.**
+
+- `(b) align`/`dereferenceable`: `align` was already done by a prior item.
+  `dereferenceable(n)` is now derived directly from the LLVM pointee type: a
+  statically-sized `ir.ArrayType` pointee (a fixed `ARRAY[lo..hi] OF T`) gets
+  `dereferenceable(count * element_size)` (via `c_abi.py::_size_of`); a
+  `SUPER ARRAY [lo..*] OF T` pointee (bare element type, no static count) gets
+  none — deliberately out of scope, since there is no compiler-enforced link
+  between such a parameter and whichever sibling parameter might carry its
+  runtime length, and guessing one would be an unproven inference this
+  project's discipline avoids.
+- `(a) readonly`/`nocapture`: `_kernel_readonly_param_names` walks the
+  procedure's own body (a generic recursive dataclass-field walk over
+  `decl.body`, since `ASTNode` subclasses are plain dataclasses) looking for
+  (i) any assignment whose target dereferences the parameter (any selector
+  chain containing DEREF), which disqualifies it; (ii) the parameter passed
+  as a bare argument to any other call (FuncCall/ProcCallStmt), which is
+  conservatively disqualified too, since there is no interprocedural proof
+  the callee doesn't write through it; (iii) any WITH statement anywhere in
+  the body, which conservatively disqualifies every parameter of that
+  procedure (WITH's field designators aren't tied back to the originating
+  pointer by this walk). This only ever *withholds* readonly, never wrongly
+  grants it — a gap here is a missed optimization, not a correctness bug.
+  llvmlite's `ArgumentAttributes` has no native `readonly` entry (only
+  `noalias`/`nocapture` are whitelisted there); it is added by shadowing the
+  instance's `_known` mapping the same way `_apply_launch_bound_attrs`
+  shadows `FunctionAttributes._known` for launch-bound string attributes,
+  adapted to the dict-shaped (not frozenset-shaped) `_known` argument
+  attributes use — confirmed to round-trip through
+  `parse_assembly`/`verify`/`emit_assembly`.
+- `(c) noalias`: gated behind a new registered feature,
+  `noalias-kernel-params` (`features.py`), deliberately **not** part of the
+  `extended` umbrella (`in_extended=False`) and so, unlike `tuning-hints`,
+  does **not** auto-enable inside `DEVICE` code — it asserts a contract about
+  the *caller* (distinct `ADS(GLOBAL)`/`ADS(CONSTANT)` buffer parameters of a
+  kernel entry do not overlap) that this compiler cannot itself verify at a
+  `LAUNCH` call site, and getting it wrong is a silent miscompilation. The
+  LAUNCH contract itself is now documented in
+  `docs/device-kernel-orientation.md` §3.
+
+**Empirical correction to the followup's own "how to verify."** The suggested
+PTX-level check (a provably-readonly buffer compiling to `ld.global.nc.*` at
+O2) was tested against the actual attribute-plumbed IR on this repo's pinned
+`llvmlite==0.47.0`/LLVM 20.1.8 and **did not fire**: `readonly`+`nocapture`
+alone, run through the same `PassBuilder`/`ModulePassManager` pipeline item 5
+added, produced no `ld.global.nc` selection at `--opt-level 2` on a
+synthetic read/write-buffer kernel built for this check. Plausible
+explanation (not confirmed): NVPTX's `ld.global.nc` selection may depend on
+target-specific IR passes (e.g. `NVPTXLowerArgs`) that a full
+`TargetMachine::addPassesToEmitFile` codegen pipeline runs but a bare
+mid-level `PassBuilder::buildPerModuleDefaultPipeline` does not. Likewise,
+`noalias` alone produced no observable PTX difference (vectorization or
+otherwise) on the mandelbrot example at O2 — expected in that specific case
+anyway, since that kernel has no actually-overlappable buffer pair to
+vectorize across. Recorded honestly rather than claimed: the attributes are
+correct, safe, and present; their downstream backend payoff on this exact
+toolchain configuration is unconfirmed and is left as a candidate follow-up
+(try routing through the full target-machine codegen pipeline rather than
+the bare IR pass manager) rather than asserted.
+
+**How verified.** `tests/test_kernel_param_attrs.py`: readonly/nocapture
+present only on a body-provably-unwritten buffer, absent when written through
+or passed to another call, withheld entirely by a WITH statement (direct unit
+test against `_kernel_readonly_param_names` on a hand-built AST fixture,
+since a realistic parser round trip needs a record-typed ADS buffer,
+orthogonal to what that unit checks); `dereferenceable` present for fixed
+arrays, absent on the CPU-device parity path (no kernel entry at all);
+`noalias` absent by default under both vintage and extended dialects, absent
+even under the full extended umbrella without the explicit feature flag,
+present (on every buffer param) only with `-f noalias-kernel-params`; a PTX
+round-trip test confirming `parse_assembly`/`verify`/`emit_assembly` accept
+the combined attribute set. Full suite green (1036 passed, 1 skipped).
+
+---
+
+## 3. ODD(WORD) is rejected but should be accepted [DONE]
+
+**Where.** `builtins_registry.py` registered `ODD` as
+`FunctionType('ODD', [('n', INTEGER_TYPE)], BOOLEAN_TYPE)`; the generic
+builtin-function argument check in `type_checker.py::infer_expression_type`
+rejected a WORD actual.
+
+**What.** The manual states "the ODD function for INTEGER and WORD values"
+(Elementary Types, BOOLEAN, p.6-6), but `ODD(w)` for `w: WORD` was a type error
+("expected INTEGER, got WORD").
+
+**Why it mattered.** A small vintage-conformance gap: a faithful program that
+calls `ODD` on a WORD was wrongly rejected. It was intentionally left out of
+the WORD/INTEGER strictness change set to keep that change coherent, and was
+pinned as a KNOWN GAP in `tests/test_conversion_matrix.py::TestManualKnownGaps`.
+
+**Resolution.** `ODD` is now special-cased in
+`type_checker.py::infer_expression_type`, modeled on the `HIBYTE`/`LOBYTE`
+siblings: it accepts `INTEGER_TYPE` and `WORD_TYPE`, returns `BOOLEAN_TYPE`,
+and rejects other types (REAL, CHAR, etc.) with a clear mismatch message.
+Because it is a custom branch (not the generic builtin path), no WORD/INTEGER
+mix warning fires -- correct, since `ODD` does no signed arithmetic; it only
+tests the low bit. The codegen lowering in `codegen/exprs.py` was already
+signedness-independent (`val & 1` then `icmp_signed('!=', 0)` -- the
+`!= 0` comparison is identical for signed and unsigned interpretation), so no
+lowering change was required. The registered `FunctionType` in
+`builtins_registry.py` is left as-is (INTEGER parameter); the special-case
+branch is what widens acceptance to WORD, matching how the other
+ordinal-flexible intrinsics (`ORD`, `SUCC`, `PRED`, `HIBYTE`, `LOBYTE`) are
+handled.
+
+**How verified.** `tests/test_conversion_matrix.py`: the pinned known-gap test
+was flipped from REJECT to ACCEPT and renamed to `test_odd_accepts_word`; a
+regression guard `test_odd_accepts_integer` and an over-widen guard
+`test_odd_rejects_real_and_char` were added. `tests/test_codegen.py` gained
+`test_odd_word_integer_parity`, a build-and-run test asserting `ODD(WORD)` and
+`ODD(INTEGER)` agree at runtime for the same bit pattern (7 -> odd). Suite
+green: `tests/test_conversion_matrix.py` (11 passed, 44 subtests passed),
+`tests/test_word_int_strictness.py` (25 passed), the new codegen test passes.
+
+---
+
+## 2. WORD/INTEGER constant exemption: fold constant expressions [DONE]
+
+**Where.** `type_checker.py::_is_constant_integer_expr` (consulted by
+`_check_word_int_assign` and `_check_word_int_mix`).
+
+**What.** The IBM Pascal 2.0 manual (Elementary Types, p.6-5) exempts INTEGER
+*constants* from the WORD/INTEGER assignment and expression-mix restrictions:
+"INTEGER type constants change to WORD type if necessary, but not INTEGER
+variables." The constant detector previously recognized only integer *literals*
+(including unary `+`/`-`) and direct references to named integer `CONST`s. It
+did **not** fold constant *expressions* such as `k + 1`, `2 * SIZE`, or
+`SUCC(k)`, so those were treated as non-constant and required an explicit
+`WRD(...)` when crossing into WORD.
+
+**Why it mattered.** This was slightly *stricter* than the vintage compiler,
+which would accept any compile-time-constant INTEGER in a WORD context. It was a
+conservative, safe deviation (it never accepted something it should reject), but
+it could force a `WRD(...)` the genuine 1981 compiler would not have required.
+
+**Resolution.** A new `_fold_const_int(expr) -> Optional[int]` was added to the
+type checker alongside `_is_constant_integer_expr`. It folds a constant INTEGER
+*expression* to its compile-time value: integer literals, unary `+`/`-`,
+arithmetic `BinOp` (`+`, `-`, `*`, `DIV`, `MOD`) over foldable operands (DIV/MOD
+by zero returns `None` rather than raising), `Identifier`/bare `Designator`
+naming an integer-family `CONST` whose folded value was stashed on the Symbol,
+and `ORD`/`SUCC`/`PRED` of a foldable operand. It returns `None` (never raises)
+for anything it cannot fold, so non-constant and REAL/boolean/set operands fall
+through cleanly. The named-CONST values are stashed in `check_const_decl` under a
+dedicated `const_int` attribute (not `Symbol.value`, which is the codegen LLVM
+value); decl-order checking guarantees earlier CONSTs are folded before later
+ones reference them. `_is_constant_integer_expr` keeps its literal and
+named-CONST fast paths (a CONST is exempt even when its value is not foldable)
+and falls through to the fold for composite expressions. The
+`_check_word_int_assign` and `_check_word_int_mix` bodies are unchanged and pick
+up the widening uniformly across assignment, value-argument passing, function
+return, and the equal-width WORD/INTEGER mix diagnostic. Codegen was unaffected:
+its own `eval_const_expr` already folded these expressions; the gap was purely
+the type-checker rejecting too eagerly. Range-checking of folded values against
+INTEGER bounds (e.g. `30000 + 5000 > MAXINT`) is deliberately out of scope.
+
+**How verified.** `tests/test_conversion_matrix.py` gained rows asserting ACCEPT
+for `w := k + 1`, `w := 2 * size`, `w := SUCC(k)`, and `f(k + 1)` into a WORD
+value parameter, plus a REJECT regression guard for `w := k + i` (constant plus a
+variable is not a compile-time constant). The `named_const_to_word` row was
+corrected to actually exercise a named CONST (`CONST k = 5; w := k`) rather than
+a bare literal. `tests/test_word_int_strictness.py` adds
+`test_constant_expression_exemption_is_clean` (`w + (k + 1)` is clean and
+compiles under `strict-word-int`),
+`test_constant_expression_into_word_assign_is_clean` (`w := k + 1`), and
+`test_const_plus_variable_is_not_constant`. `tests/test_codegen.py` gained
+`test_constant_expression_into_word_lowers_correctly`, a build-and-run test
+asserting `w := k + 1` with `k = 5` yields 6. Suite green: 231 passed, 60
+subtests passed across `test_conversion_matrix.py`, `test_word_int_strictness.py`,
+and `test_codegen.py`.

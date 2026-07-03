@@ -849,6 +849,14 @@ class PascalTypeChecker(TypeChecker):
             return
 
         symbol = Symbol(name=decl.name, type=value_type, kind='const', location=self.make_location(decl), is_mutable=False)
+        # Stash the folded integer value (if any) so that constant
+        # *expressions* referencing this CONST (e.g. `k + 1`, `2 * SIZE`) can be
+        # recognized as compile-time INTEGER constants for the manual's
+        # WORD/INTEGER exemption.  Stored under a dedicated attribute -- NOT
+        # Symbol.value, which is the codegen LLVM value.  Decl-order checking
+        # guarantees earlier CONSTs are already folded when a later CONST
+        # references them.
+        setattr(symbol, 'const_int', self._fold_const_int(decl.value))
         self.symbol_table.define(decl.name, symbol)
 
     def _predeclare_record_types(self, decls) -> None:
@@ -1010,6 +1018,7 @@ class PascalTypeChecker(TypeChecker):
         if not decl.name:
             return
 
+        self._check_launch_bound_attrs(decl, is_function=True)
         attrs = {attr.name.upper() for attr in getattr(decl, 'attributes', [])}
         if 'PURE' in attrs:
             for param in getattr(decl, 'params', []):
@@ -1084,6 +1093,41 @@ class PascalTypeChecker(TypeChecker):
         self.current_function = old_func
         self.current_function_return_type = old_return_type
 
+    def _check_launch_bound_attrs(self, decl, is_function: bool) -> None:
+        """Validate MAXNTID/REQNTID/MINCTASM launch-bound attributes.
+
+        These are extension surface (tuning-hints feature), meaningful only on
+        exported device kernel PROCEDUREs; codegen lowers them to NVVM
+        annotations. Dimensions must be positive integer literals so the
+        annotation values are compile-time facts.
+        """
+        for attr in getattr(decl, 'attributes', []) or []:
+            name = attr.name.upper()
+            if name not in {'MAXNTID', 'REQNTID', 'MINCTASM'}:
+                continue
+            if not self.feature_enabled('tuning-hints'):
+                self.error(f"[{name}] is an extension attribute; enable it with -f tuning-hints", decl)
+                continue
+            if not self.in_device_module:
+                self.error(f"[{name}] is only valid in device code", decl)
+                continue
+            if is_function:
+                self.error(f"[{name}] is only valid on PROCEDUREs: a kernel entry cannot be a FUNCTION", decl)
+                continue
+            if not getattr(decl, 'is_exported_entry', False):
+                self.error(f"[{name}] is only meaningful on an exported device kernel procedure; '{decl.name}' is not in the interface export list", decl)
+                continue
+            args = attr.arg if isinstance(attr.arg, list) else ([attr.arg] if attr.arg is not None else [])
+            max_args = 1 if name == 'MINCTASM' else 3
+            if not (1 <= len(args) <= max_args):
+                self.error(f"[{name}] expects 1{'' if max_args == 1 else '-3'} dimension argument(s), got {len(args)}", decl)
+                continue
+            for arg in args:
+                value = self._fold_int_literal_value(arg)
+                if value is None or value < 1:
+                    self.error(f"[{name}] dimensions must be positive integer literals", decl)
+                    break
+
     def check_proc_decl(self, decl: ProcDecl) -> None:
         """Type check a procedure declaration."""
         if not decl.name:
@@ -1092,6 +1136,7 @@ class PascalTypeChecker(TypeChecker):
         attrs = {attr.name.upper() for attr in getattr(decl, 'attributes', [])}
         if 'PURE' in attrs:
             self.error(f"PURE is only valid on functions, not procedure '{decl.name}'", decl)
+        self._check_launch_bound_attrs(decl, is_function=False)
 
         effective_decl = decl
         iface_decl = self.current_interface_decls.get(decl.name.lower()) if decl.name else None
@@ -1259,8 +1304,26 @@ class PascalTypeChecker(TypeChecker):
         wide INTEGER32/INTEGER64). Used to validate byte-count arguments."""
         return t in (INTEGER_TYPE, WORD_TYPE, INTEGER32_TYPE, INTEGER64_TYPE)
 
+    def _check_unroll_hint(self, stmt, loop_name: str) -> None:
+        """Gate and validate a {$UNROLL n} hint attached to a loop statement.
+
+        The hint is extension surface (tuning-hints feature): rejected under the
+        faithful vintage dialect, on by default inside DEVICE code (the device
+        feature baseline is the extended umbrella), enabled in host code with
+        -f tuning-hints.
+        """
+        unroll = getattr(stmt, 'unroll', None)
+        if unroll is None:
+            return
+        if not self.feature_enabled('tuning-hints'):
+            self.error(f"{{$UNROLL}} on {loop_name} is an extension; enable it with -f tuning-hints", stmt)
+            return
+        if not isinstance(unroll, int) or unroll < 1:
+            self.error(f"{{$UNROLL}} count must be a positive integer, got {unroll}", stmt)
+
     def check_for_stmt(self, stmt: ForStmt) -> None:
         """Type check a FOR statement."""
+        self._check_unroll_hint(stmt, 'FOR')
         # The control variable must be an ordinal type (INTEGER, CHAR, BOOLEAN,
         # WORD, or an enum). Enum-controlled loops are valid: enum ordinals are
         # contiguous, so `FOR c := Red TO Blue` iterates the members in order.
@@ -1295,6 +1358,7 @@ class PascalTypeChecker(TypeChecker):
 
     def check_while_stmt(self, stmt: WhileStmt) -> None:
         """Type check a WHILE statement."""
+        self._check_unroll_hint(stmt, 'WHILE')
         # Condition must be BOOLEAN
         cond_type = self.infer_expression_type(stmt.cond)
         if cond_type and not cond_type.equivalent_to(BOOLEAN_TYPE):
@@ -1306,6 +1370,7 @@ class PascalTypeChecker(TypeChecker):
 
     def check_repeat_stmt(self, stmt: RepeatStmt) -> None:
         """Type check a REPEAT statement."""
+        self._check_unroll_hint(stmt, 'REPEAT')
         # Condition must be BOOLEAN
         cond_type = self.infer_expression_type(stmt.cond)
         if cond_type and not cond_type.equivalent_to(BOOLEAN_TYPE):
@@ -2263,21 +2328,87 @@ class PascalTypeChecker(TypeChecker):
     # -f strict-word-int, error) on a WORD/INTEGER expression mix.  In every case
     # an INTEGER *constant* is exempt -- it "changes to WORD" per the manual.
     #
-    # !!! TECH DEBT -- CONSTANT DETECTION IS LITERAL-ONLY FOR NOW !!!
-    # `_is_constant_integer_expr` recognizes integer *literals* (including unary
-    # +/-) and direct references to named integer CONSTs.  It does NOT fold
-    # constant *expressions* such as `k + 1`, `2 * SIZE`, or `SUCC(k)`, so those
-    # are currently treated as non-constant and require an explicit WRD(...) when
-    # crossing into WORD.  This is stricter than the vintage compiler (which would
-    # accept any compile-time-constant INTEGER).  Folding general constant
-    # expressions here is tracked as follow-up work in docs/followups.md
-    # ("WORD/INTEGER constant exemption: fold constant expressions").
+    # Constant-expression folding is implemented via `_fold_const_int` (below):
+    # `_is_constant_integer_expr` keeps its literal + named-CONST fast paths and
+    # then falls through to the fold for composite expressions such as `k + 1`,
+    # `2 * SIZE`, or `SUCC(k)`.  The named-CONST branch stays as-is: a CONST is
+    # exempt even if its value cannot be folded.
     # ------------------------------------------------------------------
+    def _fold_const_int(self, expr: Expression) -> Optional[int]:
+        """Fold a constant INTEGER *expression* to its compile-time value.
+
+        Returns the integer value, or None when the expression is not a
+        compile-time INTEGER constant.  Never raises.  Used by
+        `_is_constant_integer_expr` to widen the manual's INTEGER-constant
+        WORD exemption from literals/named-CONSTs to constant *expressions*.
+
+        Integer-scoped on purpose: literals, unary +/-, arithmetic BinOp
+        (+, -, *, DIV, MOD) over foldable operands, identifiers naming an
+        integer-family CONST whose folded value was stashed in
+        `check_const_decl`, and ORD/SUCC/PRED of a foldable operand.  REAL
+        operands, SLASH, comparisons, and set ops return None.  DIV/MOD by
+        zero returns None (the codegen folder would emit 0, but the type
+        checker declines to claim a value for a program that is dubious
+        anyway).
+        """
+        ARITH = {'PLUS', 'MINUS', 'MUL', 'DIV', 'MOD'}
+        if isinstance(expr, IntLiteral):
+            return expr.value
+        if isinstance(expr, UnaryOp) and expr.op in ('PLUS', 'MINUS'):
+            inner = self._fold_const_int(expr.operand)
+            if inner is None:
+                return None
+            return -inner if expr.op == 'MINUS' else inner
+        if isinstance(expr, BinOp) and expr.op in ARITH:
+            left = self._fold_const_int(expr.left)
+            right = self._fold_const_int(expr.right)
+            if left is None or right is None:
+                return None
+            if expr.op == 'PLUS':
+                return left + right
+            if expr.op == 'MINUS':
+                return left - right
+            if expr.op == 'MUL':
+                return left * right
+            if expr.op == 'DIV':
+                return None if right == 0 else left // right
+            if expr.op == 'MOD':
+                return None if right == 0 else left % right
+        # Identifier or bare Designator naming an integer-family CONST whose
+        # folded value was stashed at declaration time.
+        name = None
+        if isinstance(expr, Identifier):
+            name = expr.name
+        elif isinstance(expr, Designator) and not expr.selectors:
+            name = expr.name
+        if name is not None:
+            sym = self.symbol_table.lookup(name)
+            if (sym and getattr(sym, 'kind', None) == 'const'
+                    and sym.type in (INTEGER_TYPE, INTEGER32_TYPE, INTEGER64_TYPE)):
+                folded = getattr(sym, 'const_int', None)
+                if folded is not None:
+                    return folded
+        if isinstance(expr, FuncCall):
+            fn = expr.name.upper()
+            if fn in ('ORD', 'SUCC', 'PRED') and expr.args:
+                val = self._fold_const_int(expr.args[0])
+                if val is None:
+                    return None
+                if fn == 'ORD':
+                    return val
+                if fn == 'SUCC':
+                    return val + 1
+                if fn == 'PRED':
+                    return val - 1
+        return None
+
     def _is_constant_integer_expr(self, expr: Expression) -> bool:
         """True if expr is a *constant* INTEGER for the manual's WORD exemption.
 
-        Literal-only for now (see the big TECH DEBT note above): integer literals
-        (incl. unary +/-) and references to named integer CONSTs.
+        Recognizes integer literals (incl. unary +/-), named integer CONSTs
+        (exempt even when their value is not foldable), and -- via
+        `_fold_const_int` -- constant *expressions* such as `k + 1`,
+        `2 * SIZE`, or `SUCC(k)`.
         """
         if self._fold_int_literal_value(expr) is not None:
             return True
@@ -2286,7 +2417,7 @@ class PascalTypeChecker(TypeChecker):
             if (sym and getattr(sym, 'kind', None) == 'const'
                     and sym.type in (INTEGER_TYPE, INTEGER32_TYPE, INTEGER64_TYPE)):
                 return True
-        return False
+        return self._fold_const_int(expr) is not None
 
     def _check_word_int_assign(self, value_type, target_type, value_expr, node) -> None:
         """Reject a non-constant INTEGER value assigned/passed into a WORD target.
@@ -2472,14 +2603,38 @@ class PascalTypeChecker(TypeChecker):
             # Sizeof operator (sizeof var_name or type)
             return INTEGER_TYPE
         elif isinstance(expr, UpperExpr) or isinstance(expr, LowerExpr):
+            intrinsic = type(expr).__name__[:-4].upper()
             sym = self.symbol_table.lookup(expr.name)
             if not sym:
                 self.error(f"Undefined variable: {expr.name}", expr)
                 return None
+            if getattr(expr, 'deref', False):
+                # UPPER(p^) / LOWER(p^): bound of the pointee. For a heap super
+                # array UPPER(p^) is the dynamic upper bound recorded by long-form
+                # NEW (docs/super-array-bounds-abi.md); LOWER(p^) and fixed-array
+                # bounds stay static.
+                if not isinstance(sym.type, PointerType):
+                    self.error(f"Function '{intrinsic}': '{expr.name}^' requires a pointer variable, got {sym.type}", expr)
+                    return None
+                pointee = sym.type.target_type
+                if not isinstance(pointee, (ArrayType, StringType, LStringType)):
+                    self.error(f"Function '{intrinsic}' expects an array pointee, got {pointee}", expr)
+                    return None
+                type_expr = getattr(sym, 'type_expr', None)
+                ptr_expr = self._resolve_ast_type_alias(type_expr)
+                pointee_expr = ptr_expr.base if isinstance(ptr_expr, ASTPointerType) else None
+                is_super = self._is_super_array_type_expr(pointee_expr) if pointee_expr is not None else False
+                if is_super and self.in_device_module:
+                    # Device code has no heap (NEW/DISPOSE are rescinded), so no
+                    # bound header ever exists to read. Buffers arrive from the
+                    # host with explicit bound/length parameters instead.
+                    self.error(f"Function '{intrinsic}': dynamic super array bounds are not available in device code; pass bounds explicitly", expr)
+                    return None
+                return INTEGER_TYPE
             ty = sym.type
             if isinstance(ty, (ArrayType, StringType, LStringType)):
                 return INTEGER_TYPE
-            self.error(f"Function '{type(expr).__name__[:-4].upper()}' expects an array variable", expr)
+            self.error(f"Function '{intrinsic}' expects an array variable", expr)
             return None
         elif isinstance(expr, RetypeExpr):
             # 1. Resolve target type
@@ -2745,6 +2900,24 @@ class PascalTypeChecker(TypeChecker):
                 if isinstance(arg_type, EnumType) or arg_type in (INTEGER_TYPE, WORD_TYPE, CHAR_TYPE, BOOLEAN_TYPE):
                     return INTEGER_TYPE
                 self.error(f"Argument 1 type mismatch: ORD expects an ordinal type, got {arg_type}", expr)
+                return None
+            if lookup_name == 'ODD':
+                # Manual (Elementary Types, BOOLEAN, p.6-6): "the ODD function
+                # for INTEGER and WORD values".  ODD only tests the low bit, so
+                # it is signedness-independent; accept INTEGER and WORD (the
+                # faithful-dialect pair, matching HIBYTE/LOBYTE above).  Because
+                # this is a custom branch (not the generic builtin path), no
+                # WORD/INTEGER mix warning fires -- correct, as ODD does no
+                # signed arithmetic.  Codegen already lowers ODD as `val & 1`
+                # then `icmp != 0`, which is width/signedness-agnostic.
+                if len(expr.args) != 1:
+                    self.error(f"Function 'ODD' expects 1 argument, got {len(expr.args)}", expr)
+                    return None
+                arg_type = self.infer_expression_type(expr.args[0])
+                if arg_type in (INTEGER_TYPE, WORD_TYPE):
+                    return BOOLEAN_TYPE
+                if arg_type:
+                    self.error(f"Argument 1 type mismatch: expected INTEGER or WORD, got {arg_type}", expr)
                 return None
             if lookup_name in {'HIBYTE', 'LOBYTE'}:
                 if len(expr.args) != 1:
