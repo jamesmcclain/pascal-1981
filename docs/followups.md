@@ -44,33 +44,19 @@ discipline).
 
 ---
 
-## 2. WORD/INTEGER constant exemption: fold constant expressions [OPEN]
+## 2. WORD/INTEGER constant exemption: fold constant expressions [DONE]
 
-**Where.** `type_checker.py::_is_constant_integer_expr` (consulted by
-`_check_word_int_assign` and `_check_word_int_mix`).
-
-**What.** The IBM Pascal 2.0 manual (Elementary Types, p.6-5) exempts INTEGER
-*constants* from the WORD/INTEGER assignment and expression-mix restrictions:
-"INTEGER type constants change to WORD type if necessary, but not INTEGER
-variables." Our constant detector currently recognizes only integer *literals*
-(including unary `+`/`-`) and direct references to named integer `CONST`s. It
-does **not** fold constant *expressions* such as `k + 1`, `2 * SIZE`, or
-`SUCC(k)`, so those are treated as non-constant and require an explicit `WRD(...)`
-when crossing into WORD.
-
-**Why it matters.** This is slightly *stricter* than the vintage compiler, which
-would accept any compile-time-constant INTEGER in a WORD context. It is a
-conservative, safe deviation (it never accepts something it should reject), but
-it can force a `WRD(...)` the genuine 1981 compiler would not have required.
-
-**Suggested resolution.** Reuse/extend a single constant-folding pass for
-integers (the array-bound and literal-range paths already fold pieces of this)
-and have `_is_constant_integer_expr` return True whenever the expression folds to
-a compile-time integer constant. Keep the literal/named-CONST fast path.
-
-**How to verify.** Add rows to `tests/test_conversion_matrix.py` for
-`w := k + 1` and `f(k + 1)` (constant expression into WORD) asserting ACCEPT, and
-confirm `tests/test_word_int_strictness.py` still rejects genuine variables.
+**Resolved.** `_is_constant_integer_expr` now falls through from its
+literal/named-CONST fast paths to a new `_fold_const_int`, which folds constant
+integer expressions (`k + 1`, `2 * SIZE`, `SUCC(k)`, etc.) by reading named
+CONST values stashed on the Symbol in `check_const_decl`. `_check_word_int_assign`
+and `_check_word_int_mix` are unchanged and pick up the widening uniformly.
+Codegen was unaffected (its own `eval_const_expr` already folded these). New
+conversion-matrix rows (`k + 1`, `2 * SIZE`, `SUCC(k)`, const-expr arg) assert
+ACCEPT, a const-plus-variable row asserts REJECT, and
+`tests/test_word_int_strictness.py` adds constant-expression mix/assign tests
+plus a build-and-run parity test (`w := k + 1`, `k = 5` → 6). Full entry moved
+to `docs/old/old-followups.md`.
 
 ---
 

@@ -255,14 +255,23 @@ END."""
         ir = compile_to_ir(src)
         self.assertIn("sub i16", ir)
 
+    def test_constant_expression_into_word_lowers_correctly(self):
+        """A constant INTEGER expression assigned to a WORD target lowers with
+        the folded value -- `w := k + 1` with `k = 5` yields 6 at runtime."""
+        src = ("PROGRAM P; CONST k = 5; VAR w: WORD; "
+               "BEGIN w := k + 1; WRITELN(w) END.")
+        rc, out = build_and_run(src)
+        self.assertEqual(rc, 0, f"nonzero rc: {rc}")
+        self.assertEqual(out.strip(), "6")
+
     def test_odd_word_integer_parity(self):
         """ODD(WORD) and ODD(INTEGER) agree at runtime for the same bit pattern.
 
-        followups.md item 3: the manual says "the ODD function for INTEGER and
-        WORD values".  ODD is signedness-independent (it tests only the low
-        bit), so a WORD and an INTEGER holding the same bit pattern must yield
-        the same boolean.  Exercises both the type-checker acceptance and the
-        codegen lowering end-to-end.
+        The manual says "the ODD function for INTEGER and WORD values".
+        ODD is signedness-independent (it tests only the low bit), so a WORD
+        and an INTEGER holding the same bit pattern must yield the same
+        boolean.  Exercises both the type-checker acceptance and the codegen
+        lowering end-to-end.
         """
         src = ("PROGRAM P; VAR i: INTEGER; w: WORD; "
                "BEGIN i := 7; w := 7; "

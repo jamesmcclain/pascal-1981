@@ -849,6 +849,14 @@ class PascalTypeChecker(TypeChecker):
             return
 
         symbol = Symbol(name=decl.name, type=value_type, kind='const', location=self.make_location(decl), is_mutable=False)
+        # Stash the folded integer value (if any) so that constant
+        # *expressions* referencing this CONST (e.g. `k + 1`, `2 * SIZE`) can be
+        # recognized as compile-time INTEGER constants for the manual's
+        # WORD/INTEGER exemption.  Stored under a dedicated attribute -- NOT
+        # Symbol.value, which is the codegen LLVM value.  Decl-order checking
+        # guarantees earlier CONSTs are already folded when a later CONST
+        # references them.
+        setattr(symbol, 'const_int', self._fold_const_int(decl.value))
         self.symbol_table.define(decl.name, symbol)
 
     def _predeclare_record_types(self, decls) -> None:
@@ -2320,21 +2328,87 @@ class PascalTypeChecker(TypeChecker):
     # -f strict-word-int, error) on a WORD/INTEGER expression mix.  In every case
     # an INTEGER *constant* is exempt -- it "changes to WORD" per the manual.
     #
-    # !!! TECH DEBT -- CONSTANT DETECTION IS LITERAL-ONLY FOR NOW !!!
-    # `_is_constant_integer_expr` recognizes integer *literals* (including unary
-    # +/-) and direct references to named integer CONSTs.  It does NOT fold
-    # constant *expressions* such as `k + 1`, `2 * SIZE`, or `SUCC(k)`, so those
-    # are currently treated as non-constant and require an explicit WRD(...) when
-    # crossing into WORD.  This is stricter than the vintage compiler (which would
-    # accept any compile-time-constant INTEGER).  Folding general constant
-    # expressions here is tracked as follow-up work in docs/followups.md
-    # ("WORD/INTEGER constant exemption: fold constant expressions").
+    # Constant-expression folding is implemented via `_fold_const_int` (below):
+    # `_is_constant_integer_expr` keeps its literal + named-CONST fast paths and
+    # then falls through to the fold for composite expressions such as `k + 1`,
+    # `2 * SIZE`, or `SUCC(k)`.  The named-CONST branch stays as-is: a CONST is
+    # exempt even if its value cannot be folded.
     # ------------------------------------------------------------------
+    def _fold_const_int(self, expr: Expression) -> Optional[int]:
+        """Fold a constant INTEGER *expression* to its compile-time value.
+
+        Returns the integer value, or None when the expression is not a
+        compile-time INTEGER constant.  Never raises.  Used by
+        `_is_constant_integer_expr` to widen the manual's INTEGER-constant
+        WORD exemption from literals/named-CONSTs to constant *expressions*.
+
+        Integer-scoped on purpose: literals, unary +/-, arithmetic BinOp
+        (+, -, *, DIV, MOD) over foldable operands, identifiers naming an
+        integer-family CONST whose folded value was stashed in
+        `check_const_decl`, and ORD/SUCC/PRED of a foldable operand.  REAL
+        operands, SLASH, comparisons, and set ops return None.  DIV/MOD by
+        zero returns None (the codegen folder would emit 0, but the type
+        checker declines to claim a value for a program that is dubious
+        anyway).
+        """
+        ARITH = {'PLUS', 'MINUS', 'MUL', 'DIV', 'MOD'}
+        if isinstance(expr, IntLiteral):
+            return expr.value
+        if isinstance(expr, UnaryOp) and expr.op in ('PLUS', 'MINUS'):
+            inner = self._fold_const_int(expr.operand)
+            if inner is None:
+                return None
+            return -inner if expr.op == 'MINUS' else inner
+        if isinstance(expr, BinOp) and expr.op in ARITH:
+            left = self._fold_const_int(expr.left)
+            right = self._fold_const_int(expr.right)
+            if left is None or right is None:
+                return None
+            if expr.op == 'PLUS':
+                return left + right
+            if expr.op == 'MINUS':
+                return left - right
+            if expr.op == 'MUL':
+                return left * right
+            if expr.op == 'DIV':
+                return None if right == 0 else left // right
+            if expr.op == 'MOD':
+                return None if right == 0 else left % right
+        # Identifier or bare Designator naming an integer-family CONST whose
+        # folded value was stashed at declaration time.
+        name = None
+        if isinstance(expr, Identifier):
+            name = expr.name
+        elif isinstance(expr, Designator) and not expr.selectors:
+            name = expr.name
+        if name is not None:
+            sym = self.symbol_table.lookup(name)
+            if (sym and getattr(sym, 'kind', None) == 'const'
+                    and sym.type in (INTEGER_TYPE, INTEGER32_TYPE, INTEGER64_TYPE)):
+                folded = getattr(sym, 'const_int', None)
+                if folded is not None:
+                    return folded
+        if isinstance(expr, FuncCall):
+            fn = expr.name.upper()
+            if fn in ('ORD', 'SUCC', 'PRED') and expr.args:
+                val = self._fold_const_int(expr.args[0])
+                if val is None:
+                    return None
+                if fn == 'ORD':
+                    return val
+                if fn == 'SUCC':
+                    return val + 1
+                if fn == 'PRED':
+                    return val - 1
+        return None
+
     def _is_constant_integer_expr(self, expr: Expression) -> bool:
         """True if expr is a *constant* INTEGER for the manual's WORD exemption.
 
-        Literal-only for now (see the big TECH DEBT note above): integer literals
-        (incl. unary +/-) and references to named integer CONSTs.
+        Recognizes integer literals (incl. unary +/-), named integer CONSTs
+        (exempt even when their value is not foldable), and -- via
+        `_fold_const_int` -- constant *expressions* such as `k + 1`,
+        `2 * SIZE`, or `SUCC(k)`.
         """
         if self._fold_int_literal_value(expr) is not None:
             return True
@@ -2343,7 +2417,7 @@ class PascalTypeChecker(TypeChecker):
             if (sym and getattr(sym, 'kind', None) == 'const'
                     and sym.type in (INTEGER_TYPE, INTEGER32_TYPE, INTEGER64_TYPE)):
                 return True
-        return False
+        return self._fold_const_int(expr) is not None
 
     def _check_word_int_assign(self, value_type, target_type, value_expr, node) -> None:
         """Reject a non-constant INTEGER value assigned/passed into a WORD target.

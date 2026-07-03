@@ -991,3 +991,60 @@ regression guard `test_odd_accepts_integer` and an over-widen guard
 `ODD(INTEGER)` agree at runtime for the same bit pattern (7 -> odd). Suite
 green: `tests/test_conversion_matrix.py` (11 passed, 44 subtests passed),
 `tests/test_word_int_strictness.py` (25 passed), the new codegen test passes.
+
+---
+
+## 2. WORD/INTEGER constant exemption: fold constant expressions [DONE]
+
+**Where.** `type_checker.py::_is_constant_integer_expr` (consulted by
+`_check_word_int_assign` and `_check_word_int_mix`).
+
+**What.** The IBM Pascal 2.0 manual (Elementary Types, p.6-5) exempts INTEGER
+*constants* from the WORD/INTEGER assignment and expression-mix restrictions:
+"INTEGER type constants change to WORD type if necessary, but not INTEGER
+variables." The constant detector previously recognized only integer *literals*
+(including unary `+`/`-`) and direct references to named integer `CONST`s. It
+did **not** fold constant *expressions* such as `k + 1`, `2 * SIZE`, or
+`SUCC(k)`, so those were treated as non-constant and required an explicit
+`WRD(...)` when crossing into WORD.
+
+**Why it mattered.** This was slightly *stricter* than the vintage compiler,
+which would accept any compile-time-constant INTEGER in a WORD context. It was a
+conservative, safe deviation (it never accepted something it should reject), but
+it could force a `WRD(...)` the genuine 1981 compiler would not have required.
+
+**Resolution.** A new `_fold_const_int(expr) -> Optional[int]` was added to the
+type checker alongside `_is_constant_integer_expr`. It folds a constant INTEGER
+*expression* to its compile-time value: integer literals, unary `+`/`-`,
+arithmetic `BinOp` (`+`, `-`, `*`, `DIV`, `MOD`) over foldable operands (DIV/MOD
+by zero returns `None` rather than raising), `Identifier`/bare `Designator`
+naming an integer-family `CONST` whose folded value was stashed on the Symbol,
+and `ORD`/`SUCC`/`PRED` of a foldable operand. It returns `None` (never raises)
+for anything it cannot fold, so non-constant and REAL/boolean/set operands fall
+through cleanly. The named-CONST values are stashed in `check_const_decl` under a
+dedicated `const_int` attribute (not `Symbol.value`, which is the codegen LLVM
+value); decl-order checking guarantees earlier CONSTs are folded before later
+ones reference them. `_is_constant_integer_expr` keeps its literal and
+named-CONST fast paths (a CONST is exempt even when its value is not foldable)
+and falls through to the fold for composite expressions. The
+`_check_word_int_assign` and `_check_word_int_mix` bodies are unchanged and pick
+up the widening uniformly across assignment, value-argument passing, function
+return, and the equal-width WORD/INTEGER mix diagnostic. Codegen was unaffected:
+its own `eval_const_expr` already folded these expressions; the gap was purely
+the type-checker rejecting too eagerly. Range-checking of folded values against
+INTEGER bounds (e.g. `30000 + 5000 > MAXINT`) is deliberately out of scope.
+
+**How verified.** `tests/test_conversion_matrix.py` gained rows asserting ACCEPT
+for `w := k + 1`, `w := 2 * size`, `w := SUCC(k)`, and `f(k + 1)` into a WORD
+value parameter, plus a REJECT regression guard for `w := k + i` (constant plus a
+variable is not a compile-time constant). The `named_const_to_word` row was
+corrected to actually exercise a named CONST (`CONST k = 5; w := k`) rather than
+a bare literal. `tests/test_word_int_strictness.py` adds
+`test_constant_expression_exemption_is_clean` (`w + (k + 1)` is clean and
+compiles under `strict-word-int`),
+`test_constant_expression_into_word_assign_is_clean` (`w := k + 1`), and
+`test_const_plus_variable_is_not_constant`. `tests/test_codegen.py` gained
+`test_constant_expression_into_word_lowers_correctly`, a build-and-run test
+asserting `w := k + 1` with `k = 5` yields 6. Suite green: 231 passed, 60
+subtests passed across `test_conversion_matrix.py`, `test_word_int_strictness.py`,
+and `test_codegen.py`.
