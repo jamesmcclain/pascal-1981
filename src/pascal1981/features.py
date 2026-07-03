@@ -84,6 +84,23 @@ _FEATURES: Dict[str, Feature] = {
         help='Promote the WORD/INTEGER expression-mix warning to a hard error (stricter than vintage). Orthogonal to --dialect; the assignment-compatibility error and the constant exemption apply regardless.',
         in_extended=False,
     ),
+    'noalias-kernel-params':
+    Feature(
+        name='noalias-kernel-params',
+        default=False,
+        # Policy/contract flag, orthogonal to the extended dialect
+        # (in_extended=False): unlike tuning-hints, this does NOT auto-enable
+        # inside DEVICE code, because it asserts a semantic contract about the
+        # caller (distinct ADS(GLOBAL)/ADS(CONSTANT) buffer parameters of a
+        # kernel entry do not overlap) that this compiler cannot itself prove
+        # or check at a LAUNCH call site -- it is a promise the launcher must
+        # keep. Getting it wrong is a silent miscompilation (the optimizer may
+        # reorder/vectorize loads and stores across what it believes are
+        # non-aliasing pointers), so it stays opt-in via `-f
+        # noalias-kernel-params` rather than riding the extended umbrella.
+        help='Assert that distinct ADS(GLOBAL)/ADS(CONSTANT) buffer parameters of an exported device kernel entry do not alias (LLVM `noalias`), per the LAUNCH contract documented in docs/device-kernel-orientation.md. Passing overlapping buffers with this enabled is undefined behavior. Off by default even in DEVICE code/--dialect extended; must be requested explicitly.',
+        in_extended=False,
+    ),
 }
 
 # The ``extended`` umbrella is the subset of features that define the *dialect

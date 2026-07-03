@@ -833,3 +833,119 @@ without breaking the module; the mandelbrot O2 case is asserted to be
 negative empirical result explicitly rather than silently dropping the
 followup's original (falsified) verification claim. Full suite green (1026
 passed, 1 skipped).
+
+---
+
+## Kernel entries carry no parameter facts: noalias / readonly / align / dereferenceable [DONE]
+
+**Where.** `codegen/decls.py` (kernel-entry emission around
+`calling_convention = 'ptx_kernel'`); contrast with `codegen/c_abi.py`, which
+already sets attributes on the host C-ABI path.
+
+**What.** Device kernel buffer parameters (`ADS(GLOBAL)` pointers) are emitted
+as bare pointers. LLVM cannot itself infer that two buffers do not alias, that
+a buffer is never written through, or its alignment — those are facts only the
+frontend (Pascal semantics + the LAUNCH contract) can assert. Without them the
+optimizer must stay conservative: no `ld.global.v4.f32` vectorization, no
+read-only-cache (`ld.global.nc`) selection, limited load reordering.
+
+**Why it matters.** This is the highest-leverage device codegen item and is
+orthogonal to LLVM: it is precisely the information LLVM lacks. It also
+multiplies the O2-pipeline item — an O2 pipeline over attribute-free pointers
+leaves most memory-op wins on the table.
+
+**Suggested resolution.** (a) `readonly`: the type checker can already prove a
+kernel never assigns through a given buffer parameter; plumb that through to a
+`readonly` (+ `nocapture`) attribute. (b) `align`/`dereferenceable(n)`: derive
+from element type and, where the launch contract fixes a length parameter,
+from bounds. (c) `noalias`: define it as part of the LAUNCH contract (distinct
+buffer arguments must not overlap), document it, gate behind a feature flag if
+there is any doubt about vintage-faithful semantics.
+
+**How to verify.** Unit tests asserting the attributes appear in kernel-entry
+IR; PTX-level test that a provably-readonly streamed buffer compiles to
+`ld.global.nc.*` at O2; differential run of the mandelbrot/fill examples
+confirming identical output.
+
+**Correction to the followup's own premise.** "The type checker can already
+prove a kernel never assigns through a given buffer parameter" turned out to
+be wrong as stated: `_param_device_passable` rejects VAR/CONST-moded
+parameters outright for a kernel entry (they lower to host-space addrspace-0
+pointers a device entry cannot dereference), so there is no pre-existing
+CONST-mode flag to read for a buffer parameter — kernel buffer parameters are
+always value-mode `ADS(space) OF T`. `(a)` therefore needed a real (if
+purely syntactic and deliberately conservative) analysis, not a lookup: see
+Resolution below.
+
+**Resolution.**
+
+- `(b) align`/`dereferenceable`: `align` was already done by a prior item.
+  `dereferenceable(n)` is now derived directly from the LLVM pointee type: a
+  statically-sized `ir.ArrayType` pointee (a fixed `ARRAY[lo..hi] OF T`) gets
+  `dereferenceable(count * element_size)` (via `c_abi.py::_size_of`); a
+  `SUPER ARRAY [lo..*] OF T` pointee (bare element type, no static count) gets
+  none — deliberately out of scope, since there is no compiler-enforced link
+  between such a parameter and whichever sibling parameter might carry its
+  runtime length, and guessing one would be an unproven inference this
+  project's discipline avoids.
+- `(a) readonly`/`nocapture`: `_kernel_readonly_param_names` walks the
+  procedure's own body (a generic recursive dataclass-field walk over
+  `decl.body`, since `ASTNode` subclasses are plain dataclasses) looking for
+  (i) any assignment whose target dereferences the parameter (any selector
+  chain containing DEREF), which disqualifies it; (ii) the parameter passed
+  as a bare argument to any other call (FuncCall/ProcCallStmt), which is
+  conservatively disqualified too, since there is no interprocedural proof
+  the callee doesn't write through it; (iii) any WITH statement anywhere in
+  the body, which conservatively disqualifies every parameter of that
+  procedure (WITH's field designators aren't tied back to the originating
+  pointer by this walk). This only ever *withholds* readonly, never wrongly
+  grants it — a gap here is a missed optimization, not a correctness bug.
+  llvmlite's `ArgumentAttributes` has no native `readonly` entry (only
+  `noalias`/`nocapture` are whitelisted there); it is added by shadowing the
+  instance's `_known` mapping the same way `_apply_launch_bound_attrs`
+  shadows `FunctionAttributes._known` for launch-bound string attributes,
+  adapted to the dict-shaped (not frozenset-shaped) `_known` argument
+  attributes use — confirmed to round-trip through
+  `parse_assembly`/`verify`/`emit_assembly`.
+- `(c) noalias`: gated behind a new registered feature,
+  `noalias-kernel-params` (`features.py`), deliberately **not** part of the
+  `extended` umbrella (`in_extended=False`) and so, unlike `tuning-hints`,
+  does **not** auto-enable inside `DEVICE` code — it asserts a contract about
+  the *caller* (distinct `ADS(GLOBAL)`/`ADS(CONSTANT)` buffer parameters of a
+  kernel entry do not overlap) that this compiler cannot itself verify at a
+  `LAUNCH` call site, and getting it wrong is a silent miscompilation. The
+  LAUNCH contract itself is now documented in
+  `docs/device-kernel-orientation.md` §3.
+
+**Empirical correction to the followup's own "how to verify."** The suggested
+PTX-level check (a provably-readonly buffer compiling to `ld.global.nc.*` at
+O2) was tested against the actual attribute-plumbed IR on this repo's pinned
+`llvmlite==0.47.0`/LLVM 20.1.8 and **did not fire**: `readonly`+`nocapture`
+alone, run through the same `PassBuilder`/`ModulePassManager` pipeline item 5
+added, produced no `ld.global.nc` selection at `--opt-level 2` on a
+synthetic read/write-buffer kernel built for this check. Plausible
+explanation (not confirmed): NVPTX's `ld.global.nc` selection may depend on
+target-specific IR passes (e.g. `NVPTXLowerArgs`) that a full
+`TargetMachine::addPassesToEmitFile` codegen pipeline runs but a bare
+mid-level `PassBuilder::buildPerModuleDefaultPipeline` does not. Likewise,
+`noalias` alone produced no observable PTX difference (vectorization or
+otherwise) on the mandelbrot example at O2 — expected in that specific case
+anyway, since that kernel has no actually-overlappable buffer pair to
+vectorize across. Recorded honestly rather than claimed: the attributes are
+correct, safe, and present; their downstream backend payoff on this exact
+toolchain configuration is unconfirmed and is left as a candidate follow-up
+(try routing through the full target-machine codegen pipeline rather than
+the bare IR pass manager) rather than asserted.
+
+**How verified.** `tests/test_kernel_param_attrs.py`: readonly/nocapture
+present only on a body-provably-unwritten buffer, absent when written through
+or passed to another call, withheld entirely by a WITH statement (direct unit
+test against `_kernel_readonly_param_names` on a hand-built AST fixture,
+since a realistic parser round trip needs a record-typed ADS buffer,
+orthogonal to what that unit checks); `dereferenceable` present for fixed
+arrays, absent on the CPU-device parity path (no kernel entry at all);
+`noalias` absent by default under both vintage and extended dialects, absent
+even under the full extended umbrella without the explicit feature flag,
+present (on every buffer param) only with `-f noalias-kernel-params`; a PTX
+round-trip test confirming `parse_assembly`/`verify`/`emit_assembly` accept
+the combined attribute set. Full suite green (1036 passed, 1 skipped).

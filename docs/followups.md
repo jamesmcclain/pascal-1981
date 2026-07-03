@@ -123,39 +123,6 @@ appear.
 
 ---
 
-## 6. Kernel entries carry no parameter facts: noalias / readonly / align / dereferenceable [OPEN]
-
-**Where.** `codegen/decls.py` (kernel-entry emission around
-`calling_convention = 'ptx_kernel'`); contrast with `codegen/c_abi.py`, which
-already sets attributes on the host C-ABI path.
-
-**What.** Device kernel buffer parameters (`ADS(GLOBAL)` pointers) are emitted
-as bare pointers. LLVM cannot itself infer that two buffers do not alias, that
-a buffer is never written through, or its alignment — those are facts only the
-frontend (Pascal semantics + the LAUNCH contract) can assert. Without them the
-optimizer must stay conservative: no `ld.global.v4.f32` vectorization, no
-read-only-cache (`ld.global.nc`) selection, limited load reordering.
-
-**Why it matters.** This is the highest-leverage device codegen item and is
-orthogonal to LLVM: it is precisely the information LLVM lacks. It also
-multiplies item 9 — an O2 pipeline over attribute-free pointers leaves most
-memory-op wins on the table.
-
-**Suggested resolution.** (a) `readonly`: the type checker can already prove a
-kernel never assigns through a given buffer parameter; plumb that through to a
-`readonly` (+ `nocapture`) attribute. (b) `align`/`dereferenceable(n)`: derive
-from element type and, where the launch contract fixes a length parameter,
-from bounds. (c) `noalias`: define it as part of the LAUNCH contract (distinct
-buffer arguments must not overlap), document it, gate behind a feature flag if
-there is any doubt about vintage-faithful semantics.
-
-**How to verify.** Unit tests asserting the attributes appear in kernel-entry
-IR; PTX-level test that a provably-readonly streamed buffer compiles to
-`ld.global.nc.*` at O2; differential run of the mandelbrot/fill examples
-confirming identical output.
-
----
-
 ## 9. docs/device-code claims need evidence grading before they drive work [OPEN]
 
 **Where.** `docs/device-code/KERNEL_ANALYSIS.md`,
@@ -180,3 +147,63 @@ strike or demote the sections superseded by running the stock LLVM pipeline.
 
 **How to verify.** A pass over the three files leaves no ungraded quantitative
 claim; comparison tables are reproducible from a committed script.
+
+---
+
+## 10. PTX pass pipeline may be missing target-specific IR passes (ld.global.nc, mul.wide.u32 never observed) [OPEN]
+
+**Where.** `src/pascal1981/compile_to_ptx.py::llvm_ir_to_ptx` (the `opt_level`
+pass-manager plumbing added for the O2-pipeline item).
+
+**What.** Three separate frontend facts that should, per the reasoning in the
+now-archived O2-pipeline/`!range`/kernel-parameter-attribute items, help the
+NVPTX backend make better instruction-selection choices were each tested
+empirically against this repo's pinned `llvmlite==0.47.0` (LLVM 20.1.8) and
+**none produced the expected effect**:
+
+- `!range` metadata on `tid`/`ctaid`/`ntid`/`nctaid` sreg reads: no change to
+  `mul.wide.s32` vs `mul.wide.u32` selection, on both shipped examples and a
+  minimal synthetic repro, at `--opt-level 2`.
+- `readonly`/`nocapture` on a provably-unwritten kernel buffer parameter: no
+  `ld.global.nc` (read-only-cache) selection on a synthetic read/write-buffer
+  kernel built specifically to trigger it, at `--opt-level 2`.
+- `noalias` on kernel buffer parameters (behind `-f noalias-kernel-params`):
+  no observable PTX difference on the mandelbrot example at `--opt-level 2`
+  (though that specific kernel may simply have no overlapping-buffer op to
+  vectorize across, so this one data point is weaker evidence than the other
+  two).
+
+**Why it matters.** `llvm_ir_to_ptx`'s pipeline currently runs
+`PassBuilder::buildPerModuleDefaultPipeline` (via llvmlite's
+`create_pass_builder(tm, pto).getModulePassManager().run(...)`) over the IR,
+then calls `TargetMachine.emit_assembly` directly. That is a bare mid-level
+IR optimization pipeline; it is plausible (not confirmed — this is an
+INFERRED hypothesis, not an OBSERVED fact) that NVPTX-specific IR passes such
+as `NVPTXLowerArgs` (which is understood to be where `ld.global.nc`
+selection and pointer-parameter-attribute-driven decisions happen) are
+normally inserted by a full `TargetMachine::addPassesToEmitFile` codegen
+pipeline (the one `clang -O2 -target nvptx64...` or `llc` would run) rather
+than by the bare per-module IR pipeline this code builds. If so, three
+already-shipped, correctness-safe, well-tested frontend facts (`!range`,
+`readonly`/`nocapture`, `noalias`) are currently inert cost with no realized
+benefit on this toolchain, which would be worth knowing before recommending
+any of them as a basis for further work (e.g. the `docs/device-code/`
+evidence-grading item).
+
+**Suggested resolution.** Investigate whether llvmlite exposes (or can be
+made to expose) the NVPTX-specific IR-level passes that a full
+`addPassesToEmitFile` pipeline would insert ahead of instruction selection
+(possibly via `TargetMachine`'s legacy `PassManager` codegen path instead of,
+or in addition to, the new-pass-manager `PassBuilder` used today), or
+determine that llvmlite's binding genuinely does not expose that layer, in
+which case this should be downgraded from "OPEN, worth investigating" to
+"DOCUMENTED LIMITATION of the llvmlite binding" and cross-referenced from the
+three attribute-adding items in `docs/old/old-followups.md`.
+
+**How to verify.** Re-run the same three synthetic/example probes already
+described in `docs/old/old-followups.md`'s kernel-parameter-attributes entry
+after any pipeline change, and confirm `ld.global.nc`/`mul.wide.u32`/a
+noalias-driven PTX difference actually appears where the theory predicts it
+should; if it does, add a regression test pinning the (now working)
+selection; if llvmlite genuinely cannot reach that layer, record that as the
+resolution instead and close this as WON'T-FIX with the reason documented.
