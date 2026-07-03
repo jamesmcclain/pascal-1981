@@ -7,7 +7,13 @@ IN-PROGRESS / DONE.
 
 These are not bugs that produce wrong output today; they are seams worth
 closing when the surrounding code is next touched. Resolved items are moved to
-`docs/old/old-followups.md` once they ship (most recently the Python
+`docs/old/old-followups.md` once they ship (most recently the super-array
+bound-metadata item, item 1 here — long-form `NEW(p, u)` now records the
+dynamic upper bound in an 8-byte block header, `UPPER(p^)`/`LOWER(p^)` read
+it back, `DISPOSE` frees from the header, `$INDEXCK` checks against it, and
+DEVICE code rejects `UPPER(p^)` on super arrays so kernel `.ptx` artifacts
+keep the drop-in bare-pointer ABI; design record in
+`docs/super-array-bounds-abi.md`; before that the Python
 version-floor packaging metadata, item 4 here — `pyproject.toml` now declares
 `requires-python = ">=3.10"` and only lists the 3.10-3.12 classifiers, matching
 the real floor set by `llvmlite>=0.47.0`;
@@ -28,44 +34,6 @@ item 6 originally, where `_check_word_int_mix` now covers `WORD32`/`INTEGER32`
 and `WORD64`/`INTEGER64` at equal rank under the same `strict-word-int`
 discipline).
 
-
----
-
-## 1. Super-array remediation residue and device-heap boundary [OPEN]
-
-**Where.** The D-001/D-002 historical evidence now lives in
-`docs/old/discrepancies-super-array.md` and
-`docs/old/discrepancies-remediation-plan.md`. Current implementation touchpoints
-are `type_checker.py::_check_new_args`, `codegen/runtime_builtins.py::builtin_new`,
-string-bound lowering in expression codegen, and DEVICE recission checks in the
-type checker.
-
-**What.** The observed D-001/D-002 gaps are remediated for normal host code:
-`LOWER`/`UPPER` accept `STRING(n)` and `LSTRING(n)`, and one-dimensional
-`SUPER ARRAY` pointer referents accept long-form `NEW(p, upper_bound)`. DEVICE
-code intentionally does **not** support heap allocation; `NEW` and `DISPOSE` are
-rejected during type checking with a device-code dynamic-allocation diagnostic,
-including long-form `NEW(p, upper_bound)`.
-
-**Why it matters.** The shipped support is deliberately narrower than the full
-vintage surface. Long-form `NEW` currently covers the one-dimensional
-super-array allocation case needed by D-002; it does not imply variant-record
-long-form `NEW`, multi-dimensional super-array heap allocation, or GPU/device
-heap allocation. Also, allocation sizing for heap super arrays does not yet
-establish a general ABI for preserving dynamic upper-bound metadata for later
-`UPPER(p^)`-style queries.
-
-**Suggested resolution.** If future work expands super arrays, decide the runtime
-representation first: how dynamic bounds are stored, how dereferenced super-array
-bounds are recovered, and how kernel buffer bounds are passed. For DEVICE code,
-prefer caller-provided buffers and explicit bound metadata over backend-specific
-GPU allocator calls unless a real device heap design is approved.
-
-**How to verify.** Keep the existing regression tests for normal-code
-`LOWER`/`UPPER`, long-form super-array `NEW`, DEVICE string bounds, and DEVICE
-heap recission. Add new differential probes before expanding beyond the current
-subset, especially for multi-dimensional super arrays, `UPPER(p^)`, and any
-variant-record long-form `NEW` behavior.
 
 ---
 

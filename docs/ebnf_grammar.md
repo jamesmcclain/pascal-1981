@@ -372,7 +372,7 @@ factor =
     | "ADR" identifier                        (* 16-bit near offset of identifier *)
     | "ADS" identifier                        (* segmented address; pointee space inferred from operand's residence (HOST outside a DEVICE MODULE) *)
     | "SIZEOF" "(" ( identifier | type ) ")"  (* byte size of identifier or type  *)
-    | ( "LOWER" | "UPPER" ) "(" identifier ")" (* array/super-array/string bound *)
+    | ( "LOWER" | "UPPER" ) "(" identifier [ "^" ] ")" (* array/super-array/string bound; identifier^ queries the pointee — for a heap super array, the dynamic upper bound recorded by long-form NEW (docs/super-array-bounds-abi.md) *)
     | set_constructor ;
 
 (* [OBSERVED] A designator is an identifier followed by zero or more

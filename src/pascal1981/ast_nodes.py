@@ -380,11 +380,17 @@ class SizeofExpr(ASTNode):
 @dataclass
 class UpperExpr(ASTNode):
     name: str
+    # True for the dereferenced form UPPER(p^): p is a pointer variable and the
+    # bound queried is that of the pointee (for a heap super array, the dynamic
+    # upper bound recorded by long-form NEW -- see docs/super-array-bounds-abi.md).
+    deref: bool = False
 
 
 @dataclass
 class LowerExpr(ASTNode):
     name: str
+    # True for the dereferenced form LOWER(p^); see UpperExpr.deref.
+    deref: bool = False
 
 
 @dataclass

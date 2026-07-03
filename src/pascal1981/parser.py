@@ -874,14 +874,18 @@ class Parser:
             self.pos += 1
             self.expect('LPAREN')
             name = self.expect('IDENTIFIER').lexeme
+            # UPPER(p^): bound of the pointee. For a heap super array this is
+            # the dynamic upper bound recorded by long-form NEW.
+            deref = self.match('POINTER')
             self.expect('RPAREN')
-            return UpperExpr(name)
+            return UpperExpr(name, deref)
         if kind == 'LOWER':
             self.pos += 1
             self.expect('LPAREN')
             name = self.expect('IDENTIFIER').lexeme
+            deref = self.match('POINTER')
             self.expect('RPAREN')
-            return LowerExpr(name)
+            return LowerExpr(name, deref)
         if kind == 'LBRACKET':
             self.pos += 1
             elements: List[Expression] = []

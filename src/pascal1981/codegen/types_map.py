@@ -418,6 +418,12 @@ class TypesMapMixin:
         if hasattr(t, 'max_len'):
             return None, None
         if hasattr(t, 'index_range') and getattr(t, 'index_range', None) is not None:
+            if getattr(t, 'super', False) or t.index_range.high is None:
+                # Super array [low..*]: the upper bound is dynamic, so there is
+                # no declared static (low, high) pair to check against. The
+                # dereferenced-heap case gets a dynamic header check in
+                # resolve_designator_ptr_typed instead.
+                return None, None
             try:
                 low = self.eval_const_expr(t.index_range.low)
                 high = self.eval_const_expr(t.index_range.high) if t.index_range.high is not None else low
@@ -479,11 +485,34 @@ class TypesMapMixin:
         ptr = symbol.llvm_value
         cur_type = symbol.type_expr
         base_is_parameter = symbol.is_parameter
+        # Set by a DEREF through a plain ^SUPER ARRAY pointer; consumed by the
+        # next INDEX selector for a dynamic upper-bound check.
+        super_heap_data_ptr = None
 
         if designator.selectors:
             for selector in designator.selectors:
                 if selector.kind == 'INDEX':
                     index = self.codegen_expr(selector.index_or_field)
+                    resolved_cur = self.resolve_type_alias(cur_type)
+                    if (super_heap_data_ptr is not None
+                            and isinstance(resolved_cur, ArrayType)
+                            and getattr(resolved_cur, 'super', False)
+                            and isinstance(index.type, ir.IntType)
+                            and self.check_enabled('INDEXCK')):
+                        # $INDEXCK for a heap super array: the lower bound is
+                        # declared and static; the upper bound is the i64 the
+                        # long-form NEW wrote just before the element data.
+                        low_c = self.eval_const_expr(resolved_cur.index_range.low)
+                        hdr = self.builder.bitcast(
+                            self.builder.bitcast(super_heap_data_ptr, ir.IntType(8).as_pointer()),
+                            ir.IntType(64).as_pointer())
+                        hdr = self.builder.gep(hdr, [ir.Constant(ir.IntType(64), -1)])
+                        bound64 = self.builder.load(hdr)
+                        idx64 = self.builder.sext(index, ir.IntType(64)) if index.type.width < 64 else index
+                        ge = self.builder.icmp_signed('>=', idx64, ir.Constant(ir.IntType(64), low_c))
+                        le = self.builder.icmp_signed('<=', idx64, bound64)
+                        self._emit_runtime_check(self.builder.and_(ge, le), 'indexck')
+                    super_heap_data_ptr = None
                     # $INDEXCK (manual: default +, "bounds checking is
                     # separate from other subrange checking"): emit
                     # low <= idx <= high against the declared bounds.
@@ -574,6 +603,19 @@ class TypesMapMixin:
                                 ok = self.builder.and_(ok, not_sentinel)
                             self._emit_runtime_check(ok, 'nilck')
                         cur_type = getattr(base, 'base', None) or getattr(base, 'target_type', None)
+                        # If we just dereferenced a plain ^SUPER ARRAY pointer,
+                        # remember the data pointer: values of that pointer type
+                        # come from long-form NEW, which recorded the dynamic
+                        # upper bound in a header just before the data
+                        # (docs/super-array-bounds-abi.md). A following INDEX
+                        # selector can then bounds-check against that header.
+                        pointee = self.resolve_type_alias(cur_type)
+                        if (getattr(base, 'flavor', 'POINTER') == 'POINTER'
+                                and isinstance(pointee, ArrayType)
+                                and getattr(pointee, 'super', False)):
+                            super_heap_data_ptr = ptr
+                        else:
+                            super_heap_data_ptr = None
         return ptr, cur_type
 
     # ========================================================================

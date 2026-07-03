@@ -2472,14 +2472,38 @@ class PascalTypeChecker(TypeChecker):
             # Sizeof operator (sizeof var_name or type)
             return INTEGER_TYPE
         elif isinstance(expr, UpperExpr) or isinstance(expr, LowerExpr):
+            intrinsic = type(expr).__name__[:-4].upper()
             sym = self.symbol_table.lookup(expr.name)
             if not sym:
                 self.error(f"Undefined variable: {expr.name}", expr)
                 return None
+            if getattr(expr, 'deref', False):
+                # UPPER(p^) / LOWER(p^): bound of the pointee. For a heap super
+                # array UPPER(p^) is the dynamic upper bound recorded by long-form
+                # NEW (docs/super-array-bounds-abi.md); LOWER(p^) and fixed-array
+                # bounds stay static.
+                if not isinstance(sym.type, PointerType):
+                    self.error(f"Function '{intrinsic}': '{expr.name}^' requires a pointer variable, got {sym.type}", expr)
+                    return None
+                pointee = sym.type.target_type
+                if not isinstance(pointee, (ArrayType, StringType, LStringType)):
+                    self.error(f"Function '{intrinsic}' expects an array pointee, got {pointee}", expr)
+                    return None
+                type_expr = getattr(sym, 'type_expr', None)
+                ptr_expr = self._resolve_ast_type_alias(type_expr)
+                pointee_expr = ptr_expr.base if isinstance(ptr_expr, ASTPointerType) else None
+                is_super = self._is_super_array_type_expr(pointee_expr) if pointee_expr is not None else False
+                if is_super and self.in_device_module:
+                    # Device code has no heap (NEW/DISPOSE are rescinded), so no
+                    # bound header ever exists to read. Buffers arrive from the
+                    # host with explicit bound/length parameters instead.
+                    self.error(f"Function '{intrinsic}': dynamic super array bounds are not available in device code; pass bounds explicitly", expr)
+                    return None
+                return INTEGER_TYPE
             ty = sym.type
             if isinstance(ty, (ArrayType, StringType, LStringType)):
                 return INTEGER_TYPE
-            self.error(f"Function '{type(expr).__name__[:-4].upper()}' expects an array variable", expr)
+            self.error(f"Function '{intrinsic}' expects an array variable", expr)
             return None
         elif isinstance(expr, RetypeExpr):
             # 1. Resolve target type

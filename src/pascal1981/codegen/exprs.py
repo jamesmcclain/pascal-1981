@@ -102,6 +102,26 @@ class ExprsMixin:
             if not symbol or symbol.type_expr is None:
                 raise CodegenError(f'Undefined variable: {expr.name}')
             ty = self.resolve_type_alias(symbol.type_expr)
+            if getattr(expr, 'deref', False):
+                # UPPER(p^) / LOWER(p^): bounds of the pointee.
+                if not isinstance(ty, PointerType):
+                    raise CodegenError(f"{type(expr).__name__[:-4].upper()}: '{expr.name}^' requires a pointer variable")
+                pointee = self.resolve_type_alias(getattr(ty, 'target_type', None) or getattr(ty, 'base', None))
+                if isinstance(pointee, ArrayType) and getattr(pointee, 'super', False):
+                    lower = self.eval_const_expr(pointee.index_range.low)
+                    if isinstance(expr, LowerExpr):
+                        return ir.Constant(ir.IntType(32), lower)
+                    # Dynamic upper bound: read the i64 bound header that
+                    # long-form NEW stored immediately before the element data
+                    # (docs/super-array-bounds-abi.md).
+                    data_ptr = self.builder.load(self.resolve_designator_ptr(Designator(expr.name, [])))
+                    raw = self.builder.bitcast(data_ptr, ir.IntType(64).as_pointer())
+                    hdr = self.builder.gep(raw, [ir.Constant(ir.IntType(64), -1)])
+                    bound = self.builder.load(hdr)
+                    return self.builder.trunc(bound, ir.IntType(32))
+                # Fixed-bound pointee (array/string): static bounds, same
+                # resolution as the direct-variable form below.
+                ty = pointee
             if isinstance(ty, NamedType) and ty.name.upper() in {'STRING', 'LSTRING'}:
                 max_len = int(ty.param) if isinstance(ty.param, int) else 256
                 lower = 1 if ty.name.upper() == 'STRING' else 0

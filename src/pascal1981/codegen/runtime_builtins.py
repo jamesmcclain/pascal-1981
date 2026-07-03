@@ -62,6 +62,12 @@ class RuntimeBuiltinsMixin:
     def builtin_movesr(self, args: List[Expression]) -> None:
         self._runtime_fillmove('MOVESR', args)
 
+    # Size of the dynamic-bound header prepended to heap super-array blocks by
+    # long-form NEW (one i64 holding the upper bound; see
+    # docs/super-array-bounds-abi.md). malloc alignment (>= 8 on the supported
+    # x86-64 host target) keeps the element data past the header aligned.
+    SUPER_ARRAY_BOUND_HEADER_BYTES = 8
+
     def builtin_new(self, args: List[Expression]) -> None:
         if len(args) < 1:
             raise CodegenError(f'NEW expects at least 1 argument, got {len(args)}')
@@ -94,7 +100,20 @@ class RuntimeBuiltinsMixin:
             else:
                 upper64 = upper_val
             count = self.builder.sub(upper64, ir.Constant(ir.IntType(64), lower - 1))
-            alloc_size = self.builder.mul(count, ir.Constant(ir.IntType(64), elem_size))
+            data_size = self.builder.mul(count, ir.Constant(ir.IntType(64), elem_size))
+            # Bound-header ABI (docs/super-array-bounds-abi.md): prepend an
+            # 8-byte header holding the dynamic upper bound as an i64, store
+            # the bound there, and point p at the element data just past it so
+            # indexing/deref are unchanged. UPPER(p^) reads the header back;
+            # DISPOSE(p) frees from the header.
+            alloc_size = self.builder.add(data_size, ir.Constant(ir.IntType(64), self.SUPER_ARRAY_BOUND_HEADER_BYTES))
+            raw = self.builder.call(self.runtime_extern('malloc'), [alloc_size])
+            hdr = self.builder.bitcast(raw, ir.IntType(64).as_pointer())
+            self.builder.store(upper64, hdr)
+            data = self.builder.gep(raw, [ir.Constant(ir.IntType(64), self.SUPER_ARRAY_BOUND_HEADER_BYTES)])
+            casted = self.builder.bitcast(data, self.llvm_type(sym.type_expr))
+            self.builder.store(casted, ptr_addr)
+            return
         else:
             # Size the heap block from the pointee's real byte size. The module
             # carries an empty target datalayout, so DataLayout.get_type_alloc_size()
@@ -132,6 +151,12 @@ class RuntimeBuiltinsMixin:
             raise CodegenError('DISPOSE requires a pointer variable')
         ptr_val = self.builder.load(ptr_addr)
         raw = self.builder.bitcast(ptr_val, ir.IntType(8).as_pointer())
+        pointee = getattr(ptr_type, 'target_type', None) or getattr(ptr_type, 'base', None)
+        resolved_pointee = self.resolve_type_alias(pointee)
+        if isinstance(resolved_pointee, ArrayType) and getattr(resolved_pointee, 'super', False):
+            # Long-form NEW stored a bound header before the element data
+            # (docs/super-array-bounds-abi.md); the allocation starts there.
+            raw = self.builder.gep(raw, [ir.Constant(ir.IntType(64), -self.SUPER_ARRAY_BOUND_HEADER_BYTES)])
         self.builder.call(self.runtime_extern('free'), [raw])
         self.builder.store(ir.Constant(self.llvm_type(sym.type_expr), None), ptr_addr)
 

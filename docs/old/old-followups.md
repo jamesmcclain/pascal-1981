@@ -569,3 +569,71 @@ inside a comment string, not live PEP 604 syntax.
 pascal1981.compile_to_ptx"` succeeds. Full suite green:
 `PYTHONPATH=src python3 -m pytest tests/ -q` → `971 passed, 1 skipped, 115
 subtests passed`.
+
+## Super-array remediation residue and device-heap boundary [DONE]
+
+*(Moved from `docs/followups.md` item 1 when the dynamic-bound ABI shipped;
+original text below, then the resolution.)*
+
+**Where.** The D-001/D-002 historical evidence now lives in
+`docs/old/discrepancies-super-array.md` and
+`docs/old/discrepancies-remediation-plan.md`. Current implementation touchpoints
+are `type_checker.py::_check_new_args`, `codegen/runtime_builtins.py::builtin_new`,
+string-bound lowering in expression codegen, and DEVICE recission checks in the
+type checker.
+
+**What.** The observed D-001/D-002 gaps are remediated for normal host code:
+`LOWER`/`UPPER` accept `STRING(n)` and `LSTRING(n)`, and one-dimensional
+`SUPER ARRAY` pointer referents accept long-form `NEW(p, upper_bound)`. DEVICE
+code intentionally does **not** support heap allocation; `NEW` and `DISPOSE` are
+rejected during type checking with a device-code dynamic-allocation diagnostic,
+including long-form `NEW(p, upper_bound)`.
+
+**Why it matters.** The shipped support is deliberately narrower than the full
+vintage surface. Long-form `NEW` currently covers the one-dimensional
+super-array allocation case needed by D-002; it does not imply variant-record
+long-form `NEW`, multi-dimensional super-array heap allocation, or GPU/device
+heap allocation. Also, allocation sizing for heap super arrays does not yet
+establish a general ABI for preserving dynamic upper-bound metadata for later
+`UPPER(p^)`-style queries.
+
+**Suggested resolution.** If future work expands super arrays, decide the runtime
+representation first: how dynamic bounds are stored, how dereferenced super-array
+bounds are recovered, and how kernel buffer bounds are passed. For DEVICE code,
+prefer caller-provided buffers and explicit bound metadata over backend-specific
+GPU allocator calls unless a real device heap design is approved.
+
+**Resolution.** Done by the dynamic-bound ABI, design record
+`docs/super-array-bounds-abi.md`:
+
+- Long-form `NEW(p, u)` now allocates an 8-byte header before the element
+  data, records `u` there as an i64, and points `p` at the data — so
+  indexing, dereference, parameter passing, and the pointer's LLVM type are
+  all unchanged.
+- The dereferenced bound queries `UPPER(p^)` / `LOWER(p^)` are implemented
+  end to end (parser-level `^` after the identifier in the intrinsic's
+  argument, AST `deref` flag, type checking, codegen). `UPPER(p^)` reads the
+  header back at run time for heap super arrays; `LOWER(p^)` and fixed-array
+  pointee bounds stay static.
+- `DISPOSE(p)` for super-array pointers frees from the header, not the data
+  pointer (verified under AddressSanitizer).
+- `$INDEXCK` on `p^[i]` previously aborted for any `i` above the declared
+  lower bound (the static-bound helper guessed `(low, low)` for `[low..*]`);
+  it now checks the static lower bound plus the dynamic header upper bound,
+  and super arrays are excluded from the static `(low, high)` check path.
+- The device-heap boundary is kept and sharpened: `NEW`/`DISPOSE` remain
+  rescinded in DEVICE code, and `UPPER(p^)` on a super array is now a
+  device-code type error directing the programmer to explicit bound
+  parameters — matching the drop-in CUDA pointer-ABI split recorded in
+  `docs/old/mandelbrot-ptx-substitution-plan.md`. No device codegen path
+  changed; the committed `fill_indices` PTX regenerates byte-identical.
+- Multi-dimensional super arrays, variant-record long-form `NEW`, and
+  super-array *parameter* bounds remain out of scope pending new differential
+  probes, per the original item; the design record carries the guidance.
+
+**How verified.** `tests/test_super_array_bounds.py` (parser, typecheck,
+IR-shape, and native run tests: bound round-trip, nonzero lower bounds,
+full-range writes, dynamic out-of-bounds aborts, independent bounds across
+allocations, header-relative DISPOSE, device-code rejection); existing
+regression suites for string bounds, long-form `NEW`, and DEVICE heap
+recission stay green; PTX artifact diff is empty.
