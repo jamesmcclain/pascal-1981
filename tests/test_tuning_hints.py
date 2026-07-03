@@ -226,6 +226,26 @@ class TestLoweringIR(unittest.TestCase):
         self.assertIn('!"maxntidx", i32 16', ir)
         self.assertIn('!"maxntidy", i32 16', ir)
 
+    def test_z_axis_maxntid_and_reqntid_use_correct_key_spelling(self):
+        """Regression test for the exact bug class found and fixed in
+        decls.py's _LAUNCH_BOUND_KEYS: the per-axis legacy annotation key has
+        no underscore (`maxntidz`/`reqntidz`), and only x/y dimensions were
+        previously exercised by this test file -- the z axis (a different
+        numeric ceiling: 64, not 1024, per _NVVM_SREG_MAX in exprs.py) was
+        exactly the kind of untested case where the same copy-paste mistake
+        could hide again. Assert the full 3-dimension form for both
+        directives together, since that's the realistic MAXNTID(x,y,z) shape.
+        """
+        ir = _compile_device_ir(_IFACE, _impl(' [MAXNTID(8, 8, 4), REQNTID(8, 8, 4)]'))
+        self.assertIn('"nvvm.maxntid"="8,8,4"', ir)
+        self.assertIn('"nvvm.reqntid"="8,8,4"', ir)
+        self.assertIn('!"maxntidx", i32 8', ir)
+        self.assertIn('!"maxntidy", i32 8', ir)
+        self.assertIn('!"maxntidz", i32 4', ir)
+        self.assertIn('!"reqntidx", i32 8', ir)
+        self.assertIn('!"reqntidy", i32 8', ir)
+        self.assertIn('!"reqntidz", i32 4', ir)
+
     def test_cpu_device_triple_ignores_launch_bounds(self):
         """On the x86 CPU-device parity path there is no kernel entry, so the
         hints are inert and no NVVM surface appears."""
@@ -286,6 +306,18 @@ class TestLoweringPTXAndPipeline(unittest.TestCase):
         from pascal1981.compile_to_ptx import llvm_ir_to_ptx
         ptx = llvm_ir_to_ptx(_compile_device_ir(_IFACE, _impl(' [REQNTID(128)]')), cpu='sm_70')
         self.assertIn('.reqntid 128', ptx)
+
+    def test_full_3d_maxntid_and_reqntid_directives_at_ptx_level(self):
+        """PTX-level counterpart to the z-axis IR test above: this is the
+        layer that actually caught the underscored-key bug (the IR-level
+        assertions alone couldn't, since the wrong spelling was baked into
+        both the code and the old test in the same way). Exercise all three
+        dimensions together through to real PTX output."""
+        from pascal1981.compile_to_ptx import llvm_ir_to_ptx
+        ir = _compile_device_ir(_IFACE, _impl(' [MAXNTID(8, 8, 4), REQNTID(8, 8, 4)]'))
+        ptx = llvm_ir_to_ptx(ir, cpu='sm_70')
+        self.assertIn('.maxntid 8, 8, 4', ptx)
+        self.assertIn('.reqntid 8, 8, 4', ptx)
 
     def test_hint_free_device_unit_ptx_is_unchanged(self):
         """Drop-in discipline: without hints, IR and PTX are byte-identical to
