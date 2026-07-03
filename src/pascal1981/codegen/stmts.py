@@ -795,6 +795,24 @@ class StmtsMixin:
 
         self.builder.position_at_end(end_block)
 
+    def _attach_unroll_metadata(self, branch_instr, count: int) -> None:
+        """Attach llvm.loop.unroll.count(count) loop metadata to a back-edge
+        branch ({$UNROLL n}, tuning-hints feature).
+
+        llvmlite cannot construct the self-referential loop-ID node LLVM's
+        unroller requires as the first operand, so the node is emitted with a
+        null first operand here and rewritten to a distinct self-reference by
+        the textual pass in compile_to_llvm (_selfref_loop_metadata). Without
+        that rewrite the hint verifies but is ignored by the unroll pass
+        (verified empirically against llvmlite 0.48 / LLVM 20).
+        """
+        unroll_md = self.module.add_metadata([
+            "llvm.loop.unroll.count",
+            ir.Constant(ir.IntType(32), count),
+        ])
+        loop_md = self.module.add_metadata([None, unroll_md])
+        branch_instr.set_metadata('llvm.loop', loop_md)
+
     def codegen_for_stmt(self, stmt: ForStmt) -> None:
         """Codegen for FOR loop."""
         # Allocate loop variable (or reuse if already exists).  IBM Pascal's
@@ -852,7 +870,9 @@ class StmtsMixin:
         one = ir.Constant(current_val.type, 1)
         next_val = self.builder.add(current_val, one) if stmt.direction == 'TO' else self.builder.sub(current_val, one)
         self.builder.store(next_val, loop_var)
-        self.builder.branch(loop_block)
+        back_edge = self.builder.branch(loop_block)
+        if getattr(stmt, 'unroll', None):
+            self._attach_unroll_metadata(back_edge, stmt.unroll)
 
         self.loop_stack.pop()
         self.builder.position_at_end(end_block)
@@ -872,7 +892,9 @@ class StmtsMixin:
         self.builder.position_at_end(body_block)
         self.codegen_stmt(stmt.body)
         if not self.builder.block.is_terminated:
-            self.builder.branch(loop_block)
+            back_edge = self.builder.branch(loop_block)
+            if getattr(stmt, 'unroll', None):
+                self._attach_unroll_metadata(back_edge, stmt.unroll)
         self.loop_stack.pop()
         self.builder.position_at_end(end_block)
 
@@ -887,7 +909,9 @@ class StmtsMixin:
         self.codegen_stmt_list(stmt.body)
         if not self.builder.block.is_terminated:
             cond = self.codegen_expr(stmt.cond)
-            self.builder.cbranch(self.to_bool(cond), end_block, loop_block)
+            back_edge = self.builder.cbranch(self.to_bool(cond), end_block, loop_block)
+            if getattr(stmt, 'unroll', None):
+                self._attach_unroll_metadata(back_edge, stmt.unroll)
         self.loop_stack.pop()
         self.builder.position_at_end(end_block)
 

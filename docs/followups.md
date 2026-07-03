@@ -7,7 +7,14 @@ IN-PROGRESS / DONE.
 
 These are not bugs that produce wrong output today; they are seams worth
 closing when the surrounding code is next touched. Resolved items are moved to
-`docs/old/old-followups.md` once they ship (most recently the super-array
+`docs/old/old-followups.md` once they ship (most recently the launch-bound /
+loop-hint channel, item 8 here — the `tuning-hints` feature adds
+`[MAXNTID(x[,y[,z]])]` / `[REQNTID(x[,y[,z]])]` / `[MINCTASM(n)]` attributes on
+exported device kernel procedures, lowered to NVVM launch-bound facts that
+surface as `.maxntid`/`.reqntid`/`.minnctapersm` PTX directives, and a
+`{$UNROLL n}` metacommand lowered to self-referential `llvm.loop.unroll.count`
+metadata on the loop it precedes; design note in `docs/tuning-hints.md`; before
+that the super-array
 bound-metadata item, item 1 here — long-form `NEW(p, u)` now records the
 dynamic upper bound in an 8-byte block header, `UPPER(p^)`/`LOWER(p^)` read
 it back, `DISPOSE` frees from the header, `$INDEXCK` checks against it, and
@@ -203,36 +210,6 @@ are range-annotated.
 **How to verify.** IR test asserting `!range` on the sreg calls; PTX diff
 showing e.g. `mul.wide.u32`/dropped `cvt` instructions in the fill_indices
 kernel at O2.
-
----
-
-## 8. No source-level channel for launch bounds or per-loop hints [OPEN]
-
-**Where.** Kernel-entry emission in `codegen/decls.py` (no
-`!nvvm.annotations` beyond kernel marking); the `$`-metacommand tier in
-`lexer.py`/parser (currently `$if`/`$message`/push-pop only).
-
-**What.** Two hint channels that LLVM cannot invent because they encode
-programmer intent: (a) launch bounds — `maxntid` / `reqntid` / `minctasm`
-annotations that let the backend budget registers for a known block size; and
-(b) per-loop transform hints — `llvm.loop.unroll.count` etc., the `#pragma
-unroll` equivalent. Neither has any surface syntax today.
-
-**Why it matters.** Occupancy tuning (OPTIMIZATION_GUIDE §5/§6) is impossible
-without (a); (b) gives users the guide's §1 unrolling benefits selectively
-without a bespoke unroller, once item 9 lands. Both are pure hint plumbing —
-the transforms remain LLVM's.
-
-**Suggested resolution.** Reuse existing extension syntax: a bracket attribute
-on exported device procedures (e.g. `[MAXNTID(256)]`, mirroring the current
-attribute grammar) lowered to `!nvvm.annotations`, and a `{$unroll N}`
-metacommand attaching `llvm.loop` metadata to the following loop. Gate both
-behind a registered feature (they are not vintage IBM Pascal), consistent with
-the `--dialect`/`-f` machinery.
-
-**How to verify.** Parser fixtures for the new attribute/metacommand (accept
-under the feature, reject under `vintage`); IR tests asserting the annotation
-and loop metadata; PTX test that `.maxntid` appears in the kernel directive.
 
 ---
 

@@ -615,6 +615,62 @@ class DeclsMixin:
         for arg in func.args:
             if isinstance(arg.type, ir.PointerType):
                 arg.attributes.align = self.natural_alignment(arg.type.pointee)
+        self._apply_launch_bound_attrs(decl, func)
+
+    _LAUNCH_BOUND_KEYS = {
+        # Attribute name -> (function-attribute key, per-dimension legacy
+        # nvvm.annotations keys for x, y, z).
+        'MAXNTID': ('nvvm.maxntid', ('maxntid_x', 'maxntid_y', 'maxntid_z')),
+        'REQNTID': ('nvvm.reqntid', ('reqntid_x', 'reqntid_y', 'reqntid_z')),
+        'MINCTASM': ('nvvm.minctasm', ('minctasm',)),
+    }
+
+    def _apply_launch_bound_attrs(self, decl, func: ir.Function) -> None:
+        """Lower [MAXNTID]/[REQNTID]/[MINCTASM] to NVPTX launch-bound facts.
+
+        Called only from `_apply_kernel_entry`, so this fires exclusively for a
+        real GPU-triple kernel entry; on the x86 CPU-device parity path the
+        attributes are inert and the emitted module is unchanged (the drop-in
+        PTX discipline: modules without these attributes are byte-identical to
+        before this feature existed).
+
+        Both encodings LLVM has used are emitted: the "nvvm.maxntid"="x[,y,z]"
+        style *function string attributes* current LLVM reads (verified: on the
+        LLVM 20 bundled with llvmlite 0.48, only this form produces the
+        `.maxntid`/`.reqntid`/`.minnctapersm` PTX directives), plus the legacy
+        per-dimension `!nvvm.annotations` entries older LLVM reads. With both
+        present each PTX directive still appears exactly once (verified).
+        These directives are how ptxas learns the block-size/occupancy budget
+        for register allocation.
+
+        llvmlite's FunctionAttributes whitelists known enum attributes and has
+        no string-attribute API, so the key="value" token is added by shadowing
+        the instance's `_known` set; the token renders verbatim in the
+        `define` attribute list, which is exactly LLVM's string-attribute
+        syntax (round-trip through parse_assembly/verify is covered by tests).
+        """
+        launch_attrs = [a for a in (getattr(decl, 'attributes', []) or [])
+                        if a.name.upper() in self._LAUNCH_BOUND_KEYS]
+        if not launch_attrs:
+            return
+        if not self.device_triple.startswith('nvptx'):
+            # AMD launch bounds use different function attributes (e.g.
+            # amdgpu-flat-work-group-size), a separate lowering nobody has
+            # written yet; fail loudly rather than dropping the hint.
+            raise CodegenError(f"launch-bound attributes on '{decl.name}' are only supported for nvptx device "
+                               f"triples; got '{self.device_triple}'")
+        nvvm = self.module.add_named_metadata('nvvm.annotations')
+        for attr in launch_attrs:
+            fn_attr_key, legacy_keys = self._LAUNCH_BOUND_KEYS[attr.name.upper()]
+            args = attr.arg if isinstance(attr.arg, list) else [attr.arg]
+            values = [int(self.eval_const_expr(arg)) for arg in args]
+            token = '"{}"="{}"'.format(fn_attr_key, ",".join(str(v) for v in values))
+            func.attributes._known = frozenset(func.attributes._known) | {token}
+            func.attributes.add(token)
+            for key, value in zip(legacy_keys, values):
+                nvvm.add(self.module.add_metadata([
+                    func, key, ir.Constant(ir.IntType(32), value),
+                ]))
 
     @staticmethod
     def _c_abi_sign_attr(type_expr) -> Optional[str]:

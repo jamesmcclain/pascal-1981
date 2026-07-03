@@ -484,6 +484,22 @@ class Parser:
         if cur.kind == 'IDENTIFIER' and cur.lexeme.upper() == 'VARARGS':
             self.pos += 1
             return Attribute('VARARGS')
+        # MAXNTID / REQNTID / MINCTASM: launch-bound attributes on exported
+        # device kernel procedures (tuning-hints feature; lowered to NVVM
+        # annotations).  Contextual like SPACE -- recognized from IDENTIFIER
+        # lexemes only, so vintage identifiers with these names survive.
+        # MAXNTID/REQNTID take 1-3 constant dimensions (x[, y[, z]]);
+        # MINCTASM takes exactly one.  Arity/constancy/feature gating are the
+        # type checker's job; here `arg` carries the argument Expression list.
+        if cur.kind == 'IDENTIFIER' and cur.lexeme.upper() in {'MAXNTID', 'REQNTID', 'MINCTASM'}:
+            attr_name = cur.lexeme.upper()
+            self.pos += 1
+            self.expect('LPAREN')
+            args: List[Expression] = [self.parse_expression()]
+            while self.match('COMMA'):
+                args.append(self.parse_expression())
+            self.expect('RPAREN')
+            return Attribute(attr_name, args)
         self.error('expected attribute item')
 
     def parse_compound_statement(self) -> CompoundStmt:
@@ -504,6 +520,10 @@ class Parser:
     def parse_statement(self) -> Statement:
         kind = self.current().kind
         flags = self.current_flags()
+        # A {$UNROLL n} stamp must land on the loop keyword it hints.  Catch a
+        # misplaced hint here rather than silently dropping it.
+        if 'UNROLL' in flags and kind not in {'FOR', 'WHILE', 'REPEAT'}:
+            self.error('{$UNROLL n} must immediately precede a FOR, WHILE, or REPEAT statement')
         if kind == 'BEGIN':
             return self.parse_compound_statement()
         if kind == 'IF':
@@ -614,6 +634,7 @@ class Parser:
         return IfStmt(cond, then_branch, else_branch)
 
     def parse_for_statement(self) -> ForStmt:
+        unroll = self.current_flags().get('UNROLL')
         self.expect('FOR')
         static = self.match('STATIC')
         var = self.expect('IDENTIFIER').lexeme
@@ -627,9 +648,10 @@ class Parser:
         end = self.parse_expression()
         self.expect('DO')
         body = self.parse_statement()
-        return ForStmt(var, start, end, direction, body, static)
+        return ForStmt(var, start, end, direction, body, static, unroll=unroll)
 
     def parse_repeat_statement(self) -> RepeatStmt:
+        unroll = self.current_flags().get('UNROLL')
         self.expect('REPEAT')
         stmts: List[Statement] = []
         if self.current().kind != 'UNTIL':
@@ -640,14 +662,15 @@ class Parser:
                 stmts.append(self.parse_statement())
         self.expect('UNTIL')
         cond = self.parse_boolean_expression()
-        return RepeatStmt(stmts, cond)
+        return RepeatStmt(stmts, cond, unroll=unroll)
 
     def parse_while_statement(self) -> WhileStmt:
+        unroll = self.current_flags().get('UNROLL')
         self.expect('WHILE')
         cond = self.parse_boolean_expression()
         self.expect('DO')
         body = self.parse_statement()
-        return WhileStmt(cond, body)
+        return WhileStmt(cond, body, unroll=unroll)
 
     def parse_case_statement(self) -> CaseStmt:
         self.expect('CASE')

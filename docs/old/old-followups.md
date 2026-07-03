@@ -637,3 +637,74 @@ full-range writes, dynamic out-of-bounds aborts, independent bounds across
 allocations, header-relative DISPOSE, device-code rejection); existing
 regression suites for string bounds, long-form `NEW`, and DEVICE heap
 recission stay green; PTX artifact diff is empty.
+
+## No source-level channel for launch bounds or per-loop hints [DONE]
+
+*(Moved from `docs/followups.md` item 8 when the tuning-hints feature shipped;
+original text below, then the resolution. The original's cross-references to
+"item 9" mean the PTX optimization-pipeline item, still open.)*
+
+**Where.** Kernel-entry emission in `codegen/decls.py` (no
+`!nvvm.annotations` beyond kernel marking); the `$`-metacommand tier in
+`lexer.py`/parser (currently `$if`/`$message`/push-pop only).
+
+**What.** Two hint channels that LLVM cannot invent because they encode
+programmer intent: (a) launch bounds — `maxntid` / `reqntid` / `minctasm`
+annotations that let the backend budget registers for a known block size; and
+(b) per-loop transform hints — `llvm.loop.unroll.count` etc., the `#pragma
+unroll` equivalent. Neither has any surface syntax today.
+
+**Why it matters.** Occupancy tuning (OPTIMIZATION_GUIDE §5/§6) is impossible
+without (a); (b) gives users the guide's §1 unrolling benefits selectively
+without a bespoke unroller, once item 9 lands. Both are pure hint plumbing —
+the transforms remain LLVM's.
+
+**Suggested resolution.** Reuse existing extension syntax: a bracket attribute
+on exported device procedures (e.g. `[MAXNTID(256)]`, mirroring the current
+attribute grammar) lowered to `!nvvm.annotations`, and a `{$unroll N}`
+metacommand attaching `llvm.loop` metadata to the following loop. Gate both
+behind a registered feature (they are not vintage IBM Pascal), consistent with
+the `--dialect`/`-f` machinery.
+
+**Resolution.** Done by the `tuning-hints` feature; design note
+`docs/tuning-hints.md`:
+
+- `[MAXNTID(x[,y[,z]])]`, `[REQNTID(x[,y[,z]])]`, and `[MINCTASM(n)]` parse in
+  the existing bracket attribute grammar (contextual identifiers, so vintage
+  programs using those names as ordinary identifiers survive). The type
+  checker restricts them to exported device kernel PROCEDUREs with positive
+  integer literal dimensions.
+- One deviation from the suggested lowering, forced by evidence: the LLVM 20
+  bundled with llvmlite 0.48 no longer reads maxntid/reqntid from
+  `!nvvm.annotations` — only the newer `"nvvm.maxntid"="x[,y,z]"` function
+  string attributes produce the `.maxntid`/`.reqntid` PTX directives
+  (`.minnctapersm` still honors the annotation form). Codegen dual-emits both
+  encodings, so old and new LLVM each read the one they understand; with both
+  present, each PTX directive appears exactly once.
+- `{$UNROLL n}` joins the metacommand tier: the count is stamped one-shot onto
+  the next token and must immediately precede a FOR/WHILE/REPEAT (a misplaced
+  stamp is a parse error, not a silently dropped hint). Loops carry the count
+  on the AST; codegen attaches `llvm.loop.unroll.count(n)` metadata to the
+  back-edge branch.
+- llvmlite cannot express the *distinct self-referential* loop-ID node LLVM's
+  unroll pass requires (a null first operand verifies but the hint is
+  ignored — established empirically), so `compile_to_llvm` runs a targeted
+  textual pass rewriting exactly the null-headed loop-ID nodes into
+  `distinct !{ !N, ... }`. End to end, an `{$UNROLL 4}` loop calling an opaque
+  EXTERN shows 4 call sites after LLVM's O2 pipeline vs 1 without the hint.
+- Both channels sit behind the registered `tuning-hints` feature
+  (in-extended), so they are rejected under the faithful vintage default,
+  enabled by `-f tuning-hints` in host code, and on by default inside DEVICE
+  code, whose feature baseline is the extended umbrella.
+- Drop-in PTX discipline preserved: hint-free modules are byte-identical at
+  the IR and PTX level (the committed `fill_indices` artifact regenerates
+  unchanged), and on the x86 CPU-device parity path the attributes are inert.
+
+**How verified.** `tests/test_tuning_hints.py`: parser accept/reject
+(including the misplaced-`$UNROLL` and contextual-identifier cases),
+type-check gating (vintage reject / `-f` accept / device auto-accept) and
+placement/arity/value validation, IR-shape tests for both launch-bound
+encodings and the self-referential loop metadata, PTX tests asserting
+`.maxntid`/`.reqntid`/`.minnctapersm` (the item's stated verification), an
+O2-pipeline test proving the unroll hint fires, and hint-free byte-identity
+checks. Full suite green; `fill_indices` PTX diff empty.

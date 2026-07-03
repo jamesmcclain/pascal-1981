@@ -194,6 +194,8 @@ class Lexer:
         self._flag_stack: list[tuple[dict, dict, dict]] = []
         # $INCONST identifiers (integer meta-constants usable in $IF conditions).
         self._meta_consts: dict[str, int] = {}
+        # Pending {$UNROLL n} count, stamped one-shot onto the next token.
+        self._pending_unroll: Optional[int] = None
 
     def current(self) -> str:
         return self.source[self.pos] if self.pos < self.length else ''
@@ -218,7 +220,13 @@ class Lexer:
                 self.column += 1
 
     def emit(self, kind: str, lexeme: str, value: Any, line: int, column: int) -> Token:
-        return Token(kind=kind, code=ALL_CODES[kind], lexeme=lexeme, value=value, line=line, column=column, flags=dict(self.meta_flags))
+        flags = dict(self.meta_flags)
+        if self._pending_unroll is not None:
+            # One-shot stamp from a preceding {$UNROLL n}: the flag rides on
+            # exactly the next token, which the parser requires to open a loop.
+            flags['UNROLL'] = self._pending_unroll
+            self._pending_unroll = None
+        return Token(kind=kind, code=ALL_CODES[kind], lexeme=lexeme, value=value, line=line, column=column, flags=flags)
 
     def skip_whitespace(self) -> None:
         while self.current() and self.current() in ' \t\r\n':
@@ -500,6 +508,28 @@ class Lexer:
                 if ident:
                     print(f"[Pascal] $INCONST: '{ident}' — non-interactive build, using 0", file=sys.stderr)
                     self._meta_consts[ident] = 0
+
+            elif name == 'UNROLL':
+                # $UNROLL n (extension metacommand, gated by -f tuning-hints at
+                # type check): request llvm.loop.unroll.count(n) on the loop
+                # statement this comment immediately precedes.  The count is
+                # stamped one-shot onto the next token; the parser requires that
+                # token to open a FOR/WHILE/REPEAT statement.  Optional ':' for
+                # symmetry with the other valued metacommands.
+                if self.current() == ':':
+                    self.advance()
+                self.skip_whitespace()
+                count_token = ''
+                if self.current().isdigit():
+                    start = self.pos
+                    while self.current().isdigit():
+                        self.advance()
+                    count_token = self.source[start:self.pos]
+                elif self.current().isalpha() or self.current() == '_':
+                    count_token = self._read_meta_name()
+                if not count_token:
+                    raise LexerError(f"$UNROLL requires an integer count at line {self.line}")
+                self._pending_unroll = self._eval_meta_const(count_token)
 
             # ── Tier 1 / Tier 2: flag and listing metacommands ──────────
 

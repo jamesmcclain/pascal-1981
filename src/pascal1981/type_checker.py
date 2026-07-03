@@ -1010,6 +1010,7 @@ class PascalTypeChecker(TypeChecker):
         if not decl.name:
             return
 
+        self._check_launch_bound_attrs(decl, is_function=True)
         attrs = {attr.name.upper() for attr in getattr(decl, 'attributes', [])}
         if 'PURE' in attrs:
             for param in getattr(decl, 'params', []):
@@ -1084,6 +1085,41 @@ class PascalTypeChecker(TypeChecker):
         self.current_function = old_func
         self.current_function_return_type = old_return_type
 
+    def _check_launch_bound_attrs(self, decl, is_function: bool) -> None:
+        """Validate MAXNTID/REQNTID/MINCTASM launch-bound attributes.
+
+        These are extension surface (tuning-hints feature), meaningful only on
+        exported device kernel PROCEDUREs; codegen lowers them to NVVM
+        annotations. Dimensions must be positive integer literals so the
+        annotation values are compile-time facts.
+        """
+        for attr in getattr(decl, 'attributes', []) or []:
+            name = attr.name.upper()
+            if name not in {'MAXNTID', 'REQNTID', 'MINCTASM'}:
+                continue
+            if not self.feature_enabled('tuning-hints'):
+                self.error(f"[{name}] is an extension attribute; enable it with -f tuning-hints", decl)
+                continue
+            if not self.in_device_module:
+                self.error(f"[{name}] is only valid in device code", decl)
+                continue
+            if is_function:
+                self.error(f"[{name}] is only valid on PROCEDUREs: a kernel entry cannot be a FUNCTION", decl)
+                continue
+            if not getattr(decl, 'is_exported_entry', False):
+                self.error(f"[{name}] is only meaningful on an exported device kernel procedure; '{decl.name}' is not in the interface export list", decl)
+                continue
+            args = attr.arg if isinstance(attr.arg, list) else ([attr.arg] if attr.arg is not None else [])
+            max_args = 1 if name == 'MINCTASM' else 3
+            if not (1 <= len(args) <= max_args):
+                self.error(f"[{name}] expects 1{'' if max_args == 1 else '-3'} dimension argument(s), got {len(args)}", decl)
+                continue
+            for arg in args:
+                value = self._fold_int_literal_value(arg)
+                if value is None or value < 1:
+                    self.error(f"[{name}] dimensions must be positive integer literals", decl)
+                    break
+
     def check_proc_decl(self, decl: ProcDecl) -> None:
         """Type check a procedure declaration."""
         if not decl.name:
@@ -1092,6 +1128,7 @@ class PascalTypeChecker(TypeChecker):
         attrs = {attr.name.upper() for attr in getattr(decl, 'attributes', [])}
         if 'PURE' in attrs:
             self.error(f"PURE is only valid on functions, not procedure '{decl.name}'", decl)
+        self._check_launch_bound_attrs(decl, is_function=False)
 
         effective_decl = decl
         iface_decl = self.current_interface_decls.get(decl.name.lower()) if decl.name else None
@@ -1259,8 +1296,26 @@ class PascalTypeChecker(TypeChecker):
         wide INTEGER32/INTEGER64). Used to validate byte-count arguments."""
         return t in (INTEGER_TYPE, WORD_TYPE, INTEGER32_TYPE, INTEGER64_TYPE)
 
+    def _check_unroll_hint(self, stmt, loop_name: str) -> None:
+        """Gate and validate a {$UNROLL n} hint attached to a loop statement.
+
+        The hint is extension surface (tuning-hints feature): rejected under the
+        faithful vintage dialect, on by default inside DEVICE code (the device
+        feature baseline is the extended umbrella), enabled in host code with
+        -f tuning-hints.
+        """
+        unroll = getattr(stmt, 'unroll', None)
+        if unroll is None:
+            return
+        if not self.feature_enabled('tuning-hints'):
+            self.error(f"{{$UNROLL}} on {loop_name} is an extension; enable it with -f tuning-hints", stmt)
+            return
+        if not isinstance(unroll, int) or unroll < 1:
+            self.error(f"{{$UNROLL}} count must be a positive integer, got {unroll}", stmt)
+
     def check_for_stmt(self, stmt: ForStmt) -> None:
         """Type check a FOR statement."""
+        self._check_unroll_hint(stmt, 'FOR')
         # The control variable must be an ordinal type (INTEGER, CHAR, BOOLEAN,
         # WORD, or an enum). Enum-controlled loops are valid: enum ordinals are
         # contiguous, so `FOR c := Red TO Blue` iterates the members in order.
@@ -1295,6 +1350,7 @@ class PascalTypeChecker(TypeChecker):
 
     def check_while_stmt(self, stmt: WhileStmt) -> None:
         """Type check a WHILE statement."""
+        self._check_unroll_hint(stmt, 'WHILE')
         # Condition must be BOOLEAN
         cond_type = self.infer_expression_type(stmt.cond)
         if cond_type and not cond_type.equivalent_to(BOOLEAN_TYPE):
@@ -1306,6 +1362,7 @@ class PascalTypeChecker(TypeChecker):
 
     def check_repeat_stmt(self, stmt: RepeatStmt) -> None:
         """Type check a REPEAT statement."""
+        self._check_unroll_hint(stmt, 'REPEAT')
         # Condition must be BOOLEAN
         cond_type = self.infer_expression_type(stmt.cond)
         if cond_type and not cond_type.equivalent_to(BOOLEAN_TYPE):

@@ -60,6 +60,13 @@ _FEATURES: Dict[str, Feature] = {
         help=
         "Accept an inline set-constructor literal (e.g. ['A'..'Z']) as the READSET set argument. The faithful 1981 default rejects it (Character Set Expected) and requires a declared SET OF CHAR value or a type-prefixed constructor.",
     ),
+    'tuning-hints':
+    Feature(
+        name='tuning-hints',
+        default=False,
+        help=
+        'Enable performance-hint plumbing: the [MAXNTID(x[,y[,z]])] / [REQNTID(x[,y[,z]])] / [MINCTASM(n)] launch-bound attributes on exported device kernel procedures (lowered to NVVM launch-bound facts that surface as .maxntid/.reqntid/.minnctapersm PTX directives) and the {$UNROLL n} loop metacommand (lowered to llvm.loop.unroll.count metadata on the loop it precedes). Hints only; all transforms remain LLVM\'s. Not vintage IBM Pascal.',
+    ),
     'strict-word-int':
     Feature(
         name='strict-word-int',

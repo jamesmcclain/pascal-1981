@@ -51,11 +51,13 @@ class ModuleUnit(ASTNode):
 class Attribute(ASTNode):
     """A storage/header attribute, e.g. READONLY or the parameterized SPACE(GLOBAL).
 
-    `arg` is None for bare-keyword attributes and an Expression (folding to a
-    constant) for parameterized ones such as SPACE(constant).
+    `arg` is None for bare-keyword attributes, an Expression (folding to a
+    constant) for parameterized ones such as SPACE(constant), or a list of
+    Expressions for the launch-bound attributes MAXNTID/REQNTID/MINCTASM
+    (tuning-hints feature), which take 1-3 constant dimensions.
     """
     name: str
-    arg: Optional['Expression'] = None
+    arg: Optional[Union['Expression', List['Expression']]] = None
 
 
 @dataclass
@@ -222,18 +224,22 @@ class ForStmt(ASTNode):
     direction: str  # 'TO' or 'DOWNTO'
     body: Statement
     static: bool = False
+    # {$UNROLL n} hint count (tuning-hints feature); None when absent.
+    unroll: Optional[int] = None
 
 
 @dataclass
 class WhileStmt(ASTNode):
     cond: Expression
     body: Statement
+    unroll: Optional[int] = None  # see ForStmt.unroll
 
 
 @dataclass
 class RepeatStmt(ASTNode):
     body: List[Statement]
     cond: Expression
+    unroll: Optional[int] = None  # see ForStmt.unroll
 
 
 @dataclass
