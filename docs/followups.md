@@ -48,47 +48,6 @@ discipline).
 
 ---
 
-## 4. CLI progress chatter is emitted even without --verbose [DONE]
-
-*(Moved to `docs/old/old-followups.md` when shipped.)*
-
----
-
-## 9. docs/device-code claims need evidence grading before they drive work [OPEN]
-
-**Where.** `docs/device-code/KERNEL_ANALYSIS.md`,
-`docs/device-code/OPTIMIZATION_GUIDE.md`,
-`docs/device-code/DETAILED_COMPARISONS.md`.
-
-**What.** The analysis mixes observed artifacts (PTX listings, instruction
-counts) with unsourced performance narrative: cycle-count models for a virtual
-ISA that `ptxas` re-schedules, a "15-20x" pipelining projection walked back to
-10-25% in the same section, and CUDA-comparison ratios whose nvcc
-version/flags are not recorded. Since then, the compiler gained stock LLVM
-optimization plumbing, language-level loop unrolling, tuning hints, kernel
-parameter attributes, and range metadata support. That leaves only a narrower
-set of potentially useful optimization threads: shared-memory tiling/caching,
-deeper LICM/register-reuse opportunities, and a check on whether LLVM/NVPTX
-already covers any remaining scheduling wins.
-
-**Why it matters.** Per the repo's own anti-confabulation discipline
-(OBSERVED / DOCUMENTED / INFERRED), the guide currently reads as more
-authoritative than its evidence supports, and its costliest recommendations
-(hand-rolled software pipelining, backend unroller) are superseded by newer
-compiler features.
-
-**Suggested resolution.** Annotate each claim with an evidence grade; record
-the nvcc version and flags behind the comparison tables or regenerate them;
-strike or demote the sections superseded by running the stock LLVM pipeline;
-and carry forward only the remaining live ideas above as explicit follow-ups if
-they still matter after a current benchmark pass.
-
-**How to verify.** A pass over the three files leaves no ungraded quantitative
-claim; comparison tables are reproducible from a committed script; any retained
-optimization thread is backed by a current benchmark or an open compiler gap.
-
----
-
 ## 10. PTX pass pipeline may be missing target-specific IR passes (ld.global.nc, mul.wide.u32 never observed) [OPEN]
 
 **Where.** `src/pascal1981/compile_to_ptx.py::llvm_ir_to_ptx` (the `opt_level`
