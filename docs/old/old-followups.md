@@ -33,6 +33,79 @@ optimization thread is backed by a current benchmark or an open compiler gap.
 
 ---
 
+## 10. PTX pass pipeline / frontend metadata payoff check [DONE]
+
+**Where.** `src/pascal1981/compile_to_ptx.py::llvm_ir_to_ptx`, plus the
+already-shipped NVPTX frontend facts emitted by `codegen/exprs.py` and
+`codegen/decls.py` (`!range` on special-register reads,
+`readonly`/`nocapture` on provably-unwritten kernel buffer parameters, and the
+explicitly gated `noalias-kernel-params` feature).
+
+**What.** The live follow-up asked whether the current llvmlite PTX path was
+missing target-specific optimization/lowering behavior, because earlier probes
+had not observed the expected `mul.wide.u32` or `ld.global.nc` PTX effects.
+This was split into three empirical questions:
+
+- Does `!range` on `tid`/`ctaid`/`ntid`/`nctaid` make NVPTX select unsigned
+  widening or simpler index math?
+- Does `readonly`+`nocapture` alone make NVPTX select read-only-cache loads
+  (`ld.global.nc`)?
+- Does the explicitly unsafe caller contract `noalias-kernel-params` produce a
+  meaningful PTX difference?
+
+**Resolution.** No compiler code change is proposed from this item. The
+frontend facts remain valid and should not be removed, but the performance
+claim was narrowed to what was actually observed:
+
+- `!range`: retained as correct IR metadata, but no observed PTX payoff for the
+  tested `mul.wide.s32` vs `mul.wide.u32` question. Removing `!range` from the
+  generated IR for the shipped `fill_indices` and `mandelbrot` examples
+  produced byte-identical PTX under external LLVM 21.1.8 `llc -O2` and
+  `opt -O2` followed by `llc -O2`, matching the earlier negative result from
+  the repo's pinned llvmlite/LLVM 20.1.8 path. This closes the suspected
+  target-pipeline gap for this sub-claim on the tested toolchains.
+- `readonly`/`nocapture`: retained as correct parameter facts, but no observed
+  standalone `ld.global.nc` payoff. A synthetic read/write-buffer kernel was
+  tested as four IR variants (`bare`, `readonly nocapture` only, `noalias`
+  only, and combined). The `readonly nocapture`-only variant matched the bare
+  behavior under the repo llvmlite path and under external LLVM 21.1.8
+  `llc`/`opt+llc`: no `ld.global.nc` selection. This retires the standalone
+  performance claim, not the correctness of the attributes.
+- `noalias`: not dead wiring. The same synthetic kernel produced
+  `ld.global.nc` when `noalias` was present under the repo llvmlite path;
+  external `opt -O2`+`llc -O2` also selected `ld.global.nc` for the
+  `noalias`-only and combined variants. Direct LLVM 21.1.8 `llc -O2` selected
+  `ld.global.nc` for the combined variant but not for the stripped
+  `noalias`-only variant, so the exact pass interaction differs by pipeline;
+  the practical result remains that the current compiler's real emitted
+  combined attributes are useful in the synthetic kernel.
+
+Shipped-example confirmation was weaker but unsurprising: compiling
+`fill_indices` and `mandelbrot` with and without `-f noalias-kernel-params` at
+`--opt-level 2` produced identical PTX and no `ld.global.nc`; those examples do
+not appear to exercise the relevant read-only/global-buffer aliasing pattern in
+which the synthetic kernel moved codegen. The feature remains worth keeping
+because a focused kernel does show a concrete PTX change, and because it is
+already explicitly gated behind a caller-side undefined-behavior contract.
+
+**How verified.** Scratch-only probes under `/home/ubuntu/dixie-scratch-area/`
+recorded the toolchain matrix (`llvmlite` LLVM 20.1.8; external LLVM 21.1.8
+`llc`/`opt` available under `/usr/lib/llvm-21/bin`) and compared the repo
+llvmlite PTX path with external `llc -O2` and `opt -O2`+`llc -O2`. No source
+or test files were changed for the experiment itself. `docs/followups.md` was
+updated by removing this now-closed live item; this archived note records the
+observed results and the reason no code change is recommended.
+
+**Anti-confabulation note.** The resolved claim is deliberately narrow:
+these facts are not proven useless in all LLVM versions or all kernels. What
+is OBSERVED is that `!range` and `readonly`/`nocapture` alone did not produce
+the specific predicted PTX effects under the tested repo and external
+pipelines, while `noalias` did produce a PTX effect in a targeted synthetic
+kernel. Future backend/toolchain changes may warrant re-testing, but Item 10
+no longer needs to remain open as a speculative pass-pipeline task.
+
+---
+
 ## 4. CLI progress chatter is emitted even without --verbose [DONE]
 
 **Where.** `src/pascal1981/compile_to_llvm.py::main` (the `Parsing ...`,
