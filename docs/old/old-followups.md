@@ -708,3 +708,66 @@ encodings and the self-referential loop metadata, PTX tests asserting
 `.maxntid`/`.reqntid`/`.minnctapersm` (the item's stated verification), an
 O2-pipeline test proving the unroll hint fires, and hint-free byte-identity
 checks. Full suite green; `fill_indices` PTX diff empty.
+
+---
+
+## PTX path runs no LLVM IR optimization pipeline [DONE]
+
+**Where.** `src/pascal1981/compile_to_ptx.py::llvm_ir_to_ptx` (and the
+`--target ptx` path in `compile_to_llvm.py`).
+
+**What.** The device path is parse → verify → `create_target_machine(cpu=...)`
+→ `emit_assembly`. No mid-level pass pipeline (O2/O3) is ever run over the IR,
+so LLVM's loop unrolling, LICM, GVN, instruction combining, and load/store
+vectorization never fire. The recommendations in
+`docs/device-code/OPTIMIZATION_GUIDE.md` §1 (unrolling), §2 (software
+pipelining), and §4 (address hoisting) describe hand-implementing transforms
+that the stock LLVM pipeline already provides.
+
+**Why it matters.** The kernels we ship are effectively -O0 IR handed straight
+to the NVPTX backend. Most of the guide's projected wins are available for the
+cost of pipeline plumbing rather than weeks of bespoke backend passes — and a
+bespoke unroller/pipeliner would be a maintenance liability duplicating opt.
+
+**Suggested resolution.** After `parse_assembly`/`verify`, run llvmlite's new
+pass manager (`PipelineTuningOptions` + `PassBuilder`, O2 default, flag-tunable
+via e.g. `--opt-level`) before `emit_assembly`. Note that PTX is virtual
+assembly and `ptxas` performs final scheduling/register allocation, so IR-level
+cleanup is the right layer; do not hand-implement software pipelining or
+PTX-level scheduling (OPTIMIZATION_GUIDE §2/§5) — see the kernel-parameter-facts
+item for the frontend facts the pipeline needs to be effective on memory ops.
+
+**Resolution.** `llvm_ir_to_ptx()`/`compile_file_to_ptx()` in
+`compile_to_ptx.py` gained an `opt_level: int = 0` parameter, and both
+`compile_to_ptx.py`'s CLI and `compile_to_llvm.py`'s `--target ptx` branch
+gained `--opt-level {0,1,2,3}` (rejected with `--target host`, where it has no
+meaning). Default 0 is an exact no-op — verified byte-identical to the
+pre-flag output — so the existing exact-mnemonic PTX tests
+(`test_device_ptx_artifact.py`, `test_device_mandelbrot_ptx.py`) needed no
+changes. The implementation uses llvmlite's new-pass-manager binding
+(`create_pipeline_tuning_options` / `create_pass_builder` /
+`ModulePassManager.run`), the same API already exercised by
+`test_tuning_hints.py::test_unroll_hint_fires_under_o2` before this item
+existed — so no new API surface had to be discovered, only promoted from a
+test fixture to a real, flagged production path.
+
+While validating this item, a real pre-existing bug surfaced in the
+already-shipped launch-bounds feature (see the entry immediately above this
+one): the legacy `!nvvm.annotations` keys were misspelled with a spurious
+underscore (`maxntid_x` instead of `maxntidx`), silently dropping the
+`.maxntid`/`.reqntid` PTX directives on the LLVM 20.1.8 bundled with the
+pinned `llvmlite==0.47.0`. That bug is unrelated to this item's own scope but
+was fixed as part of the same working session since item "Device index
+intrinsics lack !range metadata" and "Kernel entries carry no parameter
+facts" both land adjacent NVVM-annotation-shaped metadata and depend on this
+pipeline to make their benefit observable.
+
+**How verified.** `tests/integration/test_device_ptx_o2.py`: byte-identity of
+`--opt-level 0` vs the pre-flag call signature; argparse choice validation;
+`--opt-level` rejected with `--target host`; the single-CLI `--target ptx`
+path exercises the flag too; a mandelbrot O0-vs-O2 diff proves the pipeline
+actually changes emitted PTX (register renumbering, guard hoisting) while
+ABI-level facts (entry names, void return, no `func_retval`, parameter shape)
+survive optimization. Deliberately does not pin exact O2 instruction
+selection — this repo already has one scar from asserting exact mnemonics
+across an LLVM version bump. Full suite green (1022 passed, 1 skipped).

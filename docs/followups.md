@@ -123,38 +123,6 @@ appear.
 
 ---
 
-## 5. PTX path runs no LLVM IR optimization pipeline [OPEN]
-
-**Where.** `src/pascal1981/compile_to_ptx.py::llvm_ir_to_ptx` (and the
-`--target ptx` path in `compile_to_llvm.py`).
-
-**What.** The device path is parse → verify → `create_target_machine(cpu=...)`
-→ `emit_assembly`. No mid-level pass pipeline (O2/O3) is ever run over the IR,
-so LLVM's loop unrolling, LICM, GVN, instruction combining, and load/store
-vectorization never fire. The recommendations in
-`docs/device-code/OPTIMIZATION_GUIDE.md` §1 (unrolling), §2 (software
-pipelining), and §4 (address hoisting) describe hand-implementing transforms
-that the stock LLVM pipeline already provides.
-
-**Why it matters.** The kernels we ship are effectively -O0 IR handed straight
-to the NVPTX backend. Most of the guide's projected wins are available for the
-cost of pipeline plumbing rather than weeks of bespoke backend passes — and a
-bespoke unroller/pipeliner would be a maintenance liability duplicating opt.
-
-**Suggested resolution.** After `parse_assembly`/`verify`, run llvmlite's new
-pass manager (`PipelineTuningOptions` + `PassBuilder`, O2 default, flag-tunable
-via e.g. `--opt-level`) before `emit_assembly`. Note that PTX is virtual
-assembly and `ptxas` performs final scheduling/register allocation, so IR-level
-cleanup is the right layer; do not hand-implement software pipelining or
-PTX-level scheduling (OPTIMIZATION_GUIDE §2/§5) — see item 10 for the frontend
-facts the pipeline needs to be effective on memory ops.
-
-**How to verify.** Diff PTX for the fill/mandelbrot examples at O0 vs O2;
-existing device tests stay green (adjusting mnemonic-brittle asserts per item
-5); optional benchmark on real hardware via `scripts/build-cuda-host.sh`.
-
----
-
 ## 6. Kernel entries carry no parameter facts: noalias / readonly / align / dereferenceable [OPEN]
 
 **Where.** `codegen/decls.py` (kernel-entry emission around
