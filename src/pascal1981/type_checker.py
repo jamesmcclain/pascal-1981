@@ -1102,6 +1102,15 @@ class PascalTypeChecker(TypeChecker):
         annotations. Dimensions must be positive integer literals so the
         annotation values are compile-time facts.
         """
+        # The PTX ISA (.reqntid, Performance-Tuning Directives) states that
+        # .reqntid cannot be used in conjunction with .maxntid on the same
+        # entry, so reject the pair up front rather than emitting PTX that
+        # ptxas will refuse. (Follow-up item 12; see docs/old/old-followups.md.)
+        present = {a.name.upper() for a in getattr(decl, 'attributes', []) or []}
+        if ('MAXNTID' in present and 'REQNTID' in present
+                and self.feature_enabled('tuning-hints') and self.in_device_module):
+            self.error("[MAXNTID] and [REQNTID] cannot be used together on the same kernel: the PTX ISA forbids combining .maxntid with .reqntid", decl)
+            return
         for attr in getattr(decl, 'attributes', []) or []:
             name = attr.name.upper()
             if name not in {'MAXNTID', 'REQNTID', 'MINCTASM'}:

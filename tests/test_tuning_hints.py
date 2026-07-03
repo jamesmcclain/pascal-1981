@@ -232,6 +232,27 @@ END;
                 self.assertTrue(result.success,
                                 [e.message for e in result.errors])
 
+    def test_maxntid_and_reqntid_are_mutually_exclusive(self):
+        """Follow-up item 12: the PTX ISA forbids combining .maxntid with
+        .reqntid on the same entry, so the pair is rejected at type-check time
+        even when every dimension is individually in range. MINCTASM may still
+        combine with either one."""
+        result = typecheck_module(
+            _IFACE, _impl(' [MAXNTID(8, 8, 4), REQNTID(8, 8, 4)]'),
+            module_name='KH')
+        self.assertFalse(result.success)
+        self.assertTrue(any('cannot be used together' in e.message
+                            for e in result.errors),
+                        [e.message for e in result.errors])
+        # Either one alone alongside MINCTASM remains fine.
+        for attrs in (' [MAXNTID(256), MINCTASM(2)]',
+                      ' [REQNTID(256), MINCTASM(2)]'):
+            with self.subTest(attrs=attrs):
+                result = typecheck_module(_IFACE, _impl(attrs),
+                                          module_name='KH')
+                self.assertTrue(result.success,
+                                [e.message for e in result.errors])
+
     def test_minctasm_has_no_architectural_ceiling(self):
         """Deliberate non-fix: MINCTASM is a minimum-CTAs-per-SM occupancy hint
         with no fixed numeric ceiling. The PTX ISA says an infeasible value is
@@ -275,12 +296,17 @@ class TestLoweringIR(unittest.TestCase):
         could hide again. Assert the full 3-dimension form for both
         directives together, since that's the realistic MAXNTID(x,y,z) shape.
         """
-        ir = _compile_device_ir(_IFACE, _impl(' [MAXNTID(8, 8, 4), REQNTID(8, 8, 4)]'))
+        # NOTE: originally one compile with both attributes on the same
+        # kernel; split into two compiles when follow-up item 12 started
+        # rejecting the MAXNTID+REQNTID combination (the PTX ISA forbids
+        # .maxntid together with .reqntid). All original assertions kept.
+        ir = _compile_device_ir(_IFACE, _impl(' [MAXNTID(8, 8, 4)]'))
         self.assertIn('"nvvm.maxntid"="8,8,4"', ir)
-        self.assertIn('"nvvm.reqntid"="8,8,4"', ir)
         self.assertIn('!"maxntidx", i32 8', ir)
         self.assertIn('!"maxntidy", i32 8', ir)
         self.assertIn('!"maxntidz", i32 4', ir)
+        ir = _compile_device_ir(_IFACE, _impl(' [REQNTID(8, 8, 4)]'))
+        self.assertIn('"nvvm.reqntid"="8,8,4"', ir)
         self.assertIn('!"reqntidx", i32 8', ir)
         self.assertIn('!"reqntidy", i32 8', ir)
         self.assertIn('!"reqntidz", i32 4', ir)
@@ -353,10 +379,12 @@ class TestLoweringPTXAndPipeline(unittest.TestCase):
         both the code and the old test in the same way). Exercise all three
         dimensions together through to real PTX output."""
         from pascal1981.compile_to_ptx import llvm_ir_to_ptx
-        ir = _compile_device_ir(_IFACE, _impl(' [MAXNTID(8, 8, 4), REQNTID(8, 8, 4)]'))
-        ptx = llvm_ir_to_ptx(ir, cpu='sm_70')
-        self.assertIn('.maxntid 8, 8, 4', ptx)
-        self.assertIn('.reqntid 8, 8, 4', ptx)
+        # Split into two compiles when follow-up item 12 started rejecting
+        # the MAXNTID+REQNTID combination (ISA-forbidden); assertions kept.
+        ir = _compile_device_ir(_IFACE, _impl(' [MAXNTID(8, 8, 4)]'))
+        self.assertIn('.maxntid 8, 8, 4', llvm_ir_to_ptx(ir, cpu='sm_70'))
+        ir = _compile_device_ir(_IFACE, _impl(' [REQNTID(8, 8, 4)]'))
+        self.assertIn('.reqntid 8, 8, 4', llvm_ir_to_ptx(ir, cpu='sm_70'))
 
     def test_hint_free_device_unit_ptx_is_unchanged(self):
         """Drop-in discipline: without hints, IR and PTX are byte-identical to

@@ -1,3 +1,45 @@
+## 12. MAXNTID and REQNTID accepted together on the same kernel, which the PTX ISA forbids [DONE]
+
+**Where.** `type_checker.py::_check_launch_bound_attrs`; discovered during the
+item 11 research (see `docs/old/item-11-plan.md` §2 and §6, which flagged it
+as a separate bug class — co-occurrence, not range — and deliberately kept it
+out of item 11's scope rather than scope-creeping).
+
+**What.** The PTX ISA's `.reqntid` performance-tuning directive documentation
+states that `.reqntid` cannot be used in conjunction with `.maxntid` on the
+same entry `[DOCUMENTED — PTX ISA "Performance-Tuning Directives: .reqntid",
+fetched during the item 11 session and recorded in item-11-plan.md §2;
+re-corroborated but not re-read verbatim when this item was fixed]`. The type
+checker validated each launch-bound attribute independently, so
+`[MAXNTID(8,8,4), REQNTID(8,8,4)]` type-checked and compiled to PTX carrying
+both `.maxntid` and `.reqntid` directives `[OBSERVED — this exact combined
+fixture existed in tests/test_tuning_hints.py's own IR- and PTX-level
+regression tests and passed]`. What `ptxas`/the driver does with the pair was
+not tested in this repo (no `ptxas` in the loop) `[UNVERIFIED]`; the ISA text
+is sufficient grounds to reject it regardless.
+
+**Why it matters.** Low severity, same class as item 11: no promise was
+broken, but the compiler's own pipeline silently emitted PTX the ISA declares
+invalid, deferring discovery downstream. Notably, the invalid combination had
+crept into this repo's own test fixtures, which is exactly how an unchecked
+rule propagates.
+
+**How resolved.** `_check_launch_bound_attrs` now rejects the pair up front
+with a distinct error ("cannot be used together...") when the tuning-hints
+feature is active in device code, before per-attribute validation runs, so the
+feature-gate and device-only diagnostics for each attribute are unaffected
+when those gates fail. The two existing regression tests that carried the
+combined fixture (`test_z_axis_maxntid_and_reqntid_use_correct_key_spelling`
+and `test_full_3d_maxntid_and_reqntid_directives_at_ptx_level`) were split
+into two compiles each — one MAXNTID-only, one REQNTID-only — preserving every
+original assertion, with a comment noting why. New type-check test
+`test_maxntid_and_reqntid_are_mutually_exclusive` asserts the rejection and
+that either attribute alone still combines fine with `MINCTASM` (the ISA
+restriction is only between `.maxntid` and `.reqntid`). Full
+`tests/test_tuning_hints.py` green after the change `[OBSERVED]`.
+
+---
+
 ## 11. Launch-bound attributes accept out-of-range dimensions with no architectural check [DONE]
 
 **Where.** `type_checker.py::_check_launch_bound_attrs` (validates

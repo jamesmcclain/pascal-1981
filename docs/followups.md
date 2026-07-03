@@ -7,7 +7,10 @@ IN-PROGRESS / DONE.
 
 These are not bugs that produce wrong output today; they are seams worth
 closing when the surrounding code is next touched. Resolved items are moved to
-`docs/old/old-followups.md` once they ship (most recently the CLI progress
+`docs/old/old-followups.md` once they ship (most recently the
+MAXNTID/REQNTID co-occurrence gap, item 12 there — the PTX ISA forbids
+combining `.maxntid` with `.reqntid` on one entry, discovered during the item
+11 research, and the type checker now rejects the pair; before that the CLI progress
 chatter, item 4 here — the `Parsing ...`, `Type checking...`, `Generating LLVM
 IR...`, and `Wrote ...` prints in `compile_to_llvm.py` and `compile_to_ptx.py`
 are now gated behind `-v`, leaving stderr clean on success; before that the
