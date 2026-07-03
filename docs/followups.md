@@ -156,31 +156,6 @@ confirming identical output.
 
 ---
 
-## 7. Device index intrinsics lack !range metadata [OPEN]
-
-**Where.** `codegen/exprs.py` (~line 782), where `THREADIDX_*` / `BLOCKIDX_*` /
-`BLOCKDIM_*` / `GRIDDIM_*` lower to `llvm.nvvm.read.ptx.sreg.*` calls.
-
-**What.** The intrinsic calls carry no `!range` metadata. Clang attaches ranges
-(e.g. tid.x ∈ [0, 1024), ntid.x ∈ [1, 1025)) so LLVM can prove grid-stride
-index math is non-negative and non-overflowing. Without them the backend must
-allow negative indices, blocking sign-extension elimination, `mul.wide.u32`
-selection, and trip-count reasoning in exactly the loops our kernels use.
-
-**Why it matters.** Frontend-only information, roughly ten lines of codegen,
-zero semantic risk, and it feeds every downstream pass (item 9).
-
-**Suggested resolution.** Attach `!range` to each sreg call using the CUDA
-architectural limits keyed off `--sm` (conservative sm_70 defaults are fine).
-Optionally emit `llvm.assume` for the derived global index when both factors
-are range-annotated.
-
-**How to verify.** IR test asserting `!range` on the sreg calls; PTX diff
-showing e.g. `mul.wide.u32`/dropped `cvt` instructions in the fill_indices
-kernel at O2.
-
----
-
 ## 9. docs/device-code claims need evidence grading before they drive work [OPEN]
 
 **Where.** `docs/device-code/KERNEL_ANALYSIS.md`,

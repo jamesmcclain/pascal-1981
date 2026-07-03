@@ -771,3 +771,65 @@ ABI-level facts (entry names, void return, no `func_retval`, parameter shape)
 survive optimization. Deliberately does not pin exact O2 instruction
 selection — this repo already has one scar from asserting exact mnemonics
 across an LLVM version bump. Full suite green (1022 passed, 1 skipped).
+
+---
+
+## Device index intrinsics lack !range metadata [DONE]
+
+**Where.** `codegen/exprs.py`, where `THREADIDX_*` / `BLOCKIDX_*` /
+`BLOCKDIM_*` / `GRIDDIM_*` lower to `llvm.nvvm.read.ptx.sreg.*` calls.
+
+**What.** The intrinsic calls carry no `!range` metadata. Clang attaches ranges
+(e.g. tid.x ∈ [0, 1024), ntid.x ∈ [1, 1025)) so LLVM can prove grid-stride
+index math is non-negative and non-overflowing. Without them the backend must
+allow negative indices, blocking sign-extension elimination, `mul.wide.u32`
+selection, and trip-count reasoning in exactly the loops our kernels use.
+
+**Why it matters.** Frontend-only information, roughly ten lines of codegen,
+zero semantic risk, and it feeds every downstream pass.
+
+**Suggested resolution.** Attach `!range` to each sreg call using the CUDA
+architectural limits keyed off `--sm` (conservative sm_70 defaults are fine).
+Optionally emit `llvm.assume` for the derived global index when both factors
+are range-annotated.
+
+**How to verify.** IR test asserting `!range` on the sreg calls; PTX diff
+showing e.g. `mul.wide.u32`/dropped `cvt` instructions in the fill_indices
+kernel at O2.
+
+**Resolution.** `codegen_device_index_builtin`'s nvptx branch (`exprs.py`)
+attaches `set_metadata('range', ...)` to every sreg call: `tid`/`ctaid` reads
+get `[0, max)`, `ntid`/`nctaid` reads get `[1, max+1)`, using conservative
+CUDA-architectural ceilings graded DOCUMENTED (CUDA C Programming Guide
+"Compute Capabilities" appendix, not measured against this repo) —
+threadIdx/blockDim x,y ≤ 1024, z ≤ 64; blockIdx/gridDim x ≤ 2³¹−1, y,z ≤
+65535. Applies uniformly regardless of `--sm`, since these are the hardware's
+own register-width ceilings, not a property of a specific launch.
+
+**Anti-confabulation correction to the followup's own "how to verify."** The
+suggested verification (a PTX diff at O2 showing `mul.wide.u32` or dropped
+`cvt` instructions) was tested empirically — on both shipped examples
+(`fill_indices`, `mandelbrot`) *and* on a minimal synthetic repro built
+directly against llvmlite outside this codebase, replicating the exact
+`tid + ctaid*ntid` indexing pattern — and **did not hold** on the LLVM 20.1.8
+bundled with this repo's pinned `llvmlite==0.47.0`: PTX output at
+`--opt-level 2` is byte-identical with vs. without the `!range` metadata in
+all three cases. The metadata is present, valid (round-trips through
+`parse_assembly`/`verify`), and semantically correct, but this toolchain's
+default O2 pipeline does not visibly act on it for this specific
+instruction-selection question. This is recorded rather than hidden: the
+original followup's claim was INFERRED (a plausible expectation from how
+Clang/NVVM's own `!range` annotations are known to help elsewhere), not
+OBSERVED, and the empirical result falsifies the specific mechanism (not the
+metadata's correctness or its value as a frontend-only fact for other/future
+passes or other LLVM builds).
+
+**How verified.** `tests/test_device_index_intrinsics.py`: every sreg
+intrinsic call carries the correct `(lo, hi)` `!range` pair; the CPU-device
+TLS-global path carries none. `tests/integration/test_device_range_metadata_ptx.py`:
+the metadata survives IR→PTX emission at opt-level 0 and 2 on both examples
+without breaking the module; the mandelbrot O2 case is asserted to be
+*byte-for-byte identical* with vs. without the metadata, documenting the
+negative empirical result explicitly rather than silently dropping the
+followup's original (falsified) verification claim. Full suite green (1026
+passed, 1 skipped).

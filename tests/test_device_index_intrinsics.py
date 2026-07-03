@@ -83,6 +83,46 @@ class DeviceIndexIntrinsicCodegenTests(unittest.TestCase):
         self.assertNotIn('declare void @abort', ir)
         self.assertNotIn('declare i32 @fflush', ir)
 
+    def test_nvptx_sreg_calls_carry_range_metadata(self):
+        """docs/followups.md item 7: every sreg read carries !range so LLVM
+        can prove the index math is non-negative and non-overflowing, without
+        needing per-launch information.
+
+        tid/ctaid range over [0, max); ntid/nctaid range over [1, max+1) (a
+        block/grid always has at least one thread/block along an axis).
+        """
+        ir = self._compile(ALL_INDEX_READS_SRC, device_triple='nvptx64-nvidia-cuda')
+        expected_ranges = {
+            'llvm.nvvm.read.ptx.sreg.tid.x': (0, 1024),
+            'llvm.nvvm.read.ptx.sreg.tid.y': (0, 1024),
+            'llvm.nvvm.read.ptx.sreg.tid.z': (0, 64),
+            'llvm.nvvm.read.ptx.sreg.ctaid.x': (0, 2**31 - 1),
+            'llvm.nvvm.read.ptx.sreg.ctaid.y': (0, 65535),
+            'llvm.nvvm.read.ptx.sreg.ctaid.z': (0, 65535),
+            'llvm.nvvm.read.ptx.sreg.ntid.x': (1, 1025),
+            'llvm.nvvm.read.ptx.sreg.ntid.y': (1, 1025),
+            'llvm.nvvm.read.ptx.sreg.ntid.z': (1, 65),
+            'llvm.nvvm.read.ptx.sreg.nctaid.x': (1, 2**31),
+            'llvm.nvvm.read.ptx.sreg.nctaid.y': (1, 65536),
+            'llvm.nvvm.read.ptx.sreg.nctaid.z': (1, 65536),
+        }
+        import re
+        # Every call site to each intrinsic carries a `!range` reference; find
+        # the referenced metadata node and check its (lo, hi) pair.
+        for name, (lo, hi) in expected_ranges.items():
+            call_match = re.search(r'call i32 @"' + re.escape(name) + r'"\(\), !range !(\d+)', ir)
+            self.assertIsNotNone(call_match, f'no !range-tagged call to {name} found')
+            node_id = call_match.group(1)
+            node_match = re.search(r'!' + node_id + r' = !\{ i32 (-?\d+), i32 (-?\d+) \}', ir)
+            self.assertIsNotNone(node_match, f'metadata node !{node_id} for {name} not found')
+            self.assertEqual((int(node_match.group(1)), int(node_match.group(2))), (lo, hi), f'{name} range mismatch')
+
+    def test_cpu_device_reads_carry_no_range_metadata(self):
+        """!range is an NVPTX-sreg-specific fact; the CPU-device TLS-global
+        load path has nothing analogous and must stay untouched."""
+        ir = self._compile(ALL_INDEX_READS_SRC, device_triple='x86_64-pc-linux-gnu')
+        self.assertNotIn('!range', ir)
+
 
 if __name__ == '__main__':
     unittest.main()
