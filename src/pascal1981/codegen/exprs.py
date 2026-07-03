@@ -14,6 +14,7 @@ from llvmlite.ir import IRBuilder
 
 from ..ast_nodes import *
 from ..builtins_registry import DEVICE_INDEX_BUILTIN_FUNCTIONS
+from ..device_limits import NVVM_AXIS_MAX, NVVM_GRID_AXIS_MAX
 from ..type_system import (INTEGER32_TYPE, INTEGER64_TYPE, INTEGER8_TYPE, INTEGER_TYPE, REAL32_TYPE, WORD_TYPE, WORD32_TYPE, WORD64_TYPE, WORD8_TYPE)
 from ..type_system import LStringType as ResolvedLStringType
 from ..type_system import StringType as ResolvedStringType
@@ -792,19 +793,15 @@ class ExprsMixin:
         'GRIDDIM_Z':   '__pas_nctaid_z',
     }
 
-    # Conservative architectural ceilings for CUDA compute capability 7.0+
-    # (`sm_70` and later; this repo's device examples target `sm_70`/`sm_86`,
-    # both well within this range) per the CUDA C Programming Guide's
-    # "Compute Capabilities" appendix. [DOCUMENTED — CUDA architectural
-    # limits, not measured against this repository's own code/tests]
-    # Format: (name-suffix) -> (max threads-per-block axis, max grid axis).
-    # threadIdx.{x,y}/blockDim.{x,y} <= 1024; threadIdx.z/blockDim.z <= 64.
-    # blockIdx/gridDim.x can address up to 2^31-1 blocks; y/z are capped at
-    # 65535 on all CUDA compute capabilities to date.
+    # Conservative architectural ceilings for CUDA compute capability 7.0+.
+    # The per-axis numbers are the single source of truth in
+    # `device_limits.py` (shared with the frontend's launch-bound validation);
+    # this table just re-shapes them into the (tid, ctaid) pairs the !range
+    # helper below wants. Format: (name-suffix) -> (max threads-per-block
+    # axis, max grid axis).
     _NVVM_SREG_MAX = {
-        'X': {'tid': 1024, 'ctaid': 2**31 - 1},
-        'Y': {'tid': 1024, 'ctaid': 65535},
-        'Z': {'tid': 64, 'ctaid': 65535},
+        axis: {'tid': NVVM_AXIS_MAX[axis], 'ctaid': NVVM_GRID_AXIS_MAX[axis]}
+        for axis in ('X', 'Y', 'Z')
     }
 
     def _nvvm_sreg_range(self, upper: str) -> tuple[int, int]:

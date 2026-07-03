@@ -1,3 +1,74 @@
+## 11. Launch-bound attributes accept out-of-range dimensions with no architectural check [DONE]
+
+**Where.** `type_checker.py::_check_launch_bound_attrs` (validates
+`[MAXNTID(...)]`/`[REQNTID(...)]`/`[MINCTASM(...)]`); contrast with
+`codegen/exprs.py::_NVVM_SREG_MAX`, which already encodes the relevant CUDA
+architectural ceilings for a different purpose (`!range` metadata on sreg
+*reads*).
+
+**What.** `_check_launch_bound_attrs` only validated that each dimension
+argument is a positive integer literal; it did not check the value against
+any architectural ceiling. `[MAXNTID(2000, 2000, 2000)]` type-checked and
+compiled, producing a `.maxntid 2000, 2000, 2000` PTX directive for
+block dimensions CUDA cannot actually schedule (x/y max 1024 threads, z max
+64, per the same CUDA Compute Capabilities ceilings `_NVVM_SREG_MAX` already
+cites `[DOCUMENTED]`). Nothing in this compiler caught it; only `ptxas`
+(outside this compiler, not run by any existing test) would, if it catches it
+at all rather than silently misbehaving.
+
+**Why it matters.** Low severity — nothing here was ever claimed to be
+bound-checked, so this was a hardening gap, not a broken promise the way the
+underscored-key bug was. But it was a real, reachable footgun: a user asking
+for an impossible block size got silent acceptance all the way through this
+compiler's own pipeline, discovering the mistake only downstream.
+
+**Suggested resolution.** Reuse `exprs.py`'s `_NVVM_SREG_MAX` (or a shared
+constant lifted to a common location both `type_checker.py` and `exprs.py`
+can import, to avoid a second copy of the same architectural table drifting
+out of sync) to bound-check `MAXNTID`/`REQNTID` dimension values per axis
+(x/y ≤ 1024, z ≤ 64) at type-check time, and `MINCTASM` against whatever
+ceiling is appropriate for `minnctapersm` (check the PTX ISA reference before
+picking a number rather than guessing). Emit a type error, not a silent
+clamp, on an out-of-range literal — consistent with this feature's existing
+"dimensions must be positive integer literals" discipline of catching
+mistakes at compile time.
+
+**How to verify.** Parser/type-check fixtures: an in-range `MAXNTID`/`REQNTID`
+still accepts; an out-of-range one (e.g. `MAXNTID(2000)`, `MAXNTID(1,1,100)`)
+now rejects with a clear message citing the axis ceiling; existing
+`tests/test_tuning_hints.py` fixtures stay green (all currently use in-range
+values, e.g. the new 3-dimension `(8,8,4)` regression test added alongside
+item 8's underscore-key fix).
+
+**How resolved.** Lifted the per-axis and total-thread ceilings into a new
+dependency-free leaf module `src/pascal1981/device_limits.py`
+(`NVVM_AXIS_MAX`, `NVVM_MAX_THREADS_PER_BLOCK`, `NVVM_GRID_AXIS_MAX`) so the
+frontend and `codegen/exprs.py::_NVVM_SREG_MAX` share one source of truth with
+no import cycle. `_check_launch_bound_attrs` now rejects `MAXNTID`/`REQNTID`
+dimensions that exceed the per-axis ceiling (x/y ≤ 1024, z ≤ 64) *or* whose
+product exceeds 1024 total threads per block (the ISA bounds the product, so
+e.g. `MAXNTID(1024, 2)` — in-range per axis but 2048 total — is caught), each
+with a distinct error message citing the axis and ceiling. Per the PTX ISA
+(`.minnctapersm`, PTX ISA §11.4.4: an infeasible value is *silently ignored*
+by `ptxas`, not rejected, and it carries no fixed numeric ceiling), `MINCTASM`
+is deliberately left at positivity-only validation — inventing a hard cap
+would be unsourced confabulation. Tests added in
+`tests/test_tuning_hints.py`: `test_launch_bound_dimensions_bounded_by_cuda_ceilings`,
+`test_launch_bound_dimensions_at_ceiling_accepted`, and
+`test_minctasm_has_no_architectural_ceiling` (an explicit regression guard
+for the deliberate non-fix). Full plan and evidence grading archived alongside
+this note as `docs/old/item-11-plan.md`.
+
+**Anti-confabulation note.** The axis ceilings (1024/1024/64, product 1024)
+are `[DOCUMENTED]` — CUDA Compute Capabilities appendix, corroborated against a
+real-device query and against this repo's own pre-existing `_NVVM_SREG_MAX`
+table, not `[OBSERVED]` from measuring this compiler. The bug's reachability
+and the fix's behavior are `[OBSERVED]` (reproduced via scratch probes and
+codified in the new tests). `MINCTASM`'s lack of a static ceiling is
+`[DOCUMENTED]` from the PTX ISA text.
+
+---
+
 ## 9. docs/device-code claims need evidence grading before they drive work [OPEN]
 
 **Where.** `docs/device-code/KERNEL_ANALYSIS.md`,

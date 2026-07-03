@@ -48,50 +48,6 @@ discipline).
 
 ---
 
-## 11. Launch-bound attributes accept out-of-range dimensions with no architectural check [OPEN]
-
-**Where.** `type_checker.py::_check_launch_bound_attrs` (validates
-`[MAXNTID(...)]`/`[REQNTID(...)]`/`[MINCTASM(...)]`); contrast with
-`codegen/exprs.py::_NVVM_SREG_MAX`, which already encodes the relevant CUDA
-architectural ceilings for a different purpose (`!range` metadata on sreg
-*reads*).
-
-**What.** `_check_launch_bound_attrs` only validates that each dimension
-argument is a positive integer literal; it does not check the value against
-any architectural ceiling. `[MAXNTID(2000, 2000, 2000)]` type-checks and
-compiles today, producing a `.maxntid 2000, 2000, 2000` PTX directive for
-block dimensions CUDA cannot actually schedule (x/y max 1024 threads, z max
-64, per the same CUDA Compute Capabilities ceilings `_NVVM_SREG_MAX` already
-cites `[DOCUMENTED]`). Nothing in this compiler catches it; only `ptxas`
-(outside this compiler, not run by any existing test) would, if it catches it
-at all rather than silently misbehaving.
-
-**Why it matters.** Low severity — nothing here was ever claimed to be
-bound-checked, so this is a hardening gap, not a broken promise the way the
-underscored-key bug was. But it is a real, reachable footgun: a user asking
-for an impossible block size gets silent acceptance all the way through this
-compiler's own pipeline, discovering the mistake only downstream.
-
-**Suggested resolution.** Reuse `exprs.py`'s `_NVVM_SREG_MAX` (or a shared
-constant lifted to a common location both `type_checker.py` and `exprs.py`
-can import, to avoid a second copy of the same architectural table drifting
-out of sync) to bound-check `MAXNTID`/`REQNTID` dimension values per axis
-(x/y ≤ 1024, z ≤ 64) at type-check time, and `MINCTASM` against whatever
-ceiling is appropriate for `minnctapersm` (check the PTX ISA reference before
-picking a number rather than guessing). Emit a type error, not a silent
-clamp, on an out-of-range literal — consistent with this feature's existing
-"dimensions must be positive integer literals" discipline of catching
-mistakes at compile time.
-
-**How to verify.** Parser/type-check fixtures: an in-range `MAXNTID`/`REQNTID`
-still accepts; an out-of-range one (e.g. `MAXNTID(2000)`, `MAXNTID(1,1,100)`)
-now rejects with a clear message citing the axis ceiling; existing
-`tests/test_tuning_hints.py` fixtures stay green (all currently use in-range
-values, e.g. the new 3-dimension `(8,8,4)` regression test added alongside
-item 8's underscore-key fix).
-
----
-
 # Possible follow-ups (unconfirmed — survey only, not yet promoted)
 
 The items below are **not** vetted the way items 1-10 above are: each is a

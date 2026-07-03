@@ -202,6 +202,45 @@ END;
                 self.assertTrue(any(expect in e.message for e in result.errors),
                                 [e.message for e in result.errors])
 
+    def test_launch_bound_dimensions_bounded_by_cuda_ceilings(self):
+        """MAXNTID/REQNTID axes and total thread count are checked against the
+        CUDA architectural ceilings (x/y <= 1024, z <= 64, product <= 1024),
+        not merely positivity. Distinct message so the new failure mode is
+        distinguishable from the old positive-literal check."""
+        cases = (
+            (' [MAXNTID(2000)]', 'x-dimension 2000 exceeds'),
+            (' [MAXNTID(1, 1, 100)]', 'z-dimension 100 exceeds'),
+            (' [MAXNTID(1024, 2)]', 'total threads per block 2048 exceeds'),
+            (' [REQNTID(1025)]', 'x-dimension 1025 exceeds'),
+            (' [REQNTID(8, 8, 65)]', 'z-dimension 65 exceeds'),
+        )
+        for attrs, expect in cases:
+            with self.subTest(attrs=attrs):
+                result = typecheck_module(_IFACE, _impl(attrs), module_name='KH')
+                self.assertFalse(result.success)
+                self.assertTrue(any(expect in e.message for e in result.errors),
+                                [e.message for e in result.errors])
+
+    def test_launch_bound_dimensions_at_ceiling_accepted(self):
+        """Boundary guard: values exactly at the per-axis and product ceilings
+        must still type-check."""
+        for attrs in (' [MAXNTID(1024)]', ' [MAXNTID(1024, 1)]',
+                      ' [MAXNTID(8, 8, 4)]', ' [REQNTID(8, 8, 4)]',
+                      ' [MAXNTID(16, 16, 4)]'):
+            with self.subTest(attrs=attrs):
+                result = typecheck_module(_IFACE, _impl(attrs), module_name='KH')
+                self.assertTrue(result.success,
+                                [e.message for e in result.errors])
+
+    def test_minctasm_has_no_architectural_ceiling(self):
+        """Deliberate non-fix: MINCTASM is a minimum-CTAs-per-SM occupancy hint
+        with no fixed numeric ceiling. The PTX ISA says an infeasible value is
+        silently ignored by ptxas, not rejected, so a large MINCTASM must still
+        type-check -- do not 'fix' this into an invented ceiling."""
+        result = typecheck_module(_IFACE, _impl(' [MINCTASM(999999)]'),
+                                  module_name='KH')
+        self.assertTrue(result.success, [e.message for e in result.errors])
+
 
 @requires_llvm
 class TestLoweringIR(unittest.TestCase):

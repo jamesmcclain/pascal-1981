@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .ast_nodes import AdrExpr, AdsExpr
+from .device_limits import NVVM_AXIS_MAX, NVVM_MAX_THREADS_PER_BLOCK
 from .ast_nodes import ArrayType as ASTArrayType
 from .ast_nodes import (AssignStmt, ASTNode, BinOp, Block, BoolLiteral, CaseStmt, CharLiteral, ConstDecl, Designator)
 from .ast_nodes import EnumType as ASTEnumType
@@ -1122,11 +1123,40 @@ class PascalTypeChecker(TypeChecker):
             if not (1 <= len(args) <= max_args):
                 self.error(f"[{name}] expects 1{'' if max_args == 1 else '-3'} dimension argument(s), got {len(args)}", decl)
                 continue
+            values = []
+            bad = False
             for arg in args:
                 value = self._fold_int_literal_value(arg)
                 if value is None or value < 1:
                     self.error(f"[{name}] dimensions must be positive integer literals", decl)
+                    bad = True
                     break
+                values.append(value)
+            if bad:
+                continue
+            # MAXNTID/REQNTID declare thread-block (CTA) geometry, so their
+            # dimensions must fit the CUDA architectural ceilings; otherwise
+            # ptxas/the driver rejects the kernel at load time (or, worse, it
+            # is silently mis-scheduled). MINCTASM is a *minimum CTAs-per-SM*
+            # occupancy hint with no fixed numeric ceiling -- the PTX ISA says
+            # an infeasible value is silently ignored by ptxas, not rejected,
+            # so we deliberately bound-check only positivity for it (above)
+            # and invent no upper limit here.
+            if name in {'MAXNTID', 'REQNTID'}:
+                axes = ('X', 'Y', 'Z')
+                for value, axis in zip(values, axes):
+                    axis_max = NVVM_AXIS_MAX[axis]
+                    if value > axis_max:
+                        self.error(f"[{name}] {axis.lower()}-dimension {value} exceeds the CUDA architectural maximum of {axis_max} threads for that axis", decl)
+                        bad = True
+                if bad:
+                    continue
+                total = 1
+                for value in values:
+                    total *= value
+                if total > NVVM_MAX_THREADS_PER_BLOCK:
+                    self.error(f"[{name}] total threads per block {total} exceeds the CUDA architectural maximum of {NVVM_MAX_THREADS_PER_BLOCK}", decl)
+                    continue
 
     def check_proc_decl(self, decl: ProcDecl) -> None:
         """Type check a procedure declaration."""
