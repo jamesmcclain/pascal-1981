@@ -685,9 +685,9 @@ Each step is independently landable and keeps host/vintage byte-identical.
    implements the six `pas_dev_*` symbols against the CUDA Driver API (lazy `cuInit`/context,
    load-once module cache keyed on the embedded PTX blob, `cuCtxSynchronize` after launch,
    every return code checked with `cuGetErrorName`). The runtime Makefile's `DEVICE_SHIM=cpu|cuda`
-   switch selects exactly one shim (they define the same symbols); `scripts/build-cuda-host.sh`
-   is the end-to-end recipe, and `tests/integration/test_device_orchestration_gpu.py`
-   (`@requires_gpu`) runs the vector-add on the device and asserts `0 3 6 … 21`.
+   switch selects exactly one shim (they define the same symbols); the end-to-end recipe
+   is exercised by `tests/integration/test_device_orchestration_gpu.py`
+   (`@requires_gpu`), which runs the vector-add on the device and asserts `0 3 6 … 21`.
 8. **Datalayout/alloca hygiene** (§6) - fixes AMDGPU and is latently correct for NVPTX.
 9. **Ergonomics & breadth:** `FORALL`, `GRID/BLOCK` sugar, width changes (`REAL32`/`HALF`,
    32-bit index), device helper libraries (`DEVICE UNIT` uses `DEVICE UNIT`) and cross-kind

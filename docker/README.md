@@ -62,10 +62,9 @@ regardless.
 make -C runtime
 PYTHONPATH=src pytest tests/
 
-# build the runtime with the CUDA shim, then run the end-to-end GPU recipe
+# build the runtime with the CUDA shim, then run the gated GPU test for the
+# end-to-end recipe (device unit -> PTX, host -> --device-backend cuda, link)
 make -C runtime clean && make -C runtime DEVICE_SHIM=cuda
-scripts/build-cuda-host.sh <device_unit.pas> <iface.inc> <host_main.pas> ./out_exe -- -f wide-integers
-./out_exe
 
 # the gated GPU test (skips automatically without a device)
 PYTHONPATH=src pytest tests/integration/test_device_orchestration_gpu.py

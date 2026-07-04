@@ -17,8 +17,8 @@ Landed as planned:
 - **§3.5 — both runtime archives prebuilt** (`libpascalrt_{cpu,cuda}.a`, two
   full archives in one `make`; the "simpler" variant). `runtime-cuda`
   clean-rebuild phony deleted.
-- **§4 / §5 — build files + migration.** `device-example.mk` and
-  `build-cuda-host.sh` reduced to the three-command flow; `compile_to_ptx`,
+- **§4 / §5 — build files + migration.** `device-example.mk` and the example
+  CUDA build recipe reduced to the three-command flow; `compile_to_ptx`,
   `--embed-device-ptx`, and the CPU path all still work; PTX ABI unchanged.
 - **§6 — validation (2 of 3 rungs).** New `--target ptx` output is byte-identical
   to the pre-change tree (diffed against 571c9bb); a regression test pins
@@ -40,8 +40,8 @@ Deviations / not done:
 ## 1. Where the bodies are buried (current state)
 
 The end-to-end GPU path for an example (`examples/device_ptx/mandelbrot`,
-`fill_indices`) is driven by `examples/device_ptx/device-example.mk` and the
-hand-written `scripts/build-cuda-host.sh`. For `DEVICE=cuda` it does **five**
+`fill_indices`) is driven by `examples/device_ptx/device-example.mk` and a
+hand-written end-to-end recipe. For `DEVICE=cuda` it does **five**
 build actions plus a full runtime rebuild, for two source files:
 
 ```
@@ -52,7 +52,7 @@ build actions plus a full runtime rebuild, for two source files:
 5. link      = clang host.ll dev.ll libpascalrt.a -L.../stubs -lcuda -o exe
 ```
 
-(`build-cuda-host.sh` has an extra step 3 compiling the interface `.inc` too.)
+(The end-to-end recipe has an extra step 3 compiling the interface `.inc` too.)
 
 ### The jank, itemized
 
@@ -164,7 +164,7 @@ __pas_device_ptx:
         .byte 0                  # the C-string NUL the shim requires
 ```
 
-The example Makefile / `build-cuda-host.sh` generate this stub from `dev.ptx`.
+The example Makefile / the end-to-end recipe generate this stub from `dev.ptx`.
 `--embed-device-ptx` stays as a legacy opt-in (host-embeds, two-input link).
 With the default decoupled path, host compile no longer depends on the device
 artifact.
@@ -222,7 +222,7 @@ does `make clean && make DEVICE_SHIM=cuda`) is deleted.
   $(BUILD)/host.ll:  $(HOST_SRC) ; $(PAS) --target host --device-backend cuda $(FEATURES) $< $@
   $(EXE): $(BUILD)/host.ll $(BUILD)/dev.o ; clang $^ $(RUNTIME_CUDA) -L$(CUDA_HOME)/lib64/stubs -lcuda -o $@
   ```
-- `scripts/build-cuda-host.sh` collapses from 6 steps to 3 (+ optional ptxas),
+- The example end-to-end recipe collapses from 6 steps to 3 (+ optional ptxas),
   and stops rebuilding the runtime.
 
 ## 5. Migration / compatibility
