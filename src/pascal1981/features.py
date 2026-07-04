@@ -32,7 +32,7 @@ _FEATURES: Dict[str, Feature] = {
     Feature(
         name='wide-integers',
         default=False,
-        help='Enable extension INTEGER32/INTEGER64 (signed) and WORD32/WORD64 (unsigned) types, the WORD16 (= WORD) and INTEGER16 (= INTEGER) synonyms, and wide integer constants.',
+        help='Enable extension INTEGER8/INTEGER32/INTEGER64 (signed) and WORD8/WORD32/WORD64 (unsigned) types, the WORD16 (= WORD) and INTEGER16 (= INTEGER) synonyms, and wide integer constants.',
     ),
     'wide-reals':
     Feature(

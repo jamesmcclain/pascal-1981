@@ -14,7 +14,7 @@ from llvmlite.ir import IRBuilder
 
 from ..ast_nodes import *
 from ..builtins_registry import DEVICE_INDEX_BUILTIN_FUNCTIONS
-from ..type_system import (INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL32_TYPE, WORD_TYPE, WORD32_TYPE, WORD64_TYPE)
+from ..type_system import (INTEGER32_TYPE, INTEGER64_TYPE, INTEGER8_TYPE, INTEGER_TYPE, REAL32_TYPE, WORD_TYPE, WORD32_TYPE, WORD64_TYPE, WORD8_TYPE)
 from ..type_system import LStringType as ResolvedLStringType
 from ..type_system import StringType as ResolvedStringType
 from .base import CodegenError, _is_gpu_triple
@@ -31,6 +31,8 @@ class ExprsMixin:
                 return ir.Constant(ir.IntType(64), expr.value)
             if resolved == INTEGER32_TYPE or resolved == WORD32_TYPE:
                 return ir.Constant(ir.IntType(32), expr.value)
+            if resolved == INTEGER8_TYPE or resolved == WORD8_TYPE:
+                return ir.Constant(ir.IntType(8), expr.value)
             return ir.Constant(ir.IntType(16), expr.value)
         elif isinstance(expr, RealLiteral):
             # The type checker tags the literal REAL32 when it sits in a
@@ -344,25 +346,30 @@ class ExprsMixin:
     def _expr_is_unsigned_word(self, expr: Expression) -> bool:
         """Best-effort Pascal signedness query for checked integer arithmetic.
 
-        The unsigned scalars are the WORD family: WORD/WORD16 (i16), WORD32
-        (i32), and WORD64 (i64).  INTEGER/INTEGER16/INTEGER32/INTEGER64 are
+        The unsigned scalars are the WORD family: WORD8 (i8), WORD/WORD16
+        (i16), WORD32 (i32), and WORD64 (i64).
+        INTEGER8/INTEGER/INTEGER16/INTEGER32/INTEGER64 are
         signed.  Signedness is taken from the Pascal type, not the LLVM width, so
         that widening picks zext (unsigned) vs sext (signed) correctly.
         """
-        unsigned_names = {'WORD', 'WORD16', 'WORD32', 'WORD64'}
+        unsigned_names = {'WORD', 'WORD8', 'WORD16', 'WORD32', 'WORD64'}
         if isinstance(expr, Identifier):
             sym = self.scope.lookup(expr.name)
             return bool(sym and self._type_expr_name(sym.type_expr) in unsigned_names)
         if isinstance(expr, Designator):
-            sym = self.scope.lookup(expr.name)
-            return bool(sym and self._type_expr_name(sym.type_expr) in unsigned_names and not expr.selectors)
+            # Walk the selector chain so an unsigned element/field (e.g.
+            # ``a[i]`` where a is ARRAY OF WORD8, or ``p^[i]`` over a WORD8
+            # super array) is recognized; a bare-name lookup would misclassify
+            # it as signed and sign-extend on widening.
+            ty = self.resolve_designator_type_expr(expr)
+            return bool(ty is not None and self._type_expr_name(ty) in unsigned_names)
         if isinstance(expr, UnaryOp):
             return self._expr_is_unsigned_word(expr.operand)
         if isinstance(expr, BinOp):
             if expr.op in {'PLUS', 'MINUS', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR'}:
                 return self._expr_is_unsigned_word(expr.left) and self._expr_is_unsigned_word(expr.right)
         if isinstance(expr, FuncCall):
-            return expr.name.upper() == 'WRD'
+            return expr.name.upper() in ('WRD', 'WRD8')
         return False
 
     def _extend_int_for_pascal_expr(self, value: 'ir.Value', target: ir.IntType, expr: Expression) -> 'ir.Value':
@@ -668,6 +675,19 @@ class ExprsMixin:
                 raise CodegenError(f'{lookup_name} not supported for type {val.type}')
             shifted = self.builder.lshr(val, ir.Constant(val.type, 8)) if lookup_name == 'HIBYTE' else val
             return self.builder.trunc(shifted, ir.IntType(8))
+        elif lookup_name == 'WRD8':
+            # WRD8(x): truncate/retype to the 8-bit unsigned WORD8 (the 8-bit
+            # sibling of WRD).  Wider integers truncate to the low byte; i8
+            # values (CHAR/BOOLEAN/WORD8/INTEGER8) pass through unchanged.
+            val = self.codegen_expr(expr.args[0])
+            vt = val.type
+            if isinstance(vt, ir.IntType):
+                if vt.width > 8:
+                    return self.builder.trunc(val, ir.IntType(8))
+                if vt.width == 8:
+                    return val
+                return self.builder.zext(val, ir.IntType(8))
+            raise CodegenError(f'WRD8: unsupported value type {vt}')
         elif lookup_name == 'WRD':
             val = self.codegen_expr(expr.args[0])
             vt = val.type

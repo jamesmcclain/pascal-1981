@@ -73,6 +73,7 @@ def _is_gpu_triple(triple: str) -> bool:
 
 _SCALAR_SIZES = {
     'INTEGER': 2,
+    'INTEGER8': 1,
     'INTEGER16': 2,
     'INTEGER32': 4,
     'INTEGER64': 8,
@@ -80,6 +81,7 @@ _SCALAR_SIZES = {
     'REAL64': 8,
     'REAL32': 4,
     'WORD': 2,
+    'WORD8': 1,
     'WORD16': 2,
     'WORD32': 4,
     'WORD64': 8,

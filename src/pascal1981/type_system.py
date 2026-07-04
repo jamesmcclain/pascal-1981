@@ -54,6 +54,23 @@ class Integer64Type(Type):
         return isinstance(other, Integer64Type)
 
 
+class Integer8Type(Type):
+    """The INTEGER8 extension type (8-bit signed).
+
+    The narrow signed sibling of INTEGER32/INTEGER64, gated on
+    ``wide-integers``.  Deliberately NOT a synonym for CHAR: CHAR is a
+    character type (no arithmetic, WRITEs as a glyph), while INTEGER8 is a
+    true signed integer (arithmetic, WRITEs as a number, ``signext`` across
+    the C ABI -- the Pascal spelling of C ``int8_t``/``signed char``).
+    """
+
+    def __str__(self) -> str:
+        return "INTEGER8"
+
+    def equivalent_to(self, other: Type) -> bool:
+        return isinstance(other, Integer8Type)
+
+
 class BooleanType(Type):
     """The BOOLEAN type (TRUE/FALSE)."""
 
@@ -107,6 +124,21 @@ class WordType(Type):
 
     def equivalent_to(self, other: Type) -> bool:
         return isinstance(other, WordType)
+
+
+class Word8Type(Type):
+    """The WORD8 extension type (8-bit unsigned).
+
+    The narrow unsigned sibling of WORD32/WORD64 (the Pascal spelling of C
+    ``uint8_t``), gated on ``wide-integers``.  Widens implicitly to
+    WORD/WORD32/WORD64 and zero-extends (never sign-extends) when widened.
+    """
+
+    def __str__(self) -> str:
+        return "WORD8"
+
+    def equivalent_to(self, other: Type) -> bool:
+        return isinstance(other, Word8Type)
 
 
 class Word32Type(Type):
@@ -382,12 +414,14 @@ class FunctionType(Type):
 
 # Built-in type instances (singletons)
 INTEGER_TYPE = IntegerType()
+INTEGER8_TYPE = Integer8Type()
 INTEGER32_TYPE = Integer32Type()
 INTEGER64_TYPE = Integer64Type()
 BOOLEAN_TYPE = BooleanType()
 REAL_TYPE = RealType()
 REAL32_TYPE = Real32Type()
 WORD_TYPE = WordType()
+WORD8_TYPE = Word8Type()
 WORD32_TYPE = Word32Type()
 WORD64_TYPE = Word64Type()
 CHAR_TYPE = CharType()
@@ -423,11 +457,31 @@ def can_assign(from_type: Type, to_type: Type) -> bool:
         return True
     if isinstance(from_type, IntegerType) and isinstance(to_type, RealType):
         return True
+    # INTEGER32 -> REAL is exact (every i32 is representable in an f64), and
+    # INTEGER32 -> REAL32 was already implicit, so allowing the wider float
+    # too removes an inconsistency.  INTEGER64 -> REAL stays explicit-only:
+    # it is lossy above 2**53.
+    if isinstance(from_type, Integer32Type) and isinstance(to_type, RealType):
+        return True
     # Integer family widens into REAL32 (single-precision), mirroring the
     # INTEGER->REAL widening above. REAL32 in turn widens into REAL (f32->f64),
     # but the reverse (REAL->REAL32) is a narrowing and is NOT implicit; write
     # REAL32 literals/values in a REAL32 context instead.
-    if isinstance(from_type, (IntegerType, Integer32Type, Integer64Type, WordType, Word32Type, Word64Type)) and isinstance(to_type, Real32Type):
+    if isinstance(from_type, (IntegerType, Integer8Type, Integer32Type, Integer64Type, WordType, Word8Type, Word32Type, Word64Type)) and isinstance(to_type, Real32Type):
+        return True
+    # Narrow 8-bit family widening (value-preserving):
+    #   INTEGER8 -> INTEGER/INTEGER32/INTEGER64 (sign-extend) and REAL.
+    #   WORD8    -> WORD/WORD32/WORD64 (zero-extend), and -- because every
+    #   WORD8 value 0..255 is representable in every wider signed type --
+    #   WORD8 -> INTEGER/INTEGER32/INTEGER64 too (the rank-shifted analog of
+    #   the existing WORD -> INTEGER32/INTEGER64 rule).  INTEGER8 -> REAL
+    #   mirrors the existing INTEGER -> REAL widening; WORD8, like WORD, has
+    #   no implicit REAL widening.
+    # Narrowing the other way is never implicit, and the signedness wall
+    # holds at equal width: INTEGER8 does not implicitly become WORD8.
+    if isinstance(from_type, Integer8Type) and isinstance(to_type, (IntegerType, Integer32Type, Integer64Type, RealType)):
+        return True
+    if isinstance(from_type, Word8Type) and isinstance(to_type, (WordType, Word32Type, Word64Type, IntegerType, Integer32Type, Integer64Type)):
         return True
     if isinstance(from_type, Real32Type) and isinstance(to_type, RealType):
         return True
@@ -496,12 +550,13 @@ def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optiona
     # wide WORD32/INTEGER32, WORD64/INTEGER64 pairs alike) is additionally
     # diagnosed in the type checker (_check_word_int_mix): a warning by default,
     # an error under -f strict-word-int, with the INTEGER-constant exemption.
-    int_rank = {IntegerType: 0, WordType: 0,
+    int_rank = {Integer8Type: -1, Word8Type: -1,
+                IntegerType: 0, WordType: 0,
                 Integer32Type: 1, Word32Type: 1,
                 Integer64Type: 2, Word64Type: 2}
-    _signed_by_rank = {0: INTEGER_TYPE, 1: INTEGER32_TYPE, 2: INTEGER64_TYPE}
-    _unsigned_by_rank = {0: WORD_TYPE, 1: WORD32_TYPE, 2: WORD64_TYPE}
-    _unsigned_types = (WordType, Word32Type, Word64Type)
+    _signed_by_rank = {-1: INTEGER8_TYPE, 0: INTEGER_TYPE, 1: INTEGER32_TYPE, 2: INTEGER64_TYPE}
+    _unsigned_by_rank = {-1: WORD8_TYPE, 0: WORD_TYPE, 1: WORD32_TYPE, 2: WORD64_TYPE}
+    _unsigned_types = (Word8Type, WordType, Word32Type, Word64Type)
     if type(left_type) in int_rank and type(right_type) in int_rank:
         if op == 'SLASH':
             return REAL_TYPE
@@ -530,7 +585,7 @@ def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optiona
     #   REAL32 op REAL/REAL64   -> REAL     (f32 widens to f64, C-like)
     REAL_ARITH = ('PLUS', 'MINUS', 'MUL', 'SLASH')
     if isinstance(left_type, Real32Type) or isinstance(right_type, Real32Type):
-        other_ok_int = (IntegerType, Integer32Type, Integer64Type, WordType)
+        other_ok_int = (IntegerType, Integer8Type, Integer32Type, Integer64Type, WordType, Word8Type)
         l_is32, r_is32 = isinstance(left_type, Real32Type), isinstance(right_type, Real32Type)
         l_is64, r_is64 = isinstance(left_type, RealType), isinstance(right_type, RealType)
         l_int, r_int = isinstance(left_type, other_ok_int), isinstance(right_type, other_ok_int)
@@ -550,9 +605,10 @@ def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optiona
         if op in COMPARE:
             return BOOLEAN_TYPE
 
-    # INTEGER op REAL (mixed arithmetic widens to REAL)
-    if (isinstance(left_type, IntegerType) and isinstance(right_type, RealType)) or \
-       (isinstance(left_type, RealType) and isinstance(right_type, IntegerType)):
+    # INTEGER op REAL (mixed arithmetic widens to REAL).  INTEGER8 joins the
+    # signed side of this rule, mirroring its INTEGER8 -> REAL assignability.
+    if (isinstance(left_type, (IntegerType, Integer8Type)) and isinstance(right_type, RealType)) or \
+       (isinstance(left_type, RealType) and isinstance(right_type, (IntegerType, Integer8Type))):
         if op in ('PLUS', 'MINUS', 'MUL', 'SLASH'):
             return REAL_TYPE
         if op in COMPARE:
@@ -617,17 +673,17 @@ def unary_op_result_type(operand_type: Type, op: str) -> Optional[Type]:
     if op == 'NOT':
         if isinstance(operand_type, BooleanType):
             return BOOLEAN_TYPE
-        if isinstance(operand_type, (IntegerType, Integer32Type, Integer64Type, WordType)):
+        if isinstance(operand_type, (Integer8Type, IntegerType, Integer32Type, Integer64Type, Word8Type, WordType)):
             return operand_type  # bitwise complement
 
     if op in ('PLUS', 'MINUS'):
-        if isinstance(operand_type, (IntegerType, Integer32Type, Integer64Type)):
+        if isinstance(operand_type, (Integer8Type, IntegerType, Integer32Type, Integer64Type)):
             return operand_type
         if isinstance(operand_type, RealType):
             return REAL_TYPE
         if isinstance(operand_type, Real32Type):
             return REAL32_TYPE
-        if isinstance(operand_type, WordType):
-            return WORD_TYPE
+        if isinstance(operand_type, (Word8Type, WordType)):
+            return operand_type
 
     return None

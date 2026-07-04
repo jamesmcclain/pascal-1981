@@ -13,7 +13,7 @@ import llvmlite.ir as ir
 from ..ast_nodes import EnumType as ASTEnumType
 from ..ast_nodes import LStringType as ASTLStringType
 from ..ast_nodes import *
-from ..type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, WORD32_TYPE, WORD64_TYPE)
+from ..type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER8_TYPE, INTEGER_TYPE, REAL_TYPE, WORD_TYPE, WORD32_TYPE, WORD64_TYPE, WORD8_TYPE)
 from ..type_system import EnumType as ResolvedEnumType
 from ..type_system import FileType as ResolvedFileType
 from ..type_system import LStringType, StringType
@@ -50,6 +50,13 @@ class IoWriteReadMixin:
                 if tag is not None:
                     return NamedType(tag, None)
             if isinstance(expr, Designator) and expr.selectors and ty is not None:
+                # Prefer the full selector walk so element/field/pointee types
+                # (array elements, record fields, super-array elements) format
+                # by their own Pascal type -- a WORD8 element prints unsigned,
+                # not as the CHAR glyph of its i8 storage.
+                walked = self.resolve_designator_type_expr(expr)
+                if walked is not None:
+                    return walked
                 cur = ty
                 for sel in expr.selectors:
                     if sel.kind == 'FIELD' and isinstance(self.resolve_type_alias(cur), (ResolvedFileType, FileType)):
@@ -180,7 +187,22 @@ class IoWriteReadMixin:
                 continue
 
             if str(val.type) == 'i8':
-                conv = 'c'
+                # i8 is shared storage for CHAR, BOOLEAN-as-loaded, WORD8, and
+                # INTEGER8.  CHAR prints as a glyph; the 8-bit integer extension
+                # types print as numbers (unsigned for WORD8, signed for
+                # INTEGER8), exactly like their wider siblings.
+                ty_name = pas_ty.name.upper() if isinstance(pas_ty, (NamedType, BuiltinType)) else ''
+                if pas_ty is WORD8_TYPE or ty_name == 'WORD8' or self._expr_is_unsigned_word(expr):
+                    # WORD8 values -- including WRD8(...) conversion results,
+                    # whose Pascal type is not carried by _pas_type -- print
+                    # as unsigned numbers.
+                    conv = 'u'
+                    val = self.builder.zext(val, ir.IntType(32))
+                elif pas_ty is INTEGER8_TYPE or ty_name == 'INTEGER8':
+                    conv = 'd'
+                    val = self.builder.sext(val, ir.IntType(32))
+                else:
+                    conv = 'c'
             elif str(val.type) == 'i1':
                 conv = 'd'
                 val = self.builder.zext(val, ir.IntType(32))

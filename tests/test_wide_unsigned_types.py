@@ -42,6 +42,15 @@ def run(src, feats, exe):
     return rc, out, err
 
 
+class TestInteger32RealWidening(unittest.TestCase):
+    def test_integer32_assigns_into_real(self):
+        # Exact widening (every i32 fits an f64); INTEGER64 stays explicit-only.
+        src = ("PROGRAM P; VAR i: INTEGER32; r: REAL; BEGIN i := 5; r := i END.")
+        self.assertTrue(ok(src, WI))
+        src64 = ("PROGRAM P; VAR i: INTEGER64; r: REAL; BEGIN i := 5; r := i END.")
+        self.assertFalse(ok(src64, WI))
+
+
 class TestGating(unittest.TestCase):
     def test_word32_word64_need_wide_integers(self):
         self.assertTrue(ok("PROGRAM P; VAR w: WORD32; BEGIN w := 0 END.", WI))

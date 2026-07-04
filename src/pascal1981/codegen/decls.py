@@ -812,9 +812,9 @@ class DeclsMixin:
         returns, the same status quo as before Phase 4).
 
         Signed narrow types (C char / short):  'signext'
-          INTEGER (i16), CHAR (i8), CCHAR (i8 alias), CSHORT (i16 alias)
+          INTEGER (i16), INTEGER8 (i8), CHAR (i8), CCHAR (i8 alias), CSHORT (i16 alias)
         Unsigned/boolean narrow types:         'zeroext'
-          WORD (i16), BOOLEAN (i8)
+          WORD (i16), WORD8 (i8), BOOLEAN (i8)
         All 32-bit-and-wider types:            None  (no attribute needed)
         """
         if type_expr is None:
@@ -823,9 +823,9 @@ class DeclsMixin:
         if name is None:
             return None
         n = name.upper()
-        if n in {'INTEGER', 'INTEGER16', 'CHAR', 'CCHAR', 'CSHORT'}:
+        if n in {'INTEGER', 'INTEGER8', 'INTEGER16', 'CHAR', 'CCHAR', 'CSHORT'}:
             return 'signext'
-        if n in {'WORD', 'WORD16', 'BOOLEAN'}:
+        if n in {'WORD', 'WORD8', 'WORD16', 'BOOLEAN'}:
             return 'zeroext'
         return None
 
