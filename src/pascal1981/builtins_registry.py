@@ -5,10 +5,10 @@ This is shared between the type checker and code generator to prevent
 "registered but no codegen" traps.
 """
 
-from .symbol_table import Symbol
 from .features import is_extended
-from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL_TYPE, WORD32_TYPE, WORD64_TYPE, WORD_TYPE, EnumType, FileType, FunctionType, LStringType, PointerType,
-                          ProcedureType, RecordType, StringType)
+from .symbol_table import Symbol
+from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL_TYPE, WORD8_TYPE, WORD32_TYPE, WORD64_TYPE, WORD_TYPE, EnumType, FileType,
+                          FunctionType, LStringType, PointerType, ProcedureType, RecordType, StringType)
 
 # Lists of all built-in function and procedure names
 DEVICE_INDEX_BUILTIN_FUNCTIONS = {
@@ -34,8 +34,8 @@ DEVICE_ORCHESTRATION_BUILTIN_FUNCTIONS = {'DEVALLOC'}
 DEVICE_ORCHESTRATION_BUILTIN_PROCEDURES = {'DEVCOPYTO', 'DEVCOPYFROM', 'DEVFREE', 'LAUNCH'}
 
 BUILTIN_FUNCTIONS = {
-    'ABS', 'SQR', 'SQRT', 'SIN', 'COS', 'LN', 'EXP', 'ARCTAN', 'CHR', 'ORD', 'ODD', 'SUCC', 'PRED', 'HIBYTE', 'LOBYTE', 'WRD', 'BYWORD', 'TRUNC', 'ROUND', 'FLOAT', 'SCANEQ',
-    'SCANNE', 'ENCODE', 'DECODE', 'EOF', 'EOLN', *DEVICE_INDEX_BUILTIN_FUNCTIONS, *DEVICE_ORCHESTRATION_BUILTIN_FUNCTIONS
+    'ABS', 'SQR', 'SQRT', 'SIN', 'COS', 'LN', 'EXP', 'ARCTAN', 'CHR', 'ORD', 'ODD', 'SUCC', 'PRED', 'HIBYTE', 'LOBYTE', 'WRD', 'WRD8', 'BYWORD', 'TRUNC', 'ROUND', 'FLOAT',
+    'SCANEQ', 'SCANNE', 'ENCODE', 'DECODE', 'EOF', 'EOLN', *DEVICE_INDEX_BUILTIN_FUNCTIONS, *DEVICE_ORCHESTRATION_BUILTIN_FUNCTIONS
 }
 
 DEVICE_SYNC_BUILTIN_PROCEDURES = {'SYNCTHREADS'}
@@ -54,18 +54,19 @@ DEVICE_SYNC_BUILTIN_PROCEDURES = {'SYNCTHREADS'}
 # the existing INTEGER32/INTEGER64/CHAR/REAL/ADRMEM machinery.  Registered as
 # predeclared TYPE symbols; a user TYPE/VAR of the same name still shadows them.
 C_ABI_TYPE_ALIASES = {
-    'CCHAR': 'CHAR',         # C char        -> i8
-    'CSHORT': 'INTEGER',     # C short       -> i16
-    'CINT': 'INTEGER32',     # C int         -> i32
-    'CLONG': 'INTEGER64',    # C long (LP64) -> i64
+    'CCHAR': 'CHAR',  # C char        -> i8
+    'CSHORT': 'INTEGER',  # C short       -> i16
+    'CINT': 'INTEGER32',  # C int         -> i32
+    'CLONG': 'INTEGER64',  # C long (LP64) -> i64
     'CSIZE_T': 'INTEGER64',  # C size_t      -> i64
-    'CDOUBLE': 'REAL',       # C double      -> f64
-    'CPTR': 'ADRMEM',        # C void*       -> i8*
+    'CDOUBLE': 'REAL',  # C double      -> f64
+    'CPTR': 'ADRMEM',  # C void*       -> i8*
 }
 
 BUILTIN_PROCEDURES = {
     'WRITE', 'WRITELN', 'READ', 'READLN', 'RESET', 'REWRITE', 'GET', 'PUT', 'ASSIGN', 'CLOSE', 'DISCARD', 'READFN', 'READSET', 'CONCAT', 'COPYLST', 'COPYSTR', 'INSERT', 'DELETE',
-    'POSITN', 'PACK', 'UNPACK', 'NEW', 'DISPOSE', 'FILLC', 'FILLSC', 'MOVEL', 'MOVER', 'MOVESL', 'MOVESR', 'ABORT', *DEVICE_SYNC_BUILTIN_PROCEDURES, *DEVICE_ORCHESTRATION_BUILTIN_PROCEDURES
+    'POSITN', 'PACK', 'UNPACK', 'NEW', 'DISPOSE', 'FILLC', 'FILLSC', 'MOVEL', 'MOVER', 'MOVESL', 'MOVESR', 'ABORT', *DEVICE_SYNC_BUILTIN_PROCEDURES,
+    *DEVICE_ORCHESTRATION_BUILTIN_PROCEDURES
 }
 
 
@@ -155,6 +156,13 @@ def register_builtins(symbol_table, features=None) -> None:
         # wide signed/unsigned max-constant surfaces never drift apart.
         define_builtin('MAXWORD32', WORD32_TYPE, 'const')
         define_builtin('MAXWORD64', WORD64_TYPE, 'const')
+        # WRD8 is the WORD8 retyping conversion (the 8-bit sibling of WRD):
+        # WRD8(x) truncates any integer-family/CHAR/BOOLEAN value to its low
+        # 8 bits and retypes the result WORD8.  It exists only where WORD8
+        # itself exists, so it is gated with the rest of the wide surface.
+        # (The declared INTEGER parameter is a placeholder; the type checker
+        # validates WRD8 arguments with a dedicated branch, like WRD.)
+        define_builtin('WRD8', FunctionType('WRD8', [('x', INTEGER_TYPE)], WORD8_TYPE), 'function')
     define_builtin('NULL', LStringType(0), 'const')
     filemodes_type = EnumType(['SEQUENTIAL', 'TERMINAL', 'DIRECT'], name='FILEMODES')
     define_builtin('SEQUENTIAL', filemodes_type, 'const')

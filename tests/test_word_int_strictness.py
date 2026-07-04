@@ -20,9 +20,8 @@ What is pinned:
 
 import unittest
 
-from pascal1981.features import extended_features, is_extended, resolve_features
-from tests.support import (build_and_run_pascal_project, parse_source,
-                           requires_exe, requires_llvm, typecheck_source)
+from pascal1981.features import (extended_features, is_extended, resolve_features)
+from tests.support import (build_and_run_pascal_project, parse_source, requires_exe, requires_llvm, typecheck_source)
 
 
 def _ir(src, features=None):
@@ -35,6 +34,7 @@ def _ir(src, features=None):
         raise RuntimeError(f"Type check failed: {result.errors}")
     return compile_to_llvm(ast, features=features)
 
+
 EXT = extended_features()
 
 
@@ -46,21 +46,20 @@ def _warnings(result):
 # Strictness (pure type checker)
 # ---------------------------------------------------------------------------
 
+
 class TestWordIntStrictness(unittest.TestCase):
+
     def test_integer_variable_not_assignable_to_word(self):
         r = typecheck_source("PROGRAM P; VAR i: INTEGER; w: WORD; BEGIN w := i END.")
         self.assertFalse(r.success)
-        self.assertTrue(any("WRD" in e.message for e in r.errors),
-                        "error should point at WRD(...)")
+        self.assertTrue(any("WRD" in e.message for e in r.errors), "error should point at WRD(...)")
 
     def test_integer_constant_changes_to_word(self):
         self.assertTrue(typecheck_source("PROGRAM P; VAR w: WORD; BEGIN w := 5 END.").success)
-        self.assertTrue(typecheck_source(
-            "PROGRAM P; CONST k = 5; VAR w: WORD; BEGIN w := k END.").success)
+        self.assertTrue(typecheck_source("PROGRAM P; CONST k = 5; VAR w: WORD; BEGIN w := k END.").success)
 
     def test_wrd_makes_integer_assignable_to_word(self):
-        self.assertTrue(typecheck_source(
-            "PROGRAM P; VAR i: INTEGER; w: WORD; BEGIN w := WRD(i) END.").success)
+        self.assertTrue(typecheck_source("PROGRAM P; VAR i: INTEGER; w: WORD; BEGIN w := WRD(i) END.").success)
 
     def test_integer_variable_not_passable_to_word_param(self):
         r = typecheck_source("PROGRAM P; PROCEDURE f(x: WORD); BEGIN END; "
@@ -68,14 +67,11 @@ class TestWordIntStrictness(unittest.TestCase):
         self.assertFalse(r.success)
 
     def test_integer_constant_passable_to_word_param(self):
-        self.assertTrue(typecheck_source(
-            "PROGRAM P; PROCEDURE f(x: WORD); BEGIN END; BEGIN f(5) END.").success)
+        self.assertTrue(typecheck_source("PROGRAM P; PROCEDURE f(x: WORD); BEGIN END; BEGIN f(5) END.").success)
 
     def test_word_to_integer_still_needs_ord(self):
-        self.assertFalse(typecheck_source(
-            "PROGRAM P; VAR i: INTEGER; w: WORD; BEGIN i := w END.").success)
-        self.assertTrue(typecheck_source(
-            "PROGRAM P; VAR i: INTEGER; w: WORD; BEGIN i := ORD(w) END.").success)
+        self.assertFalse(typecheck_source("PROGRAM P; VAR i: INTEGER; w: WORD; BEGIN i := w END.").success)
+        self.assertTrue(typecheck_source("PROGRAM P; VAR i: INTEGER; w: WORD; BEGIN i := ORD(w) END.").success)
 
     def test_mix_warns_by_default_and_compiles(self):
         r = typecheck_source("PROGRAM P; VAR i: INTEGER; w: WORD; BEGIN w := w + i END.")
@@ -94,8 +90,7 @@ class TestWordIntStrictness(unittest.TestCase):
         self.assertTrue(any("WORD and INTEGER" in e.message for e in r.errors))
 
     def test_strict_flag_keeps_constant_exemption(self):
-        r = typecheck_source("PROGRAM P; VAR w: WORD; BEGIN w := w + 1 END.",
-                             features={"strict-word-int": True})
+        r = typecheck_source("PROGRAM P; VAR w: WORD; BEGIN w := w + 1 END.", features={"strict-word-int": True})
         self.assertTrue(r.success)
 
     def test_constant_expression_exemption_is_clean(self):
@@ -133,6 +128,7 @@ class TestWordIntStrictness(unittest.TestCase):
 # Wide same-width signedness mix (extension types, but same discipline)
 # ---------------------------------------------------------------------------
 
+
 class TestWideSameWidthMix(unittest.TestCase):
     """The wide extension pairs WORD32/INTEGER32 and WORD64/INTEGER64 inherit the
     vintage WORD/INTEGER same-width signedness rule: warn by default, error under
@@ -145,40 +141,29 @@ class TestWideSameWidthMix(unittest.TestCase):
     WIDE_STRICT = {"wide-integers": True, "strict-word-int": True}
 
     def test_word32_int32_mix_warns_by_default(self):
-        for dst, decl in (("WORD32", "w: WORD32; i: INTEGER32;"),
-                          ("WORD64", "w: WORD64; i: INTEGER64;")):
+        for dst, decl in (("WORD32", "w: WORD32; i: INTEGER32;"), ("WORD64", "w: WORD64; i: INTEGER64;")):
             with self.subTest(dst=dst):
-                r = typecheck_source(
-                    f"PROGRAM P; VAR d: {dst}; {decl} BEGIN d := w + i END.",
-                    features=self.WIDE)
+                r = typecheck_source(f"PROGRAM P; VAR d: {dst}; {decl} BEGIN d := w + i END.", features=self.WIDE)
                 self.assertTrue(r.success)
-                self.assertTrue(any("WORD and INTEGER" in m for m in _warnings(r)),
-                                f"{dst} mix should warn by default")
+                self.assertTrue(any("WORD and INTEGER" in m for m in _warnings(r)), f"{dst} mix should warn by default")
 
     def test_word32_int32_mix_errors_under_strict(self):
-        for dst, decl in (("WORD32", "w: WORD32; i: INTEGER32;"),
-                          ("WORD64", "w: WORD64; i: INTEGER64;")):
+        for dst, decl in (("WORD32", "w: WORD32; i: INTEGER32;"), ("WORD64", "w: WORD64; i: INTEGER64;")):
             with self.subTest(dst=dst):
-                r = typecheck_source(
-                    f"PROGRAM P; VAR d: {dst}; {decl} BEGIN d := w + i END.",
-                    features=self.WIDE_STRICT)
+                r = typecheck_source(f"PROGRAM P; VAR d: {dst}; {decl} BEGIN d := w + i END.", features=self.WIDE_STRICT)
                 self.assertFalse(r.success)
-                self.assertTrue(any("WORD and INTEGER" in e.message for e in r.errors),
-                                f"{dst} mix should be a hard error under strict-word-int")
+                self.assertTrue(any("WORD and INTEGER" in e.message for e in r.errors), f"{dst} mix should be a hard error under strict-word-int")
 
     def test_wide_constant_exemption_holds(self):
         # An INTEGER constant changes to the unsigned type at every width.
-        r = typecheck_source("PROGRAM P; VAR d: WORD32; w: WORD32; BEGIN d := w + 1 END.",
-                             features=self.WIDE_STRICT)
+        r = typecheck_source("PROGRAM P; VAR d: WORD32; w: WORD32; BEGIN d := w + 1 END.", features=self.WIDE_STRICT)
         self.assertTrue(r.success)
         self.assertFalse(any("WORD and INTEGER" in m for m in _warnings(r)))
 
     def test_unequal_width_mix_is_not_flagged(self):
         # WORD(16) + INTEGER32: the wider signed operand wins unambiguously, so
         # there is no coin-flip and no diagnostic, even under strict-word-int.
-        r = typecheck_source(
-            "PROGRAM P; VAR d: INTEGER32; w: WORD; i: INTEGER32; BEGIN d := w + i END.",
-            features=self.WIDE_STRICT)
+        r = typecheck_source("PROGRAM P; VAR d: INTEGER32; w: WORD; i: INTEGER32; BEGIN d := w + i END.", features=self.WIDE_STRICT)
         self.assertTrue(r.success, msg=str(r.errors))
         self.assertFalse(any("WORD and INTEGER" in m for m in _warnings(r)))
 
@@ -187,7 +172,9 @@ class TestWideSameWidthMix(unittest.TestCase):
 # Flag orthogonality
 # ---------------------------------------------------------------------------
 
+
 class TestStrictWordIntOrthogonality(unittest.TestCase):
+
     def test_strict_off_under_extended_by_default(self):
         ext = resolve_features("extended")
         self.assertFalse(ext["strict-word-int"], "extended must not auto-enable strict-word-int")
@@ -207,9 +194,8 @@ class TestStrictWordIntOrthogonality(unittest.TestCase):
     def test_c_ffi_available_under_extended_without_strict(self):
         # [C] must still parse+check with strict-word-int explicitly off.
         feats = resolve_features("extended", ["no-strict-word-int"])
-        r = typecheck_source(
-            "PROGRAM P(output);\nFUNCTION cube(x: CINT): CINT [C]; EXTERN;\n"
-            "BEGIN WRITELN(cube(3)) END.", features=feats)
+        r = typecheck_source("PROGRAM P(output);\nFUNCTION cube(x: CINT): CINT [C]; EXTERN;\n"
+                             "BEGIN WRITELN(cube(3)) END.", features=feats)
         self.assertTrue(r.success, msg=str(r.errors))
 
 
@@ -217,12 +203,12 @@ class TestStrictWordIntOrthogonality(unittest.TestCase):
 # Finding 3: variadic procedures (type checker)
 # ---------------------------------------------------------------------------
 
+
 class TestVariadicProcedure(unittest.TestCase):
+
     def test_variadic_procedure_accepts_tail_args(self):
-        r = typecheck_source(
-            "PROGRAM P;\nPROCEDURE cprint(fmt: CPTR) [C, VARARGS]; EXTERN;\n"
-            "VAR f: ARRAY[0..1] OF CHAR;\nBEGIN cprint(adr f, 1, 2) END.",
-            features=EXT)
+        r = typecheck_source("PROGRAM P;\nPROCEDURE cprint(fmt: CPTR) [C, VARARGS]; EXTERN;\n"
+                             "VAR f: ARRAY[0..1] OF CHAR;\nBEGIN cprint(adr f, 1, 2) END.", features=EXT)
         self.assertTrue(r.success, msg=str(r.errors))
 
 
@@ -230,14 +216,15 @@ class TestVariadicProcedure(unittest.TestCase):
 # Finding 1 / 2: extension direction in the IR (no toolchain run)
 # ---------------------------------------------------------------------------
 
+
 @requires_llvm
 class TestSignExtensionIR(unittest.TestCase):
+
     def test_signed_integer_widens_with_sext(self):
-        ir = _ir(
-            "PROGRAM P(output);\n"
-            "FUNCTION id32(x: INTEGER32): INTEGER32; BEGIN id32 := x END;\n"
-            "VAR i: INTEGER;\nBEGIN i := -5; WRITELN(id32(i)) END.",
-            features={"wide-integers": True})
+        ir = _ir("PROGRAM P(output);\n"
+                 "FUNCTION id32(x: INTEGER32): INTEGER32; BEGIN id32 := x END;\n"
+                 "VAR i: INTEGER;\nBEGIN i := -5; WRITELN(id32(i)) END.",
+                 features={"wide-integers": True})
         self.assertIn("sext i16", ir)
         self.assertNotIn("zext i16", ir.split("@\"id32\"")[0])  # not zext on the way in
 
@@ -246,7 +233,8 @@ class TestSignExtensionIR(unittest.TestCase):
             "PROGRAM P(output);\n"
             "FUNCTION printf(fmt: CPTR): CINT [C, VARARGS]; EXTERN;\n"
             "VAR w: WORD; f: ARRAY[0..1] OF CHAR; r: CINT;\n"
-            "BEGIN w := 60000; r := printf(adr f, w) END.", features=EXT)
+            "BEGIN w := 60000; r := printf(adr f, w) END.",
+            features=EXT)
         # The WORD tail argument must zero-extend, not sign-extend.
         self.assertIn("zext i16", ir)
 
@@ -255,15 +243,16 @@ class TestSignExtensionIR(unittest.TestCase):
 # Finding 1 / 2 / 3: end-to-end values against clang
 # ---------------------------------------------------------------------------
 
+
 @requires_exe
 class TestSignFindingsBuildAndRun(unittest.TestCase):
+
     def test_signed_widening_preserves_value(self):
         # id32(-5) must print -5, not 65531 (Finding 1: was ZEXT).
         files = {
-            "p.pas": (
-                "PROGRAM P(output);\n"
-                "FUNCTION id32(x: INTEGER32): INTEGER32; BEGIN id32 := x END;\n"
-                "VAR i: INTEGER;\nBEGIN i := -5; WRITELN(id32(i)) END."),
+            "p.pas": ("PROGRAM P(output);\n"
+                      "FUNCTION id32(x: INTEGER32): INTEGER32; BEGIN id32 := x END;\n"
+                      "VAR i: INTEGER;\nBEGIN i := -5; WRITELN(id32(i)) END."),
         }
         rc, out, err = build_and_run_pascal_project(
             files=files,
@@ -279,17 +268,17 @@ class TestSignFindingsBuildAndRun(unittest.TestCase):
         # printf("%u %d", w, w) with w = 60000 must print 60000 60000
         # (Finding 2: WORD was SEXT -> 4294961760 -5536).
         files = {
-            "p.pas": (
-                "PROGRAM P(output);\n"
-                "FUNCTION printf(fmt: CPTR): CINT [C, VARARGS]; EXTERN;\n"
-                "VAR w: WORD; fmt: ARRAY[0..7] OF CHAR; r: CINT;\n"
-                "BEGIN\n"
-                "  w := 60000;\n"
-                "  fmt[0]:='%'; fmt[1]:='u'; fmt[2]:=' '; fmt[3]:='%';\n"
-                "  fmt[4]:='d'; fmt[5]:=CHR(10); fmt[6]:=CHR(0);\n"
-                "  r := printf(adr fmt, w, w)\n"
-                "END."),
-            "cimpl.c": "/* printf comes from libc */\n",
+            "p.pas": ("PROGRAM P(output);\n"
+                      "FUNCTION printf(fmt: CPTR): CINT [C, VARARGS]; EXTERN;\n"
+                      "VAR w: WORD; fmt: ARRAY[0..7] OF CHAR; r: CINT;\n"
+                      "BEGIN\n"
+                      "  w := 60000;\n"
+                      "  fmt[0]:='%'; fmt[1]:='u'; fmt[2]:=' '; fmt[3]:='%';\n"
+                      "  fmt[4]:='d'; fmt[5]:=CHR(10); fmt[6]:=CHR(0);\n"
+                      "  r := printf(adr fmt, w, w)\n"
+                      "END."),
+            "cimpl.c":
+            "/* printf comes from libc */\n",
         }
         rc, out, err = build_and_run_pascal_project(
             files=files,
@@ -304,18 +293,16 @@ class TestSignFindingsBuildAndRun(unittest.TestCase):
     def test_variadic_procedure_builds_and_runs(self):
         # Finding 3: a variadic [C] PROCEDURE (void return) links and runs.
         files = {
-            "p.pas": (
-                "PROGRAM P(output);\n"
-                "PROCEDURE cprint(fmt: CPTR) [C, VARARGS]; EXTERN;\n"
-                "VAR fmt: ARRAY[0..3] OF CHAR;\n"
-                "BEGIN\n"
-                "  fmt[0]:='%'; fmt[1]:='d'; fmt[2]:=CHR(10); fmt[3]:=CHR(0);\n"
-                "  cprint(adr fmt, 7)\n"
-                "END."),
-            "cimpl.c": (
-                "#include <stdio.h>\n#include <stdarg.h>\n"
-                "void cprint(const char* fmt, ...){\n"
-                "  va_list ap; va_start(ap, fmt); vprintf(fmt, ap); va_end(ap);\n}\n"),
+            "p.pas": ("PROGRAM P(output);\n"
+                      "PROCEDURE cprint(fmt: CPTR) [C, VARARGS]; EXTERN;\n"
+                      "VAR fmt: ARRAY[0..3] OF CHAR;\n"
+                      "BEGIN\n"
+                      "  fmt[0]:='%'; fmt[1]:='d'; fmt[2]:=CHR(10); fmt[3]:=CHR(0);\n"
+                      "  cprint(adr fmt, 7)\n"
+                      "END."),
+            "cimpl.c": ("#include <stdio.h>\n#include <stdarg.h>\n"
+                        "void cprint(const char* fmt, ...){\n"
+                        "  va_list ap; va_start(ap, fmt); vprintf(fmt, ap); va_end(ap);\n}\n"),
         }
         rc, out, err = build_and_run_pascal_project(
             files=files,

@@ -1,3 +1,224 @@
+## 12. MAXNTID and REQNTID accepted together on the same kernel, which the PTX ISA forbids [DONE]
+
+**Where.** `type_checker.py::_check_launch_bound_attrs`; discovered during the
+item 11 research (see `docs/old/item-11-plan.md` §2 and §6, which flagged it
+as a separate bug class — co-occurrence, not range — and deliberately kept it
+out of item 11's scope rather than scope-creeping).
+
+**What.** The PTX ISA's `.reqntid` performance-tuning directive documentation
+states that `.reqntid` cannot be used in conjunction with `.maxntid` on the
+same entry `[DOCUMENTED — PTX ISA "Performance-Tuning Directives: .reqntid",
+fetched during the item 11 session and recorded in item-11-plan.md §2;
+re-corroborated but not re-read verbatim when this item was fixed]`. The type
+checker validated each launch-bound attribute independently, so
+`[MAXNTID(8,8,4), REQNTID(8,8,4)]` type-checked and compiled to PTX carrying
+both `.maxntid` and `.reqntid` directives `[OBSERVED — this exact combined
+fixture existed in tests/test_tuning_hints.py's own IR- and PTX-level
+regression tests and passed]`. What `ptxas`/the driver does with the pair was
+not tested in this repo (no `ptxas` in the loop) `[UNVERIFIED]`; the ISA text
+is sufficient grounds to reject it regardless.
+
+**Why it matters.** Low severity, same class as item 11: no promise was
+broken, but the compiler's own pipeline silently emitted PTX the ISA declares
+invalid, deferring discovery downstream. Notably, the invalid combination had
+crept into this repo's own test fixtures, which is exactly how an unchecked
+rule propagates.
+
+**How resolved.** `_check_launch_bound_attrs` now rejects the pair up front
+with a distinct error ("cannot be used together...") when the tuning-hints
+feature is active in device code, before per-attribute validation runs, so the
+feature-gate and device-only diagnostics for each attribute are unaffected
+when those gates fail. The two existing regression tests that carried the
+combined fixture (`test_z_axis_maxntid_and_reqntid_use_correct_key_spelling`
+and `test_full_3d_maxntid_and_reqntid_directives_at_ptx_level`) were split
+into two compiles each — one MAXNTID-only, one REQNTID-only — preserving every
+original assertion, with a comment noting why. New type-check test
+`test_maxntid_and_reqntid_are_mutually_exclusive` asserts the rejection and
+that either attribute alone still combines fine with `MINCTASM` (the ISA
+restriction is only between `.maxntid` and `.reqntid`). Full
+`tests/test_tuning_hints.py` green after the change `[OBSERVED]`.
+
+---
+
+## 11. Launch-bound attributes accept out-of-range dimensions with no architectural check [DONE]
+
+**Where.** `type_checker.py::_check_launch_bound_attrs` (validates
+`[MAXNTID(...)]`/`[REQNTID(...)]`/`[MINCTASM(...)]`); contrast with
+`codegen/exprs.py::_NVVM_SREG_MAX`, which already encodes the relevant CUDA
+architectural ceilings for a different purpose (`!range` metadata on sreg
+*reads*).
+
+**What.** `_check_launch_bound_attrs` only validated that each dimension
+argument is a positive integer literal; it did not check the value against
+any architectural ceiling. `[MAXNTID(2000, 2000, 2000)]` type-checked and
+compiled, producing a `.maxntid 2000, 2000, 2000` PTX directive for
+block dimensions CUDA cannot actually schedule (x/y max 1024 threads, z max
+64, per the same CUDA Compute Capabilities ceilings `_NVVM_SREG_MAX` already
+cites `[DOCUMENTED]`). Nothing in this compiler caught it; only `ptxas`
+(outside this compiler, not run by any existing test) would, if it catches it
+at all rather than silently misbehaving.
+
+**Why it matters.** Low severity — nothing here was ever claimed to be
+bound-checked, so this was a hardening gap, not a broken promise the way the
+underscored-key bug was. But it was a real, reachable footgun: a user asking
+for an impossible block size got silent acceptance all the way through this
+compiler's own pipeline, discovering the mistake only downstream.
+
+**Suggested resolution.** Reuse `exprs.py`'s `_NVVM_SREG_MAX` (or a shared
+constant lifted to a common location both `type_checker.py` and `exprs.py`
+can import, to avoid a second copy of the same architectural table drifting
+out of sync) to bound-check `MAXNTID`/`REQNTID` dimension values per axis
+(x/y ≤ 1024, z ≤ 64) at type-check time, and `MINCTASM` against whatever
+ceiling is appropriate for `minnctapersm` (check the PTX ISA reference before
+picking a number rather than guessing). Emit a type error, not a silent
+clamp, on an out-of-range literal — consistent with this feature's existing
+"dimensions must be positive integer literals" discipline of catching
+mistakes at compile time.
+
+**How to verify.** Parser/type-check fixtures: an in-range `MAXNTID`/`REQNTID`
+still accepts; an out-of-range one (e.g. `MAXNTID(2000)`, `MAXNTID(1,1,100)`)
+now rejects with a clear message citing the axis ceiling; existing
+`tests/test_tuning_hints.py` fixtures stay green (all currently use in-range
+values, e.g. the new 3-dimension `(8,8,4)` regression test added alongside
+item 8's underscore-key fix).
+
+**How resolved.** Lifted the per-axis and total-thread ceilings into a new
+dependency-free leaf module `src/pascal1981/device_limits.py`
+(`NVVM_AXIS_MAX`, `NVVM_MAX_THREADS_PER_BLOCK`, `NVVM_GRID_AXIS_MAX`) so the
+frontend and `codegen/exprs.py::_NVVM_SREG_MAX` share one source of truth with
+no import cycle. `_check_launch_bound_attrs` now rejects `MAXNTID`/`REQNTID`
+dimensions that exceed the per-axis ceiling (x/y ≤ 1024, z ≤ 64) *or* whose
+product exceeds 1024 total threads per block (the ISA bounds the product, so
+e.g. `MAXNTID(1024, 2)` — in-range per axis but 2048 total — is caught), each
+with a distinct error message citing the axis and ceiling. Per the PTX ISA
+(`.minnctapersm`, PTX ISA §11.4.4: an infeasible value is *silently ignored*
+by `ptxas`, not rejected, and it carries no fixed numeric ceiling), `MINCTASM`
+is deliberately left at positivity-only validation — inventing a hard cap
+would be unsourced confabulation. Tests added in
+`tests/test_tuning_hints.py`: `test_launch_bound_dimensions_bounded_by_cuda_ceilings`,
+`test_launch_bound_dimensions_at_ceiling_accepted`, and
+`test_minctasm_has_no_architectural_ceiling` (an explicit regression guard
+for the deliberate non-fix). Full plan and evidence grading archived alongside
+this note as `docs/old/item-11-plan.md`.
+
+**Anti-confabulation note.** The axis ceilings (1024/1024/64, product 1024)
+are `[DOCUMENTED]` — CUDA Compute Capabilities appendix, corroborated against a
+real-device query and against this repo's own pre-existing `_NVVM_SREG_MAX`
+table, not `[OBSERVED]` from measuring this compiler. The bug's reachability
+and the fix's behavior are `[OBSERVED]` (reproduced via scratch probes and
+codified in the new tests). `MINCTASM`'s lack of a static ceiling is
+`[DOCUMENTED]` from the PTX ISA text.
+
+---
+
+## 9. docs/device-code claims need evidence grading before they drive work [OPEN]
+
+**Where.** `docs/device-code/KERNEL_ANALYSIS.md`,
+`docs/device-code/OPTIMIZATION_GUIDE.md`,
+`docs/device-code/DETAILED_COMPARISONS.md`.
+
+**What.** The analysis mixes observed artifacts (PTX listings, instruction
+counts) with unsourced performance narrative: cycle-count models for a virtual
+ISA that `ptxas` re-schedules, a "15-20x" pipelining projection walked back to
+10-25% in the same section, and CUDA-comparison ratios whose nvcc
+version/flags are not recorded. Since then, the compiler gained stock LLVM
+optimization plumbing, language-level loop unrolling, tuning hints, kernel
+parameter attributes, and range metadata support. That leaves only a narrower
+set of potentially useful optimization threads: shared-memory tiling/caching,
+deeper LICM/register-reuse opportunities, and a check on whether LLVM/NVPTX
+already covers any remaining scheduling wins.
+
+**Why it matters.** Per the repo's own anti-confabulation discipline
+(OBSERVED / DOCUMENTED / INFERRED), the guide currently reads as more
+authoritative than its evidence supports, and its costliest recommendations
+(hand-rolled software pipelining, backend unroller) are superseded by newer
+compiler features.
+
+**Suggested resolution.** Annotate each claim with an evidence grade; record
+the nvcc version and flags behind the comparison tables or regenerate them;
+strike or demote the sections superseded by running the stock LLVM pipeline;
+and carry forward only the remaining live ideas above as explicit follow-ups if
+they still matter after a current benchmark pass.
+
+**How to verify.** A pass over the three files leaves no ungraded quantitative
+claim; comparison tables are reproducible from a committed script; any retained
+optimization thread is backed by a current benchmark or an open compiler gap.
+
+---
+
+## 10. PTX pass pipeline / frontend metadata payoff check [DONE]
+
+**Where.** `src/pascal1981/compile_to_ptx.py::llvm_ir_to_ptx`, plus the
+already-shipped NVPTX frontend facts emitted by `codegen/exprs.py` and
+`codegen/decls.py` (`!range` on special-register reads,
+`readonly`/`nocapture` on provably-unwritten kernel buffer parameters, and the
+explicitly gated `noalias-kernel-params` feature).
+
+**What.** The live follow-up asked whether the current llvmlite PTX path was
+missing target-specific optimization/lowering behavior, because earlier probes
+had not observed the expected `mul.wide.u32` or `ld.global.nc` PTX effects.
+This was split into three empirical questions:
+
+- Does `!range` on `tid`/`ctaid`/`ntid`/`nctaid` make NVPTX select unsigned
+  widening or simpler index math?
+- Does `readonly`+`nocapture` alone make NVPTX select read-only-cache loads
+  (`ld.global.nc`)?
+- Does the explicitly unsafe caller contract `noalias-kernel-params` produce a
+  meaningful PTX difference?
+
+**Resolution.** No compiler code change is proposed from this item. The
+frontend facts remain valid and should not be removed, but the performance
+claim was narrowed to what was actually observed:
+
+- `!range`: retained as correct IR metadata, but no observed PTX payoff for the
+  tested `mul.wide.s32` vs `mul.wide.u32` question. Removing `!range` from the
+  generated IR for the shipped `fill_indices` and `mandelbrot` examples
+  produced byte-identical PTX under external LLVM 21.1.8 `llc -O2` and
+  `opt -O2` followed by `llc -O2`, matching the earlier negative result from
+  the repo's pinned llvmlite/LLVM 20.1.8 path. This closes the suspected
+  target-pipeline gap for this sub-claim on the tested toolchains.
+- `readonly`/`nocapture`: retained as correct parameter facts, but no observed
+  standalone `ld.global.nc` payoff. A synthetic read/write-buffer kernel was
+  tested as four IR variants (`bare`, `readonly nocapture` only, `noalias`
+  only, and combined). The `readonly nocapture`-only variant matched the bare
+  behavior under the repo llvmlite path and under external LLVM 21.1.8
+  `llc`/`opt+llc`: no `ld.global.nc` selection. This retires the standalone
+  performance claim, not the correctness of the attributes.
+- `noalias`: not dead wiring. The same synthetic kernel produced
+  `ld.global.nc` when `noalias` was present under the repo llvmlite path;
+  external `opt -O2`+`llc -O2` also selected `ld.global.nc` for the
+  `noalias`-only and combined variants. Direct LLVM 21.1.8 `llc -O2` selected
+  `ld.global.nc` for the combined variant but not for the stripped
+  `noalias`-only variant, so the exact pass interaction differs by pipeline;
+  the practical result remains that the current compiler's real emitted
+  combined attributes are useful in the synthetic kernel.
+
+Shipped-example confirmation was weaker but unsurprising: compiling
+`fill_indices` and `mandelbrot` with and without `-f noalias-kernel-params` at
+`--opt-level 2` produced identical PTX and no `ld.global.nc`; those examples do
+not appear to exercise the relevant read-only/global-buffer aliasing pattern in
+which the synthetic kernel moved codegen. The feature remains worth keeping
+because a focused kernel does show a concrete PTX change, and because it is
+already explicitly gated behind a caller-side undefined-behavior contract.
+
+**How verified.** Scratch-only probes under `/home/ubuntu/dixie-scratch-area/`
+recorded the toolchain matrix (`llvmlite` LLVM 20.1.8; external LLVM 21.1.8
+`llc`/`opt` available under `/usr/lib/llvm-21/bin`) and compared the repo
+llvmlite PTX path with external `llc -O2` and `opt -O2`+`llc -O2`. No source
+or test files were changed for the experiment itself. `docs/followups.md` was
+updated by removing this now-closed live item; this archived note records the
+observed results and the reason no code change is recommended.
+
+**Anti-confabulation note.** The resolved claim is deliberately narrow:
+these facts are not proven useless in all LLVM versions or all kernels. What
+is OBSERVED is that `!range` and `readonly`/`nocapture` alone did not produce
+the specific predicted PTX effects under the tested repo and external
+pipelines, while `noalias` did produce a PTX effect in a targeted synthetic
+kernel. Future backend/toolchain changes may warrant re-testing, but Item 10
+no longer needs to remain open as a speculative pass-pipeline task.
+
+---
+
 ## 4. CLI progress chatter is emitted even without --verbose [DONE]
 
 **Where.** `src/pascal1981/compile_to_llvm.py::main` (the `Parsing ...`,

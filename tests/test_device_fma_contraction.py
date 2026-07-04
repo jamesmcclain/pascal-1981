@@ -18,7 +18,6 @@ from pascal1981.parser import parse_file
 from pascal1981.type_checker import PascalTypeChecker
 from tests.support import requires_llvm
 
-
 _DEVICE_IFACE = ("DEVICE INTERFACE;\n"
                  "UNIT FMA (kern);\n"
                  "TYPE R32ARR = SUPER ARRAY [0..*] OF REAL32;\n"

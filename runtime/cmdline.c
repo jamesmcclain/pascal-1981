@@ -24,7 +24,7 @@ static int g_argc = 0;
 static char **g_argv = NULL;
 
 /* Redirect state for the parameter currently being read (one at a time). */
-static FILE *g_saved_stdin = NULL; /* non-NULL only while redirected */
+static FILE *g_saved_stdin = NULL;      /* non-NULL only while redirected */
 static FILE *g_mem = NULL;
 static char *g_buf = NULL;
 
@@ -48,7 +48,7 @@ int pas_arg_begin(int param_index, const char *name)
         g_buf = (char *) malloc(n + 2);
         if (g_buf) {
             memcpy(g_buf, tok, n);
-            g_buf[n] = '\n'; /* line marker the readers stop on */
+            g_buf[n] = '\n';    /* line marker the readers stop on */
             g_buf[n + 1] = '\0';
             g_mem = fmemopen(g_buf, n + 1, "r");
             if (g_mem) {

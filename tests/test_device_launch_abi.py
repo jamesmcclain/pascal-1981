@@ -22,13 +22,10 @@ These tests pin three things:
 import re
 import unittest
 
-from tests.support import (build_and_run_pascal_project, compile_pascal_file,
-                           parse_source, requires_exe, requires_llvm,
-                           temporary_pascal_project, typecheck_source)
-
 from pascal1981.features import resolve_features
 from pascal1981.parser import parse_file
 from pascal1981.type_checker import PascalTypeChecker
+from tests.support import (build_and_run_pascal_project, compile_pascal_file, parse_source, requires_exe, requires_llvm, temporary_pascal_project, typecheck_source)
 
 _WIDE = resolve_features(overrides=['wide-integers'])
 
@@ -107,8 +104,7 @@ class TestLaunchLowersThroughShim(unittest.TestCase):
             'main.pas': _main_with_launch('LAUNCH(add, 1, n, da, db, dc, n);'),
         }
         with temporary_pascal_project(files) as proj:
-            out = compile_pascal_file(
-                f'{proj}/main.pas', f'{proj}/main.ll', features=_WIDE)
+            out = compile_pascal_file(f'{proj}/main.pas', f'{proj}/main.ll', features=_WIDE)
             ir = open(out).read()
 
         # The launch goes through the shim with a marshalled argument array...
@@ -178,17 +174,12 @@ END.
     def test_three_value_geometry_rejected(self):
         result = self._check('LAUNCH(k, 1, 1, 1, d, m)')
         self.assertFalse(result.success)
-        self.assertTrue(
-            any('geometry' in str(e).lower() for e in result.errors),
-            result.errors)
+        self.assertTrue(any('geometry' in str(e).lower() for e in result.errors), result.errors)
 
     def test_non_integer_geometry_rejected(self):
         result = self._check("LAUNCH(k, 1, 'x', d, m)")
         self.assertFalse(result.success)
-        self.assertTrue(
-            any('geometry' in str(e).lower() and 'integer' in str(e).lower()
-                for e in result.errors),
-            result.errors)
+        self.assertTrue(any('geometry' in str(e).lower() and 'integer' in str(e).lower() for e in result.errors), result.errors)
 
 
 if __name__ == '__main__':

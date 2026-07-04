@@ -32,22 +32,20 @@ import unittest
 from pascal1981.codegen import compile_to_llvm
 from pascal1981.parser import parse_file
 from pascal1981.type_checker import PascalTypeChecker
-from tests.support import build_and_run_pascal_project, requires_exe, requires_llvm
+from tests.support import (build_and_run_pascal_project, requires_exe, requires_llvm)
 
 # A host program whose guarded arm overflows INTEGER (16-bit: -32768..32767).
 # n = 0, so the ELSE arm runs and the program must print 42.  Speculatively
 # evaluating the THEN arm (a + a = 60000) would overflow and trap under the
 # default $MATHCK.  `a` is a variable so the sum is a runtime add, not folded.
-_HOST_GUARDED_OVERFLOW = (
-    "PROGRAM sel;\n"
-    "VAR x, n, a: INTEGER;\n"
-    "BEGIN\n"
-    "  a := 30000;\n"
-    "  n := 0;\n"
-    "  IF n > 0 THEN x := a + a ELSE x := 42;\n"
-    "  WRITELN(x)\n"
-    "END.\n"
-)
+_HOST_GUARDED_OVERFLOW = ("PROGRAM sel;\n"
+                          "VAR x, n, a: INTEGER;\n"
+                          "BEGIN\n"
+                          "  a := 30000;\n"
+                          "  n := 0;\n"
+                          "  IF n > 0 THEN x := a + a ELSE x := 42;\n"
+                          "  WRITELN(x)\n"
+                          "END.\n")
 
 
 def _host_ir(src: str) -> str:
@@ -83,9 +81,7 @@ class TestHostIfSelectNoSpeculativeMathck(unittest.TestCase):
     def test_host_if_does_not_lower_to_select(self):
         """Host IF/ELSE-of-assignment stays a real branch, never a select."""
         ir = _host_ir(_HOST_GUARDED_OVERFLOW)
-        self.assertNotRegex(
-            ir, r'select\s+i1',
-            "host IF/ELSE must not use the device-only select peephole")
+        self.assertNotRegex(ir, r'select\s+i1', "host IF/ELSE must not use the device-only select peephole")
 
 
 class TestDeviceIfSelectStillPredicates(unittest.TestCase):
@@ -119,13 +115,10 @@ class TestDeviceIfSelectStillPredicates(unittest.TestCase):
             ast = parse_file(impl_path)
             result = PascalTypeChecker(source_file=impl_path).check(ast)
             assert result.success, result.errors
-            ir = compile_to_llvm(ast, source_file=impl_path,
-                                 device_triple='nvptx64-nvidia-cuda')
+            ir = compile_to_llvm(ast, source_file=impl_path, device_triple='nvptx64-nvidia-cuda')
         finally:
             shutil.rmtree(tmpdir)
-        self.assertRegex(
-            ir, r'select\s+i1',
-            "device IF/ELSE-of-assignment should still use the select peephole")
+        self.assertRegex(ir, r'select\s+i1', "device IF/ELSE-of-assignment should still use the select peephole")
 
 
 if __name__ == '__main__':

@@ -40,11 +40,12 @@ def _probe_cuda_headers() -> bool:
         return False
     cuda_home = os.environ.get("CUDA_HOME", "/usr/local/cuda")
     try:
-        r = subprocess.run(
-            ["clang", "-x", "c", "-fsyntax-only", "-Wno-unknown-pragmas",
-             "-I", os.path.join(cuda_home, "include"), "-"],
-            input="#include <cuda.h>\n",
-            capture_output=True, text=True, timeout=10)
+        r = subprocess.run(["clang", "-x", "c", "-fsyntax-only", "-Wno-unknown-pragmas", "-I",
+                            os.path.join(cuda_home, "include"), "-"],
+                           input="#include <cuda.h>\n",
+                           capture_output=True,
+                           text=True,
+                           timeout=10)
         return r.returncode == 0
     except Exception:
         return False
@@ -63,8 +64,7 @@ def _probe_gpu() -> bool:
     """
     if not CAN_BUILD_EXE:
         return False
-    if not (shutil.which("nvidia-smi") and
-            subprocess.run(["nvidia-smi"], capture_output=True).returncode == 0):
+    if not (shutil.which("nvidia-smi") and subprocess.run(["nvidia-smi"], capture_output=True).returncode == 0):
         return False
     # NVPTX backend present in this llvmlite?
     try:
@@ -74,9 +74,7 @@ def _probe_gpu() -> bool:
     except Exception:
         return False
     # A linkable libcuda (real driver lib or the toolkit stub)?
-    if any(Path(p).exists() for p in (
-            "/usr/lib/x86_64-linux-gnu/libcuda.so",
-            "/usr/lib/x86_64-linux-gnu/libcuda.so.1")):
+    if any(Path(p).exists() for p in ("/usr/lib/x86_64-linux-gnu/libcuda.so", "/usr/lib/x86_64-linux-gnu/libcuda.so.1")):
         has_libcuda = True
     else:
         cuda_home = os.environ.get("CUDA_HOME", "/usr/local/cuda")
@@ -130,11 +128,9 @@ def _ensure_runtime_lib_built() -> None:
         )
     except (subprocess.CalledProcessError, OSError) as exc:
         detail = getattr(exc, "stderr", None) or str(exc)
-        raise RuntimeError(
-            f"runtime library missing at {RUNTIME_LIB} and `make -C runtime` "
-            f"failed to build it automatically. Run `make -C runtime` "
-            f"manually and inspect the error below.\n{detail}"
-        ) from exc
+        raise RuntimeError(f"runtime library missing at {RUNTIME_LIB} and `make -C runtime` "
+                           f"failed to build it automatically. Run `make -C runtime` "
+                           f"manually and inspect the error below.\n{detail}") from exc
 
 
 _ensure_runtime_lib_built()

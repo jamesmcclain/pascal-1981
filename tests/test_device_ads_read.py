@@ -5,15 +5,15 @@ returned the raw pointer value instead of the element, because the Designator
 codegen bailed out on `is_parameter` before walking the selector chain.
 """
 
-import re
 import os
+import re
 import shutil
 import tempfile
 import unittest
 
+from pascal1981.codegen import compile_to_llvm
 from pascal1981.parser import parse_file
 from pascal1981.type_checker import PascalTypeChecker
-from pascal1981.codegen import compile_to_llvm
 
 GPU_TRIPLE = 'nvptx64-nvidia-cuda'
 
@@ -26,11 +26,12 @@ TYPE
 END;
 """
 
+
 def _compile_module(iface_src, impl_src, module_name='T'):
     tmpdir = tempfile.mkdtemp()
     try:
         iface_path = os.path.join(tmpdir, module_name.lower())
-        impl_path  = os.path.join(tmpdir, f'{module_name.lower()}.pas')
+        impl_path = os.path.join(tmpdir, f'{module_name.lower()}.pas')
         with open(iface_path, 'w') as f:
             f.write(iface_src)
         with open(impl_path, 'w') as f:
@@ -38,8 +39,7 @@ def _compile_module(iface_src, impl_src, module_name='T'):
         ast = parse_file(impl_path)
         r = PascalTypeChecker(source_file=impl_path).check(ast)
         assert r.success, r.errors
-        return compile_to_llvm(ast, source_file=impl_path,
-                                device_triple=GPU_TRIPLE)
+        return compile_to_llvm(ast, source_file=impl_path, device_triple=GPU_TRIPLE)
     finally:
         shutil.rmtree(tmpdir)
 
@@ -48,9 +48,7 @@ class TestADSArrayRead(unittest.TestCase):
 
     def test_read_from_global_array_param(self):
         """val := inp^[i] must emit a load from addrspace(1), not store a pointer."""
-        iface = IFACE.format(
-            name='T', exports='kernel_entry',
-            decls='PROCEDURE kernel_entry(inp: ADS(GLOBAL) OF BUFFER; n: INTEGER32);')
+        iface = IFACE.format(name='T', exports='kernel_entry', decls='PROCEDURE kernel_entry(inp: ADS(GLOBAL) OF BUFFER; n: INTEGER32);')
         impl = """\
 (*$INCLUDE:'t'*)
 DEVICE IMPLEMENTATION OF T;
@@ -72,9 +70,7 @@ END;
 
     def test_vector_add_reads_two_inputs(self):
         """c^[i] := a^[i] + b^[i]: two reads from addrspace(1), one write."""
-        iface = IFACE.format(
-            name='T', exports='vadd',
-            decls='PROCEDURE vadd(a, b, c: ADS(GLOBAL) OF BUFFER; n: INTEGER32);')
+        iface = IFACE.format(name='T', exports='vadd', decls='PROCEDURE vadd(a, b, c: ADS(GLOBAL) OF BUFFER; n: INTEGER32);')
         impl = """\
 (*$INCLUDE:'t'*)
 DEVICE IMPLEMENTATION OF T;
@@ -99,9 +95,7 @@ END;
 
     def test_read_in_grid_stride_loop(self):
         """Accumulate inp^[i] in a WHILE loop — reads across iterations."""
-        iface = IFACE.format(
-            name='T', exports='kernel_entry',
-            decls='PROCEDURE kernel_entry(inp, outp: ADS(GLOBAL) OF BUFFER; n: INTEGER32);')
+        iface = IFACE.format(name='T', exports='kernel_entry', decls='PROCEDURE kernel_entry(inp, outp: ADS(GLOBAL) OF BUFFER; n: INTEGER32);')
         impl = """\
 (*$INCLUDE:'t'*)
 DEVICE IMPLEMENTATION OF T;
@@ -129,9 +123,7 @@ END;
 
     def test_write_only_kernel_unaffected(self):
         """fill_indices style write-only kernel must still work after the fix."""
-        iface = IFACE.format(
-            name='T', exports='fill_indices',
-            decls='PROCEDURE fill_indices(outp: ADS(GLOBAL) OF BUFFER; n: INTEGER32);')
+        iface = IFACE.format(name='T', exports='fill_indices', decls='PROCEDURE fill_indices(outp: ADS(GLOBAL) OF BUFFER; n: INTEGER32);')
         impl = """\
 (*$INCLUDE:'t'*)
 DEVICE IMPLEMENTATION OF T;

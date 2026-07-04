@@ -32,11 +32,12 @@ from .ast_nodes import SizeofExpr, Statement, StringLiteral
 from .ast_nodes import SubrangeType as ASTSubrangeType
 from .ast_nodes import (TypeDecl, UnaryOp, UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt, WriteArg)
 from .builtins_registry import (DEVICE_INDEX_BUILTIN_FUNCTIONS, DEVICE_SYNC_BUILTIN_PROCEDURES, register_builtins)
+from .device_limits import NVVM_AXIS_MAX, NVVM_MAX_THREADS_PER_BLOCK
 from .parser import parse_file
 from .symbol_table import SourceLocation, Symbol, SymbolTable
-from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL32_TYPE, REAL_TYPE, WORD_TYPE, WORD32_TYPE, WORD64_TYPE, ArrayType, EnumType, FileType, FunctionType,
-                          LStringType, PointerType, ProcedureType, RecordType, SetType, StringType, Type, binary_op_result_type, can_assign, is_fixed_char_array,
-                          unary_op_result_type)
+from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER8_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL32_TYPE, REAL_TYPE, WORD8_TYPE, WORD32_TYPE, WORD64_TYPE,
+                          WORD_TYPE, ArrayType, EnumType, FileType, FunctionType, LStringType, PointerType, ProcedureType, RecordType, SetType, StringType, Type,
+                          binary_op_result_type, can_assign, is_fixed_char_array, unary_op_result_type)
 
 
 @dataclass
@@ -304,7 +305,7 @@ class PascalTypeChecker(TypeChecker):
         """Import symbols from a loaded module/interface into the current scope."""
         if isinstance(interface, InterfaceUnit):
             export_names = list(interface.params)
-            all_decls    = list(interface.decls)
+            all_decls = list(interface.decls)
 
             # A DEVICE INTERFACE was written in the device dialect: its types
             # (INTEGER32, ADS(GLOBAL), etc.) must be resolved in device context.
@@ -322,9 +323,7 @@ class PascalTypeChecker(TypeChecker):
                 # imported separately below so their presence does not inflate
                 # the export count.
                 export_name_set = {n.lower() for n in export_names}
-                routine_decls   = [d for d in all_decls
-                                   if isinstance(d, (ProcDecl, FuncDecl))
-                                   and getattr(d, 'name', '').lower() in export_name_set]
+                routine_decls = [d for d in all_decls if isinstance(d, (ProcDecl, FuncDecl)) and getattr(d, 'name', '').lower() in export_name_set]
 
                 # Validate: every name in the export list must have a matching decl.
                 declared_names = {getattr(d, 'name', '').lower() for d in routine_decls}
@@ -349,14 +348,11 @@ class PascalTypeChecker(TypeChecker):
                     # name, then find the matching decl by that export name.
                     pairs = []
                     for alias, ename in zip(imported_aliases, export_names):
-                        decl = next((d for d in routine_decls
-                                     if getattr(d, 'name', '').lower() == ename.lower()), None)
+                        decl = next((d for d in routine_decls if getattr(d, 'name', '').lower() == ename.lower()), None)
                         if decl:
                             pairs.append((alias, ename, decl))
                 else:
-                    pairs = [(n, n, next(d for d in routine_decls
-                                         if getattr(d, 'name', '').lower() == n.lower()))
-                             for n in export_names]
+                    pairs = [(n, n, next(d for d in routine_decls if getattr(d, 'name', '').lower() == n.lower())) for n in export_names]
 
                 # Import non-exported TYPE/CONST decls so the importing scope
                 # can reference shared buffer type names (e.g. PIXELS).  These
@@ -715,7 +711,7 @@ class PascalTypeChecker(TypeChecker):
                 # seed names that the implementation does not itself declare
                 # (impl wins when both define the same name).
                 if iface:
-                    impl_type_names  = {getattr(d, 'name', '').upper() for d in (impl.decls or []) if isinstance(d, TypeDecl)}
+                    impl_type_names = {getattr(d, 'name', '').upper() for d in (impl.decls or []) if isinstance(d, TypeDecl)}
                     impl_const_names = {getattr(d, 'name', '').upper() for d in (impl.decls or []) if isinstance(d, ConstDecl)}
                     for decl in iface.decls:
                         name = getattr(decl, 'name', '') or ''
@@ -969,24 +965,16 @@ class PascalTypeChecker(TypeChecker):
         has_c = 'C' in attr_names
         has_varargs = 'VARARGS' in attr_names
         if has_c and not is_extended(self.features):
-            self.error(
-                f"routine '{decl.name}': the [C] (C-ABI) attribute requires the "
-                f"extended dialect and is not available in the faithful 1981 dialect.",
-                decl)
+            self.error(f"routine '{decl.name}': the [C] (C-ABI) attribute requires the "
+                       f"extended dialect and is not available in the faithful 1981 dialect.", decl)
         if has_varargs and not is_extended(self.features):
-            self.error(
-                f"routine '{decl.name}': the [VARARGS] attribute requires the "
-                f"extended dialect and is not available in the faithful 1981 dialect.",
-                decl)
+            self.error(f"routine '{decl.name}': the [VARARGS] attribute requires the "
+                       f"extended dialect and is not available in the faithful 1981 dialect.", decl)
         if has_varargs and not has_c:
-            self.error(
-                f"routine '{decl.name}': [VARARGS] requires the [C] attribute; "
-                f"variadic calls are only supported on C-ABI foreign routines.",
-                decl)
+            self.error(f"routine '{decl.name}': [VARARGS] requires the [C] attribute; "
+                       f"variadic calls are only supported on C-ABI foreign routines.", decl)
         if has_varargs and getattr(self, 'in_device_module', False):
-            self.error(
-                f"routine '{decl.name}': [VARARGS] is not permitted in DEVICE code.",
-                decl)
+            self.error(f"routine '{decl.name}': [VARARGS] is not permitted in DEVICE code.", decl)
         if not self._is_foreign_routine(decl):
             return
         # The [C]/[CDECL] marker opts into C-ABI-correct lowering of by-value
@@ -1101,6 +1089,14 @@ class PascalTypeChecker(TypeChecker):
         annotations. Dimensions must be positive integer literals so the
         annotation values are compile-time facts.
         """
+        # The PTX ISA (.reqntid, Performance-Tuning Directives) states that
+        # .reqntid cannot be used in conjunction with .maxntid on the same
+        # entry, so reject the pair up front rather than emitting PTX that
+        # ptxas will refuse. (Follow-up item 12; see docs/old/old-followups.md.)
+        present = {a.name.upper() for a in getattr(decl, 'attributes', []) or []}
+        if ('MAXNTID' in present and 'REQNTID' in present and self.feature_enabled('tuning-hints') and self.in_device_module):
+            self.error("[MAXNTID] and [REQNTID] cannot be used together on the same kernel: the PTX ISA forbids combining .maxntid with .reqntid", decl)
+            return
         for attr in getattr(decl, 'attributes', []) or []:
             name = attr.name.upper()
             if name not in {'MAXNTID', 'REQNTID', 'MINCTASM'}:
@@ -1122,11 +1118,40 @@ class PascalTypeChecker(TypeChecker):
             if not (1 <= len(args) <= max_args):
                 self.error(f"[{name}] expects 1{'' if max_args == 1 else '-3'} dimension argument(s), got {len(args)}", decl)
                 continue
+            values = []
+            bad = False
             for arg in args:
                 value = self._fold_int_literal_value(arg)
                 if value is None or value < 1:
                     self.error(f"[{name}] dimensions must be positive integer literals", decl)
+                    bad = True
                     break
+                values.append(value)
+            if bad:
+                continue
+            # MAXNTID/REQNTID declare thread-block (CTA) geometry, so their
+            # dimensions must fit the CUDA architectural ceilings; otherwise
+            # ptxas/the driver rejects the kernel at load time (or, worse, it
+            # is silently mis-scheduled). MINCTASM is a *minimum CTAs-per-SM*
+            # occupancy hint with no fixed numeric ceiling -- the PTX ISA says
+            # an infeasible value is silently ignored by ptxas, not rejected,
+            # so we deliberately bound-check only positivity for it (above)
+            # and invent no upper limit here.
+            if name in {'MAXNTID', 'REQNTID'}:
+                axes = ('X', 'Y', 'Z')
+                for value, axis in zip(values, axes):
+                    axis_max = NVVM_AXIS_MAX[axis]
+                    if value > axis_max:
+                        self.error(f"[{name}] {axis.lower()}-dimension {value} exceeds the CUDA architectural maximum of {axis_max} threads for that axis", decl)
+                        bad = True
+                if bad:
+                    continue
+                total = 1
+                for value in values:
+                    total *= value
+                if total > NVVM_MAX_THREADS_PER_BLOCK:
+                    self.error(f"[{name}] total threads per block {total} exceeds the CUDA architectural maximum of {NVVM_MAX_THREADS_PER_BLOCK}", decl)
+                    continue
 
     def check_proc_decl(self, decl: ProcDecl) -> None:
         """Type check a procedure declaration."""
@@ -1159,8 +1184,7 @@ class PascalTypeChecker(TypeChecker):
         # *procedure* call -- variadic FUNCTIONS already worked because
         # FunctionType carried the flag.  (Finding 3.)
         _proc_attrs = {a.name.upper() for a in getattr(decl, 'attributes', [])}
-        proc_type = ProcedureType(decl.name, param_types,
-                                  is_variadic='VARARGS' in _proc_attrs)
+        proc_type = ProcedureType(decl.name, param_types, is_variadic='VARARGS' in _proc_attrs)
 
         # Phase 0 C-FFI guard: reject ABI-incompatible foreign signatures
         # (procedures have no return type, so only by-value aggregate params).
@@ -1334,7 +1358,8 @@ class PascalTypeChecker(TypeChecker):
                 self.error(f"Undefined variable: {stmt.var}", stmt)
             else:
                 var_type = sym.type
-                if not self._is_ordinal_type(var_type):
+                wide_for_ok = (var_type == INTEGER32_TYPE and (self.feature_enabled('wide-integers') or self.in_device_module))
+                if not self._is_ordinal_type(var_type) and not wide_for_ok:
                     self.error(f"FOR loop variable must be an ordinal type, got {var_type}", stmt)
                     var_type = None
 
@@ -1343,7 +1368,11 @@ class PascalTypeChecker(TypeChecker):
         for bound, which in ((stmt.start, 'start'), (stmt.end, 'end')):
             if bound is None:
                 continue
-            bound_type = self.infer_expression_type(bound)
+            # The control variable's type is the literal context, so a bound
+            # like 99999 in a FOR over an INTEGER32 variable adopts (and is
+            # range-checked against) INTEGER32 rather than defaulting to
+            # INTEGER and failing its 16-bit range check.
+            bound_type = self.infer_expression_type(bound, var_type)
             if bound_type is None:
                 continue
             if var_type is not None:
@@ -1453,7 +1482,8 @@ class PascalTypeChecker(TypeChecker):
                     return
                 # Type check successful - target_type is now the element/field type
                 value_type = self.infer_expression_type(stmt.expr, target_type)
-                if value_type and not can_assign(value_type, target_type):
+                if value_type and not can_assign(value_type, target_type) \
+                        and not self._const_adapts_to_int_target(value_type, target_type, stmt.expr):
                     self.error(f"Cannot assign {value_type} to {target_type}", stmt)
                 elif value_type:
                     self._check_word_int_assign(value_type, target_type, stmt.expr, stmt)
@@ -1488,7 +1518,8 @@ class PascalTypeChecker(TypeChecker):
         # Check type compatibility
         value_type = self.infer_expression_type(stmt.expr, target_type)
         if value_type:
-            if not can_assign(value_type, target_type):
+            if not can_assign(value_type, target_type) \
+                    and not self._const_adapts_to_int_target(value_type, target_type, stmt.expr):
                 self.error(f"Cannot assign {value_type} to {target_type}", stmt)
             else:
                 self._check_word_int_assign(value_type, target_type, stmt.expr, stmt)
@@ -1607,7 +1638,14 @@ class PascalTypeChecker(TypeChecker):
             # Check that all arguments are well-formed (this will catch undefined variables)
             for i, arg in enumerate(stmt.args):
                 value_arg = arg.expr if isinstance(arg, WriteArg) else arg
-                arg_type = self.infer_expression_type(value_arg)
+                # Give integer literals the parameter's type as context, so a
+                # constant argument to a narrow (WORD8/INTEGER8) or wide
+                # parameter adopts that type directly (with its range check)
+                # instead of defaulting to INTEGER and failing compatibility.
+                _param_ctx = None
+                if (stmt.name.upper() not in ['WRITELN', 'WRITE', 'READLN'] and hasattr(sym.type, 'params') and i < len(sym.type.params)):
+                    _param_ctx = sym.type.params[i][1]
+                arg_type = self.infer_expression_type(value_arg, _param_ctx)
                 if isinstance(arg, WriteArg):
                     if arg.width is not None:
                         self.infer_expression_type(arg.width)
@@ -1617,7 +1655,8 @@ class PascalTypeChecker(TypeChecker):
                 if stmt.name.upper() not in ['WRITELN', 'WRITE', 'READLN'] and arg_type:
                     if i < len(sym.type.params):
                         _, param_type = sym.type.params[i]
-                        if not self._can_pass_value_argument(arg_type, param_type):
+                        if not self._can_pass_value_argument(arg_type, param_type) \
+                                and not self._const_adapts_to_int_target(arg_type, param_type, value_arg):
                             self.error(f"Argument {i+1} type mismatch: expected {param_type}, got {arg_type}", stmt)
                         else:
                             self._check_word_int_assign(arg_type, param_type, value_arg, stmt)
@@ -1900,8 +1939,8 @@ class PascalTypeChecker(TypeChecker):
         # source, not whether a live typed value (e.g. returned from an imported
         # device function) can be passed to WRITE.
         wide_real = (type(REAL32_TYPE), ) if (self.feature_enabled('wide-reals') or self.in_device_module) else ()
-        return isinstance(t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), type(WORD32_TYPE), type(WORD64_TYPE), type(INTEGER32_TYPE), type(INTEGER64_TYPE), EnumType, StringType, LStringType) +
-                          wide_real) or is_fixed_char_array(t)
+        return isinstance(t, (type(BOOLEAN_TYPE), type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), type(WORD8_TYPE), type(WORD32_TYPE), type(WORD64_TYPE),
+                              type(INTEGER8_TYPE), type(INTEGER32_TYPE), type(INTEGER64_TYPE), EnumType, StringType, LStringType) + wide_real) or is_fixed_char_array(t)
 
     def _is_readable_type(self, t: Type) -> bool:
         # READ remains narrower than WRITE: BOOLEAN input is unsupported, but
@@ -1909,7 +1948,8 @@ class PascalTypeChecker(TypeChecker):
         # under -f symbolic-enum-io).
         # INTEGER32/INTEGER64 are always readable for the same reason they are
         # always writable: the type object is valid regardless of how it arrived.
-        return isinstance(t, (type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), type(WORD32_TYPE), type(WORD64_TYPE), type(INTEGER32_TYPE), type(INTEGER64_TYPE), EnumType, StringType, LStringType))
+        return isinstance(t, (type(CHAR_TYPE), type(INTEGER_TYPE), type(REAL_TYPE), type(WORD_TYPE), type(WORD32_TYPE), type(WORD64_TYPE), type(INTEGER32_TYPE),
+                              type(INTEGER64_TYPE), EnumType, StringType, LStringType))
 
     def _check_concat_args(self, stmt: ProcCallStmt) -> None:
         """Type check CONCAT(VAR D: LSTRING; CONST S: STRING).
@@ -2252,8 +2292,16 @@ class PascalTypeChecker(TypeChecker):
         if len(stmt.args) != 2:
             self.error(f"NEW: super array allocation expects 1 upper bound, got {len(stmt.args) - 1}", stmt)
             return
-        bound_type = self.infer_expression_type(stmt.args[1], INTEGER_TYPE)
-        if bound_type and not can_assign(bound_type, INTEGER_TYPE):
+        _wide_gate = self.feature_enabled('wide-integers') or self.in_device_module
+        bound_type = self.infer_expression_type(stmt.args[1], INTEGER32_TYPE if _wide_gate else INTEGER_TYPE)
+        # A heap super array's dynamic bound is stored as an i64 header and the
+        # allocation math is 64-bit (docs/super-array-bounds-abi.md), so under
+        # wide-integers the bound expression may itself be a wide signed
+        # integer -- that is what lets a buffer exceed 32767 elements.  The
+        # vintage dialect keeps the INTEGER-only rule.
+        wide_bound_ok = _wide_gate and \
+            bound_type in (INTEGER32_TYPE, INTEGER64_TYPE)
+        if bound_type and not wide_bound_ok and not can_assign(bound_type, INTEGER_TYPE):
             self.error(f"NEW: super array upper bound must be INTEGER, got {bound_type}", stmt)
             return
 
@@ -2293,6 +2341,10 @@ class PascalTypeChecker(TypeChecker):
             return (-32767, 32767)
         if t == WORD_TYPE:
             return (0, 65535)
+        if t == WORD8_TYPE:
+            return (0, 255)
+        if t == INTEGER8_TYPE:
+            return (-128, 127)
         if t == WORD32_TYPE:
             return (0, 4294967295)
         if t == WORD64_TYPE:
@@ -2383,8 +2435,7 @@ class PascalTypeChecker(TypeChecker):
             name = expr.name
         if name is not None:
             sym = self.symbol_table.lookup(name)
-            if (sym and getattr(sym, 'kind', None) == 'const'
-                    and sym.type in (INTEGER_TYPE, INTEGER32_TYPE, INTEGER64_TYPE)):
+            if (sym and getattr(sym, 'kind', None) == 'const' and sym.type in (INTEGER_TYPE, INTEGER32_TYPE, INTEGER64_TYPE)):
                 folded = getattr(sym, 'const_int', None)
                 if folded is not None:
                     return folded
@@ -2412,12 +2463,37 @@ class PascalTypeChecker(TypeChecker):
         """
         if self._fold_int_literal_value(expr) is not None:
             return True
+        # SIZEOF is a compile-time constant by construction; like a named
+        # CONST it is exempt even without folding its value here, so
+        # FILLC(adr x, SIZEOF(x), ...) passes the WORD 'len' parameter.
+        if isinstance(expr, SizeofExpr):
+            return True
         if isinstance(expr, Identifier):
             sym = self.symbol_table.lookup(expr.name)
-            if (sym and getattr(sym, 'kind', None) == 'const'
-                    and sym.type in (INTEGER_TYPE, INTEGER32_TYPE, INTEGER64_TYPE)):
+            if (sym and getattr(sym, 'kind', None) == 'const' and sym.type in (INTEGER_TYPE, INTEGER32_TYPE, INTEGER64_TYPE)):
                 return True
         return self._fold_const_int(expr) is not None
+
+    def _const_adapts_to_int_target(self, value_type, target_type, value_expr) -> bool:
+        """Vintage constant-adaptation rule, generalized to the extension family.
+
+        The manual's "INTEGER type constants change to WORD type" rule lets a
+        compile-time INTEGER constant flow into a WORD target.  The extension
+        types inherit the same convenience: a constant integer expression
+        (literal, named CONST, or foldable expression) whose value fits the
+        target's range may be assigned/passed to any WORD8/WORD/WORD32/WORD64
+        or INTEGER8/INTEGER32/INTEGER64 target.  Non-constant values keep the
+        strict rules (explicit WRD/WRD8, or widening only)."""
+        if value_type not in (INTEGER_TYPE, INTEGER32_TYPE, INTEGER64_TYPE):
+            return False
+        rng = self._integer_range_for_type(target_type)
+        if rng is None:
+            return False
+        val = self._fold_const_int(value_expr) if value_expr is not None else None
+        if val is None:
+            return False
+        lo, hi = rng
+        return lo <= val <= hi
 
     def _check_word_int_assign(self, value_type, target_type, value_expr, node) -> None:
         """Reject a non-constant INTEGER value assigned/passed into a WORD target.
@@ -2429,10 +2505,9 @@ class PascalTypeChecker(TypeChecker):
         """
         if value_type == INTEGER_TYPE and target_type == WORD_TYPE:
             if value_expr is None or not self._is_constant_integer_expr(value_expr):
-                self.error(
-                    "INTEGER is not assignment compatible with WORD: only INTEGER "
-                    "constants change to WORD; convert a signed INTEGER value with "
-                    "WRD(...)", node)
+                self.error("INTEGER is not assignment compatible with WORD: only INTEGER "
+                           "constants change to WORD; convert a signed INTEGER value with "
+                           "WRD(...)", node)
 
     # Equal-rank unsigned/signed integer pairs that carry the WORD/INTEGER
     # signedness ambiguity.  Rank == index into each tuple: rank 0 is the vintage
@@ -2444,8 +2519,8 @@ class PascalTypeChecker(TypeChecker):
     # what makes that silent choice visible (and, under -f strict-word-int,
     # refusable).  Membership is tested with ``==`` rather than a dict keyed by
     # type instance, because some operand types (e.g. SetType) are unhashable.
-    _WORD_FAMILY_BY_RANK = (WORD_TYPE, WORD32_TYPE, WORD64_TYPE)
-    _INT_FAMILY_BY_RANK = (INTEGER_TYPE, INTEGER32_TYPE, INTEGER64_TYPE)
+    _WORD_FAMILY_BY_RANK = (WORD8_TYPE, WORD_TYPE, WORD32_TYPE, WORD64_TYPE)
+    _INT_FAMILY_BY_RANK = (INTEGER8_TYPE, INTEGER_TYPE, INTEGER32_TYPE, INTEGER64_TYPE)
 
     @staticmethod
     def _family_rank(t, family) -> Optional[int]:
@@ -2477,8 +2552,7 @@ class PascalTypeChecker(TypeChecker):
         ARITH_BITWISE = {'PLUS', 'MINUS', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR'}
         if op not in ARITH_BITWISE:
             return
-        for a_t, b_t, b_e in ((left_type, right_type, right_expr),
-                              (right_type, left_type, left_expr)):
+        for a_t, b_t, b_e in ((left_type, right_type, right_expr), (right_type, left_type, left_expr)):
             # a_t is the unsigned (WORD-family) operand, b_t the signed
             # (INTEGER-family) operand; only flag them at equal width/rank.
             a_rank = self._family_rank(a_t, self._WORD_FAMILY_BY_RANK)
@@ -2512,7 +2586,8 @@ class PascalTypeChecker(TypeChecker):
         """Infer the type of an expression."""
         if isinstance(expr, IntLiteral):
             self._check_integer_literal_range(expr, context_type)
-            resolved = context_type if context_type in (INTEGER_TYPE, WORD_TYPE, WORD32_TYPE, WORD64_TYPE, INTEGER32_TYPE, INTEGER64_TYPE) else INTEGER_TYPE
+            resolved = context_type if context_type in (INTEGER_TYPE, WORD_TYPE, WORD8_TYPE, WORD32_TYPE, WORD64_TYPE, INTEGER8_TYPE, INTEGER32_TYPE,
+                                                        INTEGER64_TYPE) else INTEGER_TYPE
             setattr(expr, 'resolved_type', resolved)
             return resolved
         elif isinstance(expr, RealLiteral):
@@ -2657,6 +2732,16 @@ class PascalTypeChecker(TypeChecker):
             if expr.selectors:
                 for selector in expr.selectors:
                     if selector.kind == 'INDEX':
+                        # STRING/LSTRING are character-indexable (manual:
+                        # S[I] is the Ith character; LSTRING index 0 is the
+                        # length byte, viewed as a CHAR).
+                        if isinstance(current_type, (StringType, LStringType)):
+                            if selector.index_or_field:
+                                idx_t = self.infer_expression_type(selector.index_or_field)
+                                if idx_t and not self._valid_array_index_type(idx_t, INTEGER_TYPE):
+                                    self.error(f"String index must be INTEGER, got {idx_t}", expr)
+                            current_type = CHAR_TYPE
+                            continue
                         if not isinstance(current_type, ArrayType):
                             self.error(f"Cannot index non-array type {current_type}", expr)
                             return None
@@ -2720,7 +2805,8 @@ class PascalTypeChecker(TypeChecker):
                 return sym.type.return_type
             return sym.type
         elif isinstance(expr, BinOp):
-            literal_context = context_type if context_type in (INTEGER_TYPE, WORD_TYPE, WORD32_TYPE, WORD64_TYPE, INTEGER32_TYPE, INTEGER64_TYPE) else None
+            literal_context = context_type if context_type in (INTEGER_TYPE, WORD_TYPE, WORD8_TYPE, WORD32_TYPE, WORD64_TYPE, INTEGER8_TYPE, INTEGER32_TYPE,
+                                                               INTEGER64_TYPE) else None
             left_context = literal_context if isinstance(expr.left, (IntLiteral, UnaryOp)) else None
             right_context = literal_context if isinstance(expr.right, (IntLiteral, UnaryOp)) else None
             # A REAL32 result context flows into real-literal operands so that a
@@ -2762,7 +2848,8 @@ class PascalTypeChecker(TypeChecker):
         elif isinstance(expr, UnaryOp):
             self._check_integer_literal_range(expr, context_type)
             if expr.op in ('PLUS', 'MINUS') and isinstance(expr.operand, IntLiteral):
-                operand_type = context_type if context_type in (INTEGER_TYPE, WORD_TYPE, WORD32_TYPE, WORD64_TYPE, INTEGER32_TYPE, INTEGER64_TYPE) else INTEGER_TYPE
+                operand_type = context_type if context_type in (INTEGER_TYPE, WORD_TYPE, WORD8_TYPE, WORD32_TYPE, WORD64_TYPE, INTEGER8_TYPE, INTEGER32_TYPE,
+                                                                INTEGER64_TYPE) else INTEGER_TYPE
                 setattr(expr, 'resolved_type', operand_type)
                 setattr(expr.operand, 'resolved_type', operand_type)
             else:
@@ -2797,8 +2884,12 @@ class PascalTypeChecker(TypeChecker):
                     # Check argument types (fixed params only)
                     if expr.args:
                         for i, (arg, (param_name, param_type)) in enumerate(zip(expr.args, sym.type.params)):
-                            arg_type = self.infer_expression_type(arg)
-                            if arg_type and not self._can_pass_value_argument(arg_type, param_type):
+                            # Parameter type as literal context (see the
+                            # procedure-call site): constant arguments adopt
+                            # the parameter's integer type and range.
+                            arg_type = self.infer_expression_type(arg, param_type)
+                            if arg_type and not self._can_pass_value_argument(arg_type, param_type) \
+                                    and not self._const_adapts_to_int_target(arg_type, param_type, arg):
                                 self.error(f"Argument {i+1} type mismatch: expected {param_type}, got {arg_type}", expr)
                             elif arg_type:
                                 self._check_word_int_assign(arg_type, param_type, arg, expr)
@@ -2897,7 +2988,7 @@ class PascalTypeChecker(TypeChecker):
                     return None
                 # ORD maps any ordinal value to its INTEGER ordinal position
                 # (enums included).
-                if isinstance(arg_type, EnumType) or arg_type in (INTEGER_TYPE, WORD_TYPE, CHAR_TYPE, BOOLEAN_TYPE):
+                if isinstance(arg_type, EnumType) or arg_type in (INTEGER_TYPE, WORD_TYPE, CHAR_TYPE, BOOLEAN_TYPE, INTEGER8_TYPE, WORD8_TYPE):
                     return INTEGER_TYPE
                 self.error(f"Argument 1 type mismatch: ORD expects an ordinal type, got {arg_type}", expr)
                 return None
@@ -2979,6 +3070,26 @@ class PascalTypeChecker(TypeChecker):
                     self.error(f"{lookup_name}: fourth argument must be INTEGER or WORD, got {i_type}", expr)
                     return None
                 return INTEGER_TYPE
+            if lookup_name == 'WRD8' and (self.feature_enabled('wide-integers') or self.in_device_module):
+                # WRD8 is the 8-bit sibling of WRD: an explicit retyping
+                # conversion that truncates its argument to the low 8 bits and
+                # returns WORD8.  This is the sanctioned way to narrow a
+                # computed integer into a byte (e.g. filling a WORD8 pixel
+                # buffer); implicit narrowing assignments stay rejected.
+                if len(expr.args) != 1:
+                    self.error(f"WRD8 expects 1 argument, got {len(expr.args)}", expr)
+                    return None
+                arg_type = self.infer_expression_type(expr.args[0])
+                if isinstance(arg_type, EnumType):
+                    return WORD8_TYPE
+                if arg_type in (INTEGER8_TYPE, INTEGER_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, WORD8_TYPE, WORD_TYPE, WORD32_TYPE, WORD64_TYPE, CHAR_TYPE, BOOLEAN_TYPE):
+                    return WORD8_TYPE
+                if arg_type == REAL_TYPE:
+                    self.error("WRD8: REAL argument not supported (argument must be an ordinal type)", expr)
+                    return None
+                if arg_type:
+                    self.error(f"WRD8: unsupported argument type {arg_type}", expr)
+                return None
             if lookup_name == 'WRD':
                 if len(expr.args) != 1:
                     self.error(f"WRD expects 1 argument, got {len(expr.args)}", expr)
@@ -2988,7 +3099,7 @@ class PascalTypeChecker(TypeChecker):
                     return WORD_TYPE
                 if isinstance(arg_type, EnumType):
                     return WORD_TYPE
-                if arg_type in (INTEGER_TYPE, WORD_TYPE, CHAR_TYPE, BOOLEAN_TYPE):
+                if arg_type in (INTEGER_TYPE, WORD_TYPE, CHAR_TYPE, BOOLEAN_TYPE, INTEGER8_TYPE, WORD8_TYPE):
                     return WORD_TYPE
                 if arg_type == REAL_TYPE:
                     self.error("WRD: REAL argument not supported (argument must be an ordinal type or pointer)", expr)
@@ -3047,8 +3158,12 @@ class PascalTypeChecker(TypeChecker):
                 # Check argument types (fixed params only)
                 if expr.args:
                     for i, (arg, (param_name, param_type)) in enumerate(zip(expr.args, sym.type.params)):
-                        arg_type = self.infer_expression_type(arg)
-                        if arg_type and not self._can_pass_value_argument(arg_type, param_type):
+                        # Parameter type as literal context (see the
+                        # procedure-call site): constant arguments adopt the
+                        # parameter's integer type and range.
+                        arg_type = self.infer_expression_type(arg, param_type)
+                        if arg_type and not self._can_pass_value_argument(arg_type, param_type) \
+                                and not self._const_adapts_to_int_target(arg_type, param_type, arg):
                             self.error(f"Argument {i+1} type mismatch: expected {param_type}, got {arg_type}", expr)
                     # Type-check variadic tail args too (just for expression validity)
                     for arg in (expr.args[expected_args:] if _is_variadic_fn2 else []):
@@ -3097,13 +3212,20 @@ class PascalTypeChecker(TypeChecker):
         """Return whether ``index_type`` is valid for an array selector.
 
         DEVICE code uses INTEGER32 thread/block indices.  Permit those as array
-        indices in DEVICE source while preserving vintage host behaviour.
+        indices in DEVICE source while preserving vintage host behavior.
+
+        Host code gets the same INTEGER32 allowance under ``wide-integers``:
+        heap super arrays can exceed 32767 elements (the NEW super-array
+        bound is itself dynamic), so a program that allocates a large buffer
+        with long-form NEW must be able to index it with a wide integer.
+        This is extension surface, gated exactly like the type it needs.
         """
         if index_type is None:
             return False
         if index_type.equivalent_to(expected):
             return True
-        return self.in_device_module and index_type.equivalent_to(INTEGER32_TYPE) and expected.equivalent_to(INTEGER_TYPE)
+        wide_ok = self.in_device_module or self.feature_enabled('wide-integers')
+        return wide_ok and index_type.equivalent_to(INTEGER32_TYPE) and expected.equivalent_to(INTEGER_TYPE)
 
     def infer_designator_type(self, designator: Designator) -> Optional[Type]:
         """Infer the type of a designator (with selectors for array/record access)."""
@@ -3130,6 +3252,19 @@ class PascalTypeChecker(TypeChecker):
         if designator.selectors:
             for selector in designator.selectors:
                 if selector.kind == 'INDEX':
+                    # STRING/LSTRING are character-indexable (manual: S[I] is
+                    # the Ith character; LSTRING index 0 is the length byte,
+                    # viewed as a CHAR).  Codegen already lowers this (the
+                    # length-prefix convention -- see array_lower_bound's
+                    # deliberate string exclusion); this makes the checker
+                    # agree.
+                    if isinstance(current_type, (StringType, LStringType)):
+                        if selector.index_or_field:
+                            idx_t = self.infer_expression_type(selector.index_or_field)
+                            if idx_t and not self._valid_array_index_type(idx_t, INTEGER_TYPE):
+                                self.error(f"String index must be INTEGER, got {idx_t}", designator)
+                        current_type = CHAR_TYPE
+                        continue
                     # Array indexing
                     if not isinstance(current_type, ArrayType):
                         self.error(f"Cannot index non-array type {current_type}", designator)
@@ -3230,6 +3365,11 @@ class PascalTypeChecker(TypeChecker):
             name = type_expr.name.upper()
             if name == 'INTEGER':
                 return INTEGER_TYPE
+            elif name == 'INTEGER8' and (self.feature_enabled('wide-integers') or self.in_device_module):
+                # INTEGER8 is the 8-bit signed extension type (C int8_t), the
+                # narrow sibling of INTEGER32/INTEGER64.  It is NOT a synonym
+                # for CHAR: CHAR is a character type with no arithmetic.
+                return INTEGER8_TYPE
             elif name == 'INTEGER16' and (self.feature_enabled('wide-integers') or self.in_device_module):
                 # INTEGER16 is a synonym for INTEGER, gated on the wide-integer
                 # surface (like INTEGER32), so it is available exactly when the
@@ -3250,6 +3390,10 @@ class PascalTypeChecker(TypeChecker):
                 return REAL32_TYPE
             elif name == 'WORD':
                 return WORD_TYPE
+            elif name == 'WORD8' and (self.feature_enabled('wide-integers') or self.in_device_module):
+                # WORD8 is the 8-bit unsigned extension type (C uint8_t), the
+                # narrow sibling of WORD32/WORD64.
+                return WORD8_TYPE
             elif name == 'WORD16' and (self.feature_enabled('wide-integers') or self.in_device_module):
                 # WORD16 is a synonym for WORD, gated on the wide-integer surface
                 # (like WORD32), so it is available exactly when the other wide

@@ -17,7 +17,7 @@ that exercise the codegen path without requiring ADS parameters.
 
 import unittest
 
-from tests.support import typecheck_module, requires_exe, build_and_run_pascal_project
+from tests.support import (build_and_run_pascal_project, requires_exe, typecheck_module)
 
 # --- Shared-type visibility (type-checker level) ----------------------------
 

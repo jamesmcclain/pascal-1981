@@ -20,6 +20,7 @@ EXT = extended_features()
 
 @requires_exe
 class TestSizeofBuildAndRun(unittest.TestCase):
+
     def _sizes(self, decls, exprs, exe, features=None):
         """Compile a program that WRITELNs each SIZEOF expr; return ints."""
         body = '; '.join(f"WRITELN(SIZEOF({e}))" for e in exprs)
@@ -63,8 +64,7 @@ class TestSizeofBuildAndRun(unittest.TestCase):
                  "am: ADRMEM;\n"
                  "    inl: RECORD a: INTEGER32; b: INTEGER32 END;\n"
                  "    arr: ARRAY[0..9] OF CHAR;")
-        got = self._sizes(decls, ['i', 'w', 'c', 'r', 'b', 'am', 'inl', 'arr'],
-                          'sz-scalars')
+        got = self._sizes(decls, ['i', 'w', 'c', 'r', 'b', 'am', 'inl', 'arr'], 'sz-scalars')
         self.assertEqual(got, [2, 2, 1, 8, 1, 8, 8, 10])
 
 

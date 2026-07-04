@@ -73,6 +73,7 @@ def _is_gpu_triple(triple: str) -> bool:
 
 _SCALAR_SIZES = {
     'INTEGER': 2,
+    'INTEGER8': 1,
     'INTEGER16': 2,
     'INTEGER32': 4,
     'INTEGER64': 8,
@@ -80,6 +81,7 @@ _SCALAR_SIZES = {
     'REAL64': 8,
     'REAL32': 4,
     'WORD': 2,
+    'WORD8': 1,
     'WORD16': 2,
     'WORD32': 4,
     'WORD64': 8,
@@ -428,8 +430,7 @@ class CodegenBase:
             'pas_dev_free': _mk('pas_dev_free', ir.FunctionType(void, [i8p])),
             'pas_dev_module_load': _mk('pas_dev_module_load', ir.FunctionType(i8p, [i8p, i8p])),
             'pas_dev_module_get_function': _mk('pas_dev_module_get_function', ir.FunctionType(i8p, [i8p, i8p])),
-            'pas_dev_launch': _mk('pas_dev_launch', ir.FunctionType(
-                void, [i8p, i64, i64, i64, i64, i64, i64, i8p.as_pointer()])),
+            'pas_dev_launch': _mk('pas_dev_launch', ir.FunctionType(void, [i8p, i64, i64, i64, i64, i64, i64, i8p.as_pointer()])),
             'abort': _mk('abort', ir.FunctionType(void, [])),
             'fflush': _mk('fflush', ir.FunctionType(i32, [i8p])),
             'sqrt': _mk('sqrt', ir.FunctionType(f64, [f64])),

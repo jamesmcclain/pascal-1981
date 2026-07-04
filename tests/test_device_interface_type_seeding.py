@@ -11,9 +11,9 @@ import shutil
 import tempfile
 import unittest
 
+from pascal1981.codegen import compile_to_llvm
 from pascal1981.parser import parse_file
 from pascal1981.type_checker import PascalTypeChecker
-from pascal1981.codegen import compile_to_llvm
 
 GPU_TRIPLE = 'nvptx64-nvidia-cuda'
 
@@ -22,7 +22,7 @@ def _compile_module(iface_src, impl_src, module_name='T', device_triple=GPU_TRIP
     tmpdir = tempfile.mkdtemp()
     try:
         iface_path = os.path.join(tmpdir, module_name.lower())
-        impl_path  = os.path.join(tmpdir, f'{module_name.lower()}.pas')
+        impl_path = os.path.join(tmpdir, f'{module_name.lower()}.pas')
         with open(iface_path, 'w') as f:
             f.write(iface_src)
         with open(impl_path, 'w') as f:
@@ -39,7 +39,7 @@ def _typecheck_module(iface_src, impl_src, module_name='T'):
     tmpdir = tempfile.mkdtemp()
     try:
         iface_path = os.path.join(tmpdir, module_name.lower())
-        impl_path  = os.path.join(tmpdir, f'{module_name.lower()}.pas')
+        impl_path = os.path.join(tmpdir, f'{module_name.lower()}.pas')
         with open(iface_path, 'w') as f:
             f.write(iface_src)
         with open(impl_path, 'w') as f:
@@ -53,6 +53,7 @@ def _typecheck_module(iface_src, impl_src, module_name='T'):
 # ---------------------------------------------------------------------------
 # Core seeding tests
 # ---------------------------------------------------------------------------
+
 
 class TestInterfaceTypeSeeding(unittest.TestCase):
 
@@ -188,12 +189,12 @@ END;
 # Mandelbrot example: the workaround duplication is now gone
 # ---------------------------------------------------------------------------
 
+
 class TestMandelbrotNoDuplicateType(unittest.TestCase):
 
     def test_mandelbrot_compiles_without_duplicate_pixels_type(self):
         """mandelbrot.pas no longer needs TYPE PIXELS restated in the impl."""
-        base = os.path.join(os.path.dirname(__file__),
-                            '..', 'examples', 'device_ptx', 'mandelbrot')
+        base = os.path.join(os.path.dirname(__file__), '..', 'examples', 'device_ptx', 'mandelbrot')
         impl_path = os.path.abspath(os.path.join(base, 'mandelbrot.pas'))
         if not os.path.exists(impl_path):
             self.skipTest('mandelbrot example not found')
@@ -208,11 +209,9 @@ class TestMandelbrotNoDuplicateType(unittest.TestCase):
         # The TYPE keyword should only appear in a comment now, not as a decl
         import re
         type_decls = re.findall(r'(?m)^TYPE\b', src)
-        self.assertEqual(len(type_decls), 0,
-            "mandelbrot.pas should no longer restate TYPE PIXELS")
+        self.assertEqual(len(type_decls), 0, "mandelbrot.pas should no longer restate TYPE PIXELS")
 
-        ir = compile_to_llvm(ast, source_file=impl_path,
-                              device_triple=GPU_TRIPLE)
+        ir = compile_to_llvm(ast, source_file=impl_path, device_triple=GPU_TRIPLE)
         ir_str = str(ir)
         self.assertIn('ptx_kernel', ir_str)
         self.assertIn('mandelbrot_f32', ir_str)

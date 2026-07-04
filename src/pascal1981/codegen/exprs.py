@@ -14,7 +14,8 @@ from llvmlite.ir import IRBuilder
 
 from ..ast_nodes import *
 from ..builtins_registry import DEVICE_INDEX_BUILTIN_FUNCTIONS
-from ..type_system import (INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL32_TYPE, WORD_TYPE, WORD32_TYPE, WORD64_TYPE)
+from ..device_limits import NVVM_AXIS_MAX, NVVM_GRID_AXIS_MAX
+from ..type_system import (INTEGER8_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL32_TYPE, WORD8_TYPE, WORD32_TYPE, WORD64_TYPE, WORD_TYPE)
 from ..type_system import LStringType as ResolvedLStringType
 from ..type_system import StringType as ResolvedStringType
 from .base import CodegenError, _is_gpu_triple
@@ -31,6 +32,8 @@ class ExprsMixin:
                 return ir.Constant(ir.IntType(64), expr.value)
             if resolved == INTEGER32_TYPE or resolved == WORD32_TYPE:
                 return ir.Constant(ir.IntType(32), expr.value)
+            if resolved == INTEGER8_TYPE or resolved == WORD8_TYPE:
+                return ir.Constant(ir.IntType(8), expr.value)
             return ir.Constant(ir.IntType(16), expr.value)
         elif isinstance(expr, RealLiteral):
             # The type checker tags the literal REAL32 when it sits in a
@@ -344,25 +347,30 @@ class ExprsMixin:
     def _expr_is_unsigned_word(self, expr: Expression) -> bool:
         """Best-effort Pascal signedness query for checked integer arithmetic.
 
-        The unsigned scalars are the WORD family: WORD/WORD16 (i16), WORD32
-        (i32), and WORD64 (i64).  INTEGER/INTEGER16/INTEGER32/INTEGER64 are
+        The unsigned scalars are the WORD family: WORD8 (i8), WORD/WORD16
+        (i16), WORD32 (i32), and WORD64 (i64).
+        INTEGER8/INTEGER/INTEGER16/INTEGER32/INTEGER64 are
         signed.  Signedness is taken from the Pascal type, not the LLVM width, so
         that widening picks zext (unsigned) vs sext (signed) correctly.
         """
-        unsigned_names = {'WORD', 'WORD16', 'WORD32', 'WORD64'}
+        unsigned_names = {'WORD', 'WORD8', 'WORD16', 'WORD32', 'WORD64'}
         if isinstance(expr, Identifier):
             sym = self.scope.lookup(expr.name)
             return bool(sym and self._type_expr_name(sym.type_expr) in unsigned_names)
         if isinstance(expr, Designator):
-            sym = self.scope.lookup(expr.name)
-            return bool(sym and self._type_expr_name(sym.type_expr) in unsigned_names and not expr.selectors)
+            # Walk the selector chain so an unsigned element/field (e.g.
+            # ``a[i]`` where a is ARRAY OF WORD8, or ``p^[i]`` over a WORD8
+            # super array) is recognized; a bare-name lookup would misclassify
+            # it as signed and sign-extend on widening.
+            ty = self.resolve_designator_type_expr(expr)
+            return bool(ty is not None and self._type_expr_name(ty) in unsigned_names)
         if isinstance(expr, UnaryOp):
             return self._expr_is_unsigned_word(expr.operand)
         if isinstance(expr, BinOp):
             if expr.op in {'PLUS', 'MINUS', 'MUL', 'DIV', 'MOD', 'AND', 'OR', 'XOR'}:
                 return self._expr_is_unsigned_word(expr.left) and self._expr_is_unsigned_word(expr.right)
         if isinstance(expr, FuncCall):
-            return expr.name.upper() == 'WRD'
+            return expr.name.upper() in ('WRD', 'WRD8')
         return False
 
     def _extend_int_for_pascal_expr(self, value: 'ir.Value', target: ir.IntType, expr: Expression) -> 'ir.Value':
@@ -416,7 +424,7 @@ class ExprsMixin:
         bit.  (followups.md item 2: no FMA fusion.)
         """
         if self.is_device_module:
-            return getattr(self.builder, opname)(lhs, rhs, name=name, flags=('contract',))
+            return getattr(self.builder, opname)(lhs, rhs, name=name, flags=('contract', ))
         return getattr(self.builder, opname)(lhs, rhs, name=name)
 
     def codegen_binop(self, expr: BinOp) -> ir.Value:
@@ -668,6 +676,19 @@ class ExprsMixin:
                 raise CodegenError(f'{lookup_name} not supported for type {val.type}')
             shifted = self.builder.lshr(val, ir.Constant(val.type, 8)) if lookup_name == 'HIBYTE' else val
             return self.builder.trunc(shifted, ir.IntType(8))
+        elif lookup_name == 'WRD8':
+            # WRD8(x): truncate/retype to the 8-bit unsigned WORD8 (the 8-bit
+            # sibling of WRD).  Wider integers truncate to the low byte; i8
+            # values (CHAR/BOOLEAN/WORD8/INTEGER8) pass through unchanged.
+            val = self.codegen_expr(expr.args[0])
+            vt = val.type
+            if isinstance(vt, ir.IntType):
+                if vt.width > 8:
+                    return self.builder.trunc(val, ir.IntType(8))
+                if vt.width == 8:
+                    return val
+                return self.builder.zext(val, ir.IntType(8))
+            raise CodegenError(f'WRD8: unsupported value type {vt}')
         elif lookup_name == 'WRD':
             val = self.codegen_expr(expr.args[0])
             vt = val.type
@@ -761,31 +782,24 @@ class ExprsMixin:
         'THREADIDX_X': '__pas_tid_x',
         'THREADIDX_Y': '__pas_tid_y',
         'THREADIDX_Z': '__pas_tid_z',
-        'BLOCKIDX_X':  '__pas_ctaid_x',
-        'BLOCKIDX_Y':  '__pas_ctaid_y',
-        'BLOCKIDX_Z':  '__pas_ctaid_z',
-        'BLOCKDIM_X':  '__pas_ntid_x',
-        'BLOCKDIM_Y':  '__pas_ntid_y',
-        'BLOCKDIM_Z':  '__pas_ntid_z',
-        'GRIDDIM_X':   '__pas_nctaid_x',
-        'GRIDDIM_Y':   '__pas_nctaid_y',
-        'GRIDDIM_Z':   '__pas_nctaid_z',
+        'BLOCKIDX_X': '__pas_ctaid_x',
+        'BLOCKIDX_Y': '__pas_ctaid_y',
+        'BLOCKIDX_Z': '__pas_ctaid_z',
+        'BLOCKDIM_X': '__pas_ntid_x',
+        'BLOCKDIM_Y': '__pas_ntid_y',
+        'BLOCKDIM_Z': '__pas_ntid_z',
+        'GRIDDIM_X': '__pas_nctaid_x',
+        'GRIDDIM_Y': '__pas_nctaid_y',
+        'GRIDDIM_Z': '__pas_nctaid_z',
     }
 
-    # Conservative architectural ceilings for CUDA compute capability 7.0+
-    # (`sm_70` and later; this repo's device examples target `sm_70`/`sm_86`,
-    # both well within this range) per the CUDA C Programming Guide's
-    # "Compute Capabilities" appendix. [DOCUMENTED — CUDA architectural
-    # limits, not measured against this repository's own code/tests]
-    # Format: (name-suffix) -> (max threads-per-block axis, max grid axis).
-    # threadIdx.{x,y}/blockDim.{x,y} <= 1024; threadIdx.z/blockDim.z <= 64.
-    # blockIdx/gridDim.x can address up to 2^31-1 blocks; y/z are capped at
-    # 65535 on all CUDA compute capabilities to date.
-    _NVVM_SREG_MAX = {
-        'X': {'tid': 1024, 'ctaid': 2**31 - 1},
-        'Y': {'tid': 1024, 'ctaid': 65535},
-        'Z': {'tid': 64, 'ctaid': 65535},
-    }
+    # Conservative architectural ceilings for CUDA compute capability 7.0+.
+    # The per-axis numbers are the single source of truth in
+    # `device_limits.py` (shared with the frontend's launch-bound validation);
+    # this table just re-shapes them into the (tid, ctaid) pairs the !range
+    # helper below wants. Format: (name-suffix) -> (max threads-per-block
+    # axis, max grid axis).
+    _NVVM_SREG_MAX = {axis: {'tid': NVVM_AXIS_MAX[axis], 'ctaid': NVVM_GRID_AXIS_MAX[axis]} for axis in ('X', 'Y', 'Z')}
 
     def _nvvm_sreg_range(self, upper: str) -> tuple[int, int]:
         """Return the (lo, hi) !range bound [lo, hi) for one sreg intrinsic.
@@ -858,7 +872,8 @@ class ExprsMixin:
             call = self.builder.call(fn, [])
             lo, hi = self._nvvm_sreg_range(upper)
             call.set_metadata('range', self.module.add_metadata([
-                ir.Constant(ir.IntType(32), lo), ir.Constant(ir.IntType(32), hi),
+                ir.Constant(ir.IntType(32), lo),
+                ir.Constant(ir.IntType(32), hi),
             ]))
             return call
         if self.device_triple.startswith('amdgcn'):

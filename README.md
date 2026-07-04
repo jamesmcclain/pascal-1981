@@ -115,7 +115,8 @@ Optional dialect extensions are controlled with feature flags. The default diale
 # Show available feature flags
 pascal1981 --list-features
 
-# Enable INTEGER32 / INTEGER64 and MAXINT32 / MAXINT64
+# Enable the wide/narrow integer extension family (INTEGER8/32/64,
+# WORD8/32/64, MAXINT32/MAXINT64, MAXWORD32/MAXWORD64, WRD8)
 pascal1981 -f wide-integers myprogram.pas myprogram.ll
 
 # Enable name-based user enum WRITE and READ as an extension
@@ -125,7 +126,12 @@ pascal1981 -f symbolic-enum-io myprogram.pas myprogram.ll
 By default the dialect already enforces the vintage WORD/INTEGER rules: a signed
 `INTEGER` variable is not assignment-compatible with `WORD` (convert with
 `WRD(...)`; use `ORD(...)` for the reverse), and mixing `WORD` with a
-non-constant `INTEGER` in an expression is a warning. The `strict-word-int`
+non-constant `INTEGER` in an expression is a warning. The manual's "INTEGER
+constants change to WORD" exemption is generalized to the extension family: a
+compile-time constant integer expression (literal, named `CONST`, `SIZEOF`, or
+foldable expression) whose value fits the target's range may flow into any
+`WORD8`/`WORD32`/`WORD64` or `INTEGER8`/`INTEGER32`/`INTEGER64` target; only
+non-constant values need explicit conversion. The `strict-word-int`
 feature promotes that mix warning to a hard error. It is a policy flag,
 orthogonal to `--dialect`: enabling or disabling it never moves a program in or
 out of the extended dialect.
@@ -253,17 +259,19 @@ This compiler implements the full IBM Pascal 2.0 language, including all semanti
 ### Types
 - `INTEGER` (16-bit signed, matching IBM Pascal 2.0; range `-32767..32767`, i.e. `-MAXINT..MAXINT` with `MAXINT = 32767`; per the manual `-32768` is *not* a valid `INTEGER` — that bit pattern belongs to `WORD`)
 - `INTEGER32` / `INTEGER64` (opt-in signed extension types enabled with `-f wide-integers`; also enables `MAXINT32` and `MAXINT64`)
+- `INTEGER8` (opt-in 8-bit signed extension type, `-f wide-integers`; the Pascal spelling of C `int8_t`. Deliberately *not* a synonym for `CHAR`: `CHAR` is a character type with no arithmetic that `WRITE`s as a glyph, while `INTEGER8` is a true signed integer that does arithmetic and `WRITE`s as a number)
 - `BOOLEAN` (one byte; stored as `i8` so address-of / `sizeof` / fills are byte-consistent)
 - `REAL` (64-bit float; constants, division, unary minus, and mixed arithmetic are codegen-hardened, and the default `WRITE` format matches the manual's 14-wide exponential, e.g. `WRITE(123.456)` prints ` 1.2345600E+02`)
 - `REAL32` / `REAL64` (opt-in extension real types enabled with `-f wide-reals`; `REAL32` is a 32-bit float lowering to LLVM `float`, `REAL64` is a 64-bit synonym for `REAL`. Always available inside `DEVICE` code regardless of the flag — `REAL32` is what gives device kernels true `.f32` parameter ABI.)
 - `WORD` (16-bit unsigned)
 - `WORD32` / `WORD64` (opt-in *unsigned* extension types enabled with `-f wide-integers`, the unsigned siblings of `INTEGER32`/`INTEGER64`; they zero-extend when widened and `WRITE` them unsigned. `WORD` widens implicitly to `WORD32` and `WORD64`; a signed `INTEGER` does not — convert with `WRD(...)` into `WORD` first)
+- `WORD8` (opt-in 8-bit *unsigned* extension type, `-f wide-integers`; the Pascal spelling of C `uint8_t`, for byte buffers and pixel data. Widens implicitly to `WORD`/`WORD32`/`WORD64` (zero-extend) and to the wider signed types (every `WORD8` value fits). Narrowing into `WORD8` is never implicit — `WRD8(x)` is the explicit truncating retype, the 8-bit sibling of `WRD`. Across the `[C]` ABI, `WORD8` parameters/returns carry `zeroext` and `INTEGER8` carry `signext`)
 - `WORD16` (= `WORD`) and `INTEGER16` (= `INTEGER`) — width-explicit synonyms enabled with `-f wide-integers` (or inside `DEVICE` code), alongside the other wide integer types
 - `ARRAY[low..high] OF type` — bounds may be constant expressions, including named `CONST`s
 - `RECORD ... END`
 - `SET OF type` — 256-bit bitvector representation; constant constructors fold at compile time
 - Enumerated types (`TYPE color = (RED, GREEN, BLUE)`)
-- `STRING(n)` (fixed, blank-padded) and `LSTRING(n)` (length-prefixed) string storage
+- `STRING(n)` (fixed, blank-padded) and `LSTRING(n)` (length-prefixed) string storage, with character indexing (`S[I]` is the Ith character; STRING is 1-based, LSTRING index 0 is the length byte viewed as a CHAR, and `L.LEN` reads the length)
 - `TEXT` and binary `FILE OF T` file types, with the buffer variable `F^` backed by an inline file-control block
 - Predeclared `FILEMODES` enum (`SEQUENTIAL`, `TERMINAL`, `DIRECT`) and `FCBFQQ` record; `F.MODE` is readable and assignable on file variables
 - Pointers, plus the `adrmem` (generic address) parameter type
@@ -291,7 +299,7 @@ This compiler implements the full IBM Pascal 2.0 language, including all semanti
 - Comparison: `=`, `<>`, `<`, `<=`, `>`, `>=`
 - Calls: `func(args)`
 - Systems-programming operators: `adr x` (address-of), `sizeof(x)` / `sizeof(type)`
-- Built-ins: `CHR`, `ORD`, plus the intrinsic families `ENCODE`/`DECODE`, `SCANEQ`/`SCANNE`, `POSITN`, and the move/fill block operations
+- Built-ins: `CHR`, `ORD`, `WRD` (and, under `-f wide-integers`, the truncating `WRD8` retype into `WORD8`), plus the intrinsic families `ENCODE`/`DECODE`, `SCANEQ`/`SCANNE`, `POSITN`, and the move/fill block operations
 
 ### Built-in I/O
 - `WRITE`/`WRITELN` — mixed integers, characters, booleans, enums, REALs, strings, and string literals, with `:width`/`:width:frac` field formatting; an optional leading `TEXT` file argument selects the output stream (default `OUTPUT`/stdout). User enum values print as ordinals by default, matching IBM Pascal 2.0; `-f symbolic-enum-io` switches user enum output to member names. BOOLEAN always writes `TRUE`/`FALSE`, independent of that flag. The `::N` precision operand on STRING/LSTRING values is ignored by default (matching the vintage compiler, which prints the whole value); `-f string-precision` makes it truncate to `N` characters.
@@ -310,7 +318,49 @@ These are the features that made Pascal suitable for writing operating systems, 
 - **`adrmem`** — a generic address/pointer parameter type (`i8*` in LLVM). Pointer arguments are automatically bitcast to the parameter's type at the call site, enabling polymorphic low-level functions. Example: `adr flags` (an array pointer) can be passed where an `adrmem` is expected.
 - **`extern` procedures** — declared without a body and resolved at link time. Enables linking Pascal code against C runtimes and external libraries.
 - **`word` type** — 16-bit unsigned integer for register and hardware register operations.
-- **Feature-gated wide integers** — `INTEGER32` and `INTEGER64` are available only with `-f wide-integers`; unflagged builds preserve the vintage 16-bit `INTEGER` surface.
+- **Feature-gated wide integers** — `INTEGER8`/`INTEGER32`/`INTEGER64` and `WORD8`/`WORD32`/`WORD64` are available only with `-f wide-integers`; unflagged builds preserve the vintage 16-bit `INTEGER` surface.
+
+### Foreign buffers: the heap super-array pattern
+
+The sanctioned way for host Pascal to own a large typed buffer that crosses a
+foreign boundary (a `[C]` routine or the `DEVCOPYTO`/`DEVCOPYFROM`
+orchestration builtins) is a heap **super array** allocated with long-form
+`NEW`, not a `malloc` extern returning an untyped `ADRMEM`:
+
+```pascal
+TYPE BUF = SUPER ARRAY [0..*] OF INTEGER32;
+     PB  = ^BUF;
+VAR p: PB;
+...
+NEW(p, n - 1);          { dynamic bound; i64 bound header + element data }
+some_c_function(p);     { the pointer coerces to an ADRMEM / void* param }
+DEVCOPYFROM(p, dev, bytes);
+x := p^[i];             { typed element access, wide (INTEGER32) index   }
+DISPOSE(p)
+```
+
+The pointer variable itself is accepted anywhere an `ADRMEM` is expected and
+lowers to the raw element pointer (the bound header of
+`docs/super-array-bounds-abi.md` sits *before* the data, so C sees a plain
+`T*`).  Under `-f wide-integers` the pieces that make this scale past the
+16-bit `INTEGER` range are enabled together: the `NEW` bound may be a wide
+expression or a literal beyond 32767, arrays may be indexed with `INTEGER32`,
+and `FOR` loops may use an `INTEGER32` control variable.  The vintage dialect
+keeps its 16-bit rules.
+
+### Record layout across the C boundary
+
+A Pascal `RECORD` whose fields are C-representable scalars, pointers, and
+fixed arrays is guaranteed to be laid out exactly like the corresponding C
+struct on the host triple — same field offsets (natural alignment, implicit
+padding included) and same total size (tail padding included, which `SIZEOF`
+reports).  It is therefore sound to declare a third-party C struct as a Pascal
+`RECORD` and pass it **by pointer** (`CONST`/`VAR` parameter) to an unmodified
+C function through a `[C] EXTERN` declaration.  The guarantee is pinned
+differentially against clang `offsetof`/`sizeof` in
+`tests/test_c_record_layout.py`; passing or returning aggregates **by value**
+is the separate, also-supported `[C]` classifier path (see
+[`docs/c-abi-foreign-functions.md`](docs/c-abi-foreign-functions.md)).
 
 
 ## Device Code and Memory Spaces (experimental)
@@ -470,13 +520,24 @@ pascal-1981/
 │      ├── test_codegen_strings_bounds.py
 │      ├── test_read_end_to_end.py
 │      ├── test_runtime_fixes.py
+│      ├── test_c_ffi.py               # [C] attribute, aliases, SysV classifier, variadics
+│      ├── test_c_record_layout.py     # record layout differential vs clang offsetof/sizeof
+│      ├── test_byte_types.py          # WORD8/INTEGER8 and WRD8
+│      ├── test_super_array_host_buffer.py  # heap super-array foreign-buffer pattern
+│      ├── ... (one focused suite per feature area; see tests/)
 │      └── fixtures/parser/
 │
 └─ Documentation
    └── docs/
-       ├── ebnf_grammar.md
-       ├── followups.md
-       └── old/
+       ├── ebnf_grammar.md              # formal grammar (source of truth for the parser suite)
+       ├── c-abi-foreign-functions.md   # [C] FFI report/plan, scalar map, record layout guarantee
+       ├── ads-memory-spaces-design.md  # ADS memory-space design record
+       ├── device-kernel-orientation.md
+       ├── super-array-bounds-abi.md    # heap super-array bound-header ABI
+       ├── tuning-hints.md
+       ├── command-line-support.md
+       ├── followups.md                 # tracked tech-debt
+       └── old/                         # archived plans and settled differential questions
 ```
 
 ## Testing
@@ -555,7 +616,7 @@ PYTHONPATH=src python3 -m pytest tests/integration/test_uses_graphics.py -q
 ### Dependency Isolation
 
 The front end (lexer, parser, type checker) is pure Python with **no `llvmlite` dependency**. This means:
-- `test_parser.py` and `test_typecheck.py` run on any Python 3.8+ system
+- `test_parser.py` and `test_typecheck.py` run on any Python 3.10+ system with no third-party packages
 - `test_codegen.py` and `tests/integration/` require `llvmlite` and `clang`
 - If codegen dependencies are missing, the suite auto-skips those tests without failure
 
@@ -578,11 +639,11 @@ The front end (lexer, parser, type checker) is pure Python with **no `llvmlite` 
 ## Requirements
 
 **For parsing and type checking:**
-- Python 3.8+
+- Python 3.10+ (the packaging floor set by `llvmlite`; see `pyproject.toml`)
 - No external dependencies (pure Python implementation)
 
 **For code generation (Pascal → LLVM IR):**
-- Python 3.8+
+- Python 3.10+
 - `llvmlite` (for LLVM IR generation via Python)
 
 **For native executables and runtime builds:**
@@ -591,7 +652,7 @@ The front end (lexer, parser, type checker) is pure Python with **no `llvmlite` 
 - `make` and `ar` (used by `runtime/Makefile` to build `libpascalrt.a`)
 
 **For pip installation from this repository:**
-- Python 3.8+
+- Python 3.10+
 - `pip`
 - `clang`, `make`, and `ar` available on `PATH`, because installation builds and bundles the C runtime archive
 

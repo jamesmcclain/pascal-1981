@@ -51,14 +51,8 @@ def main() -> int:
                         help='Output target: host LLVM IR (.ll, default) or device NVPTX assembly '
                         '(.ptx). --target ptx selects the NVPTX device triple and honors --sm; it '
                         'is the single-CLI replacement for python -m pascal1981.compile_to_ptx.')
-    parser.add_argument('--sm',
-                        default='sm_70',
-                        metavar='ARCH',
-                        help='NVPTX target CPU for --target ptx, e.g. sm_70, sm_86 (default: sm_70).')
-    parser.add_argument('--emit-llvm',
-                        default=None,
-                        metavar='PATH',
-                        help='With --target ptx, also write the intermediate NVPTX LLVM IR to PATH.')
+    parser.add_argument('--sm', default='sm_70', metavar='ARCH', help='NVPTX target CPU for --target ptx, e.g. sm_70, sm_86 (default: sm_70).')
+    parser.add_argument('--emit-llvm', default=None, metavar='PATH', help='With --target ptx, also write the intermediate NVPTX LLVM IR to PATH.')
     parser.add_argument('--opt-level',
                         type=int,
                         choices=[0, 1, 2, 3],
@@ -82,7 +76,8 @@ def main() -> int:
                         'compiled with python -m pascal1981.compile_to_ptx) into this host '
                         'compiland as the __pas_device_ptx blob, so the launch path is '
                         'self-contained. The CPU device never executes it; the CUDA driver shim '
-                        'cuModuleLoadData''s it. Only meaningful for host PROGRAM/MODULE units.')
+                        'cuModuleLoadData'
+                        's it. Only meaningful for host PROGRAM/MODULE units.')
     # ----------------------------------------------------------------
     # Runtime-check flag overrides
     # Each flag follows the same tri-state convention:

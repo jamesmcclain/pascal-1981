@@ -36,8 +36,8 @@ in `tests/test_c_ffi.py`.
   and return types on `[C]` routines now carry `signext` or `zeroext` LLVM parameter
   attributes, closing the latent dirty-bit gap that caused intermittent wrong answers
   for negative `char`/`short` return values and unsigned `short`/`WORD` arguments.
-  Signed narrow types (`INTEGER` i16, `CHAR` i8, `CCHAR`, `CSHORT`) get `signext`;
-  unsigned/boolean types (`WORD` i16, `BOOLEAN` i8) get `zeroext`.  Attributes appear
+  Signed narrow types (`INTEGER` i16, `INTEGER8` i8, `CHAR` i8, `CCHAR`, `CSHORT`) get `signext`;
+  unsigned/boolean types (`WORD` i16, `WORD8` i8, `BOOLEAN` i8) get `zeroext`.  Attributes appear
   on both the `declare` (so the LLVM backend generates correct register handling) and
   the call-site argument list (via `arg_attrs`).  `[C]` `EXTERN` procedures are now
   declared as `void`-returning rather than the internal `i32` convention, exactly
@@ -213,6 +213,8 @@ This is the contract a programmer must reconcile against C by hand today
 | `INTEGER32`        | `i32`            | `int32_t` / `int`                |
 | `INTEGER64`        | `i64`            | `int64_t` / `long`               |
 | `WORD`             | `i16` (unsigned) | `uint16_t`                       |
+| `WORD8`            | `i8` (unsigned)  | `uint8_t`                        |
+| `INTEGER8`         | `i8`             | `int8_t` / `signed char`         |
 | `BOOLEAN`          | `i8`             | `_Bool`/`char` (low bit)         |
 | `CHAR`             | `i8`             | `char`                           |
 | `REAL` / `REAL64`  | `double`         | `double`                         |
@@ -222,7 +224,7 @@ This is the contract a programmer must reconcile against C by hand today
 | `STRING(n)`        | `[n+1 x i8]`     | fixed char buffer (see notes)    |
 | `ADS(s) OF T`      | `{i8*, i16}`     | (segmented; not a flat C pointer)|
 
-`INTEGER32`/`INTEGER64` require `-f wide-integers`; `REAL32`/`REAL64` require
+`INTEGER8`/`INTEGER32`/`INTEGER64` and `WORD8` require `-f wide-integers`; `REAL32`/`REAL64` require
 `-f wide-reals` (always on inside `DEVICE` code).
 
 ---
@@ -316,6 +318,55 @@ touch, which has no correct lowering until Phase 2.
 
 Within that envelope the mechanism is solid and link-clean. Outside it, results are
 wrong, latent, or unbuildable.
+
+### Record layout across the C boundary (guaranteed)
+
+The by-reference rule above rests on a layout guarantee that is now explicit
+and pinned by tests: a Pascal `RECORD` whose fields are C-representable
+scalars (`CHAR`, `BOOLEAN`, the integer family including `WORD8`/`INTEGER8`,
+`REAL`/`REAL32`, the C aliases), pointers (`ADRMEM`/typed pointers), fixed
+`ARRAY`s of such, and nested records of such, is laid out **exactly like the
+corresponding C struct on the host triple**:
+
+- field offsets follow natural alignment, implicit padding included (records
+  lower to non-packed LLVM struct types, so the backend applies the target
+  datalayout's ABI alignment — the same rules clang applies to the C struct);
+- `SIZEOF` reports the padded size, tail padding included (it is computed from
+  the same layout helper the `[C]` aggregate classifier trusts, so `SIZEOF`,
+  the allocation size, and the C `sizeof` agree).
+
+This is what makes it sound to transcribe a third-party C struct (a libpng
+`png_image`, a `struct timeval`, ...) as a Pascal `RECORD` and pass it by
+pointer (`CONST`/`VAR`) to an unmodified C function.  The guarantee is
+validated differentially against clang `offsetof`/`sizeof` — including a
+mixed-alignment struct, a `png_image`-shaped struct, and nested records with
+8-bit fields — in `tests/test_c_record_layout.py`.  Out of scope: Pascal has
+no spelling for C bit-fields, unions, or `#pragma pack`ed structs; those still
+need a C-side shim.
+
+### Host buffers for foreign code: the heap super-array pattern
+
+When host Pascal needs to *own* a sizable buffer that a C routine (or the
+device orchestration builtins) will fill, prefer a heap super array over a
+`malloc` extern returning an untyped `ADRMEM`:
+
+```pascal
+TYPE BUF = SUPER ARRAY [0..*] OF INTEGER32;
+     PB  = ^BUF;
+VAR p: PB;
+...
+NEW(p, n - 1);        { long-form NEW: i64 bound header + element data }
+fill_from_c(p, n);    { the pointer coerces to an ADRMEM / void* param }
+x := p^[i];           { typed element access, wide index under -f wide-integers }
+DISPOSE(p)
+```
+
+The pointer lowers to the raw element pointer (the bound header of
+`docs/super-array-bounds-abi.md` precedes the data), so the C side sees a
+plain `T*`; the Pascal side keeps typed, bounds-aware (`$INDEXCK`) access and
+`DISPOSE` cleanup.  Under `-f wide-integers` the `NEW` bound, array indices,
+and `FOR` control variables may all be `INTEGER32`, so the buffer can exceed
+the 16-bit `INTEGER` range.  Pinned in `tests/test_super_array_host_buffer.py`.
 
 ---
 

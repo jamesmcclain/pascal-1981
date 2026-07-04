@@ -44,6 +44,7 @@ def _is_sysv_amd64(triple: str) -> bool:
 # laid out (one LLVM struct element per field, declaration order).
 # ---------------------------------------------------------------------------
 
+
 def _align_of(t: ir.Type) -> int:
     if isinstance(t, ir.IntType):
         return max(1, (t.width + 7) // 8)
@@ -113,11 +114,12 @@ def _leaves(t: ir.Type, base: int):
 # Lowering plan vocabulary (ABI-neutral).
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class AggLowering:
     """How one by-value aggregate (parameter or return) crosses the ABI."""
-    kind: str                       # 'coerced' | 'memory'
-    agg_type: ir.Type               # the aggregate's LLVM type
+    kind: str  # 'coerced' | 'memory'
+    agg_type: ir.Type  # the aggregate's LLVM type
     size: int
     align: int
     pieces: List[ir.Type] = field(default_factory=list)  # coerced register types
@@ -128,25 +130,26 @@ class AggLowering:
 
 @dataclass
 class CParamPlan:
-    kind: str                       # 'ref' | 'scalar' | 'coerced' | 'memory'
-    llvm_type: Optional[ir.Type] = None    # ref/scalar: the single LLVM arg type
-    agg: Optional[AggLowering] = None      # coerced/memory
-    sign_attr: Optional[str] = None        # 'signext' | 'zeroext' | None (Phase 4)
+    kind: str  # 'ref' | 'scalar' | 'coerced' | 'memory'
+    llvm_type: Optional[ir.Type] = None  # ref/scalar: the single LLVM arg type
+    agg: Optional[AggLowering] = None  # coerced/memory
+    sign_attr: Optional[str] = None  # 'signext' | 'zeroext' | None (Phase 4)
 
 
 @dataclass
 class CCallPlan:
     params: List[CParamPlan]
-    ret_kind: str                   # 'void' | 'scalar' | 'coerced' | 'memory'
-    ret_llvm: Optional[ir.Type] = None     # scalar: the LLVM return type
+    ret_kind: str  # 'void' | 'scalar' | 'coerced' | 'memory'
+    ret_llvm: Optional[ir.Type] = None  # scalar: the LLVM return type
     ret_agg: Optional[AggLowering] = None  # coerced/memory
-    is_variadic: bool = False       # True when the declaration has [VARARGS]
-    ret_sign_attr: Optional[str] = None    # 'signext' | 'zeroext' | None (Phase 4)
+    is_variadic: bool = False  # True when the declaration has [VARARGS]
+    ret_sign_attr: Optional[str] = None  # 'signext' | 'zeroext' | None (Phase 4)
 
 
 # ---------------------------------------------------------------------------
 # System V AMD64 classification.
 # ---------------------------------------------------------------------------
+
 
 class SysVAmd64Abi:
     name = "System V AMD64"
@@ -162,7 +165,7 @@ class SysVAmd64Abi:
 
         n_eb = (size + 7) // 8
         cls = [_NONE] * n_eb
-        end = [0] * n_eb              # last occupied byte offset within each eightbyte
+        end = [0] * n_eb  # last occupied byte offset within each eightbyte
         sse_has_double = [False] * n_eb
         sse_end = [0] * n_eb
         for off, leaf in _leaves(t, 0):
@@ -213,15 +216,15 @@ def _merge(a: int, b: int) -> int:
 def c_abi_for_triple(triple: str) -> SysVAmd64Abi:
     if _is_sysv_amd64(triple):
         return SysVAmd64Abi()
-    raise CodegenError(
-        f"C-ABI by-value aggregates are only implemented for System V AMD64; "
-        f"the target triple '{triple}' has no aggregate classifier yet. Pass "
-        f"aggregates by CONST/VAR, or add a classifier for this target.")
+    raise CodegenError(f"C-ABI by-value aggregates are only implemented for System V AMD64; "
+                       f"the target triple '{triple}' has no aggregate classifier yet. Pass "
+                       f"aggregates by CONST/VAR, or add a classifier for this target.")
 
 
 # ---------------------------------------------------------------------------
 # Codegen mixin: build [C] declarations and marshal [C] calls.
 # ---------------------------------------------------------------------------
+
 
 class CAbiMixin:
     """Lower foreign ``[C]`` routine declarations and calls per the host C ABI."""
@@ -238,8 +241,7 @@ class CAbiMixin:
     def _c_abi(self):
         return c_abi_for_triple(getattr(self, 'host_triple', 'x86_64-pc-linux-gnu'))
 
-    def build_c_abi_plan(self, decl, flat_param_types, flat_modes, return_llvm,
-                         is_variadic=False, flat_sign_attrs=None, ret_sign_attr=None):
+    def build_c_abi_plan(self, decl, flat_param_types, flat_modes, return_llvm, is_variadic=False, flat_sign_attrs=None, ret_sign_attr=None):
         """Compute the coerced LLVM signature and the per-call marshalling plan.
 
         ``flat_param_types`` / ``flat_modes`` are already flattened per parameter
@@ -284,19 +286,20 @@ class CAbiMixin:
                 # Attach signext/zeroext to the declaration arg attrs for sub-32-bit
                 # scalars (not references -- references are pointers, no extension).
                 if sattr and not by_ref and isinstance(llvm_t, ir.IntType) and llvm_t.width < 32:
-                    arg_attrs[len(ir_args)] = ((sattr,), None)
+                    arg_attrs[len(ir_args)] = ((sattr, ), None)
                 ir_args.append(llvm_t)
                 continue
             agg = abi.classify_aggregate(llvm_t)
             if agg.kind == 'memory':
                 params.append(CParamPlan('memory', agg=agg))
-                arg_attrs[len(ir_args)] = (('byval',), agg.align)
+                arg_attrs[len(ir_args)] = (('byval', ), agg.align)
                 ir_args.append(ir.PointerType(agg.agg_type))
             else:
                 params.append(CParamPlan('coerced', agg=agg))
                 ir_args.extend(agg.pieces)
 
-        plan = CCallPlan(params, ret_kind,
+        plan = CCallPlan(params,
+                         ret_kind,
                          ret_llvm=(ir_ret if ret_kind == 'scalar' else None),
                          ret_agg=ret_agg,
                          is_variadic=is_variadic,
@@ -327,8 +330,7 @@ class CAbiMixin:
         return self.builder.bitcast(ptr, ir.PointerType(ir.IntType(8)))
 
     def _c_abi_memcpy(self, dst_ptr, src_ptr, nbytes):
-        self.builder.call(self.memcpy_func(),
-                          [self._i8p(dst_ptr), self._i8p(src_ptr), ir.Constant(ir.IntType(64), nbytes)])
+        self.builder.call(self.memcpy_func(), [self._i8p(dst_ptr), self._i8p(src_ptr), ir.Constant(ir.IntType(64), nbytes)])
 
     def _c_abi_variadic_promote(self, v: ir.Value, src_expr=None) -> ir.Value:
         """Apply C default argument promotions to one variadic-tail value.

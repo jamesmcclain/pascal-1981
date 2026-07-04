@@ -32,7 +32,11 @@ class DeviceInteger32IndexTests(unittest.TestCase):
         result = typecheck_module(_IFACE, _IMPL, module_name='FILL')
         self.assertTrue(result.success, result.errors)
 
-    def test_host_integer32_array_index_still_rejected(self):
+    def test_host_integer32_array_index_gated_on_wide_integers(self):
+        # Contract change (super-array host-buffer pattern): host code may
+        # index arrays with INTEGER32 when wide-integers is on -- a heap super
+        # array can exceed 32767 elements, so its index must be able to as
+        # well.  The vintage dialect (no flag) still rejects the wide index.
         src = """
 PROGRAM P;
 VAR a: ARRAY [0..7] OF INTEGER32; i: INTEGER32;
@@ -42,8 +46,19 @@ BEGIN
 END.
 """
         result = typecheck_source(src, features={'wide-integers': True})
-        self.assertFalse(result.success)
-        self.assertTrue(any('Array index must be INTEGER, got INTEGER32' in e.message for e in result.errors), result.errors)
+        self.assertTrue(result.success, [e.message for e in result.errors])
+        vintage_src = """
+PROGRAM P;
+VAR a: ARRAY [0..7] OF INTEGER; i: INTEGER;
+BEGIN
+  i := 0;
+  a[i] := 1
+END.
+"""
+        # Vintage indexing still works, and a wide index without the feature
+        # is impossible to even declare (INTEGER32 is gated), so the vintage
+        # dialect is untouched by this allowance.
+        self.assertTrue(typecheck_source(vintage_src).success)
 
 
 @requires_llvm

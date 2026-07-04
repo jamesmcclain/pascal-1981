@@ -26,8 +26,7 @@ import unittest
 
 from pascal1981.compile_to_ptx import compile_file_to_ptx
 from pascal1981.features import resolve_features
-from tests.support import (RUNTIME_DIR, requires_gpu,
-                           temporary_pascal_project)
+from tests.support import RUNTIME_DIR, requires_gpu, temporary_pascal_project
 
 _WIDE = resolve_features(overrides=['wide-integers'])
 
@@ -113,8 +112,7 @@ def _build_cuda_runtime(tmpdir: str) -> str:
         src = os.path.join(RUNTIME_DIR, name)
         if os.path.isfile(src):
             shutil.copy(src, os.path.join(tmpdir, name))
-    r = subprocess.run(["make", "-C", tmpdir, "DEVICE_SHIM=cuda"],
-                       capture_output=True, text=True)
+    r = subprocess.run(["make", "-C", tmpdir, "DEVICE_SHIM=cuda"], capture_output=True, text=True)
     if r.returncode != 0:
         raise unittest.SkipTest(f"CUDA runtime build failed: {r.stderr}")
     out = os.path.join(tmpdir, "build", "libpascalrt.a")
@@ -162,8 +160,7 @@ class TestDeviceOrchestrationVectorAddGPU(unittest.TestCase):
 
             # 1. device unit -> PTX (NVPTX backend).
             ptx_path = os.path.join(proj, 'vadd.ptx')
-            ptx = compile_file_to_ptx(dev, device_triple='nvptx64-nvidia-cuda',
-                                      cpu='sm_70', features=_WIDE)
+            ptx = compile_file_to_ptx(dev, device_triple='nvptx64-nvidia-cuda', cpu='sm_70', features=_WIDE)
             with open(ptx_path, 'w') as f:
                 f.write(ptx)
 
@@ -178,12 +175,10 @@ class TestDeviceOrchestrationVectorAddGPU(unittest.TestCase):
             from pascal1981.parser import parse_file
             from pascal1981.type_checker import PascalTypeChecker
             ast = parse_file(main)
-            self.assertTrue(PascalTypeChecker(source_file=main, features=_WIDE)
-                            .check(ast).success)
+            self.assertTrue(PascalTypeChecker(source_file=main, features=_WIDE).check(ast).success)
             main_ll = os.path.join(proj, 'main.ll')
             with open(main_ll, 'w') as f:
-                f.write(compile_to_llvm(ast, source_file=main, features=_WIDE,
-                                        device_backend='cuda'))
+                f.write(compile_to_llvm(ast, source_file=main, features=_WIDE, device_backend='cuda'))
 
             # 3. objectify the PTX text into a __pas_device_ptx data blob
             # (PTX *text* + trailing NUL; NOT ptxas/cubin output).  incbin uses
@@ -196,24 +191,20 @@ class TestDeviceOrchestrationVectorAddGPU(unittest.TestCase):
                         f'\t.incbin "{ptx_path}"\n'
                         '\t.byte 0\n')
             blob_o = os.path.join(proj, 'dev_ptx_blob.o')
-            asm = subprocess.run(['clang', '-c', blob_s, '-o', blob_o],
-                                 capture_output=True, text=True)
+            asm = subprocess.run(['clang', '-c', blob_s, '-o', blob_o], capture_output=True, text=True)
             self.assertEqual(asm.returncode, 0, msg=asm.stderr)
 
             # 4. link host .ll + PTX blob + CUDA shim + -lcuda.
             exe = os.path.join(proj, 'vadd-gpu')
-            link = subprocess.run(
-                ['clang', main_ll, blob_o, self.runtime_lib,
-                 '-L' + os.path.join(cuda_home, 'lib64', 'stubs'), '-lcuda',
-                 '-o', exe],
-                capture_output=True, text=True)
+            link = subprocess.run(['clang', main_ll, blob_o, self.runtime_lib, '-L' + os.path.join(cuda_home, 'lib64', 'stubs'), '-lcuda', '-o', exe],
+                                  capture_output=True,
+                                  text=True)
             self.assertEqual(link.returncode, 0, msg=link.stderr)
 
             # 6. run on the GPU.
             run = subprocess.run([exe], capture_output=True, text=True)
             self.assertEqual(run.returncode, 0, msg=run.stderr)
-            self.assertEqual(run.stdout.split(),
-                             ['0', '3', '6', '9', '12', '15', '18', '21'])
+            self.assertEqual(run.stdout.split(), ['0', '3', '6', '9', '12', '15', '18', '21'])
 
 
 if __name__ == '__main__':

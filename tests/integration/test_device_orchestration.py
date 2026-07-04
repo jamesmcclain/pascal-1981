@@ -14,8 +14,7 @@ inside DEVICE code.
 import unittest
 
 from pascal1981.features import resolve_features
-from tests.support import (build_and_run_pascal_project, requires_exe,
-                           typecheck_source)
+from tests.support import (build_and_run_pascal_project, requires_exe, typecheck_source)
 
 # wide-integers lets the *host* program name INTEGER32 for its buffers so the
 # 4-byte element layout matches the device kernel's INTEGER32 buffers.
@@ -126,20 +125,17 @@ class TestOrchestrationIsHostOnly(unittest.TestCase):
     def test_devalloc_rejected_in_device_code(self):
         result = self._device_module_calling("p := DEVALLOC(16)")
         self.assertFalse(result.success)
-        self.assertTrue(any('DEVALLOC' in e and 'host' in e.lower() for e in map(str, result.errors)),
-                        result.errors)
+        self.assertTrue(any('DEVALLOC' in e and 'host' in e.lower() for e in map(str, result.errors)), result.errors)
 
     def test_launch_rejected_in_device_code(self):
         result = self._device_module_calling("LAUNCH(k, 1, 1)")
         self.assertFalse(result.success)
-        self.assertTrue(any('LAUNCH' in e and 'host' in e.lower() for e in map(str, result.errors)),
-                        result.errors)
+        self.assertTrue(any('LAUNCH' in e and 'host' in e.lower() for e in map(str, result.errors)), result.errors)
 
     def test_devcopyto_rejected_in_device_code(self):
         result = self._device_module_calling("DEVCOPYTO(p, p, 16)")
         self.assertFalse(result.success)
-        self.assertTrue(any('DEVCOPYTO' in e and 'host' in e.lower() for e in map(str, result.errors)),
-                        result.errors)
+        self.assertTrue(any('DEVCOPYTO' in e and 'host' in e.lower() for e in map(str, result.errors)), result.errors)
 
 
 if __name__ == '__main__':
