@@ -13,7 +13,7 @@ import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
 from ..ast_nodes import *
-from ..builtins_registry import DEVICE_SYNC_BUILTIN_PROCEDURES, DEVICE_INDEX_BUILTIN_FUNCTIONS
+from ..builtins_registry import (DEVICE_INDEX_BUILTIN_FUNCTIONS, DEVICE_SYNC_BUILTIN_PROCEDURES)
 from .base import CodegenError, LoopContext, Scope
 
 
@@ -406,7 +406,7 @@ class StmtsMixin:
         call_args = []
         for i, pty in enumerate(fn.function_type.args):
             slot_pp = b.gep(argv, [ir.Constant(ir.IntType(32), i)], inbounds=True)
-            slot = b.load(slot_pp)                       # i8* -> the cell holding arg i
+            slot = b.load(slot_pp)  # i8* -> the cell holding arg i
             typed = b.bitcast(slot, pty.as_pointer())
             call_args.append(b.load(typed))
         b.call(fn, call_args)
@@ -471,15 +471,14 @@ class StmtsMixin:
         gvals = [self._to_i64(self.codegen_expr(g)) for g in geometry]
         i64 = ir.IntType(64)
         one = ir.Constant(i64, 1)
-        if len(gvals) == 2:           # 1-D: grid, block
+        if len(gvals) == 2:  # 1-D: grid, block
             gx, bx = gvals
             geom6 = [gx, one, one, bx, one, one]
-        elif len(gvals) == 6:         # gx,gy,gz, bx,by,bz
+        elif len(gvals) == 6:  # gx,gy,gz, bx,by,bz
             geom6 = gvals
         else:
-            raise CodegenError(
-                f"LAUNCH of '{kernel_name}' expects 2 (grid, block) or 6 geometry "
-                f"values before its {expected} argument(s), got {len(geometry)}")
+            raise CodegenError(f"LAUNCH of '{kernel_name}' expects 2 (grid, block) or 6 geometry "
+                               f"values before its {expected} argument(s), got {len(geometry)}")
 
         # Marshal the kernel actuals into a void** argument array: argv[i] points
         # at a storage cell holding actual i, coerced to the kernel's parameter
@@ -515,13 +514,9 @@ class StmtsMixin:
         # no undefined kernel symbol and needs no dev.ll.
         if self.device_backend != 'cuda':
             self._record_launched_kernel(fn.name, self._kernel_launch_thunk(fn))
-        module = self.builder.call(
-            self.runtime_extern('pas_dev_module_load'),
-            [self._launch_registry_ptr(), self._device_ptx_ptr()])
-        entry = self.builder.call(
-            self.runtime_extern('pas_dev_module_get_function'), [module, name_str])
-        self.builder.call(self.runtime_extern('pas_dev_launch'),
-                          [entry] + geom6 + [argv_ptr])
+        module = self.builder.call(self.runtime_extern('pas_dev_module_load'), [self._launch_registry_ptr(), self._device_ptx_ptr()])
+        entry = self.builder.call(self.runtime_extern('pas_dev_module_get_function'), [module, name_str])
+        self.builder.call(self.runtime_extern('pas_dev_launch'), [entry] + geom6 + [argv_ptr])
 
     # ---- launch registry (CPU stand-in for a loaded CUDA module) -----------
 
@@ -547,8 +542,7 @@ class StmtsMixin:
             return ir.Constant(i8p, None)
         if self._launch_registry_gv is None:
             reg_ty = ir.LiteralStructType([i8p.as_pointer(), i8p.as_pointer(), i64])
-            self._launch_registry_gv = ir.GlobalVariable(
-                self.module, reg_ty, name='__pas_klaunch_registry')
+            self._launch_registry_gv = ir.GlobalVariable(self.module, reg_ty, name='__pas_klaunch_registry')
             self._launch_registry_gv.global_constant = True
         return self.builder.bitcast(self._launch_registry_gv, i8p)
 
@@ -571,8 +565,7 @@ class StmtsMixin:
                 # an external `const char __pas_device_ptx[]`.  The host .ll no
                 # longer needs the kernel text baked in, so host compile does not
                 # depend on the device artifact.
-                gv = ir.GlobalVariable(self.module, ir.ArrayType(i8, 0),
-                                       name='__pas_device_ptx')
+                gv = ir.GlobalVariable(self.module, ir.ArrayType(i8, 0), name='__pas_device_ptx')
                 gv.global_constant = True
                 gv.linkage = 'external'
                 self._device_ptx_gv = gv
@@ -609,19 +602,16 @@ class StmtsMixin:
         entry_ptrs = []
         for kname, thunk in self._launched_kernels:
             data = bytearray(kname.encode('utf-8') + b'\0')
-            nm = ir.GlobalVariable(self.module, ir.ArrayType(i8, len(data)),
-                                   name=self.unique_name('kregname'))
+            nm = ir.GlobalVariable(self.module, ir.ArrayType(i8, len(data)), name=self.unique_name('kregname'))
             nm.global_constant = True
             nm.initializer = ir.Constant(ir.ArrayType(i8, len(data)), data)
             name_ptrs.append(nm.gep([zero, zero]))
             entry_ptrs.append(thunk.bitcast(i8p))
         count = len(self._launched_kernels)
-        names_arr = ir.GlobalVariable(self.module, ir.ArrayType(i8p, count),
-                                      name=self.unique_name('kregnames'))
+        names_arr = ir.GlobalVariable(self.module, ir.ArrayType(i8p, count), name=self.unique_name('kregnames'))
         names_arr.global_constant = True
         names_arr.initializer = ir.Constant(ir.ArrayType(i8p, count), name_ptrs)
-        ents_arr = ir.GlobalVariable(self.module, ir.ArrayType(i8p, count),
-                                     name=self.unique_name('kregentries'))
+        ents_arr = ir.GlobalVariable(self.module, ir.ArrayType(i8p, count), name=self.unique_name('kregentries'))
         ents_arr.global_constant = True
         ents_arr.initializer = ir.Constant(ir.ArrayType(i8p, count), entry_ptrs)
         reg_ty = self._launch_registry_gv.type.pointee

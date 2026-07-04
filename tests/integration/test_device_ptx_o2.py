@@ -27,7 +27,9 @@ def _run_compile_to_ptx(example_dir, source, ptx_path, *extra_args):
     result = subprocess.run(
         [sys.executable, '-m', 'pascal1981.compile_to_ptx', source, ptx_path, *extra_args],
         cwd=example_dir,
-        env={**os.environ, 'PYTHONPATH': os.path.join(repo, 'src')},
+        env={
+            **os.environ, 'PYTHONPATH': os.path.join(repo, 'src')
+        },
         capture_output=True,
         text=True,
     )
@@ -119,10 +121,11 @@ class TestDevicePtxO2Pipeline(unittest.TestCase):
         out = os.path.join(example_dir, 'fill.cli.ptx')
         try:
             result = subprocess.run(
-                [sys.executable, '-m', 'pascal1981.compile_to_llvm', 'fill.pas', out,
-                 '--target', 'ptx', '--sm', 'sm_70', '--opt-level', '2'],
+                [sys.executable, '-m', 'pascal1981.compile_to_llvm', 'fill.pas', out, '--target', 'ptx', '--sm', 'sm_70', '--opt-level', '2'],
                 cwd=example_dir,
-                env={**os.environ, 'PYTHONPATH': os.path.join(repo, 'src')},
+                env={
+                    **os.environ, 'PYTHONPATH': os.path.join(repo, 'src')
+                },
                 capture_output=True,
                 text=True,
             )
@@ -140,10 +143,11 @@ class TestDevicePtxO2Pipeline(unittest.TestCase):
         repo = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         example_dir = self._example_dir('fill_indices')
         result = subprocess.run(
-            [sys.executable, '-m', 'pascal1981.compile_to_llvm', 'fill.pas',
-             '--target', 'host', '--opt-level', '2'],
+            [sys.executable, '-m', 'pascal1981.compile_to_llvm', 'fill.pas', '--target', 'host', '--opt-level', '2'],
             cwd=example_dir,
-            env={**os.environ, 'PYTHONPATH': os.path.join(repo, 'src')},
+            env={
+                **os.environ, 'PYTHONPATH': os.path.join(repo, 'src')
+            },
             capture_output=True,
             text=True,
         )

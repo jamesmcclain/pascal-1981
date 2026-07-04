@@ -12,7 +12,6 @@ Walks the AST and emits LLVM IR. Supports:
 from __future__ import annotations
 
 import re
-
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 
@@ -39,7 +38,8 @@ from .strings import StringsMixin
 from .types_map import TypesMapMixin
 
 
-class Codegen(CodegenBase, TypesMapMixin, ConstFoldMixin, RuntimeBuiltinsMixin, FilesMixin, SetsMixin, StringsMixin, IoWriteReadMixin, StmtsMixin, DeclsMixin, ExprsMixin, CAbiMixin):
+class Codegen(CodegenBase, TypesMapMixin, ConstFoldMixin, RuntimeBuiltinsMixin, FilesMixin, SetsMixin, StringsMixin, IoWriteReadMixin, StmtsMixin, DeclsMixin, ExprsMixin,
+              CAbiMixin):
     """LLVM IR code generator."""
 
     def __init__(self,

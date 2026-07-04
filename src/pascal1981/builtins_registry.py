@@ -5,10 +5,10 @@ This is shared between the type checker and code generator to prevent
 "registered but no codegen" traps.
 """
 
-from .symbol_table import Symbol
 from .features import is_extended
-from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL_TYPE, WORD32_TYPE, WORD64_TYPE, WORD8_TYPE, WORD_TYPE, EnumType, FileType, FunctionType, LStringType, PointerType,
-                          ProcedureType, RecordType, StringType)
+from .symbol_table import Symbol
+from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL_TYPE, WORD8_TYPE, WORD32_TYPE, WORD64_TYPE, WORD_TYPE, EnumType, FileType,
+                          FunctionType, LStringType, PointerType, ProcedureType, RecordType, StringType)
 
 # Lists of all built-in function and procedure names
 DEVICE_INDEX_BUILTIN_FUNCTIONS = {
@@ -34,8 +34,8 @@ DEVICE_ORCHESTRATION_BUILTIN_FUNCTIONS = {'DEVALLOC'}
 DEVICE_ORCHESTRATION_BUILTIN_PROCEDURES = {'DEVCOPYTO', 'DEVCOPYFROM', 'DEVFREE', 'LAUNCH'}
 
 BUILTIN_FUNCTIONS = {
-    'ABS', 'SQR', 'SQRT', 'SIN', 'COS', 'LN', 'EXP', 'ARCTAN', 'CHR', 'ORD', 'ODD', 'SUCC', 'PRED', 'HIBYTE', 'LOBYTE', 'WRD', 'WRD8', 'BYWORD', 'TRUNC', 'ROUND', 'FLOAT', 'SCANEQ',
-    'SCANNE', 'ENCODE', 'DECODE', 'EOF', 'EOLN', *DEVICE_INDEX_BUILTIN_FUNCTIONS, *DEVICE_ORCHESTRATION_BUILTIN_FUNCTIONS
+    'ABS', 'SQR', 'SQRT', 'SIN', 'COS', 'LN', 'EXP', 'ARCTAN', 'CHR', 'ORD', 'ODD', 'SUCC', 'PRED', 'HIBYTE', 'LOBYTE', 'WRD', 'WRD8', 'BYWORD', 'TRUNC', 'ROUND', 'FLOAT',
+    'SCANEQ', 'SCANNE', 'ENCODE', 'DECODE', 'EOF', 'EOLN', *DEVICE_INDEX_BUILTIN_FUNCTIONS, *DEVICE_ORCHESTRATION_BUILTIN_FUNCTIONS
 }
 
 DEVICE_SYNC_BUILTIN_PROCEDURES = {'SYNCTHREADS'}
@@ -54,18 +54,19 @@ DEVICE_SYNC_BUILTIN_PROCEDURES = {'SYNCTHREADS'}
 # the existing INTEGER32/INTEGER64/CHAR/REAL/ADRMEM machinery.  Registered as
 # predeclared TYPE symbols; a user TYPE/VAR of the same name still shadows them.
 C_ABI_TYPE_ALIASES = {
-    'CCHAR': 'CHAR',         # C char        -> i8
-    'CSHORT': 'INTEGER',     # C short       -> i16
-    'CINT': 'INTEGER32',     # C int         -> i32
-    'CLONG': 'INTEGER64',    # C long (LP64) -> i64
+    'CCHAR': 'CHAR',  # C char        -> i8
+    'CSHORT': 'INTEGER',  # C short       -> i16
+    'CINT': 'INTEGER32',  # C int         -> i32
+    'CLONG': 'INTEGER64',  # C long (LP64) -> i64
     'CSIZE_T': 'INTEGER64',  # C size_t      -> i64
-    'CDOUBLE': 'REAL',       # C double      -> f64
-    'CPTR': 'ADRMEM',        # C void*       -> i8*
+    'CDOUBLE': 'REAL',  # C double      -> f64
+    'CPTR': 'ADRMEM',  # C void*       -> i8*
 }
 
 BUILTIN_PROCEDURES = {
     'WRITE', 'WRITELN', 'READ', 'READLN', 'RESET', 'REWRITE', 'GET', 'PUT', 'ASSIGN', 'CLOSE', 'DISCARD', 'READFN', 'READSET', 'CONCAT', 'COPYLST', 'COPYSTR', 'INSERT', 'DELETE',
-    'POSITN', 'PACK', 'UNPACK', 'NEW', 'DISPOSE', 'FILLC', 'FILLSC', 'MOVEL', 'MOVER', 'MOVESL', 'MOVESR', 'ABORT', *DEVICE_SYNC_BUILTIN_PROCEDURES, *DEVICE_ORCHESTRATION_BUILTIN_PROCEDURES
+    'POSITN', 'PACK', 'UNPACK', 'NEW', 'DISPOSE', 'FILLC', 'FILLSC', 'MOVEL', 'MOVER', 'MOVESL', 'MOVESR', 'ABORT', *DEVICE_SYNC_BUILTIN_PROCEDURES,
+    *DEVICE_ORCHESTRATION_BUILTIN_PROCEDURES
 }
 
 

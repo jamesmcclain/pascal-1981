@@ -57,6 +57,7 @@ def has_word_int_warning(src, features=VINTAGE):
 
 # --- program templates ------------------------------------------------------
 
+
 def assign_prog(dst, src_decl, src_expr):
     return f"PROGRAM P; VAR d: {dst}; {src_decl} BEGIN d := {src_expr} END."
 
@@ -77,45 +78,42 @@ class TestAssignmentMatrix(unittest.TestCase):
     CASES = [
         # (name, dst, src_decl, src_expr, features, expect, note)
         # --- INTEGER <-> REAL : manual blesses INTEGER -> REAL implicitly ---
-        ("int_var_to_real",   "REAL",    "i: INTEGER;", "i", VINTAGE, ACCEPT, "manual: INTEGER->REAL ok"),
-        ("real_var_to_int",   "INTEGER", "r: REAL;",    "r", VINTAGE, REJECT, "narrowing rejected"),
+        ("int_var_to_real", "REAL", "i: INTEGER;", "i", VINTAGE, ACCEPT, "manual: INTEGER->REAL ok"),
+        ("real_var_to_int", "INTEGER", "r: REAL;", "r", VINTAGE, REJECT, "narrowing rejected"),
 
         # --- INTEGER -> WORD : constants change, variables do NOT ---
-        ("int_literal_to_word", "WORD", "",            "5",   VINTAGE, ACCEPT, "manual: const changes to WORD"),
-        ("named_const_to_word", "WORD", "CONST k = 5;", "k",   VINTAGE, ACCEPT, "manual: named CONST changes to WORD"),
-        ("const_expr_to_word",  "WORD", "CONST k = 5;", "k + 1", VINTAGE, ACCEPT, "manual: constant *expression* changes to WORD"),
+        ("int_literal_to_word", "WORD", "", "5", VINTAGE, ACCEPT, "manual: const changes to WORD"),
+        ("named_const_to_word", "WORD", "CONST k = 5;", "k", VINTAGE, ACCEPT, "manual: named CONST changes to WORD"),
+        ("const_expr_to_word", "WORD", "CONST k = 5;", "k + 1", VINTAGE, ACCEPT, "manual: constant *expression* changes to WORD"),
         ("const_mul_expr_to_word", "WORD", "CONST size = 10;", "2 * size", VINTAGE, ACCEPT, "manual: constant *expression* changes to WORD"),
         ("const_succ_expr_to_word", "WORD", "CONST k = 5;", "SUCC(k)", VINTAGE, ACCEPT, "manual: SUCC of CONST is a constant"),
-        ("int_var_to_word",   "WORD", "i: INTEGER;", "i",   VINTAGE, REJECT,
-         "manual: INTEGER variable NOT assignable to WORD; use WRD(i)"),
-        ("int_expr_to_word",  "WORD", "i: INTEGER;", "i+i", VINTAGE, REJECT,
-         "non-constant INTEGER expr requires WRD()"),
-        ("const_plus_var_to_word", "WORD", "CONST k = 5; i: INTEGER;", "k + i", VINTAGE, REJECT,
-         "const + variable is not a compile-time constant"),
-        ("wrd_int_to_word",   "WORD", "i: INTEGER;", "WRD(i)", VINTAGE, ACCEPT, "explicit WRD"),
+        ("int_var_to_word", "WORD", "i: INTEGER;", "i", VINTAGE, REJECT, "manual: INTEGER variable NOT assignable to WORD; use WRD(i)"),
+        ("int_expr_to_word", "WORD", "i: INTEGER;", "i+i", VINTAGE, REJECT, "non-constant INTEGER expr requires WRD()"),
+        ("const_plus_var_to_word", "WORD", "CONST k = 5; i: INTEGER;", "k + i", VINTAGE, REJECT, "const + variable is not a compile-time constant"),
+        ("wrd_int_to_word", "WORD", "i: INTEGER;", "WRD(i)", VINTAGE, ACCEPT, "explicit WRD"),
 
         # --- WORD -> INTEGER : not assignment compatible (need ORD) ---
-        ("word_var_to_int",   "INTEGER", "w: WORD;", "w",      VINTAGE, REJECT, "manual: need ORD(w)"),
-        ("ord_word_to_int",   "INTEGER", "w: WORD;", "ORD(w)", VINTAGE, ACCEPT, "explicit ORD"),
+        ("word_var_to_int", "INTEGER", "w: WORD;", "w", VINTAGE, REJECT, "manual: need ORD(w)"),
+        ("ord_word_to_int", "INTEGER", "w: WORD;", "ORD(w)", VINTAGE, ACCEPT, "explicit ORD"),
 
         # --- CHAR/BOOLEAN need explicit ORD/CHR ---
-        ("char_var_to_int",   "INTEGER", "c: CHAR;",    "c",      VINTAGE, REJECT, "manual: need ORD(c)"),
-        ("ord_char_to_int",   "INTEGER", "c: CHAR;",    "ORD(c)", VINTAGE, ACCEPT, "explicit ORD"),
-        ("int_var_to_char",   "CHAR",    "i: INTEGER;", "i",      VINTAGE, REJECT, "manual: need CHR(i)"),
-        ("chr_int_to_char",   "CHAR",    "i: INTEGER;", "CHR(i)", VINTAGE, ACCEPT, "explicit CHR"),
+        ("char_var_to_int", "INTEGER", "c: CHAR;", "c", VINTAGE, REJECT, "manual: need ORD(c)"),
+        ("ord_char_to_int", "INTEGER", "c: CHAR;", "ORD(c)", VINTAGE, ACCEPT, "explicit ORD"),
+        ("int_var_to_char", "CHAR", "i: INTEGER;", "i", VINTAGE, REJECT, "manual: need CHR(i)"),
+        ("chr_int_to_char", "CHAR", "i: INTEGER;", "CHR(i)", VINTAGE, ACCEPT, "explicit CHR"),
 
         # --- INTEGER literal range: -32768 is invalid (manual p.6-5) ---
-        ("int_minus_maxint",  "INTEGER", "", "-32767", VINTAGE, ACCEPT, "-MAXINT is valid"),
-        ("int_minus_32768",   "INTEGER", "", "-32768", VINTAGE, REJECT, "manual: -32768 not a valid INTEGER"),
-        ("int_over_maxint",   "INTEGER", "", "32768",  VINTAGE, REJECT, "> MAXINT"),
+        ("int_minus_maxint", "INTEGER", "", "-32767", VINTAGE, ACCEPT, "-MAXINT is valid"),
+        ("int_minus_32768", "INTEGER", "", "-32768", VINTAGE, REJECT, "manual: -32768 not a valid INTEGER"),
+        ("int_over_maxint", "INTEGER", "", "32768", VINTAGE, REJECT, "> MAXINT"),
 
         # --- wide-integer extension family (extension territory, not vintage) ---
-        ("int_var_to_int32",  "INTEGER32", "i: INTEGER;",   "i", WIDE, ACCEPT, "ext: signed widening (lowers as SEXT)"),
-        ("int32_var_to_int",  "INTEGER",   "j: INTEGER32;", "j", WIDE, REJECT, "narrowing rejected"),
-        ("int32_to_int64",    "INTEGER64", "j: INTEGER32;", "j", WIDE, ACCEPT, "ext: widening implicit"),
-        ("word_to_int32",     "INTEGER32", "w: WORD;",      "w", WIDE, ACCEPT, "ext: WORD widening (lowers as ZEXT)"),
-        ("real32_to_real",    "REAL",      "f: REAL32;",    "f", WIDE, ACCEPT, "ext: f32->f64 widening"),
-        ("real_to_real32",    "REAL32",    "r: REAL;",      "r", WIDE, REJECT, "narrowing rejected"),
+        ("int_var_to_int32", "INTEGER32", "i: INTEGER;", "i", WIDE, ACCEPT, "ext: signed widening (lowers as SEXT)"),
+        ("int32_var_to_int", "INTEGER", "j: INTEGER32;", "j", WIDE, REJECT, "narrowing rejected"),
+        ("int32_to_int64", "INTEGER64", "j: INTEGER32;", "j", WIDE, ACCEPT, "ext: widening implicit"),
+        ("word_to_int32", "INTEGER32", "w: WORD;", "w", WIDE, ACCEPT, "ext: WORD widening (lowers as ZEXT)"),
+        ("real32_to_real", "REAL", "f: REAL32;", "f", WIDE, ACCEPT, "ext: f32->f64 widening"),
+        ("real_to_real32", "REAL32", "r: REAL;", "r", WIDE, REJECT, "narrowing rejected"),
     ]
 
     def test_assignment(self):
@@ -130,20 +128,13 @@ class TestArgumentMatrix(unittest.TestCase):
 
     CASES = [
         # (name, param_ty, src_decl, src_expr, ret_ty, ret_sink, features, expect, note)
-        ("int_var_arg_to_int32", "INTEGER32", "i: INTEGER;", "i", "INTEGER32", "INTEGER32", WIDE, ACCEPT,
-         "arg widening implicit; lowering SEXTs the signed source (Finding 1)"),
-        ("int32_arg_to_int_narrow", "INTEGER", "j: INTEGER32;", "j", "INTEGER", "INTEGER", WIDE, REJECT,
-         "narrowing arg rejected"),
-        ("int_var_arg_to_word", "WORD", "i: INTEGER;", "i", "WORD", "WORD", VINTAGE, REJECT,
-         "INTEGER variable -> WORD param needs WRD(i)"),
-        ("int_const_arg_to_word", "WORD", "", "5", "WORD", "WORD", VINTAGE, ACCEPT,
-         "constant INTEGER -> WORD param stays implicit (manual)"),
-        ("const_expr_arg_to_word", "WORD", "CONST k = 5;", "k + 1", "WORD", "WORD", VINTAGE, ACCEPT,
-         "constant *expression* -> WORD param"),
-        ("word_arg_to_int", "INTEGER", "w: WORD;", "w", "INTEGER", "INTEGER", VINTAGE, REJECT,
-         "WORD -> INTEGER param needs ORD(w)"),
-        ("wrd_arg_to_word", "WORD", "i: INTEGER;", "WRD(i)", "WORD", "WORD", VINTAGE, ACCEPT,
-         "explicit WRD at boundary"),
+        ("int_var_arg_to_int32", "INTEGER32", "i: INTEGER;", "i", "INTEGER32", "INTEGER32", WIDE, ACCEPT, "arg widening implicit; lowering SEXTs the signed source (Finding 1)"),
+        ("int32_arg_to_int_narrow", "INTEGER", "j: INTEGER32;", "j", "INTEGER", "INTEGER", WIDE, REJECT, "narrowing arg rejected"),
+        ("int_var_arg_to_word", "WORD", "i: INTEGER;", "i", "WORD", "WORD", VINTAGE, REJECT, "INTEGER variable -> WORD param needs WRD(i)"),
+        ("int_const_arg_to_word", "WORD", "", "5", "WORD", "WORD", VINTAGE, ACCEPT, "constant INTEGER -> WORD param stays implicit (manual)"),
+        ("const_expr_arg_to_word", "WORD", "CONST k = 5;", "k + 1", "WORD", "WORD", VINTAGE, ACCEPT, "constant *expression* -> WORD param"),
+        ("word_arg_to_int", "INTEGER", "w: WORD;", "w", "INTEGER", "INTEGER", VINTAGE, REJECT, "WORD -> INTEGER param needs ORD(w)"),
+        ("wrd_arg_to_word", "WORD", "i: INTEGER;", "WRD(i)", "WORD", "WORD", VINTAGE, ACCEPT, "explicit WRD at boundary"),
     ]
 
     def test_argument(self):
@@ -158,34 +149,26 @@ class TestArithmeticMatrix(unittest.TestCase):
 
     CASES = [
         # (name, dst, a_decl, a_expr, b_decl, b_expr, op, features, expect, note)
-        ("int_plus_real", "REAL", "i: INTEGER;", "i", "r: REAL;", "r", "+", VINTAGE, ACCEPT,
-         "manual: INTEGER widens to REAL in expr"),
+        ("int_plus_real", "REAL", "i: INTEGER;", "i", "r: REAL;", "r", "+", VINTAGE, ACCEPT, "manual: INTEGER widens to REAL in expr"),
         ("word_plus_int_var_default", "WORD", "w: WORD;", "w", "i: INTEGER;", "i", "+", VINTAGE, ACCEPT,
          "WORD+INTEGER-var: warning by default, mix resolves to WORD so it compiles"),
-        ("word_plus_int_var_strict", "WORD", "w: WORD;", "w", "i: INTEGER;", "i", "+", STRICT, REJECT,
-         "-f strict-word-int promotes the mix warning to an error"),
-        ("word_plus_int_const", "WORD", "w: WORD;", "w", "", "1", "+", VINTAGE, ACCEPT,
-         "manual: mix allowed when the INTEGER side is a constant"),
-        ("word_plus_int_const_strict", "WORD", "w: WORD;", "w", "", "1", "+", STRICT, ACCEPT,
-         "constant exemption holds even under strict-word-int"),
-        ("word_plus_const_expr_strict", "WORD", "w: WORD; CONST k = 5;", "w", "", "k + 1", "+", STRICT, ACCEPT,
-         "constant *expression* exemption holds under strict"),
-        ("int_plus_int32", "INTEGER32", "i: INTEGER;", "i", "j: INTEGER32;", "j", "+", WIDE, ACCEPT,
-         "ext: rank promotion to INTEGER32"),
+        ("word_plus_int_var_strict", "WORD", "w: WORD;", "w", "i: INTEGER;", "i", "+", STRICT, REJECT, "-f strict-word-int promotes the mix warning to an error"),
+        ("word_plus_int_const", "WORD", "w: WORD;", "w", "", "1", "+", VINTAGE, ACCEPT, "manual: mix allowed when the INTEGER side is a constant"),
+        ("word_plus_int_const_strict", "WORD", "w: WORD;", "w", "", "1", "+", STRICT, ACCEPT, "constant exemption holds even under strict-word-int"),
+        ("word_plus_const_expr_strict", "WORD", "w: WORD; CONST k = 5;", "w", "", "k + 1", "+", STRICT, ACCEPT, "constant *expression* exemption holds under strict"),
+        ("int_plus_int32", "INTEGER32", "i: INTEGER;", "i", "j: INTEGER32;", "j", "+", WIDE, ACCEPT, "ext: rank promotion to INTEGER32"),
         # --- wide same-width signedness mix: same rule as 16-bit WORD/INTEGER ---
         ("word32_plus_int32_var_default", "WORD32", "w: WORD32;", "w", "i: INTEGER32;", "i", "+", WIDE, ACCEPT,
          "ext: WORD32+INTEGER32-var warns by default, resolves to WORD32 so it compiles"),
         ("word32_plus_int32_var_strict", "WORD32", "w: WORD32;", "w", "i: INTEGER32;", "i", "+", WIDE_STRICT, REJECT,
          "ext: strict-word-int promotes the wide same-width mix to an error"),
-        ("word32_plus_int32_const_strict", "WORD32", "w: WORD32;", "w", "", "1", "+", WIDE_STRICT, ACCEPT,
-         "ext: INTEGER constant exemption holds at width 32 even under strict"),
+        ("word32_plus_int32_const_strict", "WORD32", "w: WORD32;", "w", "", "1", "+", WIDE_STRICT, ACCEPT, "ext: INTEGER constant exemption holds at width 32 even under strict"),
         ("word64_plus_int64_var_strict", "WORD64", "w: WORD64;", "w", "i: INTEGER64;", "i", "+", WIDE_STRICT, REJECT,
          "ext: strict-word-int promotes the WORD64/INTEGER64 mix to an error"),
         # --- unequal width is NOT a signedness coin-flip: wider signed wins ---
         ("word_plus_int32_unequal_clean", "INTEGER32", "w: WORD;", "w", "i: INTEGER32;", "i", "+", WIDE_STRICT, ACCEPT,
          "ext: WORD(16)+INTEGER32 widens unambiguously to INTEGER32; not flagged even under strict"),
-        ("real_plus_int", "REAL", "r: REAL;", "r", "i: INTEGER;", "i", "*", VINTAGE, ACCEPT,
-         "manual: INTEGER widens to REAL"),
+        ("real_plus_int", "REAL", "r: REAL;", "r", "i: INTEGER;", "i", "*", VINTAGE, ACCEPT, "manual: INTEGER widens to REAL"),
     ]
 
     def test_arithmetic(self):
@@ -207,25 +190,21 @@ class TestArithmeticMatrix(unittest.TestCase):
         # The wide same-width unsigned/signed mix carries the same vintage-style
         # warning the 16-bit pair does (it resolves to the unsigned type, so the
         # signedness of the arithmetic is otherwise a silent coin-flip).
-        for dst, ad, bd in (("WORD32", "w: WORD32;", "i: INTEGER32;"),
-                            ("WORD64", "w: WORD64;", "i: INTEGER64;")):
+        for dst, ad, bd in (("WORD32", "w: WORD32;", "i: INTEGER32;"), ("WORD64", "w: WORD64;", "i: INTEGER64;")):
             with self.subTest(dst=dst):
                 src = arith_prog(dst, ad, "w", bd, "i", "+")
-                self.assertTrue(has_word_int_warning(src, WIDE),
-                                f"expected a {dst}/signed mix warning")
+                self.assertTrue(has_word_int_warning(src, WIDE), f"expected a {dst}/signed mix warning")
 
     def test_wide_same_width_const_mix_is_clean(self):
         # INTEGER-constant exemption carries to the wide types.
         src = arith_prog("WORD32", "w: WORD32;", "w", "", "1", "+")
-        self.assertFalse(has_word_int_warning(src, WIDE),
-                         "constant INTEGER mix should be clean at width 32 too")
+        self.assertFalse(has_word_int_warning(src, WIDE), "constant INTEGER mix should be clean at width 32 too")
 
     def test_unequal_width_mix_is_not_flagged(self):
         # WORD(16) + INTEGER32: the wider signed operand wins unambiguously, so
         # there is no signedness ambiguity and no diagnostic -- even under strict.
         src = arith_prog("INTEGER32", "w: WORD;", "w", "i: INTEGER32;", "i", "+")
-        self.assertFalse(has_word_int_warning(src, WIDE),
-                         "unequal-width mix must not warn")
+        self.assertFalse(has_word_int_warning(src, WIDE), "unequal-width mix must not warn")
 
 
 class TestManualKnownGaps(unittest.TestCase):
@@ -236,23 +215,19 @@ class TestManualKnownGaps(unittest.TestCase):
         # (Elementary Types, BOOLEAN, p.6-6).  ODD(WORD) is accepted --
         # special-cased in type_checker.py, modeled on HIBYTE/LOBYTE.
         src = "PROGRAM P; VAR w: WORD; b: BOOLEAN; BEGIN b := ODD(w) END."
-        self.assertEqual(verdict(src), ACCEPT,
-                         "ODD(WORD) should be accepted per the manual")
+        self.assertEqual(verdict(src), ACCEPT, "ODD(WORD) should be accepted per the manual")
 
     def test_odd_accepts_integer(self):
         # Regression guard: the faithful INTEGER case must keep working.
         src = "PROGRAM P; VAR i: INTEGER; b: BOOLEAN; BEGIN b := ODD(i) END."
-        self.assertEqual(verdict(src), ACCEPT,
-                         "ODD(INTEGER) should be accepted")
+        self.assertEqual(verdict(src), ACCEPT, "ODD(INTEGER) should be accepted")
 
     def test_odd_rejects_real_and_char(self):
         # ODD must not over-widen: REAL and CHAR are not INTEGER/WORD.
         for decl, arg in (("r: REAL;", "r"), ("c: CHAR;", "c")):
             with self.subTest(arg=arg):
-                src = ("PROGRAM P; VAR " + decl +
-                       " b: BOOLEAN; BEGIN b := ODD(" + arg + ") END.")
-                self.assertEqual(verdict(src), REJECT,
-                                 f"ODD({arg}) must be rejected")
+                src = ("PROGRAM P; VAR " + decl + " b: BOOLEAN; BEGIN b := ODD(" + arg + ") END.")
+                self.assertEqual(verdict(src), REJECT, f"ODD({arg}) must be rejected")
 
 
 if __name__ == "__main__":

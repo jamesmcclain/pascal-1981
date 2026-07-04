@@ -71,7 +71,6 @@ from pascal1981.parser import parse_file
 from pascal1981.type_checker import PascalTypeChecker
 from tests.support import requires_exe
 
-
 _REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 _EXAMPLE_DIR = os.path.join(_REPO, 'examples', 'device_ptx', 'mandelbrot')
 _IMPL = os.path.join(_EXAMPLE_DIR, 'mandelbrot.pas')
@@ -116,8 +115,7 @@ class TestMandelbrotX86CpuDevice(unittest.TestCase):
             ast = parse_file(_IMPL)
             result = PascalTypeChecker(source_file=_IMPL).check(ast)
             self.assertTrue(result.success, msg=result.errors)
-            ir = compile_to_llvm(
-                ast, source_file=_IMPL, device_triple='x86_64-pc-linux-gnu')
+            ir = compile_to_llvm(ast, source_file=_IMPL, device_triple='x86_64-pc-linux-gnu')
             # CPU-device shape guards: no GPU artifacts leaked in. These are
             # also device==host ABI guards: `ptx_kernel` would change the
             # calling convention (making the routine uncallable from C), and
@@ -149,12 +147,9 @@ class TestMandelbrotX86CpuDevice(unittest.TestCase):
             # 3. Link and run. The kernel IR now references the thread-local
             #    index globals (__pas_tid_x etc.) defined in cpu_device_shim.c,
             #    so link that in too (no other Pascal runtime needed).
-            shim_path = os.path.join(
-                os.path.dirname(__file__), '..', '..', 'runtime', 'cpu_device_shim.c')
+            shim_path = os.path.join(os.path.dirname(__file__), '..', '..', 'runtime', 'cpu_device_shim.c')
             exe_path = os.path.join(tmpdir, 'mandelbrot_x86')
-            link = subprocess.run(
-                ['clang', ir_path, harness_path, shim_path, '-o', exe_path],
-                capture_output=True, text=True)
+            link = subprocess.run(['clang', ir_path, harness_path, shim_path, '-o', exe_path], capture_output=True, text=True)
             self.assertEqual(link.returncode, 0, msg=link.stderr)
 
             run = subprocess.run([exe_path], capture_output=True, text=True)

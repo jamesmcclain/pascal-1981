@@ -11,7 +11,7 @@ IR-level tests need no toolchain; the build-and-run cases are decorated with
 
 import unittest
 
-from tests.support import build_and_run_pascal_project, parse_source, requires_exe
+from tests.support import (build_and_run_pascal_project, parse_source, requires_exe)
 
 
 def _ir(src):

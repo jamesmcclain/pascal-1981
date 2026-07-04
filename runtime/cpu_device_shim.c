@@ -27,37 +27,41 @@
  * via hardware special registers.  _Thread_local storage makes the design
  * naturally OpenMP-parallelisable: each OS thread gets its own set. */
 /* Thread indices and block indices start at 0 (first and only thread/block). */
-_Thread_local int32_t __pas_tid_x   = 0, __pas_tid_y   = 0, __pas_tid_z   = 0;
+_Thread_local int32_t __pas_tid_x = 0, __pas_tid_y = 0, __pas_tid_z = 0;
 _Thread_local int32_t __pas_ctaid_x = 0, __pas_ctaid_y = 0, __pas_ctaid_z = 0;
 /* Dimension counts default to 1: a unit grid so stride = BLOCKDIM*GRIDDIM = 1.
  * pas_dev_launch overrides these before the first thunk call. */
-_Thread_local int32_t __pas_ntid_x  = 1, __pas_ntid_y  = 1, __pas_ntid_z  = 1;
-_Thread_local int32_t __pas_nctaid_x= 1, __pas_nctaid_y= 1, __pas_nctaid_z= 1;
+_Thread_local int32_t __pas_ntid_x = 1, __pas_ntid_y = 1, __pas_ntid_z = 1;
+_Thread_local int32_t __pas_nctaid_x = 1, __pas_nctaid_y = 1, __pas_nctaid_z = 1;
 
 /* Allocate n bytes of "device" memory; returns an opaque handle the host must
  * not dereference (the dereferenceability invariant). On the CPU device the
  * handle happens to be a real heap pointer, but Pascal code only ever hands it
  * back to the copy/launch/free builtins. */
-void *pas_dev_alloc(long long nbytes) {
+void *pas_dev_alloc(long long nbytes)
+{
     if (nbytes <= 0)
         return NULL;
-    return malloc((size_t)nbytes);
+    return malloc((size_t) nbytes);
 }
 
 /* Host -> device copy. */
-void pas_dev_copy_to(void *dev_dst, const void *host_src, long long nbytes) {
+void pas_dev_copy_to(void *dev_dst, const void *host_src, long long nbytes)
+{
     if (dev_dst && host_src && nbytes > 0)
-        memcpy(dev_dst, host_src, (size_t)nbytes);
+        memcpy(dev_dst, host_src, (size_t) nbytes);
 }
 
 /* Device -> host copy. */
-void pas_dev_copy_from(void *host_dst, const void *dev_src, long long nbytes) {
+void pas_dev_copy_from(void *host_dst, const void *dev_src, long long nbytes)
+{
     if (host_dst && dev_src && nbytes > 0)
-        memcpy(host_dst, dev_src, (size_t)nbytes);
+        memcpy(host_dst, dev_src, (size_t) nbytes);
 }
 
 /* Free a handle returned by pas_dev_alloc. */
-void pas_dev_free(void *dev_ptr) {
+void pas_dev_free(void *dev_ptr)
+{
     free(dev_ptr);
 }
 
@@ -90,16 +94,18 @@ typedef struct {
 /* Load a "module".  CPU device: the module *is* the compiler-emitted registry;
  * the PTX blob is unused here (the CUDA shim cuModuleLoadData's it instead and
  * ignores the registry). */
-void *pas_dev_module_load(void *registry, const char *ptx) {
-    (void)ptx;
+void *pas_dev_module_load(void *registry, const char *ptx)
+{
+    (void) ptx;
     return registry;
 }
 
 /* Resolve a kernel entry by name out of a loaded module.  CPU device: linear
  * search of the registry's name table, returning the matching dispatch thunk
  * (or NULL if absent). */
-void *pas_dev_module_get_function(void *module, const char *name) {
-    const pas_dev_registry *r = (const pas_dev_registry *)module;
+void *pas_dev_module_get_function(void *module, const char *name)
+{
+    const pas_dev_registry *r = (const pas_dev_registry *) module;
     long long i;
     if (!r || !name)
         return 0;
@@ -118,28 +124,31 @@ void *pas_dev_module_get_function(void *module, const char *name) {
  * Loop order matches CUDA's row-major convention: x is the fastest-varying
  * thread index, z the slowest, mirroring the hardware warp layout. */
 typedef void (*pas_klaunch_fn)(void **);
-void pas_dev_launch(void *entry,
-                    long long gx, long long gy, long long gz,
-                    long long bx, long long by, long long bz,
-                    void **argv) {
-    if (!entry) return;
-    pas_klaunch_fn fn = (pas_klaunch_fn)entry;
+void pas_dev_launch(void *entry, long long gx, long long gy, long long gz, long long bx, long long by, long long bz, void **argv)
+{
+    if (!entry)
+        return;
+    pas_klaunch_fn fn = (pas_klaunch_fn) entry;
     /* Block and grid dimensions are constant across the launch. */
-    __pas_ntid_x  = (int32_t)bx; __pas_ntid_y  = (int32_t)by; __pas_ntid_z  = (int32_t)bz;
-    __pas_nctaid_x= (int32_t)gx; __pas_nctaid_y= (int32_t)gy; __pas_nctaid_z= (int32_t)gz;
+    __pas_ntid_x = (int32_t) bx;
+    __pas_ntid_y = (int32_t) by;
+    __pas_ntid_z = (int32_t) bz;
+    __pas_nctaid_x = (int32_t) gx;
+    __pas_nctaid_y = (int32_t) gy;
+    __pas_nctaid_z = (int32_t) gz;
     for (long long gz_i = 0; gz_i < gz; gz_i++)
-    for (long long gy_i = 0; gy_i < gy; gy_i++)
-    for (long long gx_i = 0; gx_i < gx; gx_i++) {
-        __pas_ctaid_x = (int32_t)gx_i;
-        __pas_ctaid_y = (int32_t)gy_i;
-        __pas_ctaid_z = (int32_t)gz_i;
-        for (long long bz_i = 0; bz_i < bz; bz_i++)
-        for (long long by_i = 0; by_i < by; by_i++)
-        for (long long bx_i = 0; bx_i < bx; bx_i++) {
-            __pas_tid_x = (int32_t)bx_i;
-            __pas_tid_y = (int32_t)by_i;
-            __pas_tid_z = (int32_t)bz_i;
-            fn(argv);
-        }
-    }
+        for (long long gy_i = 0; gy_i < gy; gy_i++)
+            for (long long gx_i = 0; gx_i < gx; gx_i++) {
+                __pas_ctaid_x = (int32_t) gx_i;
+                __pas_ctaid_y = (int32_t) gy_i;
+                __pas_ctaid_z = (int32_t) gz_i;
+                for (long long bz_i = 0; bz_i < bz; bz_i++)
+                    for (long long by_i = 0; by_i < by; by_i++)
+                        for (long long bx_i = 0; bx_i < bx; bx_i++) {
+                            __pas_tid_x = (int32_t) bx_i;
+                            __pas_tid_y = (int32_t) by_i;
+                            __pas_tid_z = (int32_t) bz_i;
+                            fn(argv);
+                        }
+            }
 }

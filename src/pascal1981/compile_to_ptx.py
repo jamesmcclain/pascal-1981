@@ -99,7 +99,12 @@ def main() -> int:
     parser.add_argument('--device-triple', default='nvptx64-nvidia-cuda')
     parser.add_argument('--cpu', default='sm_70', help='NVPTX target CPU, e.g. sm_70, sm_86 (default: sm_70)')
     parser.add_argument('--emit-llvm', default=None, metavar='PATH', help='Also write the intermediate LLVM IR')
-    parser.add_argument('--opt-level', type=int, choices=[0, 1, 2, 3], default=0, metavar='N', help='Run LLVM\'s O0-O3 mid-level IR pass pipeline before NVPTX codegen (default: 0, i.e. no pipeline; matches pre-existing behavior).')
+    parser.add_argument('--opt-level',
+                        type=int,
+                        choices=[0, 1, 2, 3],
+                        default=0,
+                        metavar='N',
+                        help='Run LLVM\'s O0-O3 mid-level IR pass pipeline before NVPTX codegen (default: 0, i.e. no pipeline; matches pre-existing behavior).')
     parser.add_argument('-f', '--feature', action='append', default=[], metavar='NAME', help='Enable extension feature NAME; use no-NAME to disable. Repeatable.')
     parser.add_argument('--dialect', choices=['vintage', 'extended'], default='vintage')
     parser.add_argument('-v', '--verbose', action='store_true', help='Print a full traceback on failure')

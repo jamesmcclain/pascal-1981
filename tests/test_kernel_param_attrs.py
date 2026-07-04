@@ -18,10 +18,9 @@ verify/emit_assembly.
 import os
 import unittest
 
-from tests.support import requires_llvm, temporary_pascal_project
-
 from pascal1981.parser import parse_file
 from pascal1981.type_checker import PascalTypeChecker
+from tests.support import requires_llvm, temporary_pascal_project
 
 _IFACE = """DEVICE INTERFACE;
 UNIT KH (scale, via_helper, uses_with);
@@ -118,7 +117,7 @@ class TestReadonlyAnalysis(unittest.TestCase):
         go unnoticed. Exercised directly against the analysis on a hand-built
         AST fixture (a realistic parser round trip needs a record-typed ADS
         buffer, which is orthogonal to what this unit is checking)."""
-        from pascal1981.ast_nodes import AssignStmt, Block, Designator, IntLiteral, Param, ProcDecl, Selector, WithStmt
+        from pascal1981.ast_nodes import (AssignStmt, Block, Designator, IntLiteral, Param, ProcDecl, Selector, WithStmt)
         from pascal1981.codegen.decls import DeclsMixin
 
         class _Host(DeclsMixin):

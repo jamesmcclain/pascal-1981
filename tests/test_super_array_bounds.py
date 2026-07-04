@@ -52,8 +52,7 @@ def build_run(src: str) -> tuple:
         with open(ll_path, "w") as f:
             f.write(ir)
         exe_path = os.path.join(tmpdir, "prog")
-        cc = subprocess.run(["clang", "-w", ll_path, _RUNTIME_LIB, "-o", exe_path, "-lm"],
-                            capture_output=True, text=True)
+        cc = subprocess.run(["clang", "-w", ll_path, _RUNTIME_LIB, "-o", exe_path, "-lm"], capture_output=True, text=True)
         if cc.returncode != 0:
             raise RuntimeError(f"clang failed: {cc.stderr}")
         run = subprocess.run([exe_path], capture_output=True, text=True)
@@ -69,13 +68,11 @@ _VECT0 = "TYPE VECT = SUPER ARRAY [0..*] OF INTEGER; "
 class TestUpperLowerDerefParsing(unittest.TestCase):
 
     def test_upper_deref_parses(self):
-        src = ("PROGRAM P; " + _VECT0 +
-               "VAR p: ^VECT; BEGIN NEW(p, 5); WRITELN(UPPER(p^)) END.")
+        src = ("PROGRAM P; " + _VECT0 + "VAR p: ^VECT; BEGIN NEW(p, 5); WRITELN(UPPER(p^)) END.")
         self.assertIsNotNone(parse_source(src))
 
     def test_lower_deref_parses(self):
-        src = ("PROGRAM P; " + _VECT0 +
-               "VAR p: ^VECT; BEGIN NEW(p, 5); WRITELN(LOWER(p^)) END.")
+        src = ("PROGRAM P; " + _VECT0 + "VAR p: ^VECT; BEGIN NEW(p, 5); WRITELN(LOWER(p^)) END.")
         self.assertIsNotNone(parse_source(src))
 
     def test_plain_form_still_parses(self):
@@ -87,8 +84,7 @@ class TestUpperLowerDerefParsing(unittest.TestCase):
 class TestUpperLowerDerefTypecheck(unittest.TestCase):
 
     def test_super_array_deref_accepted_in_host_code(self):
-        src = ("PROGRAM P; " + _VECT0 +
-               "VAR p: ^VECT; n: INTEGER; "
+        src = ("PROGRAM P; " + _VECT0 + "VAR p: ^VECT; n: INTEGER; "
                "BEGIN NEW(p, 5); n := UPPER(p^); n := LOWER(p^) END.")
         self.assertTrue(typecheck_source(src).success)
 
@@ -121,8 +117,7 @@ class TestUpperLowerDerefTypecheck(unittest.TestCase):
                ".\n")
         result = typecheck_source(src)
         self.assertFalse(result.success)
-        self.assertTrue(any("dynamic super array bounds are not available in device code"
-                            in e.message for e in result.errors))
+        self.assertTrue(any("dynamic super array bounds are not available in device code" in e.message for e in result.errors))
 
 
 @requires_llvm
@@ -130,8 +125,7 @@ class TestBoundHeaderIR(unittest.TestCase):
 
     def test_new_long_form_allocates_header_and_stores_bound(self):
         """NEW(p, u) allocates data + 8 header bytes and stores u as an i64."""
-        src = ("PROGRAM P; " + _VECT0 +
-               "VAR p: ^VECT; BEGIN NEW(p, 10) END.")
+        src = ("PROGRAM P; " + _VECT0 + "VAR p: ^VECT; BEGIN NEW(p, 10) END.")
         ir = compile_to_ir(src)
         # count * elem_size, then + 8 for the header, then malloc of the sum.
         self.assertIn("mul i64", ir)
@@ -142,8 +136,7 @@ class TestBoundHeaderIR(unittest.TestCase):
 
     def test_upper_deref_loads_header(self):
         """UPPER(p^) loads the i64 one slot before the data pointer."""
-        src = ("PROGRAM P; " + _VECT0 +
-               "VAR p: ^VECT; BEGIN NEW(p, 10); WRITELN(UPPER(p^)) END.")
+        src = ("PROGRAM P; " + _VECT0 + "VAR p: ^VECT; BEGIN NEW(p, 10); WRITELN(UPPER(p^)) END.")
         ir = compile_to_ir(src)
         self.assertIn("i64 -1", ir)
         self.assertIn("load i64", ir)
@@ -159,8 +152,7 @@ class TestBoundHeaderIR(unittest.TestCase):
 
     def test_dispose_frees_from_header(self):
         """DISPOSE(p) on a super-array pointer steps back to the header."""
-        src = ("PROGRAM P; " + _VECT0 +
-               "VAR p: ^VECT; BEGIN NEW(p, 10); DISPOSE(p) END.")
+        src = ("PROGRAM P; " + _VECT0 + "VAR p: ^VECT; BEGIN NEW(p, 10); DISPOSE(p) END.")
         ir = compile_to_ir(src)
         self.assertIn("i64 -8", ir)
         self.assertIn('call void @"free"', ir)
@@ -178,8 +170,7 @@ class TestBoundHeaderRuntime(unittest.TestCase):
 
     def test_upper_and_lower_round_trip(self):
         """The bound written by NEW is the bound read back by UPPER."""
-        src = ("PROGRAM P; " + _VECT0 +
-               "VAR p: ^VECT; n: INTEGER; BEGIN "
+        src = ("PROGRAM P; " + _VECT0 + "VAR p: ^VECT; n: INTEGER; BEGIN "
                "n := 10; NEW(p, n); "
                "WRITELN(LOWER(p^)); WRITELN(UPPER(p^)); DISPOSE(p) END.")
         rc, out = build_run(src)
@@ -202,8 +193,7 @@ class TestBoundHeaderRuntime(unittest.TestCase):
         """Previously $INDEXCK guessed bounds (low, low) for [low..*] and
         aborted on any index above the lower bound; now the whole allocated
         range is writable."""
-        src = ("PROGRAM P; " + _VECT0 +
-               "VAR p: ^VECT; i: INTEGER; BEGIN "
+        src = ("PROGRAM P; " + _VECT0 + "VAR p: ^VECT; i: INTEGER; BEGIN "
                "NEW(p, 10); "
                "FOR i := 0 TO UPPER(p^) DO p^[i] := i * 2; "
                "WRITELN(p^[10]); DISPOSE(p) END.")
@@ -214,8 +204,7 @@ class TestBoundHeaderRuntime(unittest.TestCase):
     def test_index_above_dynamic_bound_aborts(self):
         """$INDEXCK checks the dynamic header bound: p^[5] on NEW(p, 4)
         aborts at run time instead of writing past the allocation."""
-        src = ("PROGRAM P; " + _VECT0 +
-               "VAR p: ^VECT; i: INTEGER; BEGIN "
+        src = ("PROGRAM P; " + _VECT0 + "VAR p: ^VECT; i: INTEGER; BEGIN "
                "NEW(p, 4); i := 5; p^[i] := 1 END.")
         rc, out = build_run(src)
         self.assertNotEqual(rc, 0)
@@ -228,8 +217,7 @@ class TestBoundHeaderRuntime(unittest.TestCase):
         self.assertNotEqual(rc, 0)
 
     def test_two_allocations_carry_independent_bounds(self):
-        src = ("PROGRAM P; " + _VECT0 +
-               "VAR p, q: ^VECT; BEGIN "
+        src = ("PROGRAM P; " + _VECT0 + "VAR p, q: ^VECT; BEGIN "
                "NEW(p, 4); NEW(q, 9); "
                "WRITELN(UPPER(p^)); WRITELN(UPPER(q^)); "
                "DISPOSE(p); DISPOSE(q) END.")

@@ -31,14 +31,14 @@ untouched):
 import unittest
 
 from pascal1981.features import extended_features, resolve_features
-from tests.support import (build_and_run_pascal_project, requires_exe,
-                           typecheck_source)
+from tests.support import (build_and_run_pascal_project, requires_exe, typecheck_source)
 
 _WIDE = resolve_features(overrides=['wide-integers'])
 EXT = extended_features()
 
 
 class TestWideBufferTypecheck(unittest.TestCase):
+
     def test_wide_new_bound_and_wide_index_gated(self):
         src = ("PROGRAM P;\n"
                "TYPE BUF = SUPER ARRAY [0..*] OF INTEGER32; PB = ^BUF;\n"
@@ -57,6 +57,7 @@ class TestWideBufferTypecheck(unittest.TestCase):
 
 @requires_exe
 class TestWideBufferBuildAndRun(unittest.TestCase):
+
     def test_large_heap_super_array_end_to_end(self):
         # > 32767 elements: allocation, wide-index writes/reads, UPPER.
         src = ("PROGRAM P(output);\n"
@@ -70,9 +71,7 @@ class TestWideBufferBuildAndRun(unittest.TestCase):
                "  WRITELN(s, ' ', UPPER(p^));\n"
                "  DISPOSE(p)\n"
                "END.")
-        rc, out, err = build_and_run_pascal_project(
-            files={'p.pas': src}, compile_pairs=[('p.pas', 'p.ll')],
-            link_ir_relpaths=['p.ll'], exe_name='big-super-array', features=_WIDE)
+        rc, out, err = build_and_run_pascal_project(files={'p.pas': src}, compile_pairs=[('p.pas', 'p.ll')], link_ir_relpaths=['p.ll'], exe_name='big-super-array', features=_WIDE)
         self.assertEqual(rc, 0, msg=err)
         self.assertEqual(out.split(), ['4999950000', '99999'])
 
@@ -96,10 +95,14 @@ class TestWideBufferBuildAndRun(unittest.TestCase):
              "void fill_bytes(uint8_t *p, int32_t n){\n"
              "  for (int32_t i = 0; i < n; ++i) p[i] = (uint8_t)(i * 3);\n"
              "}\n")
-        rc, out, err = build_and_run_pascal_project(
-            files={'p.pas': src, 'c.c': c}, compile_pairs=[('p.pas', 'p.ll')],
-            link_ir_relpaths=['p.ll', 'c.c'], exe_name='super-array-cffi',
-            features=EXT)
+        rc, out, err = build_and_run_pascal_project(files={
+            'p.pas': src,
+            'c.c': c
+        },
+                                                    compile_pairs=[('p.pas', 'p.ll')],
+                                                    link_ir_relpaths=['p.ll', 'c.c'],
+                                                    exe_name='super-array-cffi',
+                                                    features=EXT)
         self.assertEqual(rc, 0, msg=err)
         self.assertEqual(out.split(), ['135', '27'])
 
@@ -140,12 +143,15 @@ class TestWideBufferBuildAndRun(unittest.TestCase):
                 "  FOR i := 0 TO n - 1 DO WRITELN(h^[i]);\n"
                 "  DISPOSE(h)\n"
                 "END.")
-        rc, out, err = build_and_run_pascal_project(
-            files={'dbl.inc': iface, 'dbl.pas': impl, 'main.pas': main},
-            compile_pairs=[('dbl.inc', 'dbl-iface.ll'), ('dbl.pas', 'dbl.ll'),
-                           ('main.pas', 'main.ll')],
-            link_ir_relpaths=['dbl.ll', 'main.ll'],
-            exe_name='super-array-devcopy', features=_WIDE)
+        rc, out, err = build_and_run_pascal_project(files={
+            'dbl.inc': iface,
+            'dbl.pas': impl,
+            'main.pas': main
+        },
+                                                    compile_pairs=[('dbl.inc', 'dbl-iface.ll'), ('dbl.pas', 'dbl.ll'), ('main.pas', 'main.ll')],
+                                                    link_ir_relpaths=['dbl.ll', 'main.ll'],
+                                                    exe_name='super-array-devcopy',
+                                                    features=_WIDE)
         self.assertEqual(rc, 0, msg=err)
         self.assertEqual(out.split(), ['2', '4', '6', '8', '10', '12', '14', '16'])
 

@@ -25,13 +25,11 @@ These tests pin:
 import os
 import unittest
 
-from tests.support import (build_and_run_pascal_project, parse_source,
-                           requires_exe, requires_llvm, temporary_pascal_project)
-
 from pascal1981.codegen import compile_to_llvm
 from pascal1981.features import resolve_features
 from pascal1981.parser import parse_file
 from pascal1981.type_checker import PascalTypeChecker
+from tests.support import (build_and_run_pascal_project, parse_source, requires_exe, requires_llvm, temporary_pascal_project)
 
 _WIDE = resolve_features(overrides=['wide-integers'])
 
@@ -86,9 +84,7 @@ def _compile_main_ir(proj_files, *, embed_ptx=None, device_backend='cpu'):
         ast = parse_file(main_path)
         result = PascalTypeChecker(source_file=main_path, features=_WIDE).check(ast)
         assert result.success, result.errors
-        return compile_to_llvm(ast, source_file=main_path, features=_WIDE,
-                               embed_device_ptx_text=embed_ptx,
-                               device_backend=device_backend)
+        return compile_to_llvm(ast, source_file=main_path, features=_WIDE, embed_device_ptx_text=embed_ptx, device_backend=device_backend)
 
 
 @requires_llvm
@@ -140,22 +136,20 @@ class TestCudaBackendDecoupling(unittest.TestCase):
     """
 
     def test_no_thunk_no_registry_no_kernel_ref(self):
-        ir = _compile_main_ir({'vadd.inc': _IFACE, 'main.pas': _MAIN},
-                              device_backend='cuda')
+        ir = _compile_main_ir({'vadd.inc': _IFACE, 'main.pas': _MAIN}, device_backend='cuda')
         # The three-step driver path is still emitted...
         self.assertIn('pas_dev_module_load', ir)
         self.assertIn('pas_dev_module_get_function', ir)
         self.assertIn('pas_dev_launch', ir)
         # ...but with none of the CPU stand-in scaffolding.
-        self.assertNotIn('__pas_klaunch', ir)         # no thunk, no registry
-        self.assertNotIn('define i32 @"add"', ir)     # no kernel definition
+        self.assertNotIn('__pas_klaunch', ir)  # no thunk, no registry
+        self.assertNotIn('define i32 @"add"', ir)  # no kernel definition
         # The kernel symbol is never *referenced* (an unused extern declare is
         # harmless; a call/thunk would force the dead dev.ll link).
         self.assertNotIn('call void @"add"', ir)
 
     def test_ptx_blob_is_external_not_embedded(self):
-        ir = _compile_main_ir({'vadd.inc': _IFACE, 'main.pas': _MAIN},
-                              device_backend='cuda')
+        ir = _compile_main_ir({'vadd.inc': _IFACE, 'main.pas': _MAIN}, device_backend='cuda')
         # Host references the blob as an external symbol; the bytes live in a
         # separate object built from the .ptx at link time.
         self.assertIn('@"__pas_device_ptx" = external constant', ir)
@@ -164,8 +158,7 @@ class TestCudaBackendDecoupling(unittest.TestCase):
         # Legacy opt-in: --embed-device-ptx still bakes the bytes in even on the
         # cuda backend (two-input link), so the old path keeps working.
         ptx = '.visible .entry add() { ret; }\n'
-        ir = _compile_main_ir({'vadd.inc': _IFACE, 'main.pas': _MAIN},
-                              embed_ptx=ptx, device_backend='cuda')
+        ir = _compile_main_ir({'vadd.inc': _IFACE, 'main.pas': _MAIN}, embed_ptx=ptx, device_backend='cuda')
         self.assertNotIn('external constant', ir.split('__pas_device_ptx')[1][:40])
         self.assertIn('visible .entry add', ir)
 
@@ -174,9 +167,7 @@ class TestCudaBackendDecoupling(unittest.TestCase):
 class TestRegistryDedup(unittest.TestCase):
 
     def test_repeated_launch_of_same_kernel_is_one_entry(self):
-        main_twice = _MAIN.replace(
-            'LAUNCH(add, 1, n, da, db, dc, n);',
-            'LAUNCH(add, 1, n, da, db, dc, n);\n  LAUNCH(add, 1, n, da, db, dc, n);')
+        main_twice = _MAIN.replace('LAUNCH(add, 1, n, da, db, dc, n);', 'LAUNCH(add, 1, n, da, db, dc, n);\n  LAUNCH(add, 1, n, da, db, dc, n);')
         ir = _compile_main_ir({'vadd.inc': _IFACE, 'main.pas': main_twice})
         # One kernel launched (twice) -> a single registry entry (count 1).
         self.assertIn('i64 1}', ir)
@@ -248,7 +239,11 @@ class TestByNameDispatchSelectsCorrectKernel(unittest.TestCase):
 
     def test_two_kernels_resolved_by_name(self):
         rc, out, err = build_and_run_pascal_project(
-            files={'vops.inc': _IFACE2, 'vops.pas': _IMPL2, 'main.pas': _MAIN2},
+            files={
+                'vops.inc': _IFACE2,
+                'vops.pas': _IMPL2,
+                'main.pas': _MAIN2
+            },
             compile_pairs=[
                 ('vops.inc', 'vops-iface.ll'),
                 ('vops.pas', 'vops.ll'),

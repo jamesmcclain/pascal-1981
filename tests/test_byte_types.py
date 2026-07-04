@@ -23,12 +23,9 @@ Semantics pinned here:
 
 import unittest
 
-from pascal1981.type_system import (INTEGER8_TYPE, INTEGER32_TYPE, INTEGER_TYPE,
-                                    WORD8_TYPE, WORD32_TYPE, WORD_TYPE,
-                                    binary_op_result_type, can_assign)
 from pascal1981.features import extended_features
-from tests.support import (build_and_run_pascal_project, requires_exe,
-                           requires_llvm, typecheck_source)
+from pascal1981.type_system import (INTEGER8_TYPE, INTEGER32_TYPE, INTEGER_TYPE, WORD8_TYPE, WORD32_TYPE, WORD_TYPE, binary_op_result_type, can_assign)
+from tests.support import (build_and_run_pascal_project, requires_exe, requires_llvm, typecheck_source)
 
 WI = {"wide-integers": True}
 EXT = extended_features()
@@ -39,6 +36,7 @@ def ok(src, feats=WI):
 
 
 class TestGating(unittest.TestCase):
+
     def test_word8_integer8_need_wide_integers(self):
         self.assertTrue(ok("PROGRAM P; VAR b: WORD8; BEGIN b := 0 END."))
         self.assertTrue(ok("PROGRAM P; VAR i: INTEGER8; BEGIN i := 0 END."))
@@ -57,6 +55,7 @@ class TestGating(unittest.TestCase):
 
 
 class TestTypeRules(unittest.TestCase):
+
     def test_widening_assignability(self):
         self.assertTrue(can_assign(WORD8_TYPE, WORD_TYPE))
         self.assertTrue(can_assign(WORD8_TYPE, WORD32_TYPE))
@@ -102,6 +101,7 @@ class TestTypeRules(unittest.TestCase):
 
 @requires_llvm
 class TestByteTypesIR(unittest.TestCase):
+
     def _ir(self, src, features=WI):
         from pascal1981.codegen import compile_to_llvm
         from tests.support import parse_source as _parse
@@ -121,26 +121,24 @@ class TestByteTypesIR(unittest.TestCase):
         self.assertIn('i16 1', ir)
 
     def test_c_abi_sign_attrs(self):
-        ir = self._ir(
-            "PROGRAM P;\n"
-            "FUNCTION f(b: WORD8): INTEGER8 [C]; EXTERN;\n"
-            "VAR i: INTEGER8;\n"
-            "BEGIN i := f(WRD8(1)) END.", features=EXT)
-        self.assertIn('zeroext', ir)   # WORD8 parameter
-        self.assertIn('signext', ir)   # INTEGER8 return
+        ir = self._ir("PROGRAM P;\n"
+                      "FUNCTION f(b: WORD8): INTEGER8 [C]; EXTERN;\n"
+                      "VAR i: INTEGER8;\n"
+                      "BEGIN i := f(WRD8(1)) END.", features=EXT)
+        self.assertIn('zeroext', ir)  # WORD8 parameter
+        self.assertIn('signext', ir)  # INTEGER8 return
 
 
 @requires_exe
 class TestByteTypesBuildAndRun(unittest.TestCase):
+
     def _run(self, src, exe, features=WI, cfiles=None):
         files = {"p.pas": src}
         link = ["p.ll"]
         if cfiles:
             files.update(cfiles)
             link += list(cfiles)
-        rc, out, err = build_and_run_pascal_project(
-            files=files, compile_pairs=[("p.pas", "p.ll")],
-            link_ir_relpaths=link, exe_name=exe, features=features)
+        rc, out, err = build_and_run_pascal_project(files=files, compile_pairs=[("p.pas", "p.ll")], link_ir_relpaths=link, exe_name=exe, features=features)
         return rc, out, err
 
     def test_arithmetic_write_and_conversions(self):

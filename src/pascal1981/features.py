@@ -32,7 +32,8 @@ _FEATURES: Dict[str, Feature] = {
     Feature(
         name='wide-integers',
         default=False,
-        help='Enable extension INTEGER8/INTEGER32/INTEGER64 (signed) and WORD8/WORD32/WORD64 (unsigned) types, the WORD16 (= WORD) and INTEGER16 (= INTEGER) synonyms, and wide integer constants.',
+        help=
+        'Enable extension INTEGER8/INTEGER32/INTEGER64 (signed) and WORD8/WORD32/WORD64 (unsigned) types, the WORD16 (= WORD) and INTEGER16 (= INTEGER) synonyms, and wide integer constants.',
     ),
     'wide-reals':
     Feature(
@@ -81,7 +82,8 @@ _FEATURES: Dict[str, Feature] = {
         # bases that want every WORD/INTEGER crossing spelled out.  It does not
         # affect the assignment rule (already an error) or constants (always
         # exempt: INTEGER constants change to WORD per the manual).
-        help='Promote the WORD/INTEGER expression-mix warning to a hard error (stricter than vintage). Orthogonal to --dialect; the assignment-compatibility error and the constant exemption apply regardless.',
+        help=
+        'Promote the WORD/INTEGER expression-mix warning to a hard error (stricter than vintage). Orthogonal to --dialect; the assignment-compatibility error and the constant exemption apply regardless.',
         in_extended=False,
     ),
     'noalias-kernel-params':
@@ -98,7 +100,8 @@ _FEATURES: Dict[str, Feature] = {
         # reorder/vectorize loads and stores across what it believes are
         # non-aliasing pointers), so it stays opt-in via `-f
         # noalias-kernel-params` rather than riding the extended umbrella.
-        help='Assert that distinct ADS(GLOBAL)/ADS(CONSTANT) buffer parameters of an exported device kernel entry do not alias (LLVM `noalias`), per the LAUNCH contract documented in docs/device-kernel-orientation.md. Passing overlapping buffers with this enabled is undefined behavior. Off by default even in DEVICE code/--dialect extended; must be requested explicitly.',
+        help=
+        'Assert that distinct ADS(GLOBAL)/ADS(CONSTANT) buffer parameters of an exported device kernel entry do not alias (LLVM `noalias`), per the LAUNCH contract documented in docs/device-kernel-orientation.md. Passing overlapping buffers with this enabled is undefined behavior. Off by default even in DEVICE code/--dialect extended; must be requested explicitly.',
         in_extended=False,
     ),
 }
@@ -125,8 +128,7 @@ def default_features() -> Dict[str, bool]:
 def extended_features() -> Dict[str, bool]:
     # Umbrella features on; policy flags (in_extended=False) stay at their
     # registered default so the dialect surface and policy flags are orthogonal.
-    return {name: (name in _EXTENDED_UMBRELLA or feat.default)
-            for name, feat in _FEATURES.items()}
+    return {name: (name in _EXTENDED_UMBRELLA or feat.default) for name, feat in _FEATURES.items()}
 
 
 def is_extended(features: Dict[str, bool] | None) -> bool:

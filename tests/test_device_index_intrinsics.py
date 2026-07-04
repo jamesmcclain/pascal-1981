@@ -107,6 +107,7 @@ class DeviceIndexIntrinsicCodegenTests(unittest.TestCase):
             'llvm.nvvm.read.ptx.sreg.nctaid.z': (1, 65536),
         }
         import re
+
         # Every call site to each intrinsic carries a `!range` reference; find
         # the referenced metadata node and check its (lo, hi) pair.
         for name, (lo, hi) in expected_ranges.items():

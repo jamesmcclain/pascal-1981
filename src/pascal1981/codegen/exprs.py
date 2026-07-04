@@ -15,7 +15,7 @@ from llvmlite.ir import IRBuilder
 from ..ast_nodes import *
 from ..builtins_registry import DEVICE_INDEX_BUILTIN_FUNCTIONS
 from ..device_limits import NVVM_AXIS_MAX, NVVM_GRID_AXIS_MAX
-from ..type_system import (INTEGER32_TYPE, INTEGER64_TYPE, INTEGER8_TYPE, INTEGER_TYPE, REAL32_TYPE, WORD_TYPE, WORD32_TYPE, WORD64_TYPE, WORD8_TYPE)
+from ..type_system import (INTEGER8_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL32_TYPE, WORD8_TYPE, WORD32_TYPE, WORD64_TYPE, WORD_TYPE)
 from ..type_system import LStringType as ResolvedLStringType
 from ..type_system import StringType as ResolvedStringType
 from .base import CodegenError, _is_gpu_triple
@@ -424,7 +424,7 @@ class ExprsMixin:
         bit.  (followups.md item 2: no FMA fusion.)
         """
         if self.is_device_module:
-            return getattr(self.builder, opname)(lhs, rhs, name=name, flags=('contract',))
+            return getattr(self.builder, opname)(lhs, rhs, name=name, flags=('contract', ))
         return getattr(self.builder, opname)(lhs, rhs, name=name)
 
     def codegen_binop(self, expr: BinOp) -> ir.Value:
@@ -782,15 +782,15 @@ class ExprsMixin:
         'THREADIDX_X': '__pas_tid_x',
         'THREADIDX_Y': '__pas_tid_y',
         'THREADIDX_Z': '__pas_tid_z',
-        'BLOCKIDX_X':  '__pas_ctaid_x',
-        'BLOCKIDX_Y':  '__pas_ctaid_y',
-        'BLOCKIDX_Z':  '__pas_ctaid_z',
-        'BLOCKDIM_X':  '__pas_ntid_x',
-        'BLOCKDIM_Y':  '__pas_ntid_y',
-        'BLOCKDIM_Z':  '__pas_ntid_z',
-        'GRIDDIM_X':   '__pas_nctaid_x',
-        'GRIDDIM_Y':   '__pas_nctaid_y',
-        'GRIDDIM_Z':   '__pas_nctaid_z',
+        'BLOCKIDX_X': '__pas_ctaid_x',
+        'BLOCKIDX_Y': '__pas_ctaid_y',
+        'BLOCKIDX_Z': '__pas_ctaid_z',
+        'BLOCKDIM_X': '__pas_ntid_x',
+        'BLOCKDIM_Y': '__pas_ntid_y',
+        'BLOCKDIM_Z': '__pas_ntid_z',
+        'GRIDDIM_X': '__pas_nctaid_x',
+        'GRIDDIM_Y': '__pas_nctaid_y',
+        'GRIDDIM_Z': '__pas_nctaid_z',
     }
 
     # Conservative architectural ceilings for CUDA compute capability 7.0+.
@@ -799,10 +799,7 @@ class ExprsMixin:
     # this table just re-shapes them into the (tid, ctaid) pairs the !range
     # helper below wants. Format: (name-suffix) -> (max threads-per-block
     # axis, max grid axis).
-    _NVVM_SREG_MAX = {
-        axis: {'tid': NVVM_AXIS_MAX[axis], 'ctaid': NVVM_GRID_AXIS_MAX[axis]}
-        for axis in ('X', 'Y', 'Z')
-    }
+    _NVVM_SREG_MAX = {axis: {'tid': NVVM_AXIS_MAX[axis], 'ctaid': NVVM_GRID_AXIS_MAX[axis]} for axis in ('X', 'Y', 'Z')}
 
     def _nvvm_sreg_range(self, upper: str) -> tuple[int, int]:
         """Return the (lo, hi) !range bound [lo, hi) for one sreg intrinsic.
@@ -875,7 +872,8 @@ class ExprsMixin:
             call = self.builder.call(fn, [])
             lo, hi = self._nvvm_sreg_range(upper)
             call.set_metadata('range', self.module.add_metadata([
-                ir.Constant(ir.IntType(32), lo), ir.Constant(ir.IntType(32), hi),
+                ir.Constant(ir.IntType(32), lo),
+                ir.Constant(ir.IntType(32), hi),
             ]))
             return call
         if self.device_triple.startswith('amdgcn'):

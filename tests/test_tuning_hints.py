@@ -19,10 +19,9 @@ import os
 import re
 import unittest
 
-from tests.support import (parse_source, requires_llvm, temporary_pascal_project, typecheck_module, typecheck_source)
-
 from pascal1981.lexer import LexerError
 from pascal1981.parser import ParserError
+from tests.support import (parse_source, requires_llvm, temporary_pascal_project, typecheck_module, typecheck_source)
 
 _HINTS = {'tuning-hints': True}
 
@@ -67,8 +66,7 @@ def _compile_device_ir(iface: str, impl: str, *, device_triple: str = 'nvptx64-n
 class TestLaunchBoundParsing(unittest.TestCase):
 
     def test_attribute_forms_parse(self):
-        for attrs in (' [MAXNTID(256)]', ' [MAXNTID(16, 16)]', ' [REQNTID(128)]',
-                      ' [MINCTASM(2)]', ' [MAXNTID(256), MINCTASM(2)]'):
+        for attrs in (' [MAXNTID(256)]', ' [MAXNTID(16, 16)]', ' [REQNTID(128)]', ' [MINCTASM(2)]', ' [MAXNTID(256), MINCTASM(2)]'):
             src = ("DEVICE MODULE M;\n"
                    f"PROCEDURE go{attrs};\n"
                    "BEGIN END;\n"
@@ -87,9 +85,7 @@ class TestLaunchBoundParsing(unittest.TestCase):
 class TestUnrollParsing(unittest.TestCase):
 
     def test_unroll_before_each_loop_kind_parses(self):
-        for loop in ('FOR i := 1 TO 8 DO n := n + i',
-                     'WHILE i < 8 DO i := i + 1',
-                     'REPEAT i := i + 1 UNTIL i = 8'):
+        for loop in ('FOR i := 1 TO 8 DO n := n + i', 'WHILE i < 8 DO i := i + 1', 'REPEAT i := i + 1 UNTIL i = 8'):
             src = ("PROGRAM P; VAR i, n: INTEGER; BEGIN i := 0; n := 0; "
                    "{$UNROLL 4} " + loop + " END.")
             with self.subTest(loop=loop.split()[0]):
@@ -177,8 +173,7 @@ END;
 """
         result = typecheck_module(_IFACE, impl, module_name='KH')
         self.assertFalse(result.success)
-        self.assertTrue(any('only meaningful on an exported device kernel procedure' in e.message
-                            for e in result.errors))
+        self.assertTrue(any('only meaningful on an exported device kernel procedure' in e.message for e in result.errors))
 
     def test_launch_bounds_rejected_on_function(self):
         src = ("DEVICE MODULE M;\n"
@@ -199,8 +194,7 @@ END;
             with self.subTest(attrs=attrs):
                 result = typecheck_module(_IFACE, _impl(attrs), module_name='KH')
                 self.assertFalse(result.success)
-                self.assertTrue(any(expect in e.message for e in result.errors),
-                                [e.message for e in result.errors])
+                self.assertTrue(any(expect in e.message for e in result.errors), [e.message for e in result.errors])
 
     def test_launch_bound_dimensions_bounded_by_cuda_ceilings(self):
         """MAXNTID/REQNTID axes and total thread count are checked against the
@@ -218,48 +212,36 @@ END;
             with self.subTest(attrs=attrs):
                 result = typecheck_module(_IFACE, _impl(attrs), module_name='KH')
                 self.assertFalse(result.success)
-                self.assertTrue(any(expect in e.message for e in result.errors),
-                                [e.message for e in result.errors])
+                self.assertTrue(any(expect in e.message for e in result.errors), [e.message for e in result.errors])
 
     def test_launch_bound_dimensions_at_ceiling_accepted(self):
         """Boundary guard: values exactly at the per-axis and product ceilings
         must still type-check."""
-        for attrs in (' [MAXNTID(1024)]', ' [MAXNTID(1024, 1)]',
-                      ' [MAXNTID(8, 8, 4)]', ' [REQNTID(8, 8, 4)]',
-                      ' [MAXNTID(16, 16, 4)]'):
+        for attrs in (' [MAXNTID(1024)]', ' [MAXNTID(1024, 1)]', ' [MAXNTID(8, 8, 4)]', ' [REQNTID(8, 8, 4)]', ' [MAXNTID(16, 16, 4)]'):
             with self.subTest(attrs=attrs):
                 result = typecheck_module(_IFACE, _impl(attrs), module_name='KH')
-                self.assertTrue(result.success,
-                                [e.message for e in result.errors])
+                self.assertTrue(result.success, [e.message for e in result.errors])
 
     def test_maxntid_and_reqntid_are_mutually_exclusive(self):
         """Follow-up item 12: the PTX ISA forbids combining .maxntid with
         .reqntid on the same entry, so the pair is rejected at type-check time
         even when every dimension is individually in range. MINCTASM may still
         combine with either one."""
-        result = typecheck_module(
-            _IFACE, _impl(' [MAXNTID(8, 8, 4), REQNTID(8, 8, 4)]'),
-            module_name='KH')
+        result = typecheck_module(_IFACE, _impl(' [MAXNTID(8, 8, 4), REQNTID(8, 8, 4)]'), module_name='KH')
         self.assertFalse(result.success)
-        self.assertTrue(any('cannot be used together' in e.message
-                            for e in result.errors),
-                        [e.message for e in result.errors])
+        self.assertTrue(any('cannot be used together' in e.message for e in result.errors), [e.message for e in result.errors])
         # Either one alone alongside MINCTASM remains fine.
-        for attrs in (' [MAXNTID(256), MINCTASM(2)]',
-                      ' [REQNTID(256), MINCTASM(2)]'):
+        for attrs in (' [MAXNTID(256), MINCTASM(2)]', ' [REQNTID(256), MINCTASM(2)]'):
             with self.subTest(attrs=attrs):
-                result = typecheck_module(_IFACE, _impl(attrs),
-                                          module_name='KH')
-                self.assertTrue(result.success,
-                                [e.message for e in result.errors])
+                result = typecheck_module(_IFACE, _impl(attrs), module_name='KH')
+                self.assertTrue(result.success, [e.message for e in result.errors])
 
     def test_minctasm_has_no_architectural_ceiling(self):
         """Deliberate non-fix: MINCTASM is a minimum-CTAs-per-SM occupancy hint
         with no fixed numeric ceiling. The PTX ISA says an infeasible value is
         silently ignored by ptxas, not rejected, so a large MINCTASM must still
         type-check -- do not 'fix' this into an invented ceiling."""
-        result = typecheck_module(_IFACE, _impl(' [MINCTASM(999999)]'),
-                                  module_name='KH')
+        result = typecheck_module(_IFACE, _impl(' [MINCTASM(999999)]'), module_name='KH')
         self.assertTrue(result.success, [e.message for e in result.errors])
 
 
@@ -314,8 +296,7 @@ class TestLoweringIR(unittest.TestCase):
     def test_cpu_device_triple_ignores_launch_bounds(self):
         """On the x86 CPU-device parity path there is no kernel entry, so the
         hints are inert and no NVVM surface appears."""
-        ir = _compile_device_ir(_IFACE, _impl(' [MAXNTID(256)]'),
-                                device_triple='x86_64-pc-linux-gnu')
+        ir = _compile_device_ir(_IFACE, _impl(' [MAXNTID(256)]'), device_triple='x86_64-pc-linux-gnu')
         self.assertNotIn('nvvm', ir)
 
     def test_unroll_metadata_is_self_referential(self):
@@ -330,9 +311,7 @@ class TestLoweringIR(unittest.TestCase):
         self.assertNotIn('!{ null,', ir)
 
     def test_each_loop_kind_carries_the_metadata(self):
-        for loop in ('FOR i := 1 TO 8 DO sink(i)',
-                     'WHILE i < 8 DO BEGIN sink(i); i := i + 1 END',
-                     'REPEAT sink(i); i := i + 1 UNTIL i = 8'):
+        for loop in ('FOR i := 1 TO 8 DO sink(i)', 'WHILE i < 8 DO BEGIN sink(i); i := i + 1 END', 'REPEAT sink(i); i := i + 1 UNTIL i = 8'):
             src = ("PROGRAM P; PROCEDURE sink(n: INTEGER); EXTERN; VAR i: INTEGER; "
                    "BEGIN i := 0; {$UNROLL 2} " + loop + " END.")
             with self.subTest(loop=loop.split()[0]):
@@ -379,6 +358,7 @@ class TestLoweringPTXAndPipeline(unittest.TestCase):
         both the code and the old test in the same way). Exercise all three
         dimensions together through to real PTX output."""
         from pascal1981.compile_to_ptx import llvm_ir_to_ptx
+
         # Split into two compiles when follow-up item 12 started rejecting
         # the MAXNTID+REQNTID combination (ISA-forbidden); assertions kept.
         ir = _compile_device_ir(_IFACE, _impl(' [MAXNTID(8, 8, 4)]'))
@@ -405,6 +385,7 @@ class TestLoweringPTXAndPipeline(unittest.TestCase):
         the self-reference rewrite buys: with a null loop-ID head the same
         pipeline leaves the loop rolled."""
         import llvmlite.binding as llvm
+
         from pascal1981.codegen import compile_to_llvm
         from pascal1981.type_checker import PascalTypeChecker
         llvm.initialize_all_targets()

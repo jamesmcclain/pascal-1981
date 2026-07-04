@@ -26,13 +26,15 @@ EXT = extended_features()
 
 @requires_exe
 class TestCRecordLayout(unittest.TestCase):
+
     def _run(self, files, exe):
         pas = [f for f in files if f.endswith('.pas')]
         assert len(pas) == 1
-        rc, out, err = build_and_run_pascal_project(
-            files=files, compile_pairs=[(pas[0], 'p.ll')],
-            link_ir_relpaths=['p.ll'] + [f for f in files if f.endswith('.c')],
-            exe_name=exe, features=EXT)
+        rc, out, err = build_and_run_pascal_project(files=files,
+                                                    compile_pairs=[(pas[0], 'p.ll')],
+                                                    link_ir_relpaths=['p.ll'] + [f for f in files if f.endswith('.c')],
+                                                    exe_name=exe,
+                                                    features=EXT)
         return rc, out, err
 
     def test_mixed_alignment_offsets_and_sizeof_match_clang(self):

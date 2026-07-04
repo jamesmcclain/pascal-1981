@@ -29,10 +29,11 @@ def _emit_llvm(example_dir, source, ll_path, *extra_args):
     repo = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
     ptx_path = ll_path + '.ptx'
     result = subprocess.run(
-        [sys.executable, '-m', 'pascal1981.compile_to_ptx', source, ptx_path,
-         '--emit-llvm', ll_path, *extra_args],
+        [sys.executable, '-m', 'pascal1981.compile_to_ptx', source, ptx_path, '--emit-llvm', ll_path, *extra_args],
         cwd=example_dir,
-        env={**os.environ, 'PYTHONPATH': os.path.join(repo, 'src')},
+        env={
+            **os.environ, 'PYTHONPATH': os.path.join(repo, 'src')
+        },
         capture_output=True,
         text=True,
     )

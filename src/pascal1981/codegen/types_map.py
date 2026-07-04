@@ -494,7 +494,7 @@ class TypesMapMixin:
             if sel.kind == 'INDEX':
                 if isinstance(ty, ArrayType):
                     ty = ty.element_type
-                elif isinstance(ty, (NamedType,)) and ty.name.upper() in {'STRING', 'LSTRING'}:
+                elif isinstance(ty, (NamedType, )) and ty.name.upper() in {'STRING', 'LSTRING'}:
                     ty = NamedType('CHAR', None)
                 else:
                     return None
@@ -551,18 +551,13 @@ class TypesMapMixin:
                 if selector.kind == 'INDEX':
                     index = self.codegen_expr(selector.index_or_field)
                     resolved_cur = self.resolve_type_alias(cur_type)
-                    if (super_heap_data_ptr is not None
-                            and isinstance(resolved_cur, ArrayType)
-                            and getattr(resolved_cur, 'super', False)
-                            and isinstance(index.type, ir.IntType)
+                    if (super_heap_data_ptr is not None and isinstance(resolved_cur, ArrayType) and getattr(resolved_cur, 'super', False) and isinstance(index.type, ir.IntType)
                             and self.check_enabled('INDEXCK')):
                         # $INDEXCK for a heap super array: the lower bound is
                         # declared and static; the upper bound is the i64 the
                         # long-form NEW wrote just before the element data.
                         low_c = self.eval_const_expr(resolved_cur.index_range.low)
-                        hdr = self.builder.bitcast(
-                            self.builder.bitcast(super_heap_data_ptr, ir.IntType(8).as_pointer()),
-                            ir.IntType(64).as_pointer())
+                        hdr = self.builder.bitcast(self.builder.bitcast(super_heap_data_ptr, ir.IntType(8).as_pointer()), ir.IntType(64).as_pointer())
                         hdr = self.builder.gep(hdr, [ir.Constant(ir.IntType(64), -1)])
                         bound64 = self.builder.load(hdr)
                         idx64 = self.builder.sext(index, ir.IntType(64)) if index.type.width < 64 else index
@@ -598,10 +593,8 @@ class TypesMapMixin:
                         # is 0-based over [n+1 x i8] with the length byte at
                         # logical index 0 (slot = index).  Element type: CHAR.
                         _str_t = self.resolve_type_alias(cur_type)
-                        _is_string = (isinstance(_str_t, (ResolvedStringType,)) or
-                                      (isinstance(_str_t, NamedType) and _str_t.name.upper() == 'STRING'))
-                        _is_lstring = (isinstance(_str_t, (ResolvedLStringType, LStringType)) or
-                                       (isinstance(_str_t, NamedType) and _str_t.name.upper() == 'LSTRING'))
+                        _is_string = (isinstance(_str_t, (ResolvedStringType, )) or (isinstance(_str_t, NamedType) and _str_t.name.upper() == 'STRING'))
+                        _is_lstring = (isinstance(_str_t, (ResolvedLStringType, LStringType)) or (isinstance(_str_t, NamedType) and _str_t.name.upper() == 'LSTRING'))
                         if _is_string or _is_lstring:
                             low = 1 if _is_string else 0
                             elem_type = NamedType('CHAR', None)
@@ -680,9 +673,7 @@ class TypesMapMixin:
                         # (docs/super-array-bounds-abi.md). A following INDEX
                         # selector can then bounds-check against that header.
                         pointee = self.resolve_type_alias(cur_type)
-                        if (getattr(base, 'flavor', 'POINTER') == 'POINTER'
-                                and isinstance(pointee, ArrayType)
-                                and getattr(pointee, 'super', False)):
+                        if (getattr(base, 'flavor', 'POINTER') == 'POINTER' and isinstance(pointee, ArrayType) and getattr(pointee, 'super', False)):
                             super_heap_data_ptr = ptr
                         else:
                             super_heap_data_ptr = None

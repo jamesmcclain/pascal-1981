@@ -134,8 +134,7 @@ class DeclsMixin:
             sym = self.scope.lookup(pname) or self.scope.lookup(pname.upper())
             if sym is not None and getattr(sym, 'llvm_value', None) is not None:
                 name_ptr = self._emit_cstring_ptr(pname)
-                self.builder.call(self.runtime_extern('pas_arg_begin'),
-                                  [ir.Constant(i32, position), name_ptr])
+                self.builder.call(self.runtime_extern('pas_arg_begin'), [ir.Constant(i32, position), name_ptr])
                 resolved = self.resolve_type_alias(sym.type_expr)
                 if isinstance(resolved, FileType):
                     self._bind_file_parameter(sym)
@@ -163,12 +162,10 @@ class DeclsMixin:
         cap = 255
         buf = self.builder.alloca(ir.ArrayType(i8, cap + 1), name='arg_filename')
         buf_i8 = self.builder.bitcast(buf, i8.as_pointer())
-        self.builder.call(self._read_helper('pas_read_lstring', i8.as_pointer(), [i32]),
-                          [buf_i8, ir.Constant(i32, cap)])
+        self.builder.call(self._read_helper('pas_read_lstring', i8.as_pointer(), [i32]), [buf_i8, ir.Constant(i32, cap)])
         # LSTRING layout: byte 0 is the length, bytes 1.. are the characters.
         length = self.builder.zext(self.builder.load(buf_i8), i32)
-        name_ptr = self.builder.bitcast(
-            self.builder.gep(buf, [zero, ir.Constant(i32, 1)]), i8.as_pointer())
+        name_ptr = self.builder.bitcast(self.builder.gep(buf, [zero, ir.Constant(i32, 1)]), i8.as_pointer())
         handle = self.builder.load(sym.llvm_value)
         fcb = self.builder.bitcast(handle, self.file_fcb_type().as_pointer())
         self.builder.call(self.runtime_extern('pas_file_assign'), [fcb, name_ptr, length])
@@ -203,7 +200,7 @@ class DeclsMixin:
                 # (impl wins when both define the same name), mirroring the
                 # identical logic in type_checker.py::check_implementation_unit.
                 if unit.interface:
-                    impl_type_names  = {getattr(d, 'name', '').upper() for d in (unit.decls or []) if isinstance(d, TypeDecl)}
+                    impl_type_names = {getattr(d, 'name', '').upper() for d in (unit.decls or []) if isinstance(d, TypeDecl)}
                     impl_const_names = {getattr(d, 'name', '').upper() for d in (unit.decls or []) if isinstance(d, ConstDecl)}
                     for decl in unit.interface.decls:
                         name = getattr(decl, 'name', '') or ''
@@ -262,12 +259,8 @@ class DeclsMixin:
         all_iface_decls = list(getattr(ast, 'decls', []))
         if isinstance(ast, InterfaceUnit):
             export_name_list = list(getattr(ast, 'params', []))
-            routine_by_name  = {getattr(d, 'name', '').lower(): d
-                                for d in all_iface_decls
-                                if isinstance(d, (ProcDecl, FuncDecl))}
-            export_routines  = [(n, routine_by_name[n.lower()])
-                                for n in export_name_list
-                                if n.lower() in routine_by_name]
+            routine_by_name = {getattr(d, 'name', '').lower(): d for d in all_iface_decls if isinstance(d, (ProcDecl, FuncDecl))}
+            export_routines = [(n, routine_by_name[n.lower()]) for n in export_name_list if n.lower() in routine_by_name]
             # Also seed TYPE/CONST decls into the importing module's type_aliases
             # so the caller can reference shared buffer types by name.
             for decl in all_iface_decls:
@@ -670,8 +663,7 @@ class DeclsMixin:
                 has_with = True
             elif isinstance(node, AssignStmt):
                 tgt = node.target
-                if (isinstance(tgt, Designator) and tgt.name in param_names
-                        and any(sel.kind == 'DEREF' for sel in tgt.selectors)):
+                if (isinstance(tgt, Designator) and tgt.name in param_names and any(sel.kind == 'DEREF' for sel in tgt.selectors)):
                     written.add(tgt.name)
             elif isinstance(node, (FuncCall, ProcCallStmt)):
                 for arg in node.args:
@@ -744,7 +736,7 @@ class DeclsMixin:
         # `.minnctapersm` was the only directive that ever actually appeared.
         'MAXNTID': ('nvvm.maxntid', ('maxntidx', 'maxntidy', 'maxntidz')),
         'REQNTID': ('nvvm.reqntid', ('reqntidx', 'reqntidy', 'reqntidz')),
-        'MINCTASM': ('nvvm.minctasm', ('minctasm',)),
+        'MINCTASM': ('nvvm.minctasm', ('minctasm', )),
     }
 
     def _apply_launch_bound_attrs(self, decl, func: ir.Function) -> None:
@@ -778,8 +770,7 @@ class DeclsMixin:
         `define` attribute list, which is exactly LLVM's string-attribute
         syntax (round-trip through parse_assembly/verify is covered by tests).
         """
-        launch_attrs = [a for a in (getattr(decl, 'attributes', []) or [])
-                        if a.name.upper() in self._LAUNCH_BOUND_KEYS]
+        launch_attrs = [a for a in (getattr(decl, 'attributes', []) or []) if a.name.upper() in self._LAUNCH_BOUND_KEYS]
         if not launch_attrs:
             return
         if not self.device_triple.startswith('nvptx'):
@@ -798,7 +789,9 @@ class DeclsMixin:
             func.attributes.add(token)
             for key, value in zip(legacy_keys, values):
                 nvvm.add(self.module.add_metadata([
-                    func, key, ir.Constant(ir.IntType(32), value),
+                    func,
+                    key,
+                    ir.Constant(ir.IntType(32), value),
                 ]))
 
     @staticmethod
@@ -863,9 +856,13 @@ class DeclsMixin:
         ret_type_expr = getattr(decl, 'return_type', None)
         ret_sign_attr = self._c_abi_sign_attr(ret_type_expr)
 
-        ir_args, ir_ret, _sret, arg_attrs, plan = self.build_c_abi_plan(
-            decl, flat_param_types, flat_modes, return_llvm, is_variadic=is_variadic,
-            flat_sign_attrs=flat_sign_attrs, ret_sign_attr=ret_sign_attr)
+        ir_args, ir_ret, _sret, arg_attrs, plan = self.build_c_abi_plan(decl,
+                                                                        flat_param_types,
+                                                                        flat_modes,
+                                                                        return_llvm,
+                                                                        is_variadic=is_variadic,
+                                                                        flat_sign_attrs=flat_sign_attrs,
+                                                                        ret_sign_attr=ret_sign_attr)
 
         func_type = ir.FunctionType(ir_ret, ir_args, var_arg=is_variadic)
         func = ir.Function(self.module, func_type, name=decl.name)

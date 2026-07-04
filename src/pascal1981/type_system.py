@@ -550,10 +550,7 @@ def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optiona
     # wide WORD32/INTEGER32, WORD64/INTEGER64 pairs alike) is additionally
     # diagnosed in the type checker (_check_word_int_mix): a warning by default,
     # an error under -f strict-word-int, with the INTEGER-constant exemption.
-    int_rank = {Integer8Type: -1, Word8Type: -1,
-                IntegerType: 0, WordType: 0,
-                Integer32Type: 1, Word32Type: 1,
-                Integer64Type: 2, Word64Type: 2}
+    int_rank = {Integer8Type: -1, Word8Type: -1, IntegerType: 0, WordType: 0, Integer32Type: 1, Word32Type: 1, Integer64Type: 2, Word64Type: 2}
     _signed_by_rank = {-1: INTEGER8_TYPE, 0: INTEGER_TYPE, 1: INTEGER32_TYPE, 2: INTEGER64_TYPE}
     _unsigned_by_rank = {-1: WORD8_TYPE, 0: WORD_TYPE, 1: WORD32_TYPE, 2: WORD64_TYPE}
     _unsigned_types = (Word8Type, WordType, Word32Type, Word64Type)

@@ -19,11 +19,8 @@ Semantics pinned here:
 
 import unittest
 
-from pascal1981.type_system import (INTEGER_TYPE, INTEGER32_TYPE, WORD_TYPE,
-                                     WORD32_TYPE, WORD64_TYPE,
-                                     binary_op_result_type)
-from tests.support import (build_and_run_pascal_project, parse_source,
-                           requires_exe, typecheck_source)
+from pascal1981.type_system import (INTEGER32_TYPE, INTEGER_TYPE, WORD32_TYPE, WORD64_TYPE, WORD_TYPE, binary_op_result_type)
+from tests.support import (build_and_run_pascal_project, parse_source, requires_exe, typecheck_source)
 
 WI = {"wide-integers": True}
 WR = {"wide-reals": True}
@@ -36,13 +33,12 @@ def ok(src, feats):
 
 def run(src, feats, exe):
     files = {"p.pas": src}
-    rc, out, err = build_and_run_pascal_project(
-        files=files, compile_pairs=[("p.pas", "p.ll")],
-        link_ir_relpaths=["p.ll"], exe_name=exe, features=feats)
+    rc, out, err = build_and_run_pascal_project(files=files, compile_pairs=[("p.pas", "p.ll")], link_ir_relpaths=["p.ll"], exe_name=exe, features=feats)
     return rc, out, err
 
 
 class TestInteger32RealWidening(unittest.TestCase):
+
     def test_integer32_assigns_into_real(self):
         # Exact widening (every i32 fits an f64); INTEGER64 stays explicit-only.
         src = ("PROGRAM P; VAR i: INTEGER32; r: REAL; BEGIN i := 5; r := i END.")
@@ -52,6 +48,7 @@ class TestInteger32RealWidening(unittest.TestCase):
 
 
 class TestGating(unittest.TestCase):
+
     def test_word32_word64_need_wide_integers(self):
         self.assertTrue(ok("PROGRAM P; VAR w: WORD32; BEGIN w := 0 END.", WI))
         self.assertTrue(ok("PROGRAM P; VAR w: WORD64; BEGIN w := 0 END.", WI))
@@ -73,15 +70,15 @@ class TestGating(unittest.TestCase):
 
 
 class TestSynonyms(unittest.TestCase):
+
     def test_word16_is_word_integer16_is_integer(self):
         # A WORD16 value flows where WORD is expected and vice versa (same type).
-        self.assertTrue(ok(
-            "PROGRAM P; VAR a: WORD16; b: WORD; BEGIN a := 5; b := a; a := b END.", WI))
-        self.assertTrue(ok(
-            "PROGRAM P; VAR a: INTEGER16; b: INTEGER; BEGIN a := 5; b := a; a := b END.", WI))
+        self.assertTrue(ok("PROGRAM P; VAR a: WORD16; b: WORD; BEGIN a := 5; b := a; a := b END.", WI))
+        self.assertTrue(ok("PROGRAM P; VAR a: INTEGER16; b: INTEGER; BEGIN a := 5; b := a; a := b END.", WI))
 
 
 class TestWidening(unittest.TestCase):
+
     def test_unsigned_widening_chain(self):
         self.assertTrue(ok("PROGRAM P; VAR w: WORD; d: WORD32; BEGIN d := w END.", WI))
         self.assertTrue(ok("PROGRAM P; VAR a: WORD32; b: WORD64; BEGIN b := a END.", WI))
@@ -99,6 +96,7 @@ class TestWidening(unittest.TestCase):
 
 
 class TestArithmeticResultTypes(unittest.TestCase):
+
     def test_same_width_unsigned_sticky(self):
         self.assertEqual(binary_op_result_type(WORD32_TYPE, 'PLUS', WORD32_TYPE), WORD32_TYPE)
         self.assertEqual(binary_op_result_type(WORD32_TYPE, 'PLUS', INTEGER32_TYPE), WORD32_TYPE)
@@ -113,6 +111,7 @@ class TestArithmeticResultTypes(unittest.TestCase):
 
 @requires_exe
 class TestBuildAndRun(unittest.TestCase):
+
     def test_word32_prints_unsigned(self):
         # 4000000000 > INTEGER32 max but valid as unsigned WORD32.
         src = ("PROGRAM P(output);\nVAR a: WORD32;\n"
@@ -164,6 +163,7 @@ class TestWideMaxConstants(unittest.TestCase):
 
 @requires_exe
 class TestWideMaxConstantsRun(unittest.TestCase):
+
     def test_maxword32_prints_unsigned(self):
         # 2**32-1; has the high bit set, so it must print unsigned (not -1).
         src = "PROGRAM P(output);\nBEGIN WRITELN(MAXWORD32) END."
@@ -187,8 +187,7 @@ class TestWideMaxConstantsRun(unittest.TestCase):
                "WRITELN(a); WRITELN(b) END.")
         rc, out, err = run(src, WI, "maxword-roundtrip")
         self.assertEqual(rc, 0, msg=err)
-        self.assertEqual([l.strip() for l in out.splitlines() if l.strip()],
-                         ["4294967295", "18446744073709551615"])
+        self.assertEqual([l.strip() for l in out.splitlines() if l.strip()], ["4294967295", "18446744073709551615"])
 
 
 if __name__ == "__main__":

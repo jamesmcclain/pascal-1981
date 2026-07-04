@@ -20,14 +20,14 @@ mandelbrot-gpu Pascal renderer is the motivating example) needs:
 import unittest
 
 from pascal1981.features import extended_features
-from tests.support import (build_and_run_pascal_project, requires_exe,
-                           typecheck_source)
+from tests.support import (build_and_run_pascal_project, requires_exe, typecheck_source)
 
 WI = {"wide-integers": True}
 EXT = extended_features()
 
 
 class TestStringIndexingTypecheck(unittest.TestCase):
+
     def test_lstring_and_string_indexing_accepted(self):
         src = ("PROGRAM P; VAR l: LSTRING(10); s: STRING(5); c: CHAR; i: INTEGER;\n"
                "BEGIN i := 1; c := l[i]; c := s[1]; l[0] := CHR(3) END.")
@@ -40,6 +40,7 @@ class TestStringIndexingTypecheck(unittest.TestCase):
 
 
 class TestConstantAdaptationTypecheck(unittest.TestCase):
+
     def test_named_const_adapts_to_word32_field(self):
         src = ("PROGRAM P;\n"
                "CONST v = 640;\n"
@@ -73,6 +74,7 @@ class TestConstantAdaptationTypecheck(unittest.TestCase):
 
 @requires_exe
 class TestStringIndexingBuildAndRun(unittest.TestCase):
+
     def test_lstring_char_walk_and_nul_termination(self):
         # The filename idiom from the shim-free renderer: walk the LSTRING's
         # characters into a CHAR array and NUL-terminate it for a C API.
@@ -89,10 +91,14 @@ class TestStringIndexingBuildAndRun(unittest.TestCase):
         c = ("#include <string.h>\n"
              "#include <stdint.h>\n"
              "int32_t cstrlen(const char *s){ return (int32_t)strlen(s); }\n")
-        rc, out, err = build_and_run_pascal_project(
-            files={'p.pas': src, 'c.c': c}, compile_pairs=[('p.pas', 'p.ll')],
-            link_ir_relpaths=['p.ll', 'c.c'], exe_name='lstring-index',
-            features=EXT)
+        rc, out, err = build_and_run_pascal_project(files={
+            'p.pas': src,
+            'c.c': c
+        },
+                                                    compile_pairs=[('p.pas', 'p.ll')],
+                                                    link_ir_relpaths=['p.ll', 'c.c'],
+                                                    exe_name='lstring-index',
+                                                    features=EXT)
         self.assertEqual(rc, 0, msg=err)
         self.assertEqual(out.split(), ['3', 'abc', '3'])
 
@@ -100,9 +106,7 @@ class TestStringIndexingBuildAndRun(unittest.TestCase):
         src = ("PROGRAM P(output);\n"
                "VAR s: STRING(3);\n"
                "BEGIN s := 'xyz'; WRITELN(s[1], s[3]) END.")
-        rc, out, err = build_and_run_pascal_project(
-            files={'p.pas': src}, compile_pairs=[('p.pas', 'p.ll')],
-            link_ir_relpaths=['p.ll'], exe_name='string-index')
+        rc, out, err = build_and_run_pascal_project(files={'p.pas': src}, compile_pairs=[('p.pas', 'p.ll')], link_ir_relpaths=['p.ll'], exe_name='string-index')
         self.assertEqual(rc, 0, msg=err)
         self.assertEqual(out.strip(), 'xz')
 
