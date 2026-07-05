@@ -48,7 +48,7 @@ types and a void-return fix for exported device entries landed (suite grew to 78
 passed with `clang` available), and the `examples/device_ptx/mandelbrot` kernels
 were emitted to PTX and dropped — unchanged — into the companion mandelbrot-gpu
 PyCUDA launcher, producing a correct image. See
-`docs/old/mandelbrot-ptx-substitution-plan.md` ("Hardware validation result"). Note
+`docs/old/mandelbrot-port.md` ("Hardware validation result"). Note
 this validates the **external-launcher** route (a Pascal-generated `.ptx` loaded
 by an existing host), **not** the Pascal-side host orchestration of §5 / Milestone
 D, which is still prescribed: §10 point (3) below — running a kernel through the

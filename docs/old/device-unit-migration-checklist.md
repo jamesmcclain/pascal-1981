@@ -205,7 +205,7 @@ for "is this check active" is `check_enabled` (`codegen/base.py`). (Prescription
   `check_enabled` and `effective_flag` (`codegen/stmts.py`) — the latter is required because
   `RANGECK` (the `CASE`-no-match trap and string-capacity guard) is evaluated through
   `effective_flag`, *not* `check_enabled`, so gating only `check_enabled` would have left those
-  two `abort` sites firing. See `docs/device-unit-phase2.1-notes.md` §1.
+  two `abort` sites firing. See `docs/old/device-unit-phase-notes.md` §1.
 - [ ] **2.1.2 (Optional, later) device trap instead of disable.** If guard rails are wanted
   on-device, emit `llvm.trap()` (NVPTX `trap;`, AMDGPU `s_trap`) instead of the `fflush`+`abort`
   host pair when `is_device_module`. Defer; do 2.1.1 first.
@@ -230,7 +230,7 @@ or not — so device IR carries dead host-runtime `declare`s. The seg-bridge int
   target triple — and threaded in via a new `skip_host_runtime_externs` constructor flag
   (`getattr(ast,'is_device',False) and _is_gpu_triple(device_triple)`). Scope is GPU-triple only;
   x86 CPU-device keeps the externs (it links the host runtime). The wider lazy form is left as the
-  documented follow-up. See `docs/device-unit-phase2.2-notes.md` §1–§3.
+  documented follow-up. See `docs/old/device-unit-phase-notes.md` §1–§3.
 - [x] **2.2.2 Emitted-IR guard test (the durable check).** Compile the device-unit vector-add
   and primes to `nvptx64` and assert the module declares/references **none** of
   `{abort, fflush, memmove, movel, mover, movesl, movesr, fillc, fillsc, pas_read_int,
@@ -294,7 +294,7 @@ this clean — see below.)
   `.visible .entry` for exports and `.func` for helpers
   (`tests/test_device_entry_points.py`). Host/`MODULE`/`DEVICE MODULE`/x86-device IR
   byte-identical to the Phase-2.2 tree (golden compare). See
-  `docs/device-unit-phase2.3-notes.md`.
+  `docs/old/device-unit-phase-notes.md`.
 
 ---
 

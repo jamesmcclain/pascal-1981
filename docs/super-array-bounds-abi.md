@@ -4,7 +4,7 @@ Reference for the runtime representation of one-dimensional heap super arrays.
 Historical evidence for the D-001/D-002 remediation and the pre-fix problem
 statement, together with forward-looking design guidance for any future
 multi-dimensional or parameter-carrying extension, are archived in
-`docs/old/super-array-remediation-context.md`.
+`docs/old/super-array-remediation.md`.
 
 Claims below are graded per the repository's anti-confabulation discipline:
 OBSERVED (checkable against this repository's code/tests or a recorded
@@ -79,7 +79,7 @@ explicit bound parameters. [OBSERVED —
 `tests/test_super_array_bounds.py::test_device_module_rejects_super_array_upper_deref`]
 
 This is exactly the split recorded in
-`docs/old/mandelbrot-ptx-substitution-plan.md`: kernel buffers use super-array
+`docs/old/mandelbrot-port.md`: kernel buffers use super-array
 syntax for the open-buffer *type*, while bounds travel as ordinary kernel
 parameters (`n`, `width`, `height`), preserving the drop-in CUDA pointer ABI
 for generated `.ptx` artifacts. [DOCUMENTED in that plan] No device codegen
