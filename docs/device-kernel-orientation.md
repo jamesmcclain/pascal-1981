@@ -251,7 +251,7 @@ For host orchestration, PTX emission, and the full CUDA launch path see
 
 ---
 
-## 3. Kernel-entry parameter facts and the LAUNCH contract
+## 4. Kernel-entry parameter facts and the LAUNCH contract
 
 Exported kernel-entry buffer parameters (`ADS(GLOBAL)`/`ADS(CONSTANT) OF T`)
 automatically carry whichever of these facts this compiler can establish
@@ -276,17 +276,12 @@ without guessing:
   (registered feature, not part of the `extended` umbrella — `--dialect
   extended` alone does not turn it on). Enabling it asserts the **LAUNCH
   contract**: *distinct `ADS(GLOBAL)`/`ADS(CONSTANT)` buffer parameters of a
-  kernel entry do not overlap in memory.* This is a promise about the
-  *caller* (whatever issues the `LAUNCH`/`cuLaunchKernel` call), which this
-  compiler cannot itself verify at a call site — get it wrong (alias two
-  `noalias`-tagged buffers at launch time) and the optimizer may reorder or
-  vectorize loads/stores across them, a silent miscompilation. That is why it
-  defaults off even inside `DEVICE` code (whose feature baseline is otherwise
-  the extended umbrella) and must be requested explicitly.
+  kernel entry do not overlap in memory.* It defaults off and must be
+  requested explicitly; see `docs/followups.md` for the rationale and the
+  miscompilation hazard it places on the caller.
 
 None of this requires any source-level syntax; it is derived entirely from
-the existing parameter declaration and procedure body. See
-`docs/followups.md`'s archived "Kernel entries carry no parameter facts"
-entry in `docs/old/old-followups.md` for the full design/verification
-record, and `tests/test_kernel_param_attrs.py` for the attribute-shape
-tests.
+the existing parameter declaration and procedure body. The attribute-shape
+tests are in `tests/test_kernel_param_attrs.py`; the design/verification
+record is the archived "Kernel entries carry no parameter facts" entry in
+`docs/old/old-followups.md`.

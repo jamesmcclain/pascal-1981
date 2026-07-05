@@ -152,7 +152,7 @@ def is_extended(features: Dict[str, bool] | None) -> bool:
 # ---------------------------------------------------------------------------
 # Device dialect (DEVICE compiland) feature set.
 #
-# Per ads-memory-spaces-design.md (S1.2, S9): a DEVICE compiland uses the
+# Per docs/old/ads-design-rationale.md (S1.2, S9): a DEVICE compiland uses the
 # *device dialect* =
 #     extended host features - a recission set + the address-space surface.
 #
