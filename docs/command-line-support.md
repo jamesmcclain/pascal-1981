@@ -103,12 +103,3 @@ runtime externs registered in `codegen/base.py`. Coverage in
 - **No flag/option parser.** Arguments are positional, as in the vintage model.
   Conventional `--flag` parsing, if ever wanted, would be a separate convenience
   layer on top of `argc`/`argv` (now available to `main`) or a future `PPM`.
-
-## Relation to the Mandelbrot port
-
-This covers the host renderer's CLI needs directly: a view selector (`INTEGER`
-or an enumerated type), a precision selector (`CHAR` or enumerated), and an
-output filename (`LSTRING`/`STRING`, or a `TEXT`/`FILE` parameter when the output
-goes through Pascal file I/O rather than a C library). For a first milestone a
-program can simply hardcode views and accept only an output name; broader CLI
-parity remains positional under this model.
