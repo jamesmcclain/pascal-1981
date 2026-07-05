@@ -42,10 +42,10 @@ scheduled.
   old plan doc.
 - **`FORALL` parallel-iteration sugar** (§4.4) and a **broader index/real
   width change** (§4.5) — both explicitly deferred in
-  `docs/old/milestone-c-parallel-execution-plan.md` and never picked back up.
+  `docs/old/cuda-kernel-prescription.md` §4 and never picked back up.
 - **CPU-device (`DEVICE=cpu`) support for the shipped `device_ptx` examples**
   — blocked on rewriting the example kernels to be grid-stride first;
-  `docs/old/CPU_DEVICE_TODO.md` describes this as deferred pending sign-off,
+  `docs/old/cuda-kernel-prescription.md` §7 describes this as deferred pending sign-off,
   with the kernels deliberately left untouched.
 - **Optional `ptxas`/cubin-embedding build route** — `docs/old/device-build-cleanup-plan.md`
   §3.3, marked optional and explicitly not implemented; lowest priority of
