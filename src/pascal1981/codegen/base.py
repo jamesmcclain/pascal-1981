@@ -124,7 +124,8 @@ class CodegenBase:
         # existing DEVICE MODULE path; DEVICE UNIT lowering reuses it later).
         # Defaults to x86 (CPU-device), which collapses every address space to
         # addrspace 0; override with a GPU triple (nvptx64.../amdgcn...) to get
-        # space-specific lowering (ads-memory-spaces-design.md S1.2/S3.2).
+        # space-specific lowering (ads-memory-spaces-design.md S3.2; the
+        # host/device split is docs/old/ads-design-rationale.md S1.2).
         self.device_triple = device_triple
         # Historical name: now means "currently lowering device code" once
         # DEVICE UNIT codegen is wired. Host/vintage codegen stays unchanged.

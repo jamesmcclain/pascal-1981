@@ -134,7 +134,7 @@ launcher change; the f32 path is now ABI-correct (`.f32` parameters), so the
 existing `get_function("mandelbrot_f32")` call site applies unchanged.
 
 The on-device launch + output diff is the final rung of the validation ladder in
-`docs/mandelbrot-ptx-substitution-plan.md` and requires a GPU (see the container
+`docs/old/mandelbrot-port.md` and requires a GPU (see the container
 recipe in `docs/cuda-kernel-prescription.md` §8). Everything up to "valid PTX with
 the right ABI" is covered here and by
 `tests/integration/test_device_mandelbrot_ptx.py`.

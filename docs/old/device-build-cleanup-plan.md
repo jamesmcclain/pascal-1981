@@ -230,7 +230,7 @@ does `make clean && make DEVICE_SHIM=cuda`) is deleted.
 - Keep `compile_to_ptx` and `--embed-device-ptx` working (deprecated aliases) so
   existing tests and the `RUNNING_PTX.md` external-launcher recipe keep passing.
 - CPU-device path is untouched by design (backend=cpu keeps thunk+registry); the
-  deferred grid-stride work in `CPU_DEVICE_TODO.md` is orthogonal.
+  deferred grid-stride work in `docs/old/cuda-kernel-prescription.md` §7 is orthogonal.
 - The PTX ABI is unchanged — same `.visible .entry`, same parameters — so the
   drop-in property the mandelbrot README sells (matching `mandelbrot.cu`
   symbol-for-symbol) is preserved. The validation ladder in

@@ -174,7 +174,7 @@ class DeclsMixin:
         """Codegen for MODULE unit."""
         # A DEVICE MODULE lowers against the device triple, with address spaces
         # live; a plain MODULE keeps the host triple and is byte-identical to
-        # before (ads-memory-spaces-design.md S1.2).
+        # before (docs/old/ads-design-rationale.md S1.2).
         with self._device_codegen_context(getattr(unit, 'is_device', False)):
             for decl in unit.decls:
                 self.codegen_decl(decl)

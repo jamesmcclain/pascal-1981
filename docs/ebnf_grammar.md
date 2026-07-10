@@ -52,7 +52,7 @@ program_unit =
 
 module_unit =
     [ "DEVICE" ]                  (* DEVICE MODULE = device-dialect code (GPU); *)
-    "MODULE" identifier ";"      (* see docs/ads-memory-spaces-design.md S1.2  *)
+    "MODULE" identifier ";"      (* see docs/old/ads-design-rationale.md S1.2  *)
     [ uses_clause ]
     module_block "." ;
 
@@ -772,7 +772,7 @@ character = (* any printable ASCII character in the range 0x20–0x7E,
 | `metacommand_comment` — new section documenting all 30 metacommands (Chapter 4): ON/OFF switches with defaults, INTEGER/STRING listing metacommands, typeless `$PUSH`/`$POP`/`$MESSAGE`/`$INCONST`, and `$IF`/`$THEN`/`$ELSE`/`$END` conditional compilation with nesting semantics | DOCUMENTED | Checklist §9.5; IBM Pascal manual Chapter 4 |
 | `io_data_param` — `P::N` now parsed and lowered on WRITE/WRITELN; comment updated (was: rejected by parser) | OBSERVED | Discrepancy D-002 differential probe (vintage accepts, output `        123.46`); manual 12-17 |
 | Metacommand codegen — $INDEXCK/$MATHCK/$NILCK/$INITCK now emit runtime checks; $STACKCK ruled a documented no-op; INITCK sentinel widened to INT32_MIN | OBSERVED | Manual metacommand pages (images, Chapter 4); checklist runtime-check item; TestRuntimeCheckFlags |
-| `module_unit` — optional contextual `DEVICE` modifier added (`DEVICE MODULE`) for GPU device-dialect code | ADDED (ADS memory-spaces) | docs/ads-memory-spaces-design.md S1.2; tests/test_ads_space_*.py |
+| `module_unit` — optional contextual `DEVICE` modifier added (`DEVICE MODULE`) for GPU device-dialect code | ADDED (ADS memory-spaces) | docs/old/ads-design-rationale.md S1.2; tests/test_ads_space_*.py |
 | `attribute_item` — `"SPACE" "(" constant ")"` added (pointer-space residence; DEVICE MODULE only) | ADDED (ADS memory-spaces) | design S4.1; tests/test_ads_space_parse.py |
 | `pointer_type` — `"ADS" "(" constant ")" "OF" type` added (explicit pointee address space) | ADDED (ADS memory-spaces) | design S4.2; tests/test_ads_space_parse.py |
 | `attribute_item` — `"C"` / `"CDECL"` added as calling-convention markers; gated on extended dialect; only valid on `EXTERN`/`EXTERNAL` routine declarations | ADDED (C-FFI Phase 0) | docs/c-abi-foreign-functions.md; tests/test_c_ffi.py |

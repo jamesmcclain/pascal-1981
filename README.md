@@ -367,8 +367,8 @@ is the separate, also-supported `[C]` classifier path (see
 
 The vintage segmented-address machinery (`ADS`, `ADSMEM`, `FILLSC`/`MOVESL`/`MOVESR`)
 is being repurposed into a static **memory-space** system for targeting LLVM GPU
-backends. The design record is [`docs/ads-memory-spaces-design.md`](docs/ads-memory-spaces-design.md)
-and the build sequence is [`docs/ads-implementation-plan.md`](docs/ads-implementation-plan.md).
+backends. The reference is [`docs/ads-memory-spaces-design.md`](docs/ads-memory-spaces-design.md)
+and the build sequence is [`docs/ads-implementation-plan.md`](docs/ads-implementation-plan.md);
 This is in-progress work; the surface below is real and tested, but the host
 orchestration/launch API and kernel marking are still deferred.
 
@@ -530,14 +530,14 @@ pascal-1981/
 └─ Documentation
    └── docs/
        ├── ebnf_grammar.md              # formal grammar (source of truth for the parser suite)
-       ├── c-abi-foreign-functions.md   # [C] FFI report/plan, scalar map, record layout guarantee
-       ├── ads-memory-spaces-design.md  # ADS memory-space design record
+       ├── c-abi-foreign-functions.md   # [C] FFI: scalar map, record layout guarantee, host-buffer pattern
+       ├── ads-memory-spaces-design.md  # ADS memory-space reference (enum, mapping, grammar rails, type rules)
        ├── device-kernel-orientation.md
        ├── super-array-bounds-abi.md    # heap super-array bound-header ABI
        ├── tuning-hints.md
        ├── command-line-support.md
        ├── followups.md                 # tracked tech-debt
-       └── old/                         # archived plans and settled differential questions
+       └── old/                         # archived plans, design rationale, and settled differential questions
 ```
 
 ## Testing

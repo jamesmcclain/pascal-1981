@@ -1,13 +1,14 @@
 # Tuning hints: launch bounds and per-loop unroll
 
-Design note for the `tuning-hints` feature, closing follow-up item "No
-source-level channel for launch bounds or per-loop hints" (now archived in
-`docs/old/old-followups.md`). Both channels are *hint plumbing only*: they
-encode programmer intent that LLVM cannot invent, and every transform remains
-LLVM's — no bespoke unroller, pipeliner, or scheduler lives in this compiler.
+Reference for the `tuning-hints` feature. Both channels are *hint plumbing
+only*: they encode programmer intent that LLVM cannot invent, and every
+transform remains LLVM's — no bespoke unroller, pipeliner, or scheduler lives
+in this compiler.
 
 Claims are graded per the repository's anti-confabulation discipline
-(OBSERVED / DOCUMENTED / INFERRED).
+(OBSERVED / DOCUMENTED / INFERRED). The originating follow-up item and the
+bug history behind the launch-bound lowering correction are archived in
+`docs/old/tuning-hints-design-rationale.md`.
 
 ## Gating
 
@@ -39,32 +40,18 @@ encodings LLVM has used are emitted —
   `maxntidy`, `maxntidz`, `reqntidx`, ..., `minctasm`) — note **no
   underscore** between the name and the axis letter.
 
-**Corrected 2026-07 (docs/followups.md item 5/7/6 bundle).** The claim
-above that the string-attribute form is what LLM 20/llvmlite 0.48 requires,
-and that the legacy form uses an underscored key (`maxntid_x`), was wrong
-and shipped a real bug: on the LLVM 20.1.8 actually bundled with the pinned
-`llvmlite==0.47.0` wheel (re-verified with `pip freeze`), a minimal
-`parse_assembly`/`emit_assembly` probe *outside* this codebase shows the
-opposite —
+On the pinned `llvmlite==0.47.0`/LLVM 20.1.8 toolchain the legacy,
+correctly-spelled (un-underscored) annotation is the one carrying the
+correctness burden — it alone is sufficient to produce `.maxntid`/`.reqntid`;
+the string-attribute form alone produces nothing. Both are still emitted
+(belt-and-suspenders for a different LLVM build that might prefer the
+string-attribute form); with both present, each PTX directive appears
+exactly once. [OBSERVED — `decls.py`'s `_LAUNCH_BOUND_KEYS`,
+`tests/test_tuning_hints.py`]
 
-- the underscored legacy key (`maxntid_x`) silently produces **no** PTX
-  directive at all;
-- the correctly-spelled, un-underscored legacy key (`maxntidx`) alone is
-  sufficient and produces `.maxntid`;
-- the `"nvvm.maxntid"="..."` string attribute alone, with no legacy
-  annotation present, produces **nothing**.
+The bug history behind this correction is archived in
+`docs/old/tuning-hints-design-rationale.md`.
 
-[OBSERVED — corrected; probes re-run and codegen fixed in `decls.py`'s
-`_LAUNCH_BOUND_KEYS`, `tests/test_tuning_hints.py`] `minnctapersm` was
-never affected (`minctasm` has no axis suffix, so both spellings coincide),
-which is exactly why it was the one directive that always worked and masked
-the bug in `.maxntid`/`.reqntid` for two axes. Both encodings are still
-emitted (harmless belt-and-suspenders for a different LLVM build that might
-prefer the string-attribute form), but the legacy, correctly-spelled
-annotation is the one carrying the correctness burden on this repo's pinned
-toolchain.
-
-With both present, each PTX directive appears exactly once. [OBSERVED]
 llvmlite has no string-attribute API, so the `key="value"` token is added by
 shadowing the `FunctionAttributes` instance's `_known` whitelist; the token
 renders verbatim in the `define` attribute list, which is LLVM's

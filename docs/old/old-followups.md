@@ -354,7 +354,7 @@ SASS and resolved to nothing during the hardware launch (the kernel ran correctl
 with them present). But they are confusing in a device artifact — a reader of a
 Mandelbrot kernel rightly wonders what `input`/`output` are — and they are the one
 purely cosmetic difference from the `nvcc` output noted in the PTX diff
-(`docs/old/mandelbrot-ptx-substitution-plan.md`, "Hardware validation result").
+(`docs/old/mandelbrot-port.md`, "Hardware validation result").
 
 **Suggested resolution.** Suppress emission of the INPUT/OUTPUT (and any other
 host-stream) globals when the compiland is a `DEVICE` unit/module, the same way
@@ -820,8 +820,8 @@ subtests passed`.
 original text below, then the resolution.)*
 
 **Where.** The D-001/D-002 historical evidence now lives in
-`docs/old/discrepancies-super-array.md` and
-`docs/old/discrepancies-remediation-plan.md`. Current implementation touchpoints
+`docs/old/super-array-remediation.md` and
+`docs/old/super-array-remediation.md`. Current implementation touchpoints
 are `type_checker.py::_check_new_args`, `codegen/runtime_builtins.py::builtin_new`,
 string-bound lowering in expression codegen, and DEVICE recission checks in the
 type checker.
@@ -869,7 +869,7 @@ GPU allocator calls unless a real device heap design is approved.
   rescinded in DEVICE code, and `UPPER(p^)` on a super array is now a
   device-code type error directing the programmer to explicit bound
   parameters — matching the drop-in CUDA pointer-ABI split recorded in
-  `docs/old/mandelbrot-ptx-substitution-plan.md`. No device codegen path
+  `docs/old/mandelbrot-port.md`. No device codegen path
   changed; the committed `fill_indices` PTX regenerates byte-identical.
 - Multi-dimensional super arrays, variant-record long-form `NEW`, and
   super-array *parameter* bounds remain out of scope pending new differential

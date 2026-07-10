@@ -1,31 +1,15 @@
 # Heap super-array dynamic-bound ABI
 
-Design record for the runtime representation of one-dimensional heap super
-arrays, closing follow-up item "Super-array remediation residue and
-device-heap boundary" (now archived in `docs/old/old-followups.md`).
-Historical evidence for the D-001/D-002 remediation lives in
-`docs/old/discrepancies-super-array.md` and
-`docs/old/discrepancies-remediation-plan.md`.
+Reference for the runtime representation of one-dimensional heap super arrays.
+Historical evidence for the D-001/D-002 remediation and the pre-fix problem
+statement, together with forward-looking design guidance for any future
+multi-dimensional or parameter-carrying extension, are archived in
+`docs/old/super-array-remediation.md`.
 
 Claims below are graded per the repository's anti-confabulation discipline:
 OBSERVED (checkable against this repository's code/tests or a recorded
 differential run), DOCUMENTED (stated in the IBM Pascal 2.0 manual), INFERRED
 (deduction; not directly evidenced).
-
-## Problem
-
-Long-form `NEW(p, upper_bound)` allocated the right number of bytes for a
-`^SUPER ARRAY [low..*] OF T` referent but discarded the bound: nothing in the
-allocated block recorded `upper_bound`, so no later `UPPER(p^)`-style query
-was possible, and `UPPER`/`LOWER` had no dereferenced form at all. [OBSERVED]
-
-Worse, `$INDEXCK` guessed the bounds of a `[low..*]` type as `(low, low)`
-(the `_array_bounds_or_none` fallback evaluated a missing high bound as the
-low bound), so any `p^[i]` with `i > low` aborted at run time — the shipped
-long-form `NEW` produced storage that could only ever be indexed at its lower
-bound with checking on. [OBSERVED — pinned by
-`tests/test_super_array_bounds.py::TestBoundHeaderRuntime::test_full_range_write_no_longer_aborts`,
-which fails on the pre-change tree]
 
 ## The representation
 
@@ -95,7 +79,7 @@ explicit bound parameters. [OBSERVED —
 `tests/test_super_array_bounds.py::test_device_module_rejects_super_array_upper_deref`]
 
 This is exactly the split recorded in
-`docs/old/mandelbrot-ptx-substitution-plan.md`: kernel buffers use super-array
+`docs/old/mandelbrot-port.md`: kernel buffers use super-array
 syntax for the open-buffer *type*, while bounds travel as ordinary kernel
 parameters (`n`, `width`, `height`), preserving the drop-in CUDA pointer ABI
 for generated `.ptx` artifacts. [DOCUMENTED in that plan] No device codegen
@@ -106,14 +90,3 @@ regenerates byte-identical before and after. [OBSERVED — diff of
 Kernel entries therefore carry no hidden bound word, no changed parameter
 layout, and no new metadata: a `.ptx` file produced by this compiler remains
 a no-change drop-in wherever it was one before.
-
-## If this is ever extended
-
-Decisions a future multi-dimensional / parameter-carrying design must make
-(kept from the original follow-up): how multiple dynamic bounds are stored
-(one header word per starred dimension is the natural extension of this
-layout), how bounds are recovered for super-array *parameters* (a hidden
-bound argument changes the call ABI and needs a differential probe of the
-vintage compiler's calling convention first), and how kernel buffer bounds
-are passed (stay with explicit parameters unless a real device heap design is
-approved). [INFERRED — design guidance, not evidenced behavior]
