@@ -167,7 +167,8 @@ PYTHONPATH=src python3 -m pascal1981.compile_to_ptx \
   examples/device_ptx/fill_indices/fill.pas \
   examples/device_ptx/fill_indices/fill.ptx \
   --emit-llvm examples/device_ptx/fill_indices/fill.ll \
-  --cpu sm_70
+  --cpu sm_70 \
+  --opt-level 2
 ```
 
 The source file is a `DEVICE IMPLEMENTATION OF` whose sibling interface file

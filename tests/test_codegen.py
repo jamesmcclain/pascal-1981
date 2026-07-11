@@ -80,6 +80,58 @@ def build_and_run(src: str, stdin: str = "", features=None) -> tuple:
 class TestCodegenIR(unittest.TestCase):
     """Test LLVM IR generation (requires llvmlite)."""
 
+    def test_local_allocas_are_in_function_entry_blocks(self):
+        """Static locals and loop variables must not be allocated in loop/branch blocks."""
+        src = ("PROGRAM P; VAR x: INTEGER; "
+               "PROCEDURE work; VAR i, local: INTEGER; "
+               "BEGIN FOR i := 1 TO 3 DO BEGIN local := i; x := local END END; "
+               "BEGIN work END.")
+        ir = compile_to_ir(src)
+        body = ir.split('define i32 @"work"', 1)[1].split('entry:\n', 1)[1].split('\n}\n', 1)[0]
+        instructions = [line.strip() for line in body.splitlines()
+                       if line.strip() and not line.endswith(':') and line.strip() != '{' ]
+        first_non_alloca = next((i for i, line in enumerate(instructions) if ' = alloca ' not in line), len(instructions))
+        self.assertTrue(instructions[:first_non_alloca])
+        self.assertTrue(all(' = alloca ' in line for line in instructions[:first_non_alloca]))
+        self.assertNotIn('alloca ', body.split('for_loop:', 1)[-1])
+
+    def test_proven_aggregate_geps_are_inbounds(self):
+        """Fixed in-range array indexes and direct record fields carry inbounds."""
+        src = ("PROGRAM P; TYPE R = RECORD a, b: INTEGER END; "
+               "VAR a: ARRAY [5..7] OF INTEGER; r: R; "
+               "BEGIN a[6] := 1; r.b := a[6] END.")
+        ir = compile_to_ir(src)
+        self.assertIn('getelementptr inbounds [3 x i16], [3 x i16]* @"a"', ir)
+        self.assertIn('getelementptr inbounds %"R", %"R"* @"r", i32 0, i32 1', ir)
+
+    def test_nested_proven_aggregate_geps_remain_inbounds(self):
+        """A proof survives only through proven array and record selectors."""
+        src = ("PROGRAM P; TYPE R = RECORD xs: ARRAY [5..7] OF INTEGER END; "
+               "VAR r: R; BEGIN r.xs[6] := 1 END.")
+        ir = compile_to_ir(src)
+        self.assertIn('getelementptr inbounds %"R", %"R"* @"r", i32 0, i32 0', ir)
+        self.assertIn('getelementptr inbounds [3 x i16]', ir)
+
+    def test_unproven_aggregate_geps_remain_plain(self):
+        """Dynamic and dereferenced-pointer selectors must not promise inbounds."""
+        dynamic = compile_to_ir(
+            "PROGRAM P; VAR a: ARRAY [1..3] OF INTEGER; i: INTEGER; "
+            "BEGIN i := 2; a[i] := 1 END.")
+        self.assertNotIn('getelementptr inbounds [3 x i16]', dynamic)
+        dereferenced = compile_to_ir(
+            "PROGRAM P; TYPE R = RECORD a, b: INTEGER END; VAR p: ^R; "
+            "BEGIN NEW(p); p^.b := 1 END.")
+        self.assertNotIn('getelementptr inbounds %"R"', dereferenced)
+
+    def test_retype_index_gep_remains_plain(self):
+        """RETYPE selectors navigate raw representation, never typed bounds."""
+        src = ("PROGRAM P; TYPE TArray = ARRAY [1..4] OF CHAR; "
+               "VAR i: INTEGER; c: CHAR; "
+               "BEGIN i := 16#4100; c := RETYPE(TArray, i)[1] END.")
+        ir = compile_to_ir(src)
+        self.assertIn('getelementptr [4 x i8], [4 x i8]*', ir)
+        self.assertNotIn('getelementptr inbounds [4 x i8]', ir)
+
     def test_file_buffer_model_ir(self):
         """FILE OF T lowers to an inline file-control block plus typed F^ buffer
         access through pas_file_buffer; no heap allocation (so nothing leaks)."""

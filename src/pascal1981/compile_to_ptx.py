@@ -21,9 +21,10 @@ from .type_checker import PascalTypeChecker
 def llvm_ir_to_ptx(ir_text: str, *, triple: str = 'nvptx64-nvidia-cuda', cpu: str = 'sm_70', opt_level: int = 0) -> str:
     """Emit PTX assembly from LLVM IR using llvmlite's NVPTX backend.
 
-    ``opt_level`` (0-3) optionally runs LLVM's mid-level O1/O2/O3 pass
-    pipeline over the module before handing it to the NVPTX backend
-    (followups.md item 5). 0 (default) is a no-op: the module goes straight
+    ``opt_level`` (0-3) runs LLVM's optional mid-level O1/O2/O3 pass
+    pipeline over the module before handing it to the NVPTX backend.
+    Production-quality PTX should use ``opt_level=2``; level 0 is retained
+    as the compatibility/debugging default. 0 (default) is a no-op: the module goes straight
     from `verify()` to `emit_assembly()`, exactly as before this flag existed,
     so no caller's output changes unless it opts in. This matters because the
     NVPTX backend's own instruction-selection/scheduling is a separate,
@@ -104,7 +105,7 @@ def main() -> int:
                         choices=[0, 1, 2, 3],
                         default=0,
                         metavar='N',
-                        help='Run LLVM\'s O0-O3 mid-level IR pass pipeline before NVPTX codegen (default: 0, i.e. no pipeline; matches pre-existing behavior).')
+                        help='Run LLVM\'s O0-O3 mid-level IR pass pipeline before NVPTX codegen (default: 0 for compatibility/debugging; use 2 for quality PTX).')
     parser.add_argument('-f', '--feature', action='append', default=[], metavar='NAME', help='Enable extension feature NAME; use no-NAME to disable. Repeatable.')
     parser.add_argument('--dialect', choices=['vintage', 'extended'], default='vintage')
     parser.add_argument('-v', '--verbose', action='store_true', help='Print a full traceback on failure')

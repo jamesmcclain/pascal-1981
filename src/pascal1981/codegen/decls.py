@@ -160,7 +160,7 @@ class DeclsMixin:
         i32 = ir.IntType(32)
         zero = ir.Constant(i32, 0)
         cap = 255
-        buf = self.builder.alloca(ir.ArrayType(i8, cap + 1), name='arg_filename')
+        buf = self.entry_alloca(ir.ArrayType(i8, cap + 1), name='arg_filename')
         buf_i8 = self.builder.bitcast(buf, i8.as_pointer())
         self.builder.call(self._read_helper('pas_read_lstring', i8.as_pointer(), [i32]), [buf_i8, ir.Constant(i32, cap)])
         # LSTRING layout: byte 0 is the length, bytes 1.. are the characters.
@@ -176,6 +176,7 @@ class DeclsMixin:
         # live; a plain MODULE keeps the host triple and is byte-identical to
         # before (docs/old/ads-design-rationale.md S1.2).
         with self._device_codegen_context(getattr(unit, 'is_device', False)):
+            self._prepare_device_readonly_summaries(unit.decls)
             for decl in unit.decls:
                 self.codegen_decl(decl)
         self._emit_launch_registry()
@@ -194,6 +195,7 @@ class DeclsMixin:
         self.current_interface_decls = {getattr(decl, 'name', '').lower(): decl for decl in (unit.interface.decls if unit.interface else []) if getattr(decl, 'name', None)}
         try:
             with self._device_codegen_context(getattr(unit, 'is_device', False)):
+                self._prepare_device_readonly_summaries(unit.decls)
                 # Seed TYPE and CONST aliases from the interface so the
                 # implementation can reference them without restating.
                 # Only seed names the implementation does not itself declare
@@ -502,7 +504,7 @@ class DeclsMixin:
         if self.builder and not is_static and residence_as == 0:
             # Local variable (inside a function) — allocate the aggregate inline
             for name in decl.names:
-                alloca = self.builder.alloca(llvm_type, name=name)
+                alloca = self.entry_alloca(llvm_type, name=name)
                 self.scope.define(name, alloca, decl.type_expr)
                 if initck_const is not None:
                     self.builder.store(initck_const, alloca)
@@ -612,68 +614,163 @@ class DeclsMixin:
         self._apply_kernel_param_attrs(decl, func)
         self._apply_launch_bound_attrs(decl, func)
 
-    def _kernel_readonly_param_names(self, decl) -> set:
-        """Names of `decl`'s parameters this procedure's own body never
-        writes through (docs/followups.md item 6, readonly/nocapture).
+    def _prepare_device_readonly_summaries(self, decls) -> None:
+        """Register locally defined device routines for readonly summaries.
 
-        Unlike a host `[C]` foreign declaration, a kernel-entry buffer
-        parameter cannot be VAR/CONST-moded at all -- `_param_device_passable`
-        rejects reference-mode params outright, since VAR/CONST lower to
-        host-space (addrspace 0) pointers a device entry cannot dereference.
-        So there is no pre-existing mode flag to read off; this is a real,
-        if purely syntactic and deliberately conservative, analysis over the
-        procedure's own AST:
-
-        - An assignment whose target dereferences the parameter (any selector
-          chain containing a DEREF, e.g. `p^ := ...`, `p^[i] := ...`,
-          `p^.f := ...`) disqualifies it.
-        - The parameter appearing as a bare argument to any other call
-          (FuncCall or ProcCallStmt) disqualifies it too: this compiler does
-          not attempt an interprocedural proof that the callee itself never
-          writes through it, so passing it onward is conservatively treated
-          as a potential write.
-        - A body containing any WITH statement disqualifies every parameter
-          of that procedure: WITH's field designators are not tied back to
-          the originating pointer expression by this walk, so a write inside
-          a WITH block could go unnoticed; refuse to guess.
-
-        This only ever *withholds* readonly, never wrongly grants it, so a
-        gap in this analysis is a missed optimization, not a correctness bug.
+        The registry is deliberately built before lowering any body: an entry
+        may call a helper declared later in the source.  Imported/interface
+        declarations have no body and are excluded, so they fail closed.
+        Duplicate names (possible with nested scopes) are recorded as
+        ambiguous rather than guessed about.
         """
-        param_names = {n for p in decl.params for n in p.names}
-        if not param_names or decl.body is None:
-            return set()
+        self._device_readonly_routines = {}
+        self._device_readonly_ambiguous = set()
+        self._device_readonly_cache = {}
+        # The analysis is also unit-tested on a bare mixin host. Its result is
+        # still syntactic there; production callers consume it only for real
+        # device kernel entries.
+        if hasattr(self, 'is_device_module') and not self.is_device_module:
+            return
 
-        def iter_nodes(node):
+        def collect(items):
+            for item in items or []:
+                if not isinstance(item, (ProcDecl, FuncDecl)):
+                    continue
+                key = item.name.upper()
+                if item.body is not None:
+                    if key in self._device_readonly_routines:
+                        self._device_readonly_ambiguous.add(key)
+                    else:
+                        self._device_readonly_routines[key] = item
+                    collect(item.body.decls)
+
+        collect(decls)
+
+    @staticmethod
+    def _readonly_bare_param_name(expr, param_names):
+        """Return normalized parameter name for a bare pointer-value use."""
+        if isinstance(expr, Identifier):
+            name = expr.name.upper()
+        elif isinstance(expr, Designator) and not expr.selectors:
+            name = expr.name.upper()
+        else:
+            return None
+        return name if name in param_names else None
+
+    def _readonly_local_effects(self, decl):
+        """Return conservative local effects for one routine's formals.
+
+        A bare formal is permitted only as the direct actual of a call; every
+        other bare use may capture or reinterpret its pointer value and is
+        therefore treated as an escape.  Nested routine declarations are not
+        walked: their effects are summarized as their own call-graph nodes.
+        """
+        param_names = {name.upper() for p in decl.params for name in p.names}
+        effects = {'written': set(), 'escaped': set(), 'calls': [], 'has_with': False}
+        if not param_names or decl.body is None:
+            return effects
+
+        def scan(node):
             if isinstance(node, list):
                 for item in node:
-                    yield from iter_nodes(item)
+                    scan(item)
                 return
             if not isinstance(node, ASTNode):
                 return
-            yield node
-            for f in dataclasses.fields(node):
-                yield from iter_nodes(getattr(node, f.name))
-
-        written: set = set()
-        passed_to_call: set = set()
-        has_with = False
-        for node in iter_nodes(decl.body):
+            if isinstance(node, (ProcDecl, FuncDecl)):
+                return  # nested routine: separate lexical body and summary
             if isinstance(node, WithStmt):
-                has_with = True
-            elif isinstance(node, AssignStmt):
-                tgt = node.target
-                if (isinstance(tgt, Designator) and tgt.name in param_names and any(sel.kind == 'DEREF' for sel in tgt.selectors)):
-                    written.add(tgt.name)
-            elif isinstance(node, (FuncCall, ProcCallStmt)):
-                for arg in node.args:
-                    if isinstance(arg, Identifier) and arg.name in param_names:
-                        passed_to_call.add(arg.name)
-                    elif isinstance(arg, Designator) and arg.name in param_names and not arg.selectors:
-                        passed_to_call.add(arg.name)
-        if has_with:
+                effects['has_with'] = True
+            if isinstance(node, AssignStmt):
+                target = node.target
+                target_name = self._readonly_bare_param_name(
+                    Designator(target.name, []) if isinstance(target, Designator) else target,
+                    param_names)
+                if (target_name is not None and isinstance(target, Designator)
+                        and any(sel.kind == 'DEREF' for sel in target.selectors)):
+                    effects['written'].add(target_name)
+            if isinstance(node, (FuncCall, ProcCallStmt)):
+                forwarded = set()
+                for index, arg in enumerate(node.args):
+                    name = self._readonly_bare_param_name(arg, param_names)
+                    if name is not None:
+                        effects['calls'].append((name, node.name.upper(), index))
+                        forwarded.add(id(arg))
+                # Do not classify recognized direct actuals as escapes; all
+                # other children (including non-bare actual expressions) are
+                # scanned normally below.
+                for f in dataclasses.fields(node):
+                    value = getattr(node, f.name)
+                    if f.name == 'args':
+                        for arg in value:
+                            if id(arg) not in forwarded:
+                                scan(arg)
+                    else:
+                        scan(value)
+                return
+            bare = self._readonly_bare_param_name(node, param_names)
+            if bare is not None:
+                effects['escaped'].add(bare)
+                return
+            for f in dataclasses.fields(node):
+                scan(getattr(node, f.name))
+
+        scan(decl.body.body)
+        return effects
+
+    def _device_readonly_summary(self, decl, visiting=None) -> set:
+        """Return formals proven readonly across analyzable local helpers.
+
+        Unknown calls, body-less/imported routines, ambiguous names, WITH, and
+        cycles all fail closed.  The result is parameter-specific: a helper
+        may write one buffer while remaining readonly for another.
+        """
+        cache = getattr(self, '_device_readonly_cache', {})
+        cache_key = id(decl)
+        if cache_key in cache:
+            return cache[cache_key]
+        if visiting is None:
+            visiting = set()
+        if cache_key in visiting:
             return set()
-        return param_names - written - passed_to_call
+        visiting = set(visiting)
+        visiting.add(cache_key)
+        effects = self._readonly_local_effects(decl)
+        params = [name.upper() for p in decl.params for name in p.names]
+        if effects['has_with']:
+            result = set()
+        else:
+            result = set(params) - effects['written'] - effects['escaped']
+            routines = getattr(self, '_device_readonly_routines', {})
+            ambiguous = getattr(self, '_device_readonly_ambiguous', set())
+            for caller_name, callee_name, index in effects['calls']:
+                if caller_name not in result:
+                    continue
+                callee = None if callee_name in ambiguous else routines.get(callee_name)
+                if callee is None:
+                    result.discard(caller_name)
+                    continue
+                callee_params = [name.upper() for p in callee.params for name in p.names]
+                if index >= len(callee_params) or callee_params[index] not in self._device_readonly_summary(callee, visiting):
+                    result.discard(caller_name)
+        cache[cache_key] = result
+        self._device_readonly_cache = cache
+        return result
+
+    def _kernel_readonly_param_names(self, decl) -> set:
+        """Names of kernel formals proven readonly through local helpers.
+
+        This is a fail-closed interprocedural may-write/capture analysis.  It
+        follows only direct calls to local device routine bodies; external,
+        imported, ambiguous, unsupported, and cyclic paths withhold the LLVM
+        fact rather than guessing.  WITH remains a whole-routine exclusion.
+        """
+        if not getattr(self, '_device_readonly_routines', None):
+            # Direct callers/tests may invoke this helper without going through
+            # module codegen.  Register this one declaration, preserving the
+            # old intraprocedural behavior except that unknown calls fail closed.
+            self._prepare_device_readonly_summaries([decl])
+        return self._device_readonly_summary(decl)
 
     def _apply_kernel_param_attrs(self, decl, func: ir.Function) -> None:
         """Attach readonly/nocapture/dereferenceable/(optionally) noalias
@@ -692,7 +789,7 @@ class DeclsMixin:
         for arg, pname in zip(func.args, flat_names):
             if not isinstance(arg.type, ir.PointerType):
                 continue
-            if pname in readonly_names:
+            if pname.upper() in readonly_names:
                 # llvmlite's ArgumentAttributes whitelist has no `readonly`
                 # entry (only `noalias`/`nocapture` are native there); LLVM
                 # itself has carried a parameter-level `readonly` since long
@@ -1025,7 +1122,7 @@ class DeclsMixin:
                 self.scope.define(name, arg, param.type_expr, is_parameter=param.mode not in {'VAR', 'VARS', 'CONST', 'CONSTS'})
 
         # Allocate space for return value
-        return_alloca = self.builder.alloca(return_type, name='return_value')
+        return_alloca = self.entry_alloca(return_type, name='return_value')
         self.scope.define(decl.name, return_alloca, decl.return_type)
         self.builder.store(ir.Constant(return_type, 0.0) if isinstance(return_type, (ir.FloatType, ir.DoubleType)) else ir.Constant(return_type, 0), return_alloca)
 

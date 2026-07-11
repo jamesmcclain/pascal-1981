@@ -267,6 +267,15 @@ func_decl_header =
 parameter_list  = parameter_group { ";" parameter_group } ;
 parameter_group = [ "VAR" | "CONST" | "VARS" | "CONSTS" ] identifier_list ":" type ;
 
+(* [ADDED] DEVICE-code lowering may infer LLVM `readonly`/`nocapture`
+   parameter metadata for an exported GPU kernel buffer that is forwarded to
+   a locally defined helper only when the helper's corresponding formal is
+   proven not to write through or capture it. This is a code-generation
+   optimization, not additional Pascal syntax or a source-level contract:
+   unknown/imported/body-less calls, cycles, and WITH-containing routines
+   fail closed and receive no inferred metadata. `noalias` remains a separate
+   explicit launch-contract feature. *)
+
 
 (* ═══════════════════════════════════════════════════════════════════
    STATEMENTS AND CONTROL FLOW
@@ -777,6 +786,7 @@ character = (* any printable ASCII character in the range 0x20–0x7E,
 | `pointer_type` — `"ADS" "(" constant ")" "OF" type` added (explicit pointee address space) | ADDED (ADS memory-spaces) | design S4.2; tests/test_ads_space_parse.py |
 | `attribute_item` — `"C"` / `"CDECL"` added as calling-convention markers; gated on extended dialect; only valid on `EXTERN`/`EXTERNAL` routine declarations | ADDED (C-FFI Phase 0) | docs/c-abi-foreign-functions.md; tests/test_c_ffi.py |
 | `attribute_item` — `"VARARGS"` added; requires `[C]`; allows variadic C foreign functions | ADDED (C-FFI Phase 3) | docs/c-abi-foreign-functions.md; tests/test_c_ffi.py::TestVariadicParsing |
+| DEVICE helper readonly propagation note added under procedure parameters; this is fail-closed LLVM metadata inference, not a grammar extension | ADDED (device code quality) | `codegen/decls.py`; `tests/test_kernel_param_attrs.py` |
 | C-type aliases — `CCHAR` (i8 signed), `CSHORT` (i16 signed), `CINT` (i32), `CLONG` (i64), `CFLOAT` (`REAL32`, f32), `CDOUBLE` (`REAL`, f64) added as built-in type names in extended dialect; map to the C ABI’s fundamental types | ADDED (C-FFI Phase 0) | docs/c-abi-foreign-functions.md; tests/test_c_ffi.py::TestCTypeAliases |
 
 ---
