@@ -104,6 +104,14 @@ class TestCodegenIR(unittest.TestCase):
         self.assertIn('getelementptr inbounds [3 x i16], [3 x i16]* @"a"', ir)
         self.assertIn('getelementptr inbounds %"R", %"R"* @"r", i32 0, i32 1', ir)
 
+    def test_nested_proven_aggregate_geps_remain_inbounds(self):
+        """A proof survives only through proven array and record selectors."""
+        src = ("PROGRAM P; TYPE R = RECORD xs: ARRAY [5..7] OF INTEGER END; "
+               "VAR r: R; BEGIN r.xs[6] := 1 END.")
+        ir = compile_to_ir(src)
+        self.assertIn('getelementptr inbounds %"R", %"R"* @"r", i32 0, i32 0', ir)
+        self.assertIn('getelementptr inbounds [3 x i16]', ir)
+
     def test_unproven_aggregate_geps_remain_plain(self):
         """Dynamic and dereferenced-pointer selectors must not promise inbounds."""
         dynamic = compile_to_ir(
@@ -114,6 +122,15 @@ class TestCodegenIR(unittest.TestCase):
             "PROGRAM P; TYPE R = RECORD a, b: INTEGER END; VAR p: ^R; "
             "BEGIN NEW(p); p^.b := 1 END.")
         self.assertNotIn('getelementptr inbounds %"R"', dereferenced)
+
+    def test_retype_index_gep_remains_plain(self):
+        """RETYPE selectors navigate raw representation, never typed bounds."""
+        src = ("PROGRAM P; TYPE TArray = ARRAY [1..4] OF CHAR; "
+               "VAR i: INTEGER; c: CHAR; "
+               "BEGIN i := 16#4100; c := RETYPE(TArray, i)[1] END.")
+        ir = compile_to_ir(src)
+        self.assertIn('getelementptr [4 x i8], [4 x i8]*', ir)
+        self.assertNotIn('getelementptr inbounds [4 x i8]', ir)
 
     def test_file_buffer_model_ir(self):
         """FILE OF T lowers to an inline file-control block plus typed F^ buffer

@@ -525,6 +525,20 @@ class TypesMapMixin:
         ptr, _ = self.resolve_designator_ptr_typed(designator)
         return ptr
 
+    def _emit_designator_gep(self, ptr: ir.Value, indices, *, proven_inbounds: bool) -> ir.Value:
+        """Emit one designator GEP under the central ``inbounds`` policy.
+
+        ``inbounds`` is an LLVM object-provenance promise, not merely a hint
+        that an INDEXCK comparison was generated somewhere nearby.  Callers
+        may set it only while the selector chain remains rooted in a known
+        typed aggregate and this particular index has a compile-time proof.
+        Pointer dereferences, raw/retyped storage, and dynamic indexes pass
+        ``False``.  Keeping the policy at this chokepoint prevents a future
+        selector path from accidentally turning an ordinary Pascal access into
+        undefined LLVM IR.
+        """
+        return self.builder.gep(ptr, indices, inbounds=proven_inbounds)
+
     def resolve_designator_ptr_typed(self, designator: Designator):
         """Resolve a designator to ``(llvm_pointer, resolved_ast_type)``.
 
@@ -617,10 +631,12 @@ class TypesMapMixin:
                     # INDEXCK guard happened to be emitted on another path.
                     use_inbounds = inbounds_base and index_is_proven_inbounds
                     if isinstance(ptr.type.pointee, ir.ArrayType):
-                        ptr = self.builder.gep(
-                            ptr, [ir.Constant(ir.IntType(32), 0), index], inbounds=use_inbounds)
+                        ptr = self._emit_designator_gep(
+                            ptr, [ir.Constant(ir.IntType(32), 0), index],
+                            proven_inbounds=use_inbounds)
                     else:
-                        ptr = self.builder.gep(ptr, [index], inbounds=use_inbounds)
+                        ptr = self._emit_designator_gep(
+                            ptr, [index], proven_inbounds=use_inbounds)
                     inbounds_base = use_inbounds
                     cur_type = elem_type
                 elif selector.kind == 'FIELD':
@@ -654,10 +670,10 @@ class TypesMapMixin:
                         fidx, ftype = self.record_field_index(cur_type, selector.index_or_field)
                         if fidx is None:
                             raise CodegenError(f"Cannot access field '{selector.index_or_field}' on type {cur_type}")
-                        ptr = self.builder.gep(
+                        ptr = self._emit_designator_gep(
                             ptr,
                             [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), fidx)],
-                            inbounds=inbounds_base,
+                            proven_inbounds=inbounds_base,
                         )
                         cur_type = ftype
                 elif selector.kind == 'DEREF':
