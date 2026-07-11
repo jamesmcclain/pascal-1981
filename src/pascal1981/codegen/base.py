@@ -527,6 +527,30 @@ class CodegenBase:
         """Size in bytes of a scalar/built-in type, by name."""
         return _SCALAR_SIZES.get(name.upper(), 4)
 
+    def entry_alloca(self, llvm_type: ir.Type, name: Optional[str] = None) -> ir.AllocaInstr:
+        """Create a static alloca in the current function's entry block.
+
+        Keeping allocas in the entry block makes them straightforward targets
+        for LLVM's mem2reg/SROA passes and avoids accidental placement inside
+        loops or conditional blocks.  The main builder remains positioned at
+        its original insertion point.
+        """
+        if self.current_function is None:
+            raise CodegenError('cannot allocate without a current function')
+        entry = self.current_function.entry_basic_block
+        current_block = self.builder.block
+        if entry.instructions:
+            self.builder.position_before(entry.instructions[0])
+        else:
+            self.builder.position_at_end(entry)
+        result = self.builder.alloca(llvm_type, name=name)
+        # Restore the original builder without positioning after a terminator.
+        if current_block.instructions and isinstance(current_block.instructions[-1], ir.Terminator):
+            self.builder.position_before(current_block.instructions[-1])
+        else:
+            self.builder.position_at_end(current_block)
+        return result
+
     def unique_name(self, prefix: str) -> str:
         """Generate a unique name."""
         if not hasattr(self, '_name_counter'):

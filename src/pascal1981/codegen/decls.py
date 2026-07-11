@@ -160,7 +160,7 @@ class DeclsMixin:
         i32 = ir.IntType(32)
         zero = ir.Constant(i32, 0)
         cap = 255
-        buf = self.builder.alloca(ir.ArrayType(i8, cap + 1), name='arg_filename')
+        buf = self.entry_alloca(ir.ArrayType(i8, cap + 1), name='arg_filename')
         buf_i8 = self.builder.bitcast(buf, i8.as_pointer())
         self.builder.call(self._read_helper('pas_read_lstring', i8.as_pointer(), [i32]), [buf_i8, ir.Constant(i32, cap)])
         # LSTRING layout: byte 0 is the length, bytes 1.. are the characters.
@@ -502,7 +502,7 @@ class DeclsMixin:
         if self.builder and not is_static and residence_as == 0:
             # Local variable (inside a function) — allocate the aggregate inline
             for name in decl.names:
-                alloca = self.builder.alloca(llvm_type, name=name)
+                alloca = self.entry_alloca(llvm_type, name=name)
                 self.scope.define(name, alloca, decl.type_expr)
                 if initck_const is not None:
                     self.builder.store(initck_const, alloca)
@@ -1025,7 +1025,7 @@ class DeclsMixin:
                 self.scope.define(name, arg, param.type_expr, is_parameter=param.mode not in {'VAR', 'VARS', 'CONST', 'CONSTS'})
 
         # Allocate space for return value
-        return_alloca = self.builder.alloca(return_type, name='return_value')
+        return_alloca = self.entry_alloca(return_type, name='return_value')
         self.scope.define(decl.name, return_alloca, decl.return_type)
         self.builder.store(ir.Constant(return_type, 0.0) if isinstance(return_type, (ir.FloatType, ir.DoubleType)) else ir.Constant(return_type, 0), return_alloca)
 

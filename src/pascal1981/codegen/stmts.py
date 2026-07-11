@@ -486,10 +486,10 @@ class StmtsMixin:
         i8p = ir.IntType(8).as_pointer()
         i32 = ir.IntType(32)
         if kernel_actuals:
-            argv = self.builder.alloca(ir.ArrayType(i8p, len(kernel_actuals)), name='launch_argv')
+            argv = self.entry_alloca(ir.ArrayType(i8p, len(kernel_actuals)), name='launch_argv')
             for i, actual in enumerate(kernel_actuals):
                 v = self.coerce_arg(self.codegen_expr(actual), param_types[i], src_expr=actual)
-                cell = self.builder.alloca(param_types[i], name=f'launch_arg{i}')
+                cell = self.entry_alloca(param_types[i], name=f'launch_arg{i}')
                 self.builder.store(v, cell)
                 slot = self.builder.gep(argv, [i32(0), i32(i)], inbounds=True)
                 self.builder.store(self.builder.bitcast(cell, i8p), slot)
@@ -821,7 +821,7 @@ class StmtsMixin:
                 loop_var.initializer = self.zero_initializer(loop_type)
             self.scope.define(stmt.var, loop_var, symbol.type_expr if symbol else BuiltinType('INTEGER'))
         elif not symbol:
-            loop_var = self.builder.alloca(ir.IntType(16), name=stmt.var)
+            loop_var = self.entry_alloca(ir.IntType(16), name=stmt.var)
             self.scope.define(stmt.var, loop_var, BuiltinType('INTEGER'))
         else:
             loop_var = symbol.llvm_value

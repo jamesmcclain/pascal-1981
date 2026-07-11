@@ -80,6 +80,21 @@ def build_and_run(src: str, stdin: str = "", features=None) -> tuple:
 class TestCodegenIR(unittest.TestCase):
     """Test LLVM IR generation (requires llvmlite)."""
 
+    def test_local_allocas_are_in_function_entry_blocks(self):
+        """Static locals and loop variables must not be allocated in loop/branch blocks."""
+        src = ("PROGRAM P; VAR x: INTEGER; "
+               "PROCEDURE work; VAR i, local: INTEGER; "
+               "BEGIN FOR i := 1 TO 3 DO BEGIN local := i; x := local END END; "
+               "BEGIN work END.")
+        ir = compile_to_ir(src)
+        body = ir.split('define i32 @"work"', 1)[1].split('entry:\n', 1)[1].split('\n}\n', 1)[0]
+        instructions = [line.strip() for line in body.splitlines()
+                       if line.strip() and not line.endswith(':') and line.strip() != '{' ]
+        first_non_alloca = next((i for i, line in enumerate(instructions) if ' = alloca ' not in line), len(instructions))
+        self.assertTrue(instructions[:first_non_alloca])
+        self.assertTrue(all(' = alloca ' in line for line in instructions[:first_non_alloca]))
+        self.assertNotIn('alloca ', body.split('for_loop:', 1)[-1])
+
     def test_file_buffer_model_ir(self):
         """FILE OF T lowers to an inline file-control block plus typed F^ buffer
         access through pas_file_buffer; no heap allocation (so nothing leaks)."""
