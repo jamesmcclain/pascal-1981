@@ -95,6 +95,26 @@ class TestCodegenIR(unittest.TestCase):
         self.assertTrue(all(' = alloca ' in line for line in instructions[:first_non_alloca]))
         self.assertNotIn('alloca ', body.split('for_loop:', 1)[-1])
 
+    def test_proven_aggregate_geps_are_inbounds(self):
+        """Fixed in-range array indexes and direct record fields carry inbounds."""
+        src = ("PROGRAM P; TYPE R = RECORD a, b: INTEGER END; "
+               "VAR a: ARRAY [5..7] OF INTEGER; r: R; "
+               "BEGIN a[6] := 1; r.b := a[6] END.")
+        ir = compile_to_ir(src)
+        self.assertIn('getelementptr inbounds [3 x i16], [3 x i16]* @"a"', ir)
+        self.assertIn('getelementptr inbounds %"R", %"R"* @"r", i32 0, i32 1', ir)
+
+    def test_unproven_aggregate_geps_remain_plain(self):
+        """Dynamic and dereferenced-pointer selectors must not promise inbounds."""
+        dynamic = compile_to_ir(
+            "PROGRAM P; VAR a: ARRAY [1..3] OF INTEGER; i: INTEGER; "
+            "BEGIN i := 2; a[i] := 1 END.")
+        self.assertNotIn('getelementptr inbounds [3 x i16]', dynamic)
+        dereferenced = compile_to_ir(
+            "PROGRAM P; TYPE R = RECORD a, b: INTEGER END; VAR p: ^R; "
+            "BEGIN NEW(p); p^.b := 1 END.")
+        self.assertNotIn('getelementptr inbounds %"R"', dereferenced)
+
     def test_file_buffer_model_ir(self):
         """FILE OF T lowers to an inline file-control block plus typed F^ buffer
         access through pas_file_buffer; no heap allocation (so nothing leaks)."""

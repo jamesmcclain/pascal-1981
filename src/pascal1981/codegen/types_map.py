@@ -542,6 +542,11 @@ class TypesMapMixin:
         ptr = symbol.llvm_value
         cur_type = symbol.type_expr
         base_is_parameter = symbol.is_parameter
+        # Tracks whether this selector chain remains rooted in a typed aggregate
+        # object.  It is deliberately cleared by pointer dereference: a typed
+        # pointer value can come from unchecked/raw storage, so its later GEPs
+        # must not make LLVM's stronger `inbounds` promise.
+        inbounds_base = True
         # Set by a DEREF through a plain ^SUPER ARRAY pointer; consumed by the
         # next INDEX selector for a dynamic upper-bound check.
         super_heap_data_ptr = None
@@ -571,13 +576,17 @@ class TypesMapMixin:
                     # Constant indices provably in range skip the check;
                     # checks are emitted only when both bounds are known.
                     low_b, high_b = self._array_bounds_or_none(cur_type)
-                    if (low_b is not None and high_b is not None and isinstance(index.type, ir.IntType) and self.check_enabled('INDEXCK')):
-                        const_idx = None
+                    const_idx = None
+                    if low_b is not None and high_b is not None:
                         try:
                             const_idx = self.eval_const_expr(selector.index_or_field)
                         except Exception:
-                            const_idx = None
-                        if not (isinstance(const_idx, int) and low_b <= const_idx <= high_b):
+                            pass
+                    index_is_proven_inbounds = (
+                        isinstance(const_idx, int) and low_b <= const_idx <= high_b
+                    )
+                    if (low_b is not None and high_b is not None and isinstance(index.type, ir.IntType) and self.check_enabled('INDEXCK')):
+                        if not index_is_proven_inbounds:
                             ge = self.builder.icmp_signed('>=', index, ir.Constant(index.type, low_b))
                             le = self.builder.icmp_signed('<=', index, ir.Constant(index.type, high_b))
                             self._emit_runtime_check(self.builder.and_(ge, le), 'indexck')
@@ -601,10 +610,18 @@ class TypesMapMixin:
                     if low is not None and low != 0 and isinstance(index.type, ir.IntType):
                         index = self.builder.sub(index, ir.Constant(index.type, low))
                     # GEP requires [0, index] for pointers to arrays, or [index] for flat pointers
+                    # Only a compile-time in-range index on a genuine typed
+                    # array object is safe to mark inbounds.  Runtime checks
+                    # may be disabled (and are suppressed in device code), so
+                    # a dynamic index must remain a plain GEP even when an
+                    # INDEXCK guard happened to be emitted on another path.
+                    use_inbounds = inbounds_base and index_is_proven_inbounds
                     if isinstance(ptr.type.pointee, ir.ArrayType):
-                        ptr = self.builder.gep(ptr, [ir.Constant(ir.IntType(32), 0), index])
+                        ptr = self.builder.gep(
+                            ptr, [ir.Constant(ir.IntType(32), 0), index], inbounds=use_inbounds)
                     else:
-                        ptr = self.builder.gep(ptr, [index])
+                        ptr = self.builder.gep(ptr, [index], inbounds=use_inbounds)
+                    inbounds_base = use_inbounds
                     cur_type = elem_type
                 elif selector.kind == 'FIELD':
                     base = self.resolve_type_alias(cur_type) if cur_type is not None else None
@@ -612,6 +629,7 @@ class TypesMapMixin:
                         field = str(selector.index_or_field).upper()
                         if field == 'LEN':
                             ptr = self.builder.gep(ptr, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0)])
+                            inbounds_base = False
                             cur_type = NamedType('CHAR', None)
                         else:
                             raise CodegenError(f"Cannot access LSTRING field '{selector.index_or_field}'")
@@ -636,7 +654,11 @@ class TypesMapMixin:
                         fidx, ftype = self.record_field_index(cur_type, selector.index_or_field)
                         if fidx is None:
                             raise CodegenError(f"Cannot access field '{selector.index_or_field}' on type {cur_type}")
-                        ptr = self.builder.gep(ptr, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), fidx)])
+                        ptr = self.builder.gep(
+                            ptr,
+                            [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), fidx)],
+                            inbounds=inbounds_base,
+                        )
                         cur_type = ftype
                 elif selector.kind == 'DEREF':
                     base = self.resolve_type_alias(cur_type) if cur_type is not None else None
@@ -652,6 +674,7 @@ class TypesMapMixin:
                         # pointer and must be loaded first.
                         if not base_is_parameter:
                             ptr = self.builder.load(ptr)
+                        inbounds_base = False
                         # $NILCK (manual: default +): error on dereferencing
                         # NIL (0) or — only with $INITCK — the uninitialized
                         # sentinel (1).  The manual's odd-pointer and

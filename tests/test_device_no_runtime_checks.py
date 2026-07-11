@@ -86,6 +86,18 @@ class TestDeviceModuleNoRuntimeChecks(unittest.TestCase):
         for sym in _HOST_TRAP_SYMS:
             self.assertEqual(_refs(ir, sym), 0, f'device IR must not reference {sym}\n{ir}')
 
+    def test_nvptx_static_array_index_is_inbounds(self):
+        """A literal in-range device index has a real typed-array proof."""
+        src = ("DEVICE MODULE M; PROCEDURE go; "
+               "VAR a: ARRAY [1..4] OF INTEGER; BEGIN a[2] := 7 END;.")
+        ir = _compile(src, device_triple='nvptx64-nvidia-cuda')
+        self.assertIn('getelementptr inbounds [4 x i16]', ir)
+
+    def test_nvptx_dynamic_array_index_stays_plain_gep(self):
+        """Suppressed device INDEXCK cannot justify LLVM's inbounds promise."""
+        ir = _compile(self._SRC, device_triple='nvptx64-nvidia-cuda')
+        self.assertNotIn('getelementptr inbounds [4 x i16]', ir)
+
     def test_host_module_still_traps(self):
         # Same constructs on the host path keep their checks: this is what
         # proves the suppression is device-only.
