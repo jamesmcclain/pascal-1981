@@ -196,7 +196,7 @@ class StmtsMixin:
                 # lowered as separate identified structs. Copy by layout via a
                 # destination-pointer bitcast rather than by nominal type.
                 ptr = self.builder.bitcast(ptr, value.type.as_pointer())
-            self.builder.store(value, ptr)
+            self.emit_store(value, ptr)
 
     def _coerce_assign_value(self, value: ir.Value, target_type: ir.Type, expr: Expression) -> ir.Value:
         """Coerce a lowered RHS value to a scalar/pointer assignment target.
@@ -329,7 +329,7 @@ class StmtsMixin:
         if then_val.type != else_val.type:
             return False  # defensive: coercion should already align these
         merged = self.builder.select(cond_bit, then_val, else_val)
-        self.builder.store(merged, ptr)
+        self.emit_store(merged, ptr)
         return True
 
     def codegen_device_sync_builtin(self, name: str) -> None:

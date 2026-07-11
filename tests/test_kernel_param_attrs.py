@@ -78,6 +78,14 @@ def _compile_device_ir(*, features=None, device_triple='nvptx64-nvidia-cuda'):
 @requires_llvm
 class TestReadonlyAnalysis(unittest.TestCase):
 
+    def test_device_pointer_accesses_carry_natural_alignment(self):
+        """Typed GLOBAL pointer dereferences preserve the parameter's alignment."""
+        ir = _compile_device_ir()
+        scale_def = ir[ir.index('define ptx_kernel void @"scale"'):]
+        scale_def = scale_def.split('\n}\n', 1)[0]
+        self.assertRegex(scale_def, r'load i32, i32 addrspace\(1\)\* %"[^" ]+", align 4')
+        self.assertRegex(scale_def, r'store i32 %"?\.[0-9]+"?, i32 addrspace\(1\)\* %"[^" ]+", align 4')
+
     def test_written_through_param_is_not_readonly(self):
         ir = _compile_device_ir()
         scale_def = ir[ir.index('define ptx_kernel void @"scale"'):]

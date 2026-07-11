@@ -527,6 +527,30 @@ class CodegenBase:
         """Size in bytes of a scalar/built-in type, by name."""
         return _SCALAR_SIZES.get(name.upper(), 4)
 
+    def memory_alignment(self, ptr: ir.Value) -> Optional[int]:
+        """Return a proven alignment for a GPU address-space memory access.
+
+        DEVICE ``ADS(GLOBAL|SHARED|CONSTANT|LOCAL) OF T`` pointers are typed
+        pointers in their target address space.  Their declarations (including
+        kernel parameters) establish the natural alignment of ``T``; indexing
+        and record-field GEPs preserve the alignment appropriate to the
+        resulting pointee.  Do not attach an alignment to addrspace(0): it can
+        originate from RETYPE or an unannotated host-facing pointer.
+        """
+        if not (self.is_device_module and _is_gpu_triple(self.device_triple)
+                and isinstance(ptr.type, ir.PointerType)
+                and ptr.type.addrspace != 0):
+            return None
+        return self.natural_alignment(ptr.type.pointee)
+
+    def emit_load(self, ptr: ir.Value, name: str = '') -> ir.LoadInstr:
+        """Load from ``ptr``, preserving known device-address-space alignment."""
+        return self.builder.load(ptr, name=name, align=self.memory_alignment(ptr))
+
+    def emit_store(self, value: ir.Value, ptr: ir.Value) -> ir.StoreInstr:
+        """Store to ``ptr``, preserving known device-address-space alignment."""
+        return self.builder.store(value, ptr, align=self.memory_alignment(ptr))
+
     def entry_alloca(self, llvm_type: ir.Type, name: Optional[str] = None) -> ir.AllocaInstr:
         """Create a static alloca in the current function's entry block.
 

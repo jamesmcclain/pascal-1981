@@ -190,7 +190,7 @@ class ExprsMixin:
                 return symbol.llvm_value  # Return pointer to aggregate
             elif isinstance(symbol.type_expr, NamedType) and isinstance(self.resolve_type_alias(symbol.type_expr), ArrayType):
                 return symbol.llvm_value  # Return pointer to aggregate alias
-            return self.builder.load(symbol.llvm_value)
+            return self.emit_load(symbol.llvm_value)
         elif isinstance(expr, SetConstructor):
             return self.codegen_set_constructor(expr)
         elif isinstance(expr, Designator):
@@ -217,11 +217,11 @@ class ExprsMixin:
             # value operations (+, -, *, IN), so load them. Strings/arrays and
             # records still travel as pointers for inline aggregate handling.
             if self.is_set_value(ir.Constant(ptr.type.pointee, None)):
-                return self.builder.load(ptr)
+                return self.emit_load(ptr)
             # For aggregate designators, return pointer without loading (inline aggregates)
             if isinstance(ptr.type.pointee, (ir.ArrayType, ir.LiteralStructType, ir.IdentifiedStructType)):
                 return ptr  # Return pointer to aggregate
-            return self.builder.load(ptr)
+            return self.emit_load(ptr)
         elif isinstance(expr, BinOp):
             return self.codegen_binop(expr)
         elif isinstance(expr, UnaryOp):
