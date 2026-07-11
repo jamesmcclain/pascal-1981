@@ -59,8 +59,8 @@ def main() -> int:
                         default=0,
                         metavar='N',
                         help='With --target ptx, run LLVM\'s O0-O3 mid-level IR pass pipeline before '
-                        'NVPTX codegen (default: 0, i.e. no pipeline). Only meaningful with '
-                        '--target ptx; an error with --target host.')
+                        'NVPTX codegen (default: 0 for compatibility/debugging; use 2 for quality PTX). '
+                        'Only meaningful with --target ptx; an error with --target host.')
     parser.add_argument('--device-backend',
                         choices=['cpu', 'cuda'],
                         default='cpu',
