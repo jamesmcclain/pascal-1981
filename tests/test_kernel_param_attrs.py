@@ -23,11 +23,13 @@ from pascal1981.type_checker import PascalTypeChecker
 from tests.support import requires_llvm, temporary_pascal_project
 
 _IFACE = """DEVICE INTERFACE;
-UNIT KH (scale, via_helper, uses_with);
+UNIT KH (scale, via_helper, via_writer, uses_with);
 TYPE BUF = ADS(GLOBAL) OF ARRAY [0..255] OF INTEGER32;
 PROCEDURE scale(inp: BUF; outp: BUF; n: INTEGER32);
 PROCEDURE via_helper(inp: BUF; outp: BUF; n: INTEGER32);
+PROCEDURE via_writer(inp: BUF; n: INTEGER32);
 PROCEDURE helper(b: BUF; n: INTEGER32);
+PROCEDURE writer(b: BUF);
 PROCEDURE uses_with(inp: BUF; outp: BUF; n: INTEGER32);
 END;
 """
@@ -37,6 +39,11 @@ DEVICE IMPLEMENTATION OF KH;
 
 PROCEDURE helper(b: BUF; n: INTEGER32);
 BEGIN
+END;
+
+PROCEDURE writer(b: BUF);
+BEGIN
+  b^[0] := 1
 END;
 
 PROCEDURE scale(inp: BUF; outp: BUF; n: INTEGER32);
@@ -52,6 +59,11 @@ VAR i: INTEGER32;
 BEGIN
   i := THREADIDX_X;
   helper(inp, n)
+END;
+
+PROCEDURE via_writer(inp: BUF; n: INTEGER32);
+BEGIN
+  writer(inp)
 END;
 
 PROCEDURE uses_with(inp: BUF; outp: BUF; n: INTEGER32);
@@ -95,18 +107,20 @@ class TestReadonlyAnalysis(unittest.TestCase):
         self.assertIn('nocapture readonly align 4 dereferenceable(1024) %"inp"', scale_sig)
         self.assertNotIn('readonly', scale_sig.split('%"outp"')[0].rsplit('%"inp"', 1)[-1])
 
-    def test_param_passed_to_another_call_is_conservatively_not_readonly(self):
-        """`via_helper` never itself writes through `inp`, but passes it on
-        to `helper` -- this compiler does not prove helper is pure, so `inp`
-        must NOT be marked readonly here (conservative, not incorrect). `outp`
-        is untouched in this body (never written, never passed on), so it
-        legitimately does still get readonly -- that is the correct,
-        expected result of the same analysis, not a bug."""
+    def test_param_passed_to_readonly_local_helper_remains_readonly(self):
+        """A local helper body is summarized before entry attributes attach."""
         ir = _compile_device_ir()
         via_def = ir[ir.index('define ptx_kernel void @"via_helper"'):]
         via_sig = via_def.split('\n', 1)[0]
-        self.assertNotIn('nocapture readonly align 4 dereferenceable(1024) %"inp"', via_sig)
+        self.assertIn('nocapture readonly align 4 dereferenceable(1024) %"inp"', via_sig)
         self.assertIn('nocapture readonly align 4 dereferenceable(1024) %"outp"', via_sig)
+
+    def test_param_passed_to_writing_local_helper_is_not_readonly(self):
+        """A transitive write through the corresponding helper formal wins."""
+        ir = _compile_device_ir()
+        via_def = ir[ir.index('define ptx_kernel void @"via_writer"'):]
+        via_sig = via_def.split('\n', 1)[0]
+        self.assertNotIn('readonly', via_sig)
 
     def test_uses_with_body_with_no_with_stmt_gets_readonly_normally(self):
         """Sanity check / control for the WITH-disqualification unit test
@@ -140,6 +154,32 @@ class TestReadonlyAnalysis(unittest.TestCase):
         decl = ProcDecl(name='p', params=[Param(mode=None, names=['buf'], type_expr=None)], attributes=[], body=body)
         names = _Host()._kernel_readonly_param_names(decl)
         self.assertEqual(names, set())
+
+    def test_unknown_and_cyclic_helper_calls_fail_closed(self):
+        """No body/cycle must withhold a fact rather than guess or recurse."""
+        from pascal1981.ast_nodes import Block, Identifier, Param, ProcCallStmt, ProcDecl
+        from pascal1981.codegen.decls import DeclsMixin
+
+        class _Host(DeclsMixin):
+            pass
+
+        def routine(name, callee):
+            return ProcDecl(
+                name=name,
+                params=[Param(mode=None, names=['buf'], type_expr=None)],
+                attributes=[],
+                body=Block(decls=[], body=[ProcCallStmt(name=callee, args=[Identifier('buf')])]),
+            )
+
+        host = _Host()
+        unknown = routine('unknown_user', 'not_local')
+        host._prepare_device_readonly_summaries([unknown])
+        self.assertEqual(host._device_readonly_summary(unknown), set())
+
+        first, second = routine('first', 'second'), routine('second', 'first')
+        host._prepare_device_readonly_summaries([first, second])
+        self.assertEqual(host._device_readonly_summary(first), set())
+        self.assertEqual(host._device_readonly_summary(second), set())
 
 
 @requires_llvm
