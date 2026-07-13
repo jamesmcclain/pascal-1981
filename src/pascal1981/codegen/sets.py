@@ -11,7 +11,7 @@ from typing import List, Optional, Union
 
 import llvmlite.ir as ir
 
-from ..ast_nodes import (Expression, RangeExpr, SetConstructor)
+from ..ast_nodes import Expression, RangeExpr, SetConstructor
 from .base import CodegenError
 
 

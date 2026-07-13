@@ -11,7 +11,9 @@ from typing import Any, Optional
 
 import llvmlite.ir as ir
 
-from ..ast_nodes import (AdrExpr, AdsExpr, ArrayType, BinOp, BoolLiteral, BuiltinType, CharLiteral, Designator, Expression, FuncCall, Identifier, IntLiteral, LStringType, LowerExpr, NamedType, NilLiteral, PointerType, RealLiteral, RecordType, RetypeExpr, SetConstructor, SetType, SizeofExpr, StringLiteral, Type, UnaryOp, UpperExpr)
+from ..ast_nodes import (AdrExpr, AdsExpr, ArrayType, BinOp, BoolLiteral, BuiltinType, CharLiteral, Designator, Expression, FuncCall, Identifier, IntLiteral, LowerExpr,
+                         LStringType, NamedType, NilLiteral, PointerType, RealLiteral, RecordType, RetypeExpr, SetConstructor, SetType, SizeofExpr, StringLiteral, Type, UnaryOp,
+                         UpperExpr)
 from ..builtins_registry import DEVICE_INDEX_BUILTIN_FUNCTIONS
 from ..device_limits import NVVM_AXIS_MAX, NVVM_GRID_AXIS_MAX
 from ..type_system import (INTEGER8_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL32_TYPE, WORD8_TYPE, WORD32_TYPE, WORD64_TYPE)

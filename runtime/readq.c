@@ -58,7 +58,7 @@ static void die(const char *msg)
     abort();
 }
 
-static int read_identifier_token(int (*next)(void), void(*push)(int), char *buf, int cap)
+static int read_identifier_token(int (*next)(void), void (*push)(int), char *buf, int cap)
 {
     int ch = skip_ws_except_nl();
     (void) next;

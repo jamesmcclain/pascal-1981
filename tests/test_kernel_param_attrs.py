@@ -32,10 +32,12 @@ def _nocapture_spelling() -> str:
     assertions hold across the dependency range pyproject.toml declares.
     """
     import llvmlite.ir as ir
+
     from pascal1981.codegen.llvmlite_compat import nocapture_spelling
     m = ir.Module()
     f = ir.Function(m, ir.FunctionType(ir.VoidType(), [ir.PointerType(ir.IntType(8))]), 'probe')
     return nocapture_spelling(f.args[0])
+
 
 _IFACE = """DEVICE INTERFACE;
 UNIT KH (scale, via_helper, via_writer, uses_with);
@@ -172,7 +174,7 @@ class TestReadonlyAnalysis(unittest.TestCase):
 
     def test_unknown_and_cyclic_helper_calls_fail_closed(self):
         """No body/cycle must withhold a fact rather than guess or recurse."""
-        from pascal1981.ast_nodes import Block, Identifier, Param, ProcCallStmt, ProcDecl
+        from pascal1981.ast_nodes import (Block, Identifier, Param, ProcCallStmt, ProcDecl)
         from pascal1981.codegen.decls import DeclsMixin
 
         class _Host(DeclsMixin):

@@ -26,7 +26,7 @@ from .ast_nodes import ModuleUnit, NamedType, NilLiteral
 from .ast_nodes import PointerType as ASTPointerType
 from .ast_nodes import (ProcCallStmt, ProcDecl, ProgramUnit, RangeExpr, RealLiteral)
 from .ast_nodes import RecordType as ASTRecordType
-from .ast_nodes import (RepeatStmt, ReturnStmt, RetypeExpr, SetConstructor)
+from .ast_nodes import RepeatStmt, ReturnStmt, RetypeExpr, SetConstructor
 from .ast_nodes import SetType as ASTSetType
 from .ast_nodes import SizeofExpr, Statement, StringLiteral
 from .ast_nodes import SubrangeType as ASTSubrangeType

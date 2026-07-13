@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Union
 import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
-from ..ast_nodes import (Declaration, FileType, NamedType, Type)
+from ..ast_nodes import Declaration, FileType, NamedType, Type
 
 
 class CodegenError(Exception):
@@ -537,9 +537,7 @@ class CodegenBase:
         resulting pointee.  Do not attach an alignment to addrspace(0): it can
         originate from RETYPE or an unannotated host-facing pointer.
         """
-        if not (self.is_device_module and _is_gpu_triple(self.device_triple)
-                and isinstance(ptr.type, ir.PointerType)
-                and ptr.type.addrspace != 0):
+        if not (self.is_device_module and _is_gpu_triple(self.device_triple) and isinstance(ptr.type, ir.PointerType) and ptr.type.addrspace != 0):
             return None
         return self.natural_alignment(ptr.type.pointee)
 

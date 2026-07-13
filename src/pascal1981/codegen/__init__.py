@@ -18,7 +18,7 @@ import llvmlite.ir as ir
 
 from ..ast_nodes import (ImplementationUnit, InterfaceUnit, ModuleUnit, ProgramUnit)
 # Import base classes and support classes
-from .base import (CodegenBase, CodegenError, LoopContext, Scope, Symbol)
+from .base import CodegenBase, CodegenError, LoopContext, Scope, Symbol
 from .c_abi import CAbiMixin
 from .constfold import ConstFoldMixin
 from .decls import DeclsMixin

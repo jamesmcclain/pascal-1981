@@ -93,15 +93,7 @@ def compile_file_to_ptx(source_file: str,
     return llvm_ir_to_ptx(ir, triple=device_triple, cpu=cpu, opt_level=opt_level)
 
 
-def run_ptx_cli(source_file: str,
-                output_file: str | None,
-                *,
-                host_triple: str,
-                device_triple: str,
-                cpu: str,
-                features,
-                emit_llvm_path: str | None,
-                opt_level: int,
+def run_ptx_cli(source_file: str, output_file: str | None, *, host_triple: str, device_triple: str, cpu: str, features, emit_llvm_path: str | None, opt_level: int,
                 verbose: bool) -> int:
     """Shared CLI tail for PTX emission: compile, write-or-print, report.
 

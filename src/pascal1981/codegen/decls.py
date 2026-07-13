@@ -14,7 +14,9 @@ from typing import List, Optional, Union
 import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
-from ..ast_nodes import (ASTNode, ArrayType, AssignStmt, ConstDecl, Declaration, Designator, EnumType, Expression, FileType, FuncCall, FuncDecl, Identifier, ImplementationUnit, InterfaceUnit, LabelDecl, ModuleUnit, NamedType, Param, PointerType, ProcCallStmt, ProcDecl, ProgramUnit, RecordType, Selector, SetConstructor, SetType, StringLiteral, Type, TypeDecl, UseClause, ValueDecl, VarDecl, WithStmt)
+from ..ast_nodes import (ArrayType, AssignStmt, ASTNode, ConstDecl, Declaration, Designator, EnumType, Expression, FileType, FuncCall, FuncDecl, Identifier, ImplementationUnit,
+                         InterfaceUnit, LabelDecl, ModuleUnit, NamedType, Param, PointerType, ProcCallStmt, ProcDecl, ProgramUnit, RecordType, Selector, SetConstructor, SetType,
+                         StringLiteral, Type, TypeDecl, UseClause, ValueDecl, VarDecl, WithStmt)
 from .base import CodegenError, Scope, _is_gpu_triple
 from .llvmlite_compat import (add_argument_attribute, add_function_string_attribute, nocapture_spelling)
 
@@ -683,11 +685,8 @@ class DeclsMixin:
                 effects['has_with'] = True
             if isinstance(node, AssignStmt):
                 target = node.target
-                target_name = self._readonly_bare_param_name(
-                    Designator(target.name, []) if isinstance(target, Designator) else target,
-                    param_names)
-                if (target_name is not None and isinstance(target, Designator)
-                        and any(sel.kind == 'DEREF' for sel in target.selectors)):
+                target_name = self._readonly_bare_param_name(Designator(target.name, []) if isinstance(target, Designator) else target, param_names)
+                if (target_name is not None and isinstance(target, Designator) and any(sel.kind == 'DEREF' for sel in target.selectors)):
                     effects['written'].add(target_name)
             if isinstance(node, (FuncCall, ProcCallStmt)):
                 forwarded = set()
