@@ -6,7 +6,6 @@ lowering but never ADS *value* production, which silently miscompiled
 (`ADS x` produced a {ptr,i16} pair stored through a punning bitcast over an
 addrspace(1) slot).
 """
-import re
 import unittest
 
 from pascal1981.codegen import compile_to_llvm

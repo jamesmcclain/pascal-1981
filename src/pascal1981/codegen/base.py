@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Union
 import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
-from ..ast_nodes import *
+from ..ast_nodes import (Declaration, FileType, NamedType, Type)
 
 
 class CodegenError(Exception):

@@ -7,15 +7,14 @@ Expression code generation
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Optional
 
 import llvmlite.ir as ir
-from llvmlite.ir import IRBuilder
 
-from ..ast_nodes import *
+from ..ast_nodes import (AdrExpr, AdsExpr, ArrayType, BinOp, BoolLiteral, BuiltinType, CharLiteral, Designator, Expression, FuncCall, Identifier, IntLiteral, LStringType, LowerExpr, NamedType, NilLiteral, PointerType, RealLiteral, RecordType, RetypeExpr, SetConstructor, SetType, SizeofExpr, StringLiteral, Type, UnaryOp, UpperExpr)
 from ..builtins_registry import DEVICE_INDEX_BUILTIN_FUNCTIONS
 from ..device_limits import NVVM_AXIS_MAX, NVVM_GRID_AXIS_MAX
-from ..type_system import (INTEGER8_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL32_TYPE, WORD8_TYPE, WORD32_TYPE, WORD64_TYPE, WORD_TYPE)
+from ..type_system import (INTEGER8_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL32_TYPE, WORD8_TYPE, WORD32_TYPE, WORD64_TYPE)
 from ..type_system import LStringType as ResolvedLStringType
 from ..type_system import StringType as ResolvedStringType
 from .base import CodegenError, _is_gpu_triple

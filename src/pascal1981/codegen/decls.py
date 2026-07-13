@@ -9,13 +9,12 @@ from __future__ import annotations
 
 import dataclasses
 from contextlib import contextmanager
-from typing import Any, List, Optional, Tuple, Union
+from typing import List, Optional, Union
 
 import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
-from ..ast_nodes import *
-from ..parser import parse_file
+from ..ast_nodes import (ASTNode, ArrayType, AssignStmt, ConstDecl, Declaration, Designator, EnumType, Expression, FileType, FuncCall, FuncDecl, Identifier, ImplementationUnit, InterfaceUnit, LabelDecl, ModuleUnit, NamedType, Param, PointerType, ProcCallStmt, ProcDecl, ProgramUnit, RecordType, Selector, SetConstructor, SetType, StringLiteral, Type, TypeDecl, UseClause, ValueDecl, VarDecl, WithStmt)
 from .base import CodegenError, Scope, _is_gpu_triple
 from .llvmlite_compat import (add_argument_attribute, add_function_string_attribute, nocapture_spelling)
 

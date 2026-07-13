@@ -207,7 +207,6 @@ class TestMandelbrotNoDuplicateType(unittest.TestCase):
         with open(impl_path) as f:
             src = f.read()
         # The TYPE keyword should only appear in a comment now, not as a decl
-        import re
         type_decls = re.findall(r'(?m)^TYPE\b', src)
         self.assertEqual(len(type_decls), 0, "mandelbrot.pas should no longer restate TYPE PIXELS")
 

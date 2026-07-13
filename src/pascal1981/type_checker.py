@@ -26,7 +26,7 @@ from .ast_nodes import ModuleUnit, NamedType, NilLiteral
 from .ast_nodes import PointerType as ASTPointerType
 from .ast_nodes import (ProcCallStmt, ProcDecl, ProgramUnit, RangeExpr, RealLiteral)
 from .ast_nodes import RecordType as ASTRecordType
-from .ast_nodes import (RepeatStmt, ReturnStmt, RetypeExpr, Selector, SetConstructor)
+from .ast_nodes import (RepeatStmt, ReturnStmt, RetypeExpr, SetConstructor)
 from .ast_nodes import SetType as ASTSetType
 from .ast_nodes import SizeofExpr, Statement, StringLiteral
 from .ast_nodes import SubrangeType as ASTSubrangeType
@@ -835,7 +835,7 @@ class PascalTypeChecker(TypeChecker):
         # Evaluate the constant value and infer type
         value_type = self.infer_expression_type(decl.value)
         if not value_type:
-            self.error(f"Cannot infer type of constant", decl)
+            self.error("Cannot infer type of constant", decl)
             return
 
         # Add constant to the symbol table
@@ -1053,7 +1053,7 @@ class PascalTypeChecker(TypeChecker):
             if decl.return_type:
                 return_type = self.resolve_type(decl.return_type)
                 if not return_type:
-                    self.error(f"Unknown return type", decl)
+                    self.error("Unknown return type", decl)
                     return_type = INTEGER_TYPE
             routine_type = FunctionType(decl.name, param_types, return_type, is_variadic=is_variadic)
             kind, noun = 'function', 'Function'
@@ -1949,7 +1949,7 @@ class PascalTypeChecker(TypeChecker):
             return
 
         if not dest_sym.is_mutable:
-            self.error(f"CONCAT: first argument must be mutable (VAR parameter)", stmt)
+            self.error("CONCAT: first argument must be mutable (VAR parameter)", stmt)
             return
 
         # Argument 2: source (CONST STRING or LSTRING)
@@ -2091,7 +2091,7 @@ class PascalTypeChecker(TypeChecker):
             return
 
         if not dest_sym.is_mutable:
-            self.error(f"COPYLST: second argument must be mutable (VAR parameter)", stmt)
+            self.error("COPYLST: second argument must be mutable (VAR parameter)", stmt)
             return
 
     def _check_copystr_args(self, stmt: ProcCallStmt) -> None:
@@ -2130,7 +2130,7 @@ class PascalTypeChecker(TypeChecker):
             return
 
         if not dest_sym.is_mutable:
-            self.error(f"COPYSTR: second argument must be mutable (VAR parameter)", stmt)
+            self.error("COPYSTR: second argument must be mutable (VAR parameter)", stmt)
             return
 
     def _check_insert_args(self, stmt: ProcCallStmt) -> None:

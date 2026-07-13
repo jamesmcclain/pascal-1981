@@ -12,18 +12,13 @@ Walks the AST and emits LLVM IR. Supports:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import llvmlite.ir as ir
-from llvmlite.ir import IRBuilder
 
-from ..ast_nodes import *
-from ..builtins_registry import register_builtins
-from ..type_system import LStringType as ResolvedLStringType
-from ..type_system import StringType as ResolvedStringType
+from ..ast_nodes import (ImplementationUnit, InterfaceUnit, ModuleUnit, ProgramUnit)
 # Import base classes and support classes
-from .base import (_SCALAR_SIZES, CodegenBase, CodegenError, LoopContext, Scope, Symbol, _is_gpu_triple)
+from .base import (CodegenBase, CodegenError, LoopContext, Scope, Symbol)
 from .c_abi import CAbiMixin
 from .constfold import ConstFoldMixin
 from .decls import DeclsMixin

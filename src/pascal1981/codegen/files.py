@@ -7,12 +7,10 @@ File I/O operations
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Tuple, Union
 
 import llvmlite.ir as ir
-from llvmlite.ir import IRBuilder
 
-from ..ast_nodes import *
+from ..ast_nodes import (FileType, NamedType, Type)
 
 
 class FilesMixin:

@@ -20,7 +20,7 @@ Semantics pinned here:
 import unittest
 
 from pascal1981.type_system import (INTEGER32_TYPE, INTEGER_TYPE, WORD32_TYPE, WORD64_TYPE, WORD_TYPE, binary_op_result_type)
-from tests.support import (build_and_run_pascal_project, parse_source, requires_exe, typecheck_source)
+from tests.support import (build_and_run_pascal_project, requires_exe, typecheck_source)
 
 WI = {"wide-integers": True}
 WR = {"wide-reals": True}

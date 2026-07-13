@@ -83,7 +83,7 @@ BEGIN
 END.
 """
         with temporary_pascal_project({'vars.inc': _VAR_INC, 'prog.pas': prog}) as d:
-            outputs = compile_pascal_project(d, [('prog.pas', 'prog.ll')])
+            compile_pascal_project(d, [('prog.pas', 'prog.ll')])
             exe = link_pascal_project(d, ['prog.ll'], exe_name='prog')
             rc, out, err = _run_exe(exe)
         self.assertEqual(rc, 0, msg=err)
@@ -99,7 +99,7 @@ BEGIN
 END.
 """
         with temporary_pascal_project({'consts.inc': _CONST_INC, 'prog.pas': prog}) as d:
-            outputs = compile_pascal_project(d, [('prog.pas', 'prog.ll')])
+            compile_pascal_project(d, [('prog.pas', 'prog.ll')])
             exe = link_pascal_project(d, ['prog.ll'], exe_name='prog')
             rc, out, err = _run_exe(exe)
         self.assertEqual(rc, 0, msg=err)
@@ -115,7 +115,7 @@ BEGIN
 END.
 """
         with temporary_pascal_project({'procs.inc': _PROC_INC, 'prog.pas': prog}) as d:
-            outputs = compile_pascal_project(d, [('prog.pas', 'prog.ll')])
+            compile_pascal_project(d, [('prog.pas', 'prog.ll')])
             exe = link_pascal_project(d, ['prog.ll'], exe_name='prog')
             rc, out, err = _run_exe(exe)
         self.assertEqual(rc, 0, msg=err)
@@ -132,7 +132,7 @@ BEGIN
 END.
 """
         with temporary_pascal_project({'multi.inc': _MULTI_INC, 'prog.pas': prog}) as d:
-            outputs = compile_pascal_project(d, [('prog.pas', 'prog.ll')])
+            compile_pascal_project(d, [('prog.pas', 'prog.ll')])
             exe = link_pascal_project(d, ['prog.ll'], exe_name='prog')
             rc, out, err = _run_exe(exe)
         self.assertEqual(rc, 0, msg=err)
@@ -148,7 +148,7 @@ BEGIN
 END.
 """
         with temporary_pascal_project({'consts.inc': _CONST_INC, 'prog.pas': prog}) as d:
-            outputs = compile_pascal_project(d, [('prog.pas', 'prog.ll')])
+            compile_pascal_project(d, [('prog.pas', 'prog.ll')])
             exe = link_pascal_project(d, ['prog.ll'], exe_name='prog')
             rc, out, err = _run_exe(exe)
         self.assertEqual(rc, 0, msg=err)

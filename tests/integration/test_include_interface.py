@@ -216,7 +216,6 @@ BEGIN
 END.
 """
         import os
-        import tempfile
 
         from pascal1981.parser import parse_file
         from pascal1981.type_checker import PascalTypeChecker

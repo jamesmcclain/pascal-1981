@@ -7,15 +7,11 @@ String operations
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Tuple, Union
+from typing import List
 
 import llvmlite.ir as ir
-from llvmlite.ir import IRBuilder
 
-from ..ast_nodes import *
-from ..type_system import LStringType as ResolvedLStringType
-from ..type_system import StringType as ResolvedStringType
-from .base import CodegenError
+from ..ast_nodes import (Designator, Expression, Identifier, NilLiteral, StringLiteral, WriteArg)
 
 
 class StringsMixin:
@@ -243,7 +239,9 @@ class StringsMixin:
         tail_len = self.builder.sub(dst_len, self.builder.sub(pos, one))
         memmove = self.runtime_extern('memmove')
         dst_start = self.builder.gep(dst_chars, [self.builder.sub(pos, one)])
-        src_start = self.builder.gep(dst_chars, [self.builder.sub(pos, one)])
+        # NOTE: assigned-but-unread on purpose -- builder.gep() *emits* the
+        # instruction as a side effect, so deleting this line would change the IR.
+        src_start = self.builder.gep(dst_chars, [self.builder.sub(pos, one)])  # noqa: F841
         self.builder.call(memmove, [self.builder.gep(dst_chars, [self.builder.add(self.builder.sub(pos, one), src_len)]), dst_start, self.builder.zext(tail_len, ir.IntType(64))])
         self.builder.call(memmove, [dst_start, src_chars, self.builder.zext(src_len, ir.IntType(64))])
         if isinstance(args[1], (Identifier, Designator)) and self.get_string_type_info(getattr(self.scope.lookup(args[1].name), 'type_expr', None))[2]:

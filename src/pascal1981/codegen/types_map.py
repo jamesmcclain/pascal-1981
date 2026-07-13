@@ -9,11 +9,11 @@ Checklist: 4.1 (type system), 4.4 (RETYPE intrinsic)
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Union
+from typing import List, Optional
 
 import llvmlite.ir as ir
 
-from ..ast_nodes import *
+from ..ast_nodes import (AdrExpr, AdsExpr, ArrayType, BuiltinType, Designator, EnumType, FileType, Identifier, LStringType, NamedType, NilLiteral, Param, PointerType, RecordType, RetypeExpr, SetType, SubrangeType, Type)
 from ..type_system import CHAR_TYPE
 from ..type_system import ArrayType as ResolvedArrayType
 from ..type_system import LStringType as ResolvedLStringType

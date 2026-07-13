@@ -7,12 +7,11 @@ Pascal set operations
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Tuple, Union
+from typing import List, Optional, Union
 
 import llvmlite.ir as ir
-from llvmlite.ir import IRBuilder
 
-from ..ast_nodes import *
+from ..ast_nodes import (Expression, RangeExpr, SetConstructor)
 from .base import CodegenError
 
 

@@ -6,7 +6,6 @@
      statically allocated in its address space (CUDA __shared__ style), not a
      stack alloca.
 """
-import re
 import unittest
 
 from pascal1981.codegen import compile_to_llvm

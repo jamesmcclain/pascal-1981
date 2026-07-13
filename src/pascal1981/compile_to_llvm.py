@@ -114,41 +114,28 @@ def main() -> int:
 
     if args.target == 'ptx':
         # Single-CLI device path: parse/check/lower to NVPTX IR, then PTX.
-        from .compile_to_ptx import compile_file_to_ptx
+        # The compile/emit/report tail is shared with compile_to_ptx.main.
+        from .compile_to_ptx import run_ptx_cli
         try:
             features = resolve_features(args.dialect, args.feature)
         except ValueError as exc:
             parser.error(str(exc))
         if not args.source_file:
             parser.error('--target ptx requires a source file')
-        try:
-            device_triple = args.device_triple
-            if device_triple == 'x86_64-pc-linux-gnu':
-                device_triple = 'nvptx64-nvidia-cuda'
-            ptx = compile_file_to_ptx(
-                args.source_file,
-                host_triple=args.host_triple,
-                device_triple=device_triple,
-                cpu=args.sm,
-                features=features,
-                emit_llvm_path=args.emit_llvm,
-                opt_level=args.opt_level,
-            )
-            if args.output_file:
-                with open(args.output_file, 'w') as f:
-                    f.write(ptx)
-                if args.verbose:
-                    print(f'Wrote {args.output_file}', file=sys.stderr)
-            else:
-                print(ptx)
-            return 0
-        except Exception as exc:
-            print(f'Error: {exc}', file=sys.stderr)
-            if args.verbose:
-                traceback.print_exc()
-            else:
-                print('(re-run with -v for a full traceback)', file=sys.stderr)
-            return 1
+        device_triple = args.device_triple
+        if device_triple == 'x86_64-pc-linux-gnu':
+            device_triple = 'nvptx64-nvidia-cuda'
+        return run_ptx_cli(
+            args.source_file,
+            args.output_file,
+            host_triple=args.host_triple,
+            device_triple=device_triple,
+            cpu=args.sm,
+            features=features,
+            emit_llvm_path=args.emit_llvm,
+            opt_level=args.opt_level,
+            verbose=args.verbose,
+        )
 
     if args.list_features:
         for feature in all_features():
@@ -179,12 +166,12 @@ def main() -> int:
 
         # Type check
         if verbose:
-            print(f'Type checking...', file=sys.stderr)
+            print('Type checking...', file=sys.stderr)
         type_checker = PascalTypeChecker(source_file=source_file, features=features)
         check_result = type_checker.check(ast)
 
         if not check_result.success:
-            print(f'Type checking failed:', file=sys.stderr)
+            print('Type checking failed:', file=sys.stderr)
             for error in check_result.errors:
                 print(f'  {error}', file=sys.stderr)
             return 1
@@ -195,7 +182,7 @@ def main() -> int:
 
         # Codegen
         if verbose:
-            print(f'Generating LLVM IR...', file=sys.stderr)
+            print('Generating LLVM IR...', file=sys.stderr)
         # Build force_flags dict from CLI args.  Only flags explicitly set
         # to 'on' or 'off' (not 'source') enter the dict.
         _DEBUG_SUBS = ('ENTRY', 'INDEXCK', 'INITCK', 'MATHCK', 'NILCK', 'RANGECK', 'STACKCK')

@@ -7,12 +7,11 @@ Statement code generation
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Union
 
 import llvmlite.ir as ir
-from llvmlite.ir import IRBuilder
 
-from ..ast_nodes import *
+from ..ast_nodes import (AssignStmt, BinOp, BreakStmt, BuiltinType, CaseStmt, CompoundStmt, CycleStmt, Designator, EmptyStmt, Expression, ForStmt, FuncCall, GotoStmt, Identifier, IfStmt, LabelStmt, NilLiteral, ProcCallStmt, RecordType, RepeatStmt, ReturnStmt, Statement, UnaryOp, WhileStmt, WithStmt)
 from ..builtins_registry import (DEVICE_INDEX_BUILTIN_FUNCTIONS, DEVICE_SYNC_BUILTIN_PROCEDURES)
 from .base import CodegenError, LoopContext, Scope
 

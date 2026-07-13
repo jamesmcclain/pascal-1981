@@ -7,12 +7,11 @@ C runtime wrappers and memory builtins
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Tuple, Union
+from typing import List
 
 import llvmlite.ir as ir
-from llvmlite.ir import IRBuilder
 
-from ..ast_nodes import *
+from ..ast_nodes import (ArrayType, Designator, Expression, Identifier, PointerType)
 from .base import CodegenError
 
 

@@ -1,6 +1,5 @@
 """Multi-file integration tests for the GRAPHICS / PLOTBOX USES examples."""
 
-import os
 import subprocess
 import unittest
 
