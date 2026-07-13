@@ -57,7 +57,8 @@ def llvm_ir_to_ptx(ir_text: str, *, triple: str = 'nvptx64-nvidia-cuda', cpu: st
     target = llvm.Target.from_triple(triple)
     tm = target.create_target_machine(cpu=cpu)
     if opt_level:
-        pto = llvm.create_pipeline_tuning_options(speed_level=opt_level, size_level=0)
+        from .codegen.llvmlite_compat import create_pipeline_tuning_options
+        pto = create_pipeline_tuning_options(llvm, speed_level=opt_level)
         pb = llvm.create_pass_builder(tm, pto)
         pb.getModulePassManager().run(llvm_mod, pb)
         llvm_mod.verify()

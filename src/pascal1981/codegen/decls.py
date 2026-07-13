@@ -17,6 +17,7 @@ from llvmlite.ir import IRBuilder
 from ..ast_nodes import *
 from ..parser import parse_file
 from .base import CodegenError, Scope, _is_gpu_triple
+from .llvmlite_compat import (add_argument_attribute, add_function_string_attribute, nocapture_spelling)
 
 
 class DeclsMixin:
@@ -791,19 +792,14 @@ class DeclsMixin:
                 continue
             if pname.upper() in readonly_names:
                 # llvmlite's ArgumentAttributes whitelist has no `readonly`
-                # entry (only `noalias`/`nocapture` are native there); LLVM
-                # itself has carried a parameter-level `readonly` since long
-                # before this project's llvmlite floor. Shadow the instance's
-                # `_known` mapping (same trick `_apply_launch_bound_attrs`
-                # uses for function-level string attributes, adapted to the
-                # dict-shaped `_known` argument attributes use) so `.add`
-                # accepts it; round-trips through parse_assembly/verify
-                # (confirmed in test_kernel_param_attrs.py).
-                if 'readonly' not in arg.attributes._known:
-                    from types import MappingProxyType
-                    arg.attributes._known = MappingProxyType({**dict(arg.attributes._known), 'readonly': False})
-                arg.attributes.add('readonly')
-                arg.attributes.add('nocapture')
+                # entry, and the no-capture fact is spelled `nocapture` on
+                # llvmlite 0.47 but `captures(none)` on 0.48+.  Both cases —
+                # the whitelist bypass and the version-dependent spelling —
+                # are centralized in llvmlite_compat; round-trips through
+                # parse_assembly/verify (confirmed in
+                # test_kernel_param_attrs.py).
+                add_argument_attribute(arg, 'readonly')
+                add_argument_attribute(arg, nocapture_spelling(arg))
             # dereferenceable(n): only for a statically-sized element type
             # (a fixed ARRAY[lo..hi] OF T pointee lowers to ir.ArrayType with a
             # known count). A `SUPER ARRAY [lo..*] OF T` pointee has no static
@@ -862,10 +858,11 @@ class DeclsMixin:
         occupancy budget for register allocation.
 
         llvmlite's FunctionAttributes whitelists known enum attributes and has
-        no string-attribute API, so the key="value" token is added by shadowing
-        the instance's `_known` set; the token renders verbatim in the
-        `define` attribute list, which is exactly LLVM's string-attribute
-        syntax (round-trip through parse_assembly/verify is covered by tests).
+        no string-attribute API, so the key="value" token is added via
+        llvmlite_compat.add_function_string_attribute; the token renders
+        verbatim in the `define` attribute list, which is exactly LLVM's
+        string-attribute syntax (round-trip through parse_assembly/verify is
+        covered by tests).
         """
         launch_attrs = [a for a in (getattr(decl, 'attributes', []) or []) if a.name.upper() in self._LAUNCH_BOUND_KEYS]
         if not launch_attrs:
@@ -882,8 +879,7 @@ class DeclsMixin:
             args = attr.arg if isinstance(attr.arg, list) else [attr.arg]
             values = [int(self.eval_const_expr(arg)) for arg in args]
             token = '"{}"="{}"'.format(fn_attr_key, ",".join(str(v) for v in values))
-            func.attributes._known = frozenset(func.attributes._known) | {token}
-            func.attributes.add(token)
+            add_function_string_attribute(func, token)
             for key, value in zip(legacy_keys, values):
                 nvvm.add(self.module.add_metadata([
                     func,
@@ -981,8 +977,22 @@ class DeclsMixin:
 
     def codegen_proc_decl(self, decl: ProcDecl) -> None:
         """Codegen for PROCEDURE declaration."""
+        self._codegen_routine_decl(decl, is_function=False)
+
+    def _codegen_routine_decl(self, decl, *, is_function: bool) -> None:
+        """Shared PROCEDURE/FUNCTION lowering.
+
+        The two routine kinds differ only in: the LLVM return type (a
+        function's declared type vs the vintage i32 / kernel-entry void
+        convention), whether a pre-registered extern declaration may be
+        reused (procedures only), the recorded return type expression, the
+        function-result alloca (functions only), and the default-return
+        epilogue.  Everything else -- interface-declaration fallback,
+        parameter flattening, linkage, kernel-entry handling, body lowering,
+        and context save/restore -- is identical and lives here once.
+        """
         if self.is_c_abi_foreign(decl):
-            self._codegen_c_abi_decl(decl, None)
+            self._codegen_c_abi_decl(decl, self.llvm_type(decl.return_type) if is_function else None)
             return
         effective_decl = decl
         iface_decl = self.current_interface_decls.get(decl.name.lower()) if decl.name else None
@@ -997,17 +1007,23 @@ class DeclsMixin:
             for _ in param.names:
                 param_types.append(param_type)
                 flat_modes.append(param.mode)
-        # A launchable GPU kernel entry must return void: the host launcher
-        # (cuLaunchKernel) provides no return slot, so an i32-returning entry is
-        # an ABI mismatch. Everywhere else, procedures keep the vintage
-        # i32-returning shape (a harmless internal convention).
-        kernel_entry = self._is_kernel_entry(decl)
-        ret_ll = ir.VoidType() if kernel_entry else ir.IntType(32)
+        if is_function:
+            return_type = self.llvm_type(decl.return_type)
+            ret_ll = return_type
+        else:
+            # A launchable GPU kernel entry must return void: the host launcher
+            # (cuLaunchKernel) provides no return slot, so an i32-returning entry is
+            # an ABI mismatch. Everywhere else, procedures keep the vintage
+            # i32-returning shape (a harmless internal convention).
+            kernel_entry = self._is_kernel_entry(decl)
+            ret_ll = ir.VoidType() if kernel_entry else ir.IntType(32)
         func_type = ir.FunctionType(ret_ll, param_types)
 
         attrs = {attr.name.upper() for attr in getattr(decl, 'attributes', [])}
-        existing = self.scope.lookup(decl.name)
+        existing = self.scope.lookup(decl.name) if not is_function else None
         if existing and isinstance(existing.llvm_value, ir.Function):
+            # Only procedures are eagerly pre-registered as extern declarations,
+            # so only they can encounter (and must reuse) an existing ir.Function.
             func = existing.llvm_value
             if func.function_type != func_type:
                 raise CodegenError(f"Procedure '{decl.name}' already declared with a different signature")
@@ -1024,7 +1040,7 @@ class DeclsMixin:
             func.linkage = 'external'
         self._apply_kernel_entry(decl, func)
         self.proc_param_modes[decl.name.lower()] = flat_modes
-        self.scope.define(decl.name, func, None)
+        self.scope.define(decl.name, func, decl.return_type if is_function else None)
 
         # If no body, it's extern/forward
         if not decl.body:
@@ -1048,83 +1064,11 @@ class DeclsMixin:
                 arg.name = name
                 self.scope.define(name, arg, param.type_expr, is_parameter=param.mode not in {'VAR', 'VARS', 'CONST', 'CONSTS'})
 
-        # Codegen body
-        for inner_decl in decl.body.decls:
-            self.codegen_decl(inner_decl)
-
-        prev_labels = self.setup_function_labels(decl.body.body)
-        self.codegen_stmt_list(decl.body.body)
-        self.label_blocks = prev_labels
-
-        # Default return
-        if not self.builder.block.is_terminated:
-            if isinstance(ret_ll, ir.VoidType):
-                self.builder.ret_void()
-            else:
-                self.builder.ret(ir.Constant(ir.IntType(32), 0))
-
-        # Restore context
-        self.builder = prev_builder
-        self.current_function = prev_func
-        self.scope = prev_scope
-
-    def codegen_func_decl(self, decl: FuncDecl) -> None:
-        """Codegen for FUNCTION declaration."""
-        if self.is_c_abi_foreign(decl):
-            self._codegen_c_abi_decl(decl, self.llvm_type(decl.return_type))
-            return
-        effective_decl = decl
-        iface_decl = self.current_interface_decls.get(decl.name.lower()) if decl.name else None
-        if iface_decl and not decl.params:
-            effective_decl = iface_decl
-
-        # Flatten parameter types: reference modes are passed as LLVM pointers.
-        param_types = []
-        flat_modes = []
-        for param in effective_decl.params:
-            param_type = self.param_llvm_type(param)
-            for _ in param.names:
-                param_types.append(param_type)
-                flat_modes.append(param.mode)
-        return_type = self.llvm_type(decl.return_type)
-        func_type = ir.FunctionType(return_type, param_types)
-
-        # Create function
-        func = ir.Function(self.module, func_type, name=decl.name)
-        attrs = {attr.name.upper() for attr in getattr(decl, 'attributes', [])}
-        _directive = getattr(decl, 'directive', '') or ''
-        if attrs.intersection({'PUBLIC', 'EXTERN', 'EXTERNAL'}) or _directive.upper() in ('EXTERN', 'EXTERNAL', 'PUBLIC'):
-            func.linkage = 'external'
-        self._apply_kernel_entry(decl, func)
-        self.proc_param_modes[decl.name.lower()] = flat_modes
-        self.scope.define(decl.name, func, decl.return_type)
-
-        # If no body, it's extern/forward
-        if not decl.body:
-            return
-
-        # Create entry block
-        entry_block = func.append_basic_block(name='entry')
-        prev_builder = self.builder
-        prev_func = self.current_function
-        prev_scope = self.scope
-
-        self.builder = IRBuilder(entry_block)
-        self.current_function = func
-        self.scope = Scope(parent=prev_scope)
-
-        # Bind parameters
-        args_iter = iter(func.args)
-        for param in effective_decl.params:
-            for name in param.names:
-                arg = next(args_iter)
-                arg.name = name
-                self.scope.define(name, arg, param.type_expr, is_parameter=param.mode not in {'VAR', 'VARS', 'CONST', 'CONSTS'})
-
-        # Allocate space for return value
-        return_alloca = self.entry_alloca(return_type, name='return_value')
-        self.scope.define(decl.name, return_alloca, decl.return_type)
-        self.builder.store(ir.Constant(return_type, 0.0) if isinstance(return_type, (ir.FloatType, ir.DoubleType)) else ir.Constant(return_type, 0), return_alloca)
+        if is_function:
+            # Allocate space for return value
+            return_alloca = self.entry_alloca(return_type, name='return_value')
+            self.scope.define(decl.name, return_alloca, decl.return_type)
+            self.builder.store(ir.Constant(return_type, 0.0) if isinstance(return_type, (ir.FloatType, ir.DoubleType)) else ir.Constant(return_type, 0), return_alloca)
 
         # Codegen body
         for inner_decl in decl.body.decls:
@@ -1136,13 +1080,22 @@ class DeclsMixin:
 
         # Default return / function result
         if not self.builder.block.is_terminated:
-            result = self.builder.load(return_alloca)
-            self.builder.ret(result)
+            if is_function:
+                result = self.builder.load(return_alloca)
+                self.builder.ret(result)
+            elif isinstance(ret_ll, ir.VoidType):
+                self.builder.ret_void()
+            else:
+                self.builder.ret(ir.Constant(ir.IntType(32), 0))
 
         # Restore context
         self.builder = prev_builder
         self.current_function = prev_func
         self.scope = prev_scope
+
+    def codegen_func_decl(self, decl: FuncDecl) -> None:
+        """Codegen for FUNCTION declaration."""
+        self._codegen_routine_decl(decl, is_function=True)
 
     # ========================================================================
     # Statements

@@ -1013,6 +1013,19 @@ class PascalTypeChecker(TypeChecker):
                 if getattr(param, 'mode', None) in {'VAR', 'VARS'}:
                     self.error(f"PURE function '{decl.name}' cannot have VAR/VARS parameters", decl)
 
+        self._check_routine_decl(decl, is_function=True)
+
+    def _check_routine_decl(self, decl, *, is_function: bool) -> None:
+        """Shared FUNCTION/PROCEDURE declaration checking.
+
+        Everything after the kind-specific attribute prelude (PURE and
+        launch-bound validation, which `check_func_decl`/`check_proc_decl`
+        keep so their error ordering is unchanged) is identical for the two
+        routine kinds except for: the return type (functions only), the
+        signature type constructed (FunctionType vs ProcedureType), the
+        symbol kind / redeclaration-message noun, and which "current routine"
+        context is saved around the body walk.
+        """
         effective_decl = decl
         iface_decl = self.current_interface_decls.get(decl.name.lower()) if decl.name else None
         if iface_decl and not decl.params:
@@ -1028,42 +1041,56 @@ class PascalTypeChecker(TypeChecker):
                         for name in param.names:
                             param_types.append((name, param_type))
 
-        # Resolve return type
-        return_type = INTEGER_TYPE
-        if decl.return_type:
-            return_type = self.resolve_type(decl.return_type)
-            if not return_type:
-                self.error(f"Unknown return type", decl)
-                return_type = INTEGER_TYPE
-
-        # Create function type
+        # Create the signature type.  [VARARGS] makes a [C] foreign routine
+        # variadic; the flag must be threaded onto the type because the
+        # call-site arity check reads sym.type.is_variadic.  (Finding 3.)
         _decl_attrs = {a.name.upper() for a in getattr(decl, 'attributes', [])}
-        func_type = FunctionType(decl.name, param_types, return_type, is_variadic='VARARGS' in _decl_attrs)
+        is_variadic = 'VARARGS' in _decl_attrs
+        return_type = None
+        if is_function:
+            # Resolve return type
+            return_type = INTEGER_TYPE
+            if decl.return_type:
+                return_type = self.resolve_type(decl.return_type)
+                if not return_type:
+                    self.error(f"Unknown return type", decl)
+                    return_type = INTEGER_TYPE
+            routine_type = FunctionType(decl.name, param_types, return_type, is_variadic=is_variadic)
+            kind, noun = 'function', 'Function'
+        else:
+            routine_type = ProcedureType(decl.name, param_types, is_variadic=is_variadic)
+            kind, noun = 'procedure', 'Procedure'
 
-        # Phase 0 C-FFI guard: reject ABI-incompatible foreign signatures.
+        # Phase 0 C-FFI guard: reject ABI-incompatible foreign signatures
+        # (procedures have no return type, so only by-value aggregate params).
         self._check_foreign_abi(decl, return_type)
 
         # Check for redeclaration. A FORWARD declaration is completed (not
-        # redeclared) by a later body definition.
+        # redeclared) by a later body definition -- this is what makes forward
+        # references and mutual recursion expressible.
         existing = self.symbol_table.lookup_local(decl.name)
         if existing and not getattr(existing, 'is_builtin', False):
             if getattr(existing, 'is_forward', False) and decl.body is not None:
                 existing.is_forward = False  # completing the forward declaration
             else:
-                self.error(f"Function '{decl.name}' already declared at {existing.location}", decl)
+                self.error(f"{noun} '{decl.name}' already declared at {existing.location}", decl)
                 return
         else:
             # Add to symbol table (mark a FORWARD declaration awaiting completion)
-            symbol = Symbol(name=decl.name, type=func_type, kind='function', location=self.make_location(decl))
+            symbol = Symbol(name=decl.name, type=routine_type, kind=kind, location=self.make_location(decl))
             if decl.body is None and getattr(decl, 'directive', None) == 'FORWARD':
                 symbol.is_forward = True
             self.symbol_table.define(decl.name, symbol)
 
-        # Check function body
-        old_func = self.current_function
-        old_return_type = self.current_function_return_type
-        self.current_function = decl
-        self.current_function_return_type = return_type
+        # Check the routine body
+        if is_function:
+            old_func = self.current_function
+            old_return_type = self.current_function_return_type
+            self.current_function = decl
+            self.current_function_return_type = return_type
+        else:
+            old_proc = self.current_procedure
+            self.current_procedure = decl
         self.symbol_table.enter_scope()
 
         # Add parameters to scope
@@ -1078,8 +1105,11 @@ class PascalTypeChecker(TypeChecker):
         self.check_block(decl.body)
 
         self.symbol_table.exit_scope()
-        self.current_function = old_func
-        self.current_function_return_type = old_return_type
+        if is_function:
+            self.current_function = old_func
+            self.current_function_return_type = old_return_type
+        else:
+            self.current_procedure = old_proc
 
     def _check_launch_bound_attrs(self, decl, is_function: bool) -> None:
         """Validate MAXNTID/REQNTID/MINCTASM launch-bound attributes.
@@ -1163,68 +1193,7 @@ class PascalTypeChecker(TypeChecker):
             self.error(f"PURE is only valid on functions, not procedure '{decl.name}'", decl)
         self._check_launch_bound_attrs(decl, is_function=False)
 
-        effective_decl = decl
-        iface_decl = self.current_interface_decls.get(decl.name.lower()) if decl.name else None
-        if iface_decl and not decl.params:
-            effective_decl = iface_decl
-
-        # Resolve parameter types
-        param_types = []
-        if effective_decl.params:
-            for param in effective_decl.params:
-                if param.type_expr:
-                    param_type = self.resolve_type(param.type_expr)
-                    if param_type:
-                        for name in param.names:
-                            param_types.append((name, param_type))
-
-        # Create procedure type.  [VARARGS] makes a [C] foreign procedure
-        # variadic; without threading it onto the type, the call-site arity
-        # check (which reads sym.type.is_variadic) rejected every variadic
-        # *procedure* call -- variadic FUNCTIONS already worked because
-        # FunctionType carried the flag.  (Finding 3.)
-        _proc_attrs = {a.name.upper() for a in getattr(decl, 'attributes', [])}
-        proc_type = ProcedureType(decl.name, param_types, is_variadic='VARARGS' in _proc_attrs)
-
-        # Phase 0 C-FFI guard: reject ABI-incompatible foreign signatures
-        # (procedures have no return type, so only by-value aggregate params).
-        self._check_foreign_abi(decl, None)
-
-        # Check for redeclaration. A FORWARD declaration is completed (not
-        # redeclared) by a later body definition -- this is what makes forward
-        # references and mutual recursion expressible.
-        existing = self.symbol_table.lookup_local(decl.name)
-        if existing and not getattr(existing, 'is_builtin', False):
-            if getattr(existing, 'is_forward', False) and decl.body is not None:
-                existing.is_forward = False  # completing the forward declaration
-            else:
-                self.error(f"Procedure '{decl.name}' already declared at {existing.location}", decl)
-                return
-        else:
-            # Add to symbol table (mark a FORWARD declaration awaiting completion)
-            symbol = Symbol(name=decl.name, type=proc_type, kind='procedure', location=self.make_location(decl))
-            if decl.body is None and getattr(decl, 'directive', None) == 'FORWARD':
-                symbol.is_forward = True
-            self.symbol_table.define(decl.name, symbol)
-
-        # Check procedure body
-        old_proc = self.current_procedure
-        self.current_procedure = decl
-        self.symbol_table.enter_scope()
-
-        # Add parameters to scope
-        for param in effective_decl.params:
-            param_type = self.resolve_type(param.type_expr)
-            if param_type:
-                for name in param.names:
-                    param_symbol = Symbol(name=name, type=param_type, kind='parameter', location=self.make_location(param), is_mutable=param.mode not in {'CONST', 'CONSTS'})
-                    self.symbol_table.define(name, param_symbol)
-
-        # Check body
-        self.check_block(decl.body)
-
-        self.symbol_table.exit_scope()
-        self.current_procedure = old_proc
+        self._check_routine_decl(decl, is_function=False)
 
     def check_statement(self, stmt: Statement) -> None:
         """Type check a statement."""
