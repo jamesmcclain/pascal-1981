@@ -674,7 +674,6 @@ class Lexer:
             if base < 2 or base > 16:
                 raise LexerError(f"Invalid radix {base} at line {line}, column {column}")
             self.advance()  # consume '#'
-            digits_start = self.pos
             digits = []
             valid = '0123456789ABCDEF'[:base]
             while self.current() and self.current().upper() in valid:

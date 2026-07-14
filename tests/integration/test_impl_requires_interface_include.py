@@ -11,7 +11,6 @@ import shutil
 import tempfile
 import unittest
 
-from pascal1981.lexer import lex_file
 from pascal1981.parser import ParserError, parse_file
 
 

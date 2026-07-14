@@ -57,7 +57,8 @@ def llvm_ir_to_ptx(ir_text: str, *, triple: str = 'nvptx64-nvidia-cuda', cpu: st
     target = llvm.Target.from_triple(triple)
     tm = target.create_target_machine(cpu=cpu)
     if opt_level:
-        pto = llvm.create_pipeline_tuning_options(speed_level=opt_level, size_level=0)
+        from .codegen.llvmlite_compat import create_pipeline_tuning_options
+        pto = create_pipeline_tuning_options(llvm, speed_level=opt_level)
         pb = llvm.create_pass_builder(tm, pto)
         pb.getModulePassManager().run(llvm_mod, pb)
         llvm_mod.verify()
@@ -92,6 +93,41 @@ def compile_file_to_ptx(source_file: str,
     return llvm_ir_to_ptx(ir, triple=device_triple, cpu=cpu, opt_level=opt_level)
 
 
+def run_ptx_cli(source_file: str, output_file: str | None, *, host_triple: str, device_triple: str, cpu: str, features, emit_llvm_path: str | None, opt_level: int,
+                verbose: bool) -> int:
+    """Shared CLI tail for PTX emission: compile, write-or-print, report.
+
+    Used by both this module's `main` and `compile_to_llvm.main`'s
+    `--target ptx` branch, which previously duplicated this block verbatim.
+    Returns a process exit code.
+    """
+    try:
+        ptx = compile_file_to_ptx(
+            source_file,
+            host_triple=host_triple,
+            device_triple=device_triple,
+            cpu=cpu,
+            features=features,
+            emit_llvm_path=emit_llvm_path,
+            opt_level=opt_level,
+        )
+        if output_file:
+            with open(output_file, 'w') as f:
+                f.write(ptx)
+            if verbose:
+                print(f'Wrote {output_file}', file=sys.stderr)
+        else:
+            print(ptx)
+        return 0
+    except Exception as exc:
+        print(f'Error: {exc}', file=sys.stderr)
+        if verbose:
+            traceback.print_exc()
+        else:
+            print('(re-run with -v for a full traceback)', file=sys.stderr)
+        return 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description='Compile Pascal DEVICE code to PTX assembly.')
     parser.add_argument('source_file', help='Source Pascal DEVICE implementation file')
@@ -113,23 +149,6 @@ def main() -> int:
 
     try:
         features = resolve_features(args.dialect, args.feature)
-        ptx = compile_file_to_ptx(
-            args.source_file,
-            host_triple=args.host_triple,
-            device_triple=args.device_triple,
-            cpu=args.cpu,
-            features=features,
-            emit_llvm_path=args.emit_llvm,
-            opt_level=args.opt_level,
-        )
-        if args.output_file:
-            with open(args.output_file, 'w') as f:
-                f.write(ptx)
-            if args.verbose:
-                print(f'Wrote {args.output_file}', file=sys.stderr)
-        else:
-            print(ptx)
-        return 0
     except Exception as exc:
         print(f'Error: {exc}', file=sys.stderr)
         if args.verbose:
@@ -137,6 +156,17 @@ def main() -> int:
         else:
             print('(re-run with -v for a full traceback)', file=sys.stderr)
         return 1
+    return run_ptx_cli(
+        args.source_file,
+        args.output_file,
+        host_triple=args.host_triple,
+        device_triple=args.device_triple,
+        cpu=args.cpu,
+        features=features,
+        emit_llvm_path=args.emit_llvm,
+        opt_level=args.opt_level,
+        verbose=args.verbose,
+    )
 
 
 if __name__ == '__main__':

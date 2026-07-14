@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Union
 import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
-from ..ast_nodes import *
+from ..ast_nodes import Declaration, FileType, NamedType, Type
 
 
 class CodegenError(Exception):
@@ -47,11 +47,16 @@ class Scope:
         self.symbols: Dict[str, Symbol] = {}
 
     def define(self, name: str, llvm_value: Any, type_expr: Type, is_parameter: bool = False) -> None:
-        """Define a symbol in this scope."""
+        """Define a symbol in this scope (keyed case-insensitively)."""
         self.symbols[name.lower()] = Symbol(name, llvm_value, type_expr, is_parameter)
 
     def lookup(self, name: str) -> Optional[Symbol]:
-        """Look up a symbol, checking parent scopes."""
+        """Look up a symbol by name, checking parent scopes.
+
+        Lookup is case-insensitive (Pascal identifiers are case-insensitive;
+        both define() and lookup() fold the key to lowercase), so callers must
+        not retry with a different casing of the same name.
+        """
         key = name.lower()
         if key in self.symbols:
             return self.symbols[key]
@@ -537,9 +542,7 @@ class CodegenBase:
         resulting pointee.  Do not attach an alignment to addrspace(0): it can
         originate from RETYPE or an unannotated host-facing pointer.
         """
-        if not (self.is_device_module and _is_gpu_triple(self.device_triple)
-                and isinstance(ptr.type, ir.PointerType)
-                and ptr.type.addrspace != 0):
+        if not (self.is_device_module and _is_gpu_triple(self.device_triple) and isinstance(ptr.type, ir.PointerType) and ptr.type.addrspace != 0):
             return None
         return self.natural_alignment(ptr.type.pointee)
 

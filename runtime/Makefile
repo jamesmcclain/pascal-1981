@@ -76,3 +76,5 @@ clean:
 	rm -rf $(BUILDDIR)
 
 cleaner: clean
+
+cleanest: cleaner

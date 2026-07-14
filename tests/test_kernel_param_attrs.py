@@ -22,6 +22,23 @@ from pascal1981.parser import parse_file
 from pascal1981.type_checker import PascalTypeChecker
 from tests.support import requires_llvm, temporary_pascal_project
 
+
+def _nocapture_spelling() -> str:
+    """The no-capture parameter attribute as this llvmlite spells it.
+
+    llvmlite 0.47 (LLVM 20) emits the classic `nocapture`; 0.48+ emits the
+    modern `captures(none)`. Same fact, different rendering — mirror the
+    selection made by pascal1981.codegen.llvmlite_compat so these IR-shape
+    assertions hold across the dependency range pyproject.toml declares.
+    """
+    import llvmlite.ir as ir
+
+    from pascal1981.codegen.llvmlite_compat import nocapture_spelling
+    m = ir.Module()
+    f = ir.Function(m, ir.FunctionType(ir.VoidType(), [ir.PointerType(ir.IntType(8))]), 'probe')
+    return nocapture_spelling(f.args[0])
+
+
 _IFACE = """DEVICE INTERFACE;
 UNIT KH (scale, via_helper, via_writer, uses_with);
 TYPE BUF = ADS(GLOBAL) OF ARRAY [0..255] OF INTEGER32;
@@ -104,7 +121,7 @@ class TestReadonlyAnalysis(unittest.TestCase):
         scale_sig = scale_def.split('\n', 1)[0]
         # outp (the written-through buffer) must not carry readonly; inp
         # (read-only in this body) must.
-        self.assertIn('nocapture readonly align 4 dereferenceable(1024) %"inp"', scale_sig)
+        self.assertIn(f'{_nocapture_spelling()} readonly align 4 dereferenceable(1024) %"inp"', scale_sig)
         self.assertNotIn('readonly', scale_sig.split('%"outp"')[0].rsplit('%"inp"', 1)[-1])
 
     def test_param_passed_to_readonly_local_helper_remains_readonly(self):
@@ -112,8 +129,8 @@ class TestReadonlyAnalysis(unittest.TestCase):
         ir = _compile_device_ir()
         via_def = ir[ir.index('define ptx_kernel void @"via_helper"'):]
         via_sig = via_def.split('\n', 1)[0]
-        self.assertIn('nocapture readonly align 4 dereferenceable(1024) %"inp"', via_sig)
-        self.assertIn('nocapture readonly align 4 dereferenceable(1024) %"outp"', via_sig)
+        self.assertIn(f'{_nocapture_spelling()} readonly align 4 dereferenceable(1024) %"inp"', via_sig)
+        self.assertIn(f'{_nocapture_spelling()} readonly align 4 dereferenceable(1024) %"outp"', via_sig)
 
     def test_param_passed_to_writing_local_helper_is_not_readonly(self):
         """A transitive write through the corresponding helper formal wins."""
@@ -157,7 +174,7 @@ class TestReadonlyAnalysis(unittest.TestCase):
 
     def test_unknown_and_cyclic_helper_calls_fail_closed(self):
         """No body/cycle must withhold a fact rather than guess or recurse."""
-        from pascal1981.ast_nodes import Block, Identifier, Param, ProcCallStmt, ProcDecl
+        from pascal1981.ast_nodes import (Block, Identifier, Param, ProcCallStmt, ProcDecl)
         from pascal1981.codegen.decls import DeclsMixin
 
         class _Host(DeclsMixin):

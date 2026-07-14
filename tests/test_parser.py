@@ -8,7 +8,6 @@ Runs in-process; no subprocess or stdout grepping.
 No llvmlite dependency.
 """
 
-import os
 import unittest
 from pathlib import Path
 
@@ -364,7 +363,7 @@ class TestMetacommands(unittest.TestCase):
 
     def test_if_true_skips_else_branch(self):
         """True condition: else-branch garbage must be skipped."""
-        kinds = self._token_kinds('PROGRAM P; BEGIN {$IF 1 $THEN} WRITELN {$ELSE} @@@ BAD @@@ {$END} END.')
+        self._token_kinds('PROGRAM P; BEGIN {$IF 1 $THEN} WRITELN {$ELSE} @@@ BAD @@@ {$END} END.')
         # WRITELN identifier present, no other stray tokens
         identifiers = [t for t in self._tokens('PROGRAM P; BEGIN {$IF 1 $THEN} WRITELN {$ELSE} @@@ BAD @@@ {$END} END.') if t.kind == 'IDENTIFIER']
         names = [t.value for t in identifiers]
@@ -524,7 +523,6 @@ class TestWriteDoubleColon(unittest.TestCase):
 
     def test_full_form_still_parses(self):
         """P:M:N must be unaffected."""
-        from pascal1981.ast_nodes import WriteArg
         from tests.support import parse_source
         ast = parse_source('PROGRAM P; VAR x: REAL; BEGIN WRITELN(x:8:3) END.')
         arg = ast.block.body[0].args[0]
@@ -609,7 +607,6 @@ class TestDeviceUnitParser(unittest.TestCase):
                            "PROCEDURE go;\n"
                            "BEGIN END;\n"
                            ".\n")
-        from pascal1981.ast_nodes import ModuleUnit
         self.assertFalse(ast.is_device)
 
     # ------------------------------------------------------------------ #

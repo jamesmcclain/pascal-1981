@@ -12,18 +12,13 @@ Walks the AST and emits LLVM IR. Supports:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Union
+from typing import Dict, Optional, Union
 
 import llvmlite.ir as ir
-from llvmlite.ir import IRBuilder
 
-from ..ast_nodes import *
-from ..builtins_registry import register_builtins
-from ..type_system import LStringType as ResolvedLStringType
-from ..type_system import StringType as ResolvedStringType
+from ..ast_nodes import (ImplementationUnit, InterfaceUnit, ModuleUnit, ProgramUnit)
 # Import base classes and support classes
-from .base import (_SCALAR_SIZES, CodegenBase, CodegenError, LoopContext, Scope, Symbol, _is_gpu_triple)
+from .base import CodegenBase, CodegenError, LoopContext, Scope, Symbol
 from .c_abi import CAbiMixin
 from .constfold import ConstFoldMixin
 from .decls import DeclsMixin
@@ -78,9 +73,6 @@ class Codegen(CodegenBase, TypesMapMixin, ConstFoldMixin, RuntimeBuiltinsMixin, 
             self._null_lstring_global.global_constant = True
         zero = ir.Constant(ir.IntType(32), 0)
         return self.builder.gep(self._null_lstring_global, [zero, zero])
-
-    def _declare_libm_func(self, name: str, ret_type: ir.Type, arg_types: List[ir.Type]) -> ir.Function:
-        return self.runtime_extern(name)
 
 
 def compile_to_llvm(

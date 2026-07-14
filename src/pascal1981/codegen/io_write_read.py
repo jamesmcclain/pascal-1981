@@ -10,10 +10,12 @@ from typing import List, Optional, Union
 
 import llvmlite.ir as ir
 
+from ..ast_nodes import BuiltinType, Designator
 from ..ast_nodes import EnumType as ASTEnumType
+from ..ast_nodes import Expression, FileType, Identifier
 from ..ast_nodes import LStringType as ASTLStringType
-from ..ast_nodes import *
-from ..type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER8_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL_TYPE, WORD8_TYPE, WORD32_TYPE, WORD64_TYPE, WORD_TYPE)
+from ..ast_nodes import NamedType, WriteArg
+from ..type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER8_TYPE, INTEGER_TYPE, REAL_TYPE, WORD8_TYPE, WORD32_TYPE, WORD64_TYPE, WORD_TYPE)
 from ..type_system import EnumType as ResolvedEnumType
 from ..type_system import FileType as ResolvedFileType
 from ..type_system import LStringType, StringType
@@ -22,24 +24,18 @@ from .base import CodegenError
 
 class IoWriteReadMixin:
 
+    # Canonical runtime-extern signatures live in
+    # CodegenBase._build_extern_factories; every helper here obtains an extern
+    # via self.runtime_extern(name).  In particular, file reads include the
+    # leading FCB pointer while stdin reads do not; callers supply only the
+    # call arguments.
+
     def printf_func(self) -> ir.Function:
         return self.runtime_extern('printf')
 
-    def _scanf_like_func(self, name: str, ret_ty=ir.IntType(32)) -> ir.Function:
-        return self.runtime_extern(name)
-
-    def _read_helper(self, name: str, llvm_ptr_ty: ir.Type, extra: Optional[List[ir.Type]] = None) -> ir.Function:
-        # Canonical signatures live in CodegenBase._build_extern_factories.
-        # In particular, file reads include the leading FCB pointer while stdin
-        # reads do not; callers supply only the call arguments.
-        return self.runtime_extern(name)
-
-    def _runtime_func(self, name: str, ret_ty: ir.Type, arg_tys: List[ir.Type]) -> ir.Function:
-        return self.runtime_extern(name)
-
     def _pas_type(self, expr) -> Optional[object]:
         if isinstance(expr, (Identifier, Designator)):
-            sym = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
+            sym = self.scope.lookup(expr.name)
             ty = getattr(sym, 'type_expr', None) if sym else None
             if ty is None and (not isinstance(expr, Designator) or not expr.selectors):
                 # Builtin constants (e.g. MAXWORD32/MAXWORD64) are not seeded
@@ -108,7 +104,7 @@ class IoWriteReadMixin:
                 table = self.enum_name_table(enum_names)
                 zero = ir.Constant(ir.IntType(32), 0)
                 names_ptr = self.builder.gep(table, [zero, zero])
-                fn = self._runtime_func('pas_enum_write_token', ir.IntType(8).as_pointer(), [ir.IntType(32), ir.IntType(8).as_pointer().as_pointer(), ir.IntType(32)])
+                fn = self.runtime_extern('pas_enum_write_token')
                 val = self.builder.call(fn, [self.coerce_printf_int(val), names_ptr, ir.Constant(ir.IntType(32), len(enum_names))])
                 pas_ty = None
 
@@ -278,20 +274,20 @@ class IoWriteReadMixin:
             ty_name = ''
         if ty is INTEGER_TYPE or ty_name == 'INTEGER':
             tmp = self.builder.alloca(ir.IntType(32), name='read_int_tmp')
-            fn = self._read_helper('pas_fread_int' if file_fcb is not None else 'pas_read_int', tmp.type)
+            fn = self.runtime_extern('pas_fread_int' if file_fcb is not None else 'pas_read_int')
             call_args = ([file_fcb, tmp] if file_fcb is not None else [tmp])
             self.builder.call(fn, call_args)
             val = self.builder.trunc(self.builder.load(tmp), ptr.type.pointee)
             self.builder.store(val, ptr)
             return
         elif ty is WORD_TYPE or ty_name == 'WORD':
-            fn = self._read_helper('pas_fread_word' if file_fcb is not None else 'pas_read_word', ptr.type)
+            fn = self.runtime_extern('pas_fread_word' if file_fcb is not None else 'pas_read_word')
             call_args = ([file_fcb, ptr] if file_fcb is not None else [ptr])
         elif ty is REAL_TYPE or ty_name == 'REAL':
-            fn = self._read_helper('pas_fread_real' if file_fcb is not None else 'pas_read_real', ptr.type)
+            fn = self.runtime_extern('pas_fread_real' if file_fcb is not None else 'pas_read_real')
             call_args = ([file_fcb, ptr] if file_fcb is not None else [ptr])
         elif ty is CHAR_TYPE or ty_name == 'CHAR':
-            fn = self._read_helper('pas_fread_char' if file_fcb is not None else 'pas_read_char', ptr.type)
+            fn = self.runtime_extern('pas_fread_char' if file_fcb is not None else 'pas_read_char')
             call_args = ([file_fcb, ptr] if file_fcb is not None else [ptr])
         elif isinstance(ty, (ResolvedEnumType, ASTEnumType)):
             if self.feature_enabled('symbolic-enum-io'):
@@ -301,14 +297,10 @@ class IoWriteReadMixin:
                 names_ptr = self.builder.gep(table, [zero, zero]) if names else ir.Constant(ir.IntType(8).as_pointer().as_pointer(), None)
                 tmp = self.builder.alloca(ir.IntType(32), name='read_enum_tmp')
                 if file_fcb is not None:
-                    fn = self._runtime_func(
-                        'pas_fread_enum_name', ir.IntType(32),
-                        [self.file_fcb_type().as_pointer(), ir.IntType(32).as_pointer(),
-                         ir.IntType(8).as_pointer().as_pointer(),
-                         ir.IntType(32)])
+                    fn = self.runtime_extern('pas_fread_enum_name')
                     call_args = [file_fcb, tmp, names_ptr, ir.Constant(ir.IntType(32), len(names or []))]
                 else:
-                    fn = self._runtime_func('pas_read_enum_name', ir.IntType(32), [ir.IntType(32).as_pointer(), ir.IntType(8).as_pointer().as_pointer(), ir.IntType(32)])
+                    fn = self.runtime_extern('pas_read_enum_name')
                     call_args = [tmp, names_ptr, ir.Constant(ir.IntType(32), len(names or []))]
                 self.builder.call(fn, call_args)
                 loaded = self.builder.load(tmp)
@@ -316,7 +308,7 @@ class IoWriteReadMixin:
                 self.builder.store(val, ptr)
                 return
             tmp = self.builder.alloca(ir.IntType(32), name='read_enum_tmp')
-            fn = self._read_helper('pas_fread_int' if file_fcb is not None else 'pas_read_int', tmp.type)
+            fn = self.runtime_extern('pas_fread_int' if file_fcb is not None else 'pas_read_int')
             call_args = ([file_fcb, tmp] if file_fcb is not None else [tmp])
             self.builder.call(fn, call_args)
             loaded = self.builder.load(tmp)
@@ -333,7 +325,7 @@ class IoWriteReadMixin:
                     fn = self.runtime_extern('pas_fread_lstring')
                     call_args = [file_fcb, self.builder.bitcast(ptr, ir.IntType(8).as_pointer()), ir.Constant(ir.IntType(32), max_len)]
                 else:
-                    fn = self._read_helper('pas_read_lstring', ir.IntType(8).as_pointer(), [ir.IntType(32)])
+                    fn = self.runtime_extern('pas_read_lstring')
                     call_args = [self.builder.bitcast(ptr, ir.IntType(8).as_pointer()), ir.Constant(ir.IntType(32), max_len)]
             else:
                 # STRING(n): read up to n characters, stopping at the line
@@ -345,7 +337,7 @@ class IoWriteReadMixin:
                     fn = self.runtime_extern('pas_fread_string')
                     call_args = [file_fcb, self.builder.bitcast(ptr, ir.IntType(8).as_pointer()), ir.Constant(ir.IntType(32), max_len)]
                 else:
-                    fn = self._read_helper('pas_read_string', ir.IntType(8).as_pointer(), [ir.IntType(32)])
+                    fn = self.runtime_extern('pas_read_string')
                     call_args = [self.builder.bitcast(ptr, ir.IntType(8).as_pointer()), ir.Constant(ir.IntType(32), max_len)]
         self.builder.call(fn, call_args)
 
@@ -402,7 +394,7 @@ class IoWriteReadMixin:
             if file_fcb is not None:
                 self.builder.call(self.runtime_extern('pas_freadln_skip'), [file_fcb])
             else:
-                self.builder.call(self._read_helper('pas_readln_skip', ir.VoidType()), [])
+                self.builder.call(self.runtime_extern('pas_readln_skip'), [])
 
     def _is_boolean_pas_type(self, pas_ty) -> bool:
         if pas_ty is BOOLEAN_TYPE:
@@ -431,7 +423,7 @@ class IoWriteReadMixin:
 
     def write_enum_names(self, expr) -> Optional[List[str]]:
         if isinstance(expr, (Identifier, Designator)) and not getattr(expr, 'selectors', None):
-            sym = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
+            sym = self.scope.lookup(expr.name)
             if sym is not None and sym.type_expr is not None:
                 names = self.enum_value_list(sym.type_expr)
                 if names:

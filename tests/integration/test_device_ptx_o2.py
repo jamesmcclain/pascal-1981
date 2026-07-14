@@ -14,7 +14,6 @@ to pin a specific LLVM's optimization output.
 """
 
 import os
-import re
 import subprocess
 import sys
 import unittest

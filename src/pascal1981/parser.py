@@ -4,12 +4,12 @@ import argparse
 import sys
 from typing import List, Optional, Sequence, Union
 
-from .ast_nodes import (AdrExpr, AdsExpr, ArrayType, AssignStmt, ASTNode, Attribute, BinOp, Block, BoolLiteral, BreakStmt, BuiltinType, CaseElement, CaseStmt, CharLiteral,
-                        CompoundStmt, ConstDecl, CycleStmt, Declaration, Designator, EmptyStmt, EnumType, Expression, FileType, ForStmt, FuncCall, FuncDecl, GotoStmt, Identifier,
-                        IfStmt, ImplementationUnit, IndexRange, InterfaceUnit, IntLiteral, LabelDecl, LabelStmt, LowerExpr, LStringType, ModuleUnit, NamedType, NilLiteral, Param,
+from .ast_nodes import (AdrExpr, AdsExpr, ArrayType, AssignStmt, Attribute, BinOp, Block, BoolLiteral, BreakStmt, BuiltinType, CaseElement, CaseStmt, CharLiteral, CompoundStmt,
+                        ConstDecl, CycleStmt, Declaration, Designator, EmptyStmt, EnumType, Expression, FileType, ForStmt, FuncCall, FuncDecl, GotoStmt, Identifier, IfStmt,
+                        ImplementationUnit, IndexRange, InterfaceUnit, IntLiteral, LabelDecl, LabelStmt, LowerExpr, LStringType, ModuleUnit, NamedType, NilLiteral, Param,
                         PointerType, ProcCallStmt, ProcDecl, ProgramUnit, RangeExpr, RealLiteral, RecordType, RepeatStmt, ReturnStmt, RetypeExpr, Selector, SetConstructor, SetType,
                         SizeofExpr, Statement, StringLiteral, SubrangeType, Type, TypeDecl, UnaryOp, UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt, WriteArg)
-from .lexer import ALL_CODES, KEYWORD_CODES, LexerError, Token, lex_file
+from .lexer import LexerError, Token, lex_file
 
 
 class ParserError(Exception):
@@ -844,31 +844,9 @@ class Parser:
                 self.pos += 1  # consume IDENTIFIER
                 designator = self.parse_designator_rest(name)
                 return designator
-        if kind == 'INTEGER_LITERAL':
-            # The lexer already computed the integer value, handling decimal
-            # and radix (n#digits) forms uniformly.
-            value = self.current().value
-            self.pos += 1
-            return IntLiteral(value)
-        if kind == 'REAL_LITERAL':
-            value = float(self.current().lexeme)
-            self.pos += 1
-            return RealLiteral(value)
-        if kind == 'CHAR_LITERAL':
-            value = self.current().value
-            self.pos += 1
-            return CharLiteral(value)
-        if kind == 'STRING_LITERAL':
-            value = self.current().lexeme
-            self.pos += 1
-            return StringLiteral(value)
-        if kind == 'BOOLEAN_LITERAL':
-            value = self.current().lexeme.upper() == 'TRUE'
-            self.pos += 1
-            return BoolLiteral(value)
-        if kind == 'NIL':
-            self.pos += 1
-            return NilLiteral()
+        literal = self._parse_literal()
+        if literal is not None:
+            return literal
         if kind == 'LPAREN':
             self.pos += 1
             expr = self.parse_expression()
@@ -939,26 +917,16 @@ class Parser:
                 return True
         return False
 
-    def parse_designator_rest(self, name: str) -> Expression:
-        """Continue parsing a designator or return as identifier."""
-        selectors: List[Selector] = []
-        while self.current().kind in {'LBRACKET', 'DOT', 'POINTER'}:
-            selectors.extend(self.parse_selector())
-        if selectors:
-            return Designator(name, selectors)
-        else:
-            return Identifier(name)
+    def _parse_literal(self) -> Optional[Expression]:
+        """Parse a literal token if one is current, else return None.
 
-    def parse_designator(self) -> Designator:
-        name = self.expect('IDENTIFIER').lexeme
-        selectors: List[Selector] = []
-        while self.current().kind in {'LBRACKET', 'DOT', 'POINTER'}:
-            selectors.extend(self.parse_selector())
-        return Designator(name, selectors)
-
-    def parse_constant(self) -> Expression:
+        Shared by primary-expression parsing and `parse_constant`, which
+        previously duplicated these six cases verbatim.
+        """
         kind = self.current().kind
         if kind == 'INTEGER_LITERAL':
+            # The lexer already computed the integer value, handling decimal
+            # and radix (n#digits) forms uniformly.
             value = self.current().value
             self.pos += 1
             return IntLiteral(value)
@@ -981,6 +949,32 @@ class Parser:
         if kind == 'NIL':
             self.pos += 1
             return NilLiteral()
+        return None
+
+    def _parse_selectors(self) -> List[Selector]:
+        """Consume any run of [index] / .field / ^ selectors."""
+        selectors: List[Selector] = []
+        while self.current().kind in {'LBRACKET', 'DOT', 'POINTER'}:
+            selectors.extend(self.parse_selector())
+        return selectors
+
+    def parse_designator_rest(self, name: str) -> Expression:
+        """Continue parsing a designator or return as identifier."""
+        selectors = self._parse_selectors()
+        if selectors:
+            return Designator(name, selectors)
+        else:
+            return Identifier(name)
+
+    def parse_designator(self) -> Designator:
+        name = self.expect('IDENTIFIER').lexeme
+        return Designator(name, self._parse_selectors())
+
+    def parse_constant(self) -> Expression:
+        literal = self._parse_literal()
+        if literal is not None:
+            return literal
+        kind = self.current().kind
         if kind == 'IDENTIFIER':
             name = self.current().lexeme
             self.pos += 1

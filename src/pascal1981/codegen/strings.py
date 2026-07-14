@@ -7,15 +7,11 @@ String operations
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Tuple, Union
+from typing import List
 
 import llvmlite.ir as ir
-from llvmlite.ir import IRBuilder
 
-from ..ast_nodes import *
-from ..type_system import LStringType as ResolvedLStringType
-from ..type_system import StringType as ResolvedStringType
-from .base import CodegenError
+from ..ast_nodes import (Designator, Expression, Identifier, NilLiteral, StringLiteral, WriteArg)
 
 
 class StringsMixin:
@@ -48,12 +44,8 @@ class StringsMixin:
 
         # Determine string type details
         t = None
-        if isinstance(expr, Identifier):
-            symbol = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
-            if symbol:
-                t = symbol.type_expr
-        elif isinstance(expr, Designator):
-            symbol = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
+        if isinstance(expr, (Identifier, Designator)):
+            symbol = self.scope.lookup(expr.name)
             if symbol:
                 t = symbol.type_expr
 
@@ -79,7 +71,7 @@ class StringsMixin:
         """Resolve the declared capacity (max length) of a string destination."""
         t = None
         if isinstance(arg, (Identifier, Designator)):
-            symbol = self.scope.lookup(arg.name) or self.scope.lookup(arg.name.upper())
+            symbol = self.scope.lookup(arg.name)
             if symbol:
                 t = symbol.type_expr
         _is_str, max_len, _is_lstring = self.get_string_type_info(t)
@@ -196,12 +188,8 @@ class StringsMixin:
 
         # Get D's maximum length
         t = None
-        if isinstance(args[1], Identifier):
-            symbol = self.scope.lookup(args[1].name) or self.scope.lookup(args[1].name.upper())
-            if symbol:
-                t = symbol.type_expr
-        elif isinstance(args[1], Designator):
-            symbol = self.scope.lookup(args[1].name) or self.scope.lookup(args[1].name.upper())
+        if isinstance(args[1], (Identifier, Designator)):
+            symbol = self.scope.lookup(args[1].name)
             if symbol:
                 t = symbol.type_expr
 
@@ -243,7 +231,9 @@ class StringsMixin:
         tail_len = self.builder.sub(dst_len, self.builder.sub(pos, one))
         memmove = self.runtime_extern('memmove')
         dst_start = self.builder.gep(dst_chars, [self.builder.sub(pos, one)])
-        src_start = self.builder.gep(dst_chars, [self.builder.sub(pos, one)])
+        # NOTE: assigned-but-unread on purpose -- builder.gep() *emits* the
+        # instruction as a side effect, so deleting this line would change the IR.
+        src_start = self.builder.gep(dst_chars, [self.builder.sub(pos, one)])  # noqa: F841
         self.builder.call(memmove, [self.builder.gep(dst_chars, [self.builder.add(self.builder.sub(pos, one), src_len)]), dst_start, self.builder.zext(tail_len, ir.IntType(64))])
         self.builder.call(memmove, [dst_start, src_chars, self.builder.zext(src_len, ir.IntType(64))])
         if isinstance(args[1], (Identifier, Designator)) and self.get_string_type_info(getattr(self.scope.lookup(args[1].name), 'type_expr', None))[2]:
@@ -344,7 +334,7 @@ class StringsMixin:
         # array element) we conservatively fall back to INTEGER width.
         dest_size = 4
         if isinstance(dest, (Identifier, Designator)) and not getattr(dest, 'selectors', None):
-            dsym = self.scope.lookup(dest.name) or self.scope.lookup(dest.name.upper())
+            dsym = self.scope.lookup(dest.name)
             if dsym is not None and dsym.type_expr is not None:
                 try:
                     sz = self.get_type_size(self.resolve_type_alias(dsym.type_expr))

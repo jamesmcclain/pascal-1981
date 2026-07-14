@@ -6,7 +6,7 @@ Each dataclass represents a construct in the Pascal grammar.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 
 # Base class for all AST nodes

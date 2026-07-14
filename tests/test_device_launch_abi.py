@@ -23,9 +23,7 @@ import re
 import unittest
 
 from pascal1981.features import resolve_features
-from pascal1981.parser import parse_file
-from pascal1981.type_checker import PascalTypeChecker
-from tests.support import (build_and_run_pascal_project, compile_pascal_file, parse_source, requires_exe, requires_llvm, temporary_pascal_project, typecheck_source)
+from tests.support import (build_and_run_pascal_project, compile_pascal_file, requires_exe, requires_llvm, temporary_pascal_project, typecheck_source)
 
 _WIDE = resolve_features(overrides=['wide-integers'])
 

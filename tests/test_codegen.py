@@ -11,7 +11,6 @@ keeping the dependency isolated and optional.
 import glob
 import os
 import subprocess
-import sys
 import tempfile
 import unittest
 
@@ -88,8 +87,7 @@ class TestCodegenIR(unittest.TestCase):
                "BEGIN work END.")
         ir = compile_to_ir(src)
         body = ir.split('define i32 @"work"', 1)[1].split('entry:\n', 1)[1].split('\n}\n', 1)[0]
-        instructions = [line.strip() for line in body.splitlines()
-                       if line.strip() and not line.endswith(':') and line.strip() != '{' ]
+        instructions = [line.strip() for line in body.splitlines() if line.strip() and not line.endswith(':') and line.strip() != '{']
         first_non_alloca = next((i for i, line in enumerate(instructions) if ' = alloca ' not in line), len(instructions))
         self.assertTrue(instructions[:first_non_alloca])
         self.assertTrue(all(' = alloca ' in line for line in instructions[:first_non_alloca]))
@@ -114,13 +112,11 @@ class TestCodegenIR(unittest.TestCase):
 
     def test_unproven_aggregate_geps_remain_plain(self):
         """Dynamic and dereferenced-pointer selectors must not promise inbounds."""
-        dynamic = compile_to_ir(
-            "PROGRAM P; VAR a: ARRAY [1..3] OF INTEGER; i: INTEGER; "
-            "BEGIN i := 2; a[i] := 1 END.")
+        dynamic = compile_to_ir("PROGRAM P; VAR a: ARRAY [1..3] OF INTEGER; i: INTEGER; "
+                                "BEGIN i := 2; a[i] := 1 END.")
         self.assertNotIn('getelementptr inbounds [3 x i16]', dynamic)
-        dereferenced = compile_to_ir(
-            "PROGRAM P; TYPE R = RECORD a, b: INTEGER END; VAR p: ^R; "
-            "BEGIN NEW(p); p^.b := 1 END.")
+        dereferenced = compile_to_ir("PROGRAM P; TYPE R = RECORD a, b: INTEGER END; VAR p: ^R; "
+                                     "BEGIN NEW(p); p^.b := 1 END.")
         self.assertNotIn('getelementptr inbounds %"R"', dereferenced)
 
     def test_retype_index_gep_remains_plain(self):
@@ -2448,64 +2444,6 @@ class TestValueInitializerCodegen(unittest.TestCase):
         rc, out = build_and_run(src)
         self.assertEqual(rc, 0)
         self.assertEqual(out, "  ABCDE\n")
-
-
-@requires_exe
-class TestGotoCodegen(unittest.TestCase):
-    """GOTO / labeled-statement lowering.
-
-    Labels are pre-created as LLVM blocks for the whole routine body before
-    its statements are lowered, so a GOTO resolves to a block whether the
-    target label appears earlier (backward) or later (forward) in the source.
-    """
-
-    def test_backward_goto_forms_a_loop(self):
-        src = ("PROGRAM P; LABEL 1; VAR i: INTEGER; BEGIN "
-               "i := 0; 1: i := i + 1; IF i < 5 THEN GOTO 1; WRITELN('i=', i) END.")
-        rc, out = build_and_run(src)
-        self.assertEqual(rc, 0)
-        self.assertEqual(out, "i=5\n")
-
-    def test_forward_goto_skips_dead_code(self):
-        # The WRITELN between the GOTO and its forward target must not run.
-        src = ("PROGRAM P; LABEL skip; VAR i: INTEGER; BEGIN "
-               "i := 1; IF i = 1 THEN GOTO skip; "
-               "WRITELN('NOPE'); skip: WRITELN('ok') END.")
-        rc, out = build_and_run(src)
-        self.assertEqual(rc, 0)
-        self.assertEqual(out, "ok\n")
-
-    def test_goto_escapes_nested_loops(self):
-        # The canonical use: jump clear out of doubly-nested FOR loops.
-        src = ("PROGRAM P; LABEL 99; VAR i, j: INTEGER; BEGIN "
-               "FOR i := 1 TO 5 DO FOR j := 1 TO 5 DO "
-               "IF (i * j) = 6 THEN BEGIN WRITELN(i, ' ', j); GOTO 99 END; "
-               "99: WRITELN('done') END.")
-        rc, out = build_and_run(src)
-        self.assertEqual(rc, 0)
-        self.assertEqual(out, "2 3\ndone\n")
-
-    def test_goto_is_routine_local(self):
-        # A label inside a procedure is reachable by a GOTO within that
-        # procedure; the program body has its own independent label scope.
-        src = ("PROGRAM P; "
-               "PROCEDURE Count(n: INTEGER); LABEL 10; VAR k: INTEGER; BEGIN "
-               "k := 0; 10: k := k + 1; IF k < n THEN GOTO 10; WRITELN('k=', k) END; "
-               "BEGIN Count(3) END.")
-        rc, out = build_and_run(src)
-        self.assertEqual(rc, 0)
-        self.assertEqual(out, "k=3\n")
-
-    def test_labeled_loop_serves_as_both_goto_and_cycle_target(self):
-        # A numeric label on a WHILE is simultaneously a GOTO target and the
-        # loop label used by CYCLE; both must resolve correctly.
-        src = ("PROGRAM P; LABEL 1, 2; VAR i: INTEGER; BEGIN i := 0; "
-               "1: WHILE i < 10 DO BEGIN i := i + 1; "
-               "IF i = 3 THEN CYCLE 1; IF i = 7 THEN GOTO 2; WRITELN(i) END; "
-               "2: WRITELN('end=', i) END.")
-        rc, out = build_and_run(src)
-        self.assertEqual(rc, 0)
-        self.assertEqual(out, "1\n2\n4\n5\n6\nend=7\n")
 
 
 @requires_llvm

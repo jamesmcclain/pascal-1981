@@ -13,7 +13,7 @@ from typing import Optional
 
 import llvmlite.ir as ir
 
-from ..ast_nodes import *
+from ..ast_nodes import (BinOp, BoolLiteral, CharLiteral, Designator, Expression, FuncCall, Identifier, IntLiteral, RealLiteral, RetypeExpr, UnaryOp)
 from .base import CodegenError
 
 

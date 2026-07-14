@@ -21,8 +21,6 @@ import shutil
 import tempfile
 import unittest
 
-import llvmlite.ir as ir
-
 from pascal1981.codegen import compile_to_llvm
 from pascal1981.parser import parse_file
 from pascal1981.type_checker import PascalTypeChecker

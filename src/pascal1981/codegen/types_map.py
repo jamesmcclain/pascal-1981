@@ -9,11 +9,12 @@ Checklist: 4.1 (type system), 4.4 (RETYPE intrinsic)
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Union
+from typing import List, Optional
 
 import llvmlite.ir as ir
 
-from ..ast_nodes import *
+from ..ast_nodes import (AdrExpr, AdsExpr, ArrayType, BuiltinType, Designator, EnumType, FileType, Identifier, LStringType, NamedType, NilLiteral, Param, PointerType, RecordType,
+                         RetypeExpr, SetType, SubrangeType, Type)
 from ..type_system import CHAR_TYPE
 from ..type_system import ArrayType as ResolvedArrayType
 from ..type_system import LStringType as ResolvedLStringType
@@ -484,7 +485,7 @@ class TypesMapMixin:
         """
         if not isinstance(expr, (Identifier, Designator)):
             return None
-        sym = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
+        sym = self.scope.lookup(expr.name)
         ty = getattr(sym, 'type_expr', None) if sym else None
         if ty is None:
             return None
@@ -596,9 +597,7 @@ class TypesMapMixin:
                             const_idx = self.eval_const_expr(selector.index_or_field)
                         except Exception:
                             pass
-                    index_is_proven_inbounds = (
-                        isinstance(const_idx, int) and low_b <= const_idx <= high_b
-                    )
+                    index_is_proven_inbounds = (isinstance(const_idx, int) and low_b <= const_idx <= high_b)
                     if (low_b is not None and high_b is not None and isinstance(index.type, ir.IntType) and self.check_enabled('INDEXCK')):
                         if not index_is_proven_inbounds:
                             ge = self.builder.icmp_signed('>=', index, ir.Constant(index.type, low_b))
@@ -631,12 +630,9 @@ class TypesMapMixin:
                     # INDEXCK guard happened to be emitted on another path.
                     use_inbounds = inbounds_base and index_is_proven_inbounds
                     if isinstance(ptr.type.pointee, ir.ArrayType):
-                        ptr = self._emit_designator_gep(
-                            ptr, [ir.Constant(ir.IntType(32), 0), index],
-                            proven_inbounds=use_inbounds)
+                        ptr = self._emit_designator_gep(ptr, [ir.Constant(ir.IntType(32), 0), index], proven_inbounds=use_inbounds)
                     else:
-                        ptr = self._emit_designator_gep(
-                            ptr, [index], proven_inbounds=use_inbounds)
+                        ptr = self._emit_designator_gep(ptr, [index], proven_inbounds=use_inbounds)
                     inbounds_base = use_inbounds
                     cur_type = elem_type
                 elif selector.kind == 'FIELD':
@@ -789,7 +785,7 @@ class TypesMapMixin:
             return isinstance(t, PointerType)
         # Named variables/designators: consult the declared Pascal type.
         if isinstance(expr, (Identifier, Designator)):
-            sym = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
+            sym = self.scope.lookup(expr.name)
             if sym is None or sym.type_expr is None:
                 return None
             t = self.resolve_type_alias(sym.type_expr)
