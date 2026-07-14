@@ -44,12 +44,8 @@ class StringsMixin:
 
         # Determine string type details
         t = None
-        if isinstance(expr, Identifier):
-            symbol = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
-            if symbol:
-                t = symbol.type_expr
-        elif isinstance(expr, Designator):
-            symbol = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
+        if isinstance(expr, (Identifier, Designator)):
+            symbol = self.scope.lookup(expr.name)
             if symbol:
                 t = symbol.type_expr
 
@@ -75,7 +71,7 @@ class StringsMixin:
         """Resolve the declared capacity (max length) of a string destination."""
         t = None
         if isinstance(arg, (Identifier, Designator)):
-            symbol = self.scope.lookup(arg.name) or self.scope.lookup(arg.name.upper())
+            symbol = self.scope.lookup(arg.name)
             if symbol:
                 t = symbol.type_expr
         _is_str, max_len, _is_lstring = self.get_string_type_info(t)
@@ -192,12 +188,8 @@ class StringsMixin:
 
         # Get D's maximum length
         t = None
-        if isinstance(args[1], Identifier):
-            symbol = self.scope.lookup(args[1].name) or self.scope.lookup(args[1].name.upper())
-            if symbol:
-                t = symbol.type_expr
-        elif isinstance(args[1], Designator):
-            symbol = self.scope.lookup(args[1].name) or self.scope.lookup(args[1].name.upper())
+        if isinstance(args[1], (Identifier, Designator)):
+            symbol = self.scope.lookup(args[1].name)
             if symbol:
                 t = symbol.type_expr
 
@@ -342,7 +334,7 @@ class StringsMixin:
         # array element) we conservatively fall back to INTEGER width.
         dest_size = 4
         if isinstance(dest, (Identifier, Designator)) and not getattr(dest, 'selectors', None):
-            dsym = self.scope.lookup(dest.name) or self.scope.lookup(dest.name.upper())
+            dsym = self.scope.lookup(dest.name)
             if dsym is not None and dsym.type_expr is not None:
                 try:
                     sz = self.get_type_size(self.resolve_type_alias(dsym.type_expr))

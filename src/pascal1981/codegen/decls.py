@@ -133,7 +133,7 @@ class DeclsMixin:
         for pname in params:
             if pname.upper() in {'INPUT', 'OUTPUT'}:
                 continue  # not set from the command line; not positional
-            sym = self.scope.lookup(pname) or self.scope.lookup(pname.upper())
+            sym = self.scope.lookup(pname)
             if sym is not None and getattr(sym, 'llvm_value', None) is not None:
                 name_ptr = self._emit_cstring_ptr(pname)
                 self.builder.call(self.runtime_extern('pas_arg_begin'), [ir.Constant(i32, position), name_ptr])
@@ -146,7 +146,7 @@ class DeclsMixin:
                 # this is harmless (the stream is discarded next); on the
                 # keyboard-prompt fallback it advances past the just-typed line
                 # so the next parameter reads cleanly.
-                self.builder.call(self._read_helper('pas_readln_skip', ir.VoidType()), [])
+                self.builder.call(self.runtime_extern('pas_readln_skip'), [])
                 self.builder.call(self.runtime_extern('pas_arg_end'), [])
             position += 1
 
@@ -164,7 +164,7 @@ class DeclsMixin:
         cap = 255
         buf = self.entry_alloca(ir.ArrayType(i8, cap + 1), name='arg_filename')
         buf_i8 = self.builder.bitcast(buf, i8.as_pointer())
-        self.builder.call(self._read_helper('pas_read_lstring', i8.as_pointer(), [i32]), [buf_i8, ir.Constant(i32, cap)])
+        self.builder.call(self.runtime_extern('pas_read_lstring'), [buf_i8, ir.Constant(i32, cap)])
         # LSTRING layout: byte 0 is the length, bytes 1.. are the characters.
         length = self.builder.zext(self.builder.load(buf_i8), i32)
         name_ptr = self.builder.bitcast(self.builder.gep(buf, [zero, ir.Constant(i32, 1)]), i8.as_pointer())

@@ -113,7 +113,7 @@ class StmtsMixin:
     def codegen_assign_stmt(self, stmt: AssignStmt) -> None:
         """Codegen for assignment statement."""
         target_name = stmt.target.name
-        symbol = self.scope.lookup(target_name) or self.scope.lookup(target_name.upper())
+        symbol = self.scope.lookup(target_name)
         if not symbol:
             raise CodegenError(f'Undefined variable: {target_name}')
 
@@ -281,7 +281,7 @@ class StmtsMixin:
                 return True  # pure special-register read
             if key in {'EOF', 'EOLN', 'NULL'}:
                 return False  # EOF/EOLN call runtime; NULL is handled via type
-            sym = self.scope.lookup(expr.name) or self.scope.lookup(key)
+            sym = self.scope.lookup(expr.name)
             if sym is not None and isinstance(getattr(sym, 'llvm_value', None), ir.Function):
                 return False  # parameterless function call (may have side effects)
             return True  # plain variable / parameter read
@@ -305,7 +305,7 @@ class StmtsMixin:
             return False
         if not (self._select_rhs_is_safe(then_s.expr) and self._select_rhs_is_safe(else_s.expr)):
             return False
-        symbol = self.scope.lookup(then_s.target.name) or self.scope.lookup(then_s.target.name.upper())
+        symbol = self.scope.lookup(then_s.target.name)
         if not symbol:
             return False
         is_str, _max_len, _is_lstr = self.get_string_type_info(symbol.type_expr)
@@ -455,7 +455,7 @@ class StmtsMixin:
         kernel_name = getattr(kernel, 'name', None)
         if kernel_name is None:
             raise CodegenError('LAUNCH first argument must name a kernel')
-        symbol = self.scope.lookup(kernel_name) or self.scope.lookup(kernel_name.upper())
+        symbol = self.scope.lookup(kernel_name)
         if not symbol or not isinstance(getattr(symbol, 'llvm_value', None), ir.Function):
             raise CodegenError(f"LAUNCH cannot resolve kernel '{kernel_name}'")
         fn = symbol.llvm_value
@@ -640,7 +640,7 @@ class StmtsMixin:
             # checker has already rejected any use inside DEVICE code.
             self._codegen_device_orchestration(lookup_name, stmt.args)
             return
-        symbol = self.scope.lookup(lookup_name) or self.scope.lookup(stmt.name)
+        symbol = self.scope.lookup(lookup_name)
         if not symbol or symbol.llvm_value is None:
             # Try built-in procedures
             if lookup_name == 'WRITELN':

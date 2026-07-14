@@ -89,7 +89,7 @@ class ExprsMixin:
         elif isinstance(expr, SizeofExpr):
             # Sizeof operator (sizeof var_name or sizeof type)
             if isinstance(expr.target, str):
-                symbol = self.scope.lookup(expr.target) or self.scope.lookup(expr.target.upper())
+                symbol = self.scope.lookup(expr.target)
                 if symbol is not None and symbol.type_expr is not None:
                     size_val = self.get_type_size(symbol.type_expr)
                 else:
@@ -102,7 +102,7 @@ class ExprsMixin:
                 size_val = self.get_type_size(expr.target)
             return ir.Constant(ir.IntType(16), size_val)  # WORD is 16-bit
         elif isinstance(expr, UpperExpr) or isinstance(expr, LowerExpr):
-            symbol = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
+            symbol = self.scope.lookup(expr.name)
             if not symbol or symbol.type_expr is None:
                 raise CodegenError(f'Undefined variable: {expr.name}')
             ty = self.resolve_type_alias(symbol.type_expr)
@@ -169,7 +169,7 @@ class ExprsMixin:
                 self.builder.call(self.runtime_extern('pas_file_attach_std'), [fcb_ptr, out_fcb])
                 fn = self.runtime_extern('pas_file_eof' if key == 'EOF' else 'pas_file_eoln')
                 return self.builder.icmp_unsigned('!=', self.builder.call(fn, [fcb_ptr]), ir.Constant(ir.IntType(32), 0))
-            symbol = self.scope.lookup(expr.name) or self.scope.lookup(key)
+            symbol = self.scope.lookup(expr.name)
             if not symbol:
                 raise CodegenError(f'Undefined variable: {expr.name}')
             # Vintage Pascal permits a parameterless function to be used in an
@@ -200,7 +200,7 @@ class ExprsMixin:
                 if isinstance(self.resolve_type_alias(alias), SetType):
                     return self.codegen_set_constructor(SetConstructor([sel.index_or_field for sel in expr.selectors], expr.name))
 
-            symbol = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
+            symbol = self.scope.lookup(expr.name)
             if not symbol:
                 raise CodegenError(f'Undefined variable: {expr.name}')
             # Parameters are passed by value; return the value directly when
@@ -602,7 +602,7 @@ class ExprsMixin:
             nbytes = self._to_i64(self.codegen_expr(expr.args[0]))
             return self.builder.call(self.runtime_extern('pas_dev_alloc'), [nbytes])
 
-        symbol = self.scope.lookup(lookup_name) or self.scope.lookup(expr.name)
+        symbol = self.scope.lookup(lookup_name)
 
         if symbol:
             fn = symbol.llvm_value
@@ -947,7 +947,7 @@ class ExprsMixin:
     def _designator_array_bounds(self, arg) -> tuple[int, int]:
         """(lower, upper) bounds of the array a designator names; (1, 10) fallback."""
         name = arg.name if isinstance(arg, (Identifier, Designator)) else ""
-        sym = self.scope.lookup(name) or self.scope.lookup(name.upper()) if name else None
+        sym = self.scope.lookup(name) if name else None
         if sym and sym.type_expr:
             return self.get_array_bounds(sym.type_expr)
         return 1, 10
@@ -955,7 +955,7 @@ class ExprsMixin:
     def _designator_array_low(self, arg) -> int:
         """Lower bound of the array a designator names; 0 fallback (no shift)."""
         name = arg.name if isinstance(arg, (Identifier, Designator)) else ""
-        sym = self.scope.lookup(name) or self.scope.lookup(name.upper()) if name else None
+        sym = self.scope.lookup(name) if name else None
         if sym and sym.type_expr:
             low, _ = self.array_lower_bound(sym.type_expr)
             if low is not None:

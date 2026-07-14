@@ -485,7 +485,7 @@ class TypesMapMixin:
         """
         if not isinstance(expr, (Identifier, Designator)):
             return None
-        sym = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
+        sym = self.scope.lookup(expr.name)
         ty = getattr(sym, 'type_expr', None) if sym else None
         if ty is None:
             return None
@@ -785,7 +785,7 @@ class TypesMapMixin:
             return isinstance(t, PointerType)
         # Named variables/designators: consult the declared Pascal type.
         if isinstance(expr, (Identifier, Designator)):
-            sym = self.scope.lookup(expr.name) or self.scope.lookup(expr.name.upper())
+            sym = self.scope.lookup(expr.name)
             if sym is None or sym.type_expr is None:
                 return None
             t = self.resolve_type_alias(sym.type_expr)

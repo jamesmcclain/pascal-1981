@@ -47,11 +47,16 @@ class Scope:
         self.symbols: Dict[str, Symbol] = {}
 
     def define(self, name: str, llvm_value: Any, type_expr: Type, is_parameter: bool = False) -> None:
-        """Define a symbol in this scope."""
+        """Define a symbol in this scope (keyed case-insensitively)."""
         self.symbols[name.lower()] = Symbol(name, llvm_value, type_expr, is_parameter)
 
     def lookup(self, name: str) -> Optional[Symbol]:
-        """Look up a symbol, checking parent scopes."""
+        """Look up a symbol by name, checking parent scopes.
+
+        Lookup is case-insensitive (Pascal identifiers are case-insensitive;
+        both define() and lookup() fold the key to lowercase), so callers must
+        not retry with a different casing of the same name.
+        """
         key = name.lower()
         if key in self.symbols:
             return self.symbols[key]

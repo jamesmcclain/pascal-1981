@@ -36,8 +36,8 @@ from .device_limits import NVVM_AXIS_MAX, NVVM_MAX_THREADS_PER_BLOCK
 from .parser import parse_file
 from .symbol_table import SourceLocation, Symbol, SymbolTable
 from .type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER8_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL32_TYPE, REAL_TYPE, WORD8_TYPE, WORD32_TYPE, WORD64_TYPE,
-                          WORD_TYPE, ArrayType, EnumType, FileType, FunctionType, LStringType, PointerType, ProcedureType, RecordType, SetType, StringType, Type,
-                          binary_op_result_type, can_assign, is_fixed_char_array, unary_op_result_type)
+                          WORD_TYPE, ArrayType, BooleanType, CharType, EnumType, FileType, FunctionType, IntegerType, LStringType, PointerType, ProcedureType, RealType,
+                          RecordType, SetType, StringType, Type, WordType, binary_op_result_type, can_assign, is_fixed_char_array, unary_op_result_type)
 
 
 @dataclass
@@ -366,7 +366,7 @@ class PascalTypeChecker(TypeChecker):
                 # Build the routine symbols under device context so parameter
                 # types involving INTEGER32 / ADS(s) / etc. resolve correctly.
                 routine_symbols = []
-                for local_name, exported_name, decl in pairs:
+                for local_name, _exported_name, decl in pairs:
                     sym = Symbol(
                         name=local_name,
                         type=self._get_declaration_type(decl),
@@ -406,7 +406,7 @@ class PascalTypeChecker(TypeChecker):
             else:
                 pairs = list(zip(export_names, export_names, export_decls))
 
-        for local_name, exported_name, decl in pairs:
+        for local_name, _exported_name, decl in pairs:
             symbol = Symbol(
                 name=local_name,
                 type=self._get_declaration_type(decl),
@@ -495,7 +495,7 @@ class PascalTypeChecker(TypeChecker):
 
     def match_signatures(self, iface_decl: Any, impl_decl: Any) -> bool:
         """Check if implementation signature matches interface declaration."""
-        if type(iface_decl) != type(impl_decl):
+        if type(iface_decl) is not type(impl_decl):
             return False
 
         if isinstance(iface_decl, FuncDecl):
@@ -2852,7 +2852,7 @@ class PascalTypeChecker(TypeChecker):
                         self.error(f"Function '{expr.name}' expects {expected_args} arguments, got {actual_args}", expr)
                     # Check argument types (fixed params only)
                     if expr.args:
-                        for i, (arg, (param_name, param_type)) in enumerate(zip(expr.args, sym.type.params)):
+                        for i, (arg, (_param_name, param_type)) in enumerate(zip(expr.args, sym.type.params)):
                             # Parameter type as literal context (see the
                             # procedure-call site): constant arguments adopt
                             # the parameter's integer type and range.
@@ -3126,7 +3126,7 @@ class PascalTypeChecker(TypeChecker):
                     self.error(f"Function '{expr.name}' expects {expected_args} arguments, got {actual_args}", expr)
                 # Check argument types (fixed params only)
                 if expr.args:
-                    for i, (arg, (param_name, param_type)) in enumerate(zip(expr.args, sym.type.params)):
+                    for i, (arg, (_param_name, param_type)) in enumerate(zip(expr.args, sym.type.params)):
                         # Parameter type as literal context (see the
                         # procedure-call site): constant arguments adopt the
                         # parameter's integer type and range.
@@ -3488,7 +3488,6 @@ class PascalTypeChecker(TypeChecker):
 
     def get_resolved_type_size(self, t: Type) -> int:
         """Estimate the size of a resolved Type in bytes."""
-        from .type_system import (ArrayType, BooleanType, CharType, EnumType, IntegerType, LStringType, PointerType, RealType, RecordType, SetType, StringType, WordType)
         if isinstance(t, IntegerType):
             return 4
         elif isinstance(t, RealType):

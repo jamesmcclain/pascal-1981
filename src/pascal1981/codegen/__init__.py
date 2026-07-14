@@ -12,7 +12,7 @@ Walks the AST and emits LLVM IR. Supports:
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Optional, Union
+from typing import Dict, Optional, Union
 
 import llvmlite.ir as ir
 
@@ -73,9 +73,6 @@ class Codegen(CodegenBase, TypesMapMixin, ConstFoldMixin, RuntimeBuiltinsMixin, 
             self._null_lstring_global.global_constant = True
         zero = ir.Constant(ir.IntType(32), 0)
         return self.builder.gep(self._null_lstring_global, [zero, zero])
-
-    def _declare_libm_func(self, name: str, ret_type: ir.Type, arg_types: List[ir.Type]) -> ir.Function:
-        return self.runtime_extern(name)
 
 
 def compile_to_llvm(
