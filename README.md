@@ -22,14 +22,24 @@ From a checkout of this repository:
 python3 -m pip install .
 ```
 
-The pip build invokes:
+The pip build compiles the C runtime with `make` and `clang` (both required:
+the build fails early with a clear message if either is missing):
 
 ```bash
-make -C runtime
+make -C runtime all        # CPU shim + libpascalrt.a alias -- always
+make -C runtime cuda       # CUDA shim -- added automatically when the
+                           # CUDA toolkit headers are visible to clang
+                           # ($CUDA_HOME/include/cuda.h; CUDA_HOME defaults
+                           # to /usr/local/cuda)
 ```
 
-That Makefile uses `clang` to compile the C runtime and bundles the resulting
-static archive, `libpascalrt.a`, inside the installed Python package.
+The resulting static archives (`libpascalrt.a`, `libpascalrt_cpu.a`, and
+`libpascalrt_cuda.a` when CUDA was found) are bundled inside the installed
+Python package, and the wheel is tagged for the build platform (e.g.
+`py3-none-linux_x86_64`) because it contains compiled binaries.  On a machine
+with the CUDA toolkit installed (such as the `docker/Dockerfile` image),
+`pip install .` or `python -m build` therefore produces a full host+CUDA
+wheel with no extra flags.
 
 Compile and link a program after installation:
 
