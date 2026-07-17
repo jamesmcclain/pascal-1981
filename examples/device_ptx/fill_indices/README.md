@@ -116,8 +116,8 @@ From the repository root:
 cd examples/device_ptx/fill_indices
 PYTHONPATH=../../../src python3 -m pascal1981 --target ptx \
   fill.pas \
-  fill.ptx \
-  --emit-llvm fill.ll \
+  -o fill.ptx \
+  --save-llvm fill.ll \
   --sm sm_70
 ```
 

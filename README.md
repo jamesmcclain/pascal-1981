@@ -47,17 +47,23 @@ Compile and link a program after installation:
 
 ```bash
 # Pascal source -> LLVM IR  (parse + type-check + codegen)
-pascal1981 myprogram.pas myprogram.ll
+pascal1981 myprogram.pas -o myprogram.ll
 
-# Locate the bundled runtime archive
-pascal1981 --print-runtime-path
+# Locate the bundled runtime archive (gcc-style spelling)
+pascal1981 -print-file-name=libpascalrt.a
 
 # LLVM IR -> native executable
-clang myprogram.ll "$(pascal1981 --print-runtime-path)" -o myprogram
+clang myprogram.ll "$(pascal1981 -print-file-name=libpascalrt.a)" -o myprogram
 
 # Run it
 ./myprogram
 ```
+
+The `pascal1981` command line follows gcc conventions: `-o FILE` names the
+output (without it, output goes to stdout), `-O0`/`-O1`/`-O2`/`-O3` (or a bare
+`-O`, meaning `-O1`) selects an optimization level where one applies, and
+`-print-file-name=libpascalrt.a` prints the absolute path of the bundled
+runtime archive.
 
 You can also locate the runtime archive from Python:
 
@@ -93,7 +99,7 @@ If you do not want to install the package, run the compiler from the checkout by
 putting `src/` on `PYTHONPATH`:
 
 ```bash
-PYTHONPATH=src python3 -m pascal1981 myprogram.pas myprogram.ll
+PYTHONPATH=src python3 -m pascal1981 myprogram.pas -o myprogram.ll
 ```
 
 Build the runtime static library manually:
@@ -118,14 +124,14 @@ clang myprogram.ll runtime/build/libpascalrt.a -o myprogram
 After `make -C runtime`, the source-tree CLI can also print that archive path:
 
 ```bash
-PYTHONPATH=src python3 -m pascal1981 --print-runtime-path
+PYTHONPATH=src python3 -m pascal1981 -print-file-name=libpascalrt.a
 ```
 
 For quick source-tree experiments, you may also link the runtime C files
 directly instead of building the archive:
 
 ```bash
-PYTHONPATH=src python3 -m pascal1981 myprogram.pas myprogram.ll
+PYTHONPATH=src python3 -m pascal1981 myprogram.pas -o myprogram.ll
 clang myprogram.ll runtime/*.c -o myprogram
 ```
 
@@ -138,9 +144,9 @@ you the truth with `undefined reference to pas_...`. Cold, but fair.
 Add `-v` / `--verbose` for detailed output and full Python tracebacks if compilation fails:
 
 ```bash
-pascal1981 -v myprogram.pas myprogram.ll
+pascal1981 -v myprogram.pas -o myprogram.ll
 # or, from a source checkout:
-PYTHONPATH=src python3 -m pascal1981 -v myprogram.pas myprogram.ll
+PYTHONPATH=src python3 -m pascal1981 -v myprogram.pas -o myprogram.ll
 ```
 
 Optional dialect extensions are controlled with feature flags. The default dialect is vintage IBM Pascal behavior; wider integer types and symbolic enum I/O are off unless explicitly enabled:
@@ -151,10 +157,10 @@ pascal1981 --list-features
 
 # Enable the wide/narrow integer extension family (INTEGER8/32/64,
 # WORD8/32/64, MAXINT32/MAXINT64, MAXWORD32/MAXWORD64, WRD8)
-pascal1981 -f wide-integers myprogram.pas myprogram.ll
+pascal1981 -f wide-integers myprogram.pas -o myprogram.ll
 
 # Enable name-based user enum WRITE and READ as an extension
-pascal1981 -f symbolic-enum-io myprogram.pas myprogram.ll
+pascal1981 -f symbolic-enum-io myprogram.pas -o myprogram.ll
 ```
 
 By default the dialect already enforces the vintage WORD/INTEGER rules: a signed
@@ -172,10 +178,10 @@ out of the extended dialect.
 
 ```bash
 # Make every non-constant WORD/INTEGER expression mix a hard error
-pascal1981 -f strict-word-int myprogram.pas myprogram.ll
+pascal1981 -f strict-word-int myprogram.pas -o myprogram.ll
 ```
 
-If no output file is specified, LLVM IR is written to stdout:
+If `-o` is not specified, LLVM IR is written to stdout:
 
 ```bash
 pascal1981 myprogram.pas | clang -x ir - "$(pascal1981 --print-runtime-path)" -o myprogram
@@ -199,10 +205,10 @@ From a source checkout, compile a device implementation directly to PTX:
 ```bash
 PYTHONPATH=src python3 -m pascal1981.compile_to_ptx \
   examples/device_ptx/fill_indices/fill.pas \
-  examples/device_ptx/fill_indices/fill.ptx \
-  --emit-llvm examples/device_ptx/fill_indices/fill.ll \
+  -o examples/device_ptx/fill_indices/fill.ptx \
+  --save-llvm examples/device_ptx/fill_indices/fill.ll \
   --cpu sm_70 \
-  --opt-level 2
+  -O2
 ```
 
 The source file is a `DEVICE IMPLEMENTATION OF` whose sibling interface file
@@ -453,13 +459,13 @@ Two CLI flags select the target triples, independently:
 
 ```bash
 # CPU device (runnable here): spaces collapse to addrspace 0
-pascal1981 kernel.pas kernel.ll
+pascal1981 kernel.pas -o kernel.ll
 
 # GPU device: IR carries addrspace(1)/addrspace(3)/... (needs a GPU toolchain to run)
-pascal1981 --device-triple nvptx64-nvidia-cuda kernel.pas kernel.ll
+pascal1981 --device-triple nvptx64-nvidia-cuda kernel.pas -o kernel.ll
 
 # Cross-compile the host side too (triples are independent)
-pascal1981 --host-triple aarch64-unknown-linux-gnu kernel.pas kernel.ll
+pascal1981 --host-triple aarch64-unknown-linux-gnu kernel.pas -o kernel.ll
 ```
 
 The same triples are available on the `compile_to_llvm` package API:

@@ -11,7 +11,7 @@ specific claim was tested empirically (both on fill_indices/mandelbrot and on
 a minimal synthetic repro replicating the tid+ctaid*ntid indexing pattern
 outside this codebase) and DID NOT hold on the LLVM 20.1.8 bundled with this
 repo's pinned llvmlite==0.47.0: the PTX for both examples is byte-identical
-with vs. without the !range metadata at --opt-level 2. This file therefore
+with vs. without the !range metadata at -O2. This file therefore
 asserts what was actually observed -- valid metadata that survives the whole
 pipeline -- and does not assert the specific instruction-selection win, which
 would be a false claim on this toolchain.
@@ -29,7 +29,7 @@ def _emit_llvm(example_dir, source, ll_path, *extra_args):
     repo = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
     ptx_path = ll_path + '.ptx'
     result = subprocess.run(
-        [sys.executable, '-m', 'pascal1981.compile_to_ptx', source, ptx_path, '--emit-llvm', ll_path, *extra_args],
+        [sys.executable, '-m', 'pascal1981.compile_to_ptx', source, '-o', ptx_path, '--save-llvm', ll_path, *extra_args],
         cwd=example_dir,
         env={
             **os.environ, 'PYTHONPATH': os.path.join(repo, 'src')
@@ -52,7 +52,7 @@ class TestDeviceRangeMetadataPtx(unittest.TestCase):
         ll = os.path.join(example_dir, 'fill.range.ll')
         try:
             for opt_level in ('0', '2'):
-                result, ptx_path = _emit_llvm(example_dir, 'fill.pas', ll, '--cpu', 'sm_70', '--opt-level', opt_level)
+                result, ptx_path = _emit_llvm(example_dir, 'fill.pas', ll, '--cpu', 'sm_70', f'-O{opt_level}')
                 self.assertEqual(result.returncode, 0, result.stderr)
                 with open(ll) as f:
                     ir_text = f.read()
@@ -71,12 +71,12 @@ class TestDeviceRangeMetadataPtx(unittest.TestCase):
     def test_mandelbrot_ptx_unaffected_by_range_metadata_at_o2(self):
         """Documents the actual (negative) empirical result: on this
         toolchain, !range on the sreg reads changes nothing observable in the
-        emitted PTX for this kernel at --opt-level 2, even though the
+        emitted PTX for this kernel at -O2, even though the
         metadata is present and valid in the IR. See module docstring."""
         example_dir = self._example_dir('mandelbrot')
         ll = os.path.join(example_dir, 'mandelbrot.range.ll')
         try:
-            result, ptx_path = _emit_llvm(example_dir, 'mandelbrot.pas', ll, '--cpu', 'sm_86', '--opt-level', '2')
+            result, ptx_path = _emit_llvm(example_dir, 'mandelbrot.pas', ll, '--cpu', 'sm_86', '-O2')
             self.assertEqual(result.returncode, 0, result.stderr)
             with open(ll) as f:
                 ir_text = f.read()

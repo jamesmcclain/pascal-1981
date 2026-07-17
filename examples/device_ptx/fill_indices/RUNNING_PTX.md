@@ -35,8 +35,8 @@ From this example directory in the Pascal repository:
 ```bash
 PYTHONPATH=../../../src python3 -m pascal1981 --target ptx \
   fill.pas \
-  fill.ptx \
-  --emit-llvm fill.ll \
+  -o fill.ptx \
+  --save-llvm fill.ll \
   --sm sm_70
 ```
 

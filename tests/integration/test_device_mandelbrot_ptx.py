@@ -53,7 +53,7 @@ class TestDeviceMandelbrotPtxSubstitution(unittest.TestCase):
         ptx_path = os.path.join(example_dir, 'mandelbrot.test.ptx')
         ll_path = os.path.join(example_dir, 'mandelbrot.test.ll')
         result = subprocess.run(
-            [sys.executable, '-m', 'pascal1981.compile_to_ptx', 'mandelbrot.pas', ptx_path, '--emit-llvm', ll_path, '--cpu', cpu],
+            [sys.executable, '-m', 'pascal1981.compile_to_ptx', 'mandelbrot.pas', '-o', ptx_path, '--save-llvm', ll_path, '--cpu', cpu],
             cwd=example_dir,
             env={
                 **os.environ, 'PYTHONPATH': os.path.join(repo, 'src')

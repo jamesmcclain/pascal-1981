@@ -131,17 +131,22 @@ def run_ptx_cli(source_file: str, output_file: str | None, *, host_triple: str, 
 def main() -> int:
     parser = argparse.ArgumentParser(description='Compile Pascal DEVICE code to PTX assembly.')
     parser.add_argument('source_file', help='Source Pascal DEVICE implementation file')
-    parser.add_argument('output_file', nargs='?', default=None, help='Output .ptx file; stdout if omitted')
+    parser.add_argument('-o', '--output', dest='output_file', default=None, metavar='FILE', help='Write PTX to FILE. Without -o, output goes to stdout.')
     parser.add_argument('--host-triple', default='x86_64-pc-linux-gnu')
     parser.add_argument('--device-triple', default='nvptx64-nvidia-cuda')
     parser.add_argument('--cpu', default='sm_70', help='NVPTX target CPU, e.g. sm_70, sm_86 (default: sm_70)')
-    parser.add_argument('--emit-llvm', default=None, metavar='PATH', help='Also write the intermediate LLVM IR')
-    parser.add_argument('--opt-level',
+    parser.add_argument('--save-llvm', default=None, metavar='PATH', help='Also write the intermediate LLVM IR to PATH (gcc -save-temps style).')
+    parser.add_argument('-O',
+                        dest='opt_level',
                         type=int,
                         choices=[0, 1, 2, 3],
-                        default=0,
+                        nargs='?',
+                        const=1,
+                        default=None,
                         metavar='N',
-                        help='Run LLVM\'s O0-O3 mid-level IR pass pipeline before NVPTX codegen (default: 0 for compatibility/debugging; use 2 for quality PTX).')
+                        help='Optimization level 0-3 (gcc-style; a bare -O means -O1): run LLVM\'s O0-O3 '
+                        'mid-level IR pass pipeline before NVPTX codegen (default: 0 for '
+                        'compatibility/debugging; use 2 for quality PTX).')
     parser.add_argument('-f', '--feature', action='append', default=[], metavar='NAME', help='Enable extension feature NAME; use no-NAME to disable. Repeatable.')
     parser.add_argument('--dialect', choices=['vintage', 'extended'], default='vintage')
     parser.add_argument('-v', '--verbose', action='store_true', help='Print a full traceback on failure')
@@ -163,8 +168,8 @@ def main() -> int:
         device_triple=args.device_triple,
         cpu=args.cpu,
         features=features,
-        emit_llvm_path=args.emit_llvm,
-        opt_level=args.opt_level,
+        emit_llvm_path=args.save_llvm,
+        opt_level=args.opt_level if args.opt_level is not None else 0,
         verbose=args.verbose,
     )
 

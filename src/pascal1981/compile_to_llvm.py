@@ -3,10 +3,10 @@
 Pascal to LLVM IR compiler driver.
 
 Usage:
-    pascal1981 [-v|--verbose] <source.pas> [output.ll]
-    pascal1981 --print-runtime-path
+    pascal1981 [-v|--verbose] [-o output.ll] <source.pas>
+    pascal1981 -print-file-name=libpascalrt.a
 
-If output.ll is not specified, IR is written to stdout.
+If -o is not specified, IR is written to stdout.
 With -v/--verbose, codegen logs each declaration/statement it processes and
 prints a full traceback if compilation fails.
 """
@@ -25,11 +25,7 @@ from .type_checker import PascalTypeChecker
 def main() -> int:
     parser = argparse.ArgumentParser(description="Pascal to LLVM IR compiler driver.", formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument('source_file', nargs='?', type=str, help='Source Pascal file (e.g., program.pas)')
-    parser.add_argument(
-        'output_file',
-        nargs='?',  # Optional positional argument
-        default=None,
-        help='Output LLVM IR file to write to.')
+    parser.add_argument('-o', '--output', dest='output_file', default=None, metavar='FILE', help='Write output to FILE. Without -o, output goes to stdout.')
     parser.add_argument('-v', '--verbose', action='store_true', help='Log each declaration/statement and print a full traceback on failure.')
     parser.add_argument('-f', '--feature', action='append', default=[], metavar='NAME', help='Enable extension feature NAME; use no-NAME to disable. Repeatable.')
     parser.add_argument('--dialect',
@@ -37,7 +33,7 @@ def main() -> int:
                         default='vintage',
                         help='Feature umbrella: vintage enables no extensions; extended enables all registered features.')
     parser.add_argument('--list-features', action='store_true', help='List registered extension features and exit.')
-    parser.add_argument('--print-runtime-path', action='store_true', help='Print the bundled libpascalrt.a path and exit.')
+    parser.add_argument('-print-file-name', dest='print_file_name', default=None, metavar='LIB', help='Print the absolute path of the named runtime archive and exit (gcc-style; e.g. -print-file-name=libpascalrt.a). As with gcc, an unrecognized LIB is echoed back unchanged.')
     parser.add_argument('--host-triple', default='x86_64-pc-linux-gnu', metavar='TRIPLE', help='LLVM target triple for host MODULE/PROGRAM units (default: x86_64-pc-linux-gnu).')
     parser.add_argument('--device-triple',
                         default='x86_64-pc-linux-gnu',
@@ -52,15 +48,19 @@ def main() -> int:
                         '(.ptx). --target ptx selects the NVPTX device triple and honors --sm; it '
                         'is the single-CLI replacement for python -m pascal1981.compile_to_ptx.')
     parser.add_argument('--sm', default='sm_70', metavar='ARCH', help='NVPTX target CPU for --target ptx, e.g. sm_70, sm_86 (default: sm_70).')
-    parser.add_argument('--emit-llvm', default=None, metavar='PATH', help='With --target ptx, also write the intermediate NVPTX LLVM IR to PATH.')
-    parser.add_argument('--opt-level',
+    parser.add_argument('--save-llvm', default=None, metavar='PATH', help='With --target ptx, also write the intermediate NVPTX LLVM IR to PATH (gcc -save-temps style).')
+    parser.add_argument('-O',
+                        dest='opt_level',
                         type=int,
                         choices=[0, 1, 2, 3],
-                        default=0,
+                        nargs='?',
+                        const=1,
+                        default=None,
                         metavar='N',
-                        help='With --target ptx, run LLVM\'s O0-O3 mid-level IR pass pipeline before '
-                        'NVPTX codegen (default: 0 for compatibility/debugging; use 2 for quality PTX). '
-                        'Only meaningful with --target ptx; an error with --target host.')
+                        help='Optimization level 0-3 (gcc-style; a bare -O means -O1). With --target ptx, '
+                        'run LLVM\'s O0-O3 mid-level IR pass pipeline before NVPTX codegen (default: 0 '
+                        'for compatibility/debugging; use 2 for quality PTX). Only meaningful with '
+                        '--target ptx; an error with --target host.')
     parser.add_argument('--device-backend',
                         choices=['cpu', 'cuda'],
                         default='cpu',
@@ -105,12 +105,19 @@ def main() -> int:
     parser.add_argument('--initck', choices=['on', 'off', 'source'], default='source', help=_flag_help.format(name='INITCK (uninitialised variable detection)'))
     args = parser.parse_args()
 
-    if args.print_runtime_path:
-        print(runtime_lib_path())
+    if args.print_file_name is not None:
+        # gcc semantics: print the located path, or echo the name back when it
+        # is not a file this driver knows how to locate.
+        if args.print_file_name == 'libpascalrt.a':
+            print(runtime_lib_path())
+        else:
+            print(args.print_file_name)
         return 0
 
-    if args.target != 'ptx' and args.opt_level:
-        parser.error('--opt-level is only meaningful with --target ptx')
+    opt_level = args.opt_level if args.opt_level is not None else 0
+
+    if args.target != 'ptx' and opt_level:
+        parser.error('-O is only meaningful with --target ptx')
 
     if args.target == 'ptx':
         # Single-CLI device path: parse/check/lower to NVPTX IR, then PTX.
@@ -132,8 +139,8 @@ def main() -> int:
             device_triple=device_triple,
             cpu=args.sm,
             features=features,
-            emit_llvm_path=args.emit_llvm,
-            opt_level=args.opt_level,
+            emit_llvm_path=args.save_llvm,
+            opt_level=opt_level,
             verbose=args.verbose,
         )
 
