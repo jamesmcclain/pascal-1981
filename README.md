@@ -35,8 +35,10 @@ make -C runtime cuda       # CUDA shim -- added automatically when the
 
 The resulting static archives (`libpascalrt.a`, `libpascalrt_cpu.a`, and
 `libpascalrt_cuda.a` when CUDA was found) are bundled inside the installed
-Python package, and the wheel is tagged for the build platform (e.g.
-`py3-none-linux_x86_64`) because it contains compiled binaries.  On a machine
+Python package, and the wheel carries the PEP 600 perennial tag of the build
+machine (e.g. `py3-none-manylinux_2_39_x86_64` when built on Ubuntu 24.04):
+the archives are compiled against the build machine's glibc, so pip refuses
+the wheel on older-glibc machines instead of letting them fail at link time.  On a machine
 with the CUDA toolkit installed (such as the `docker/Dockerfile` image),
 `pip install .` or `python -m build` therefore produces a full host+CUDA
 wheel with no extra flags.
@@ -62,6 +64,28 @@ You can also locate the runtime archive from Python:
 ```bash
 python3 -c 'from pascal1981 import runtime_lib_path; print(runtime_lib_path())'
 ```
+
+### Build a wheel
+
+On any machine with `make` + `clang`:
+
+```bash
+python3 -m pip wheel . --no-deps -w dist
+```
+
+The build self-configures: a visible CUDA toolkit produces a full host+CUDA
+wheel, otherwise the wheel is CPU-only.  To guarantee the full wheel, build
+inside the CUDA development image (no GPU needed for the build itself):
+
+```bash
+docker build -t pascal-1981:latest -f docker/Dockerfile .   # once; see docker/README.md
+docker run --rm -v "$PWD":/work pascal-1981:latest sh -c "pip wheel . --no-deps -w /work/dist"
+```
+
+Either way the wheel lands in `dist/`, tagged with the build machine's glibc
+floor (e.g. `pascal1981-1.0.0-py3-none-manylinux_2_39_x86_64.whl` from the
+container).  Check its cargo with
+`unzip -l dist/*.whl | grep '\.a$'` (three archives with CUDA, two without).
 
 ### Run from a source checkout without pip installing
 

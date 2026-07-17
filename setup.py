@@ -19,7 +19,12 @@ Build-time tool policy:
 A custom ``bdist_wheel`` marks the wheel platform-specific: the bundled
 archives are compiled binaries, so a ``py3-none-any`` tag would lie.  The
 tag stays Python-agnostic (``py3-none-<platform>``) because the archives
-are data files, not CPython extensions.
+are data files, not CPython extensions.  On glibc Linux the platform tag is
+the PEP 600 perennial tag of the BUILD machine (e.g.
+``manylinux_2_39_x86_64`` when built on Ubuntu 24.04): the archives are
+compiled against the build machine's glibc, so that tag makes pip refuse
+older-glibc machines at install time instead of letting the archives fail
+later at link time.
 
 All project metadata lives in pyproject.toml; this file only exists to
 register the custom build commands.
@@ -28,6 +33,7 @@ register the custom build commands.
 from __future__ import annotations
 
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -150,7 +156,11 @@ class NonPureBdistWheel(_bdist_wheel):
 
     The wheel bundles compiled static archives, so ``py3-none-any`` would be
     a lie; but the archives are data files rather than CPython extensions, so
-    a CPython ABI tag would overclaim.  Result: e.g. ``py3-none-linux_x86_64``.
+    a CPython ABI tag would overclaim.  On glibc Linux the platform is the
+    PEP 600 perennial tag computed from the build machine's own glibc
+    (``manylinux_<glibc>_<arch>``), which is exactly the floor the compiled
+    archives impose.  Non-Linux or non-glibc build hosts keep the default
+    platform tag.
     """
 
     def finalize_options(self) -> None:
@@ -159,6 +169,10 @@ class NonPureBdistWheel(_bdist_wheel):
 
     def get_tag(self):
         _impl, _abi, plat = super().get_tag()
+        libc, version = platform.libc_ver()
+        if sys.platform.startswith("linux") and libc == "glibc" and version:
+            major, minor = version.split(".")[:2]
+            plat = f"manylinux_{major}_{minor}_{platform.machine()}"
         return "py3", "none", plat
 
 
