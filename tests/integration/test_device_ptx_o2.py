@@ -120,7 +120,7 @@ class TestDevicePtxO2Pipeline(unittest.TestCase):
         out = os.path.join(example_dir, 'fill.cli.ptx')
         try:
             result = subprocess.run(
-                [sys.executable, '-m', 'pascal1981.compile_to_llvm', 'fill.pas', '-o', out, '--target', 'ptx', '--sm', 'sm_70', '-O2'],
+                [sys.executable, '-m', 'pascal1981.compile_to_llvm', 'fill.pas', '-S', '-o', out, '--target', 'ptx', '--sm', 'sm_70', '-O2'],
                 cwd=example_dir,
                 env={
                     **os.environ, 'PYTHONPATH': os.path.join(repo, 'src')
@@ -138,11 +138,13 @@ class TestDevicePtxO2Pipeline(unittest.TestCase):
             except FileNotFoundError:
                 pass
 
-    def test_opt_level_rejected_with_target_host(self):
+    def test_target_ptx_requires_dash_S(self):
+        """--target ptx emits assembly-level PTX, so the driver requires the
+        -S stage flag (it cannot be assembled or linked into a host exe)."""
         repo = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         example_dir = self._example_dir('fill_indices')
         result = subprocess.run(
-            [sys.executable, '-m', 'pascal1981.compile_to_llvm', 'fill.pas', '--target', 'host', '-O2'],
+            [sys.executable, '-m', 'pascal1981.compile_to_llvm', 'fill.pas', '--target', 'ptx', '-O2'],
             cwd=example_dir,
             env={
                 **os.environ, 'PYTHONPATH': os.path.join(repo, 'src')
@@ -151,7 +153,7 @@ class TestDevicePtxO2Pipeline(unittest.TestCase):
             text=True,
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('-O', result.stderr)
+        self.assertIn('requires -S', result.stderr)
 
 
 if __name__ == '__main__':

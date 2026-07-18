@@ -46,24 +46,25 @@ wheel with no extra flags.
 Compile and link a program after installation:
 
 ```bash
-# Pascal source -> LLVM IR  (parse + type-check + codegen)
-pascal1981 myprogram.pas -o myprogram.ll
-
-# Locate the bundled runtime archive (gcc-style spelling)
-pascal1981 -print-file-name=libpascalrt.a
-
-# LLVM IR -> native executable
-clang myprogram.ll "$(pascal1981 -print-file-name=libpascalrt.a)" -o myprogram
+# Pascal source -> native executable (compile + assemble + link via clang;
+# the bundled libpascalrt.a is added to the link automatically)
+pascal1981 myprogram.pas -o myprogram
 
 # Run it
 ./myprogram
 ```
 
-The `pascal1981` command line follows gcc conventions: `-o FILE` names the
-output (without it, output goes to stdout), `-O0`/`-O1`/`-O2`/`-O3` (or a bare
-`-O`, meaning `-O1`) selects an optimization level where one applies, and
-`-print-file-name=libpascalrt.a` prints the absolute path of the bundled
-runtime archive.
+The `pascal1981` command line follows gcc conventions. Stage flags select how
+far compilation goes: with no stage flag the driver compiles, assembles, and
+links an executable (`a.out`, or `-o FILE`); `-S` stops at assembly (host:
+LLVM IR, `./<name>.ll`; `--target ptx`: `./<name>.ptx`); `-c` stops at an
+object file (`./<name>.o`). Assembling and linking run through clang. `-o
+FILE` names the output, and with `-S` the extension `-o -` writes to stdout.
+`-O0`/`-O1`/`-O2`/`-O3` (or a bare `-O`, meaning `-O1`) selects an
+optimization level: with host `-S` it runs LLVM's mid-level IR pipeline, with
+`-c`/linking it is forwarded to clang, and with `--target ptx` it runs the
+pipeline before NVPTX codegen. `-print-file-name=libpascalrt.a` prints the
+absolute path of the bundled runtime archive.
 
 You can also locate the runtime archive from Python:
 
@@ -99,7 +100,7 @@ If you do not want to install the package, run the compiler from the checkout by
 putting `src/` on `PYTHONPATH`:
 
 ```bash
-PYTHONPATH=src python3 -m pascal1981 myprogram.pas -o myprogram.ll
+PYTHONPATH=src python3 -m pascal1981 -S myprogram.pas -o myprogram.ll
 ```
 
 Build the runtime static library manually:
@@ -131,7 +132,7 @@ For quick source-tree experiments, you may also link the runtime C files
 directly instead of building the archive:
 
 ```bash
-PYTHONPATH=src python3 -m pascal1981 myprogram.pas -o myprogram.ll
+PYTHONPATH=src python3 -m pascal1981 -S myprogram.pas -o myprogram.ll
 clang myprogram.ll runtime/*.c -o myprogram
 ```
 
@@ -144,9 +145,9 @@ you the truth with `undefined reference to pas_...`. Cold, but fair.
 Add `-v` / `--verbose` for detailed output and full Python tracebacks if compilation fails:
 
 ```bash
-pascal1981 -v myprogram.pas -o myprogram.ll
+pascal1981 -v -S myprogram.pas -o myprogram.ll
 # or, from a source checkout:
-PYTHONPATH=src python3 -m pascal1981 -v myprogram.pas -o myprogram.ll
+PYTHONPATH=src python3 -m pascal1981 -v -S myprogram.pas -o myprogram.ll
 ```
 
 Optional dialect extensions are controlled with feature flags. The default dialect is vintage IBM Pascal behavior; wider integer types and symbolic enum I/O are off unless explicitly enabled:
@@ -157,10 +158,10 @@ pascal1981 --list-features
 
 # Enable the wide/narrow integer extension family (INTEGER8/32/64,
 # WORD8/32/64, MAXINT32/MAXINT64, MAXWORD32/MAXWORD64, WRD8)
-pascal1981 -f wide-integers myprogram.pas -o myprogram.ll
+pascal1981 -f wide-integers -S myprogram.pas -o myprogram.ll
 
 # Enable name-based user enum WRITE and READ as an extension
-pascal1981 -f symbolic-enum-io myprogram.pas -o myprogram.ll
+pascal1981 -f symbolic-enum-io -S myprogram.pas -o myprogram.ll
 ```
 
 By default the dialect already enforces the vintage WORD/INTEGER rules: a signed
@@ -178,19 +179,22 @@ out of the extended dialect.
 
 ```bash
 # Make every non-constant WORD/INTEGER expression mix a hard error
-pascal1981 -f strict-word-int myprogram.pas -o myprogram.ll
+pascal1981 -f strict-word-int -S myprogram.pas -o myprogram.ll
 ```
 
-If `-o` is not specified, LLVM IR is written to stdout:
+Without a stage flag the driver links an executable; intermediate artifacts
+follow gcc's naming rules (`-S` writes `./<name>.ll`, `-c` writes
+`./<name>.o`, linking writes `./a.out`) unless `-o` says otherwise. To stream
+LLVM IR to stdout -- e.g. to drive clang yourself in a pipe -- use `-S -o -`:
 
 ```bash
-pascal1981 myprogram.pas | clang -x ir - "$(pascal1981 --print-runtime-path)" -o myprogram
+pascal1981 -S -o - myprogram.pas | clang -x ir - "$(pascal1981 -print-file-name=libpascalrt.a)" -o myprogram
 ```
 
 Source-tree equivalent:
 
 ```bash
-PYTHONPATH=src python3 -m pascal1981 myprogram.pas | clang -x ir - runtime/build/libpascalrt.a -o myprogram
+PYTHONPATH=src python3 -m pascal1981 -S -o - myprogram.pas | clang -x ir - runtime/build/libpascalrt.a -o myprogram
 ```
 
 ## Device PTX artifact generation
@@ -459,13 +463,13 @@ Two CLI flags select the target triples, independently:
 
 ```bash
 # CPU device (runnable here): spaces collapse to addrspace 0
-pascal1981 kernel.pas -o kernel.ll
+pascal1981 -S kernel.pas -o kernel.ll
 
 # GPU device: IR carries addrspace(1)/addrspace(3)/... (needs a GPU toolchain to run)
-pascal1981 --device-triple nvptx64-nvidia-cuda kernel.pas -o kernel.ll
+pascal1981 -S --device-triple nvptx64-nvidia-cuda kernel.pas -o kernel.ll
 
 # Cross-compile the host side too (triples are independent)
-pascal1981 --host-triple aarch64-unknown-linux-gnu kernel.pas -o kernel.ll
+pascal1981 -S --host-triple aarch64-unknown-linux-gnu kernel.pas -o kernel.ll
 ```
 
 The same triples are available on the `compile_to_llvm` package API:

@@ -33,7 +33,7 @@ not the same as a successful CUDA launch.  The machine knows when you lie.
 From this example directory in the Pascal repository:
 
 ```bash
-PYTHONPATH=../../../src python3 -m pascal1981 --target ptx \
+PYTHONPATH=../../../src python3 -m pascal1981 --target ptx -S \
   fill.pas \
   -o fill.ptx \
   --save-llvm fill.ll \

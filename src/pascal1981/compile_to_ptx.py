@@ -9,6 +9,7 @@ It does not require a CUDA runtime or an NVIDIA device.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import traceback
 
@@ -131,7 +132,7 @@ def run_ptx_cli(source_file: str, output_file: str | None, *, host_triple: str, 
 def main() -> int:
     parser = argparse.ArgumentParser(description='Compile Pascal DEVICE code to PTX assembly.')
     parser.add_argument('source_file', help='Source Pascal DEVICE implementation file')
-    parser.add_argument('-o', '--output', dest='output_file', default=None, metavar='FILE', help='Write PTX to FILE. Without -o, output goes to stdout.')
+    parser.add_argument('-o', '--output', dest='output_file', default=None, metavar='FILE', help='Write PTX to FILE (default: ./<basename>.ptx; -o - writes to stdout).')
     parser.add_argument('--host-triple', default='x86_64-pc-linux-gnu')
     parser.add_argument('--device-triple', default='nvptx64-nvidia-cuda')
     parser.add_argument('--cpu', default='sm_70', help='NVPTX target CPU, e.g. sm_70, sm_86 (default: sm_70)')
@@ -161,9 +162,12 @@ def main() -> int:
         else:
             print('(re-run with -v for a full traceback)', file=sys.stderr)
         return 1
+    out = args.output_file
+    if out is None:
+        out = os.path.splitext(os.path.basename(args.source_file))[0] + '.ptx'
     return run_ptx_cli(
         args.source_file,
-        args.output_file,
+        None if out == '-' else out,
         host_triple=args.host_triple,
         device_triple=args.device_triple,
         cpu=args.cpu,

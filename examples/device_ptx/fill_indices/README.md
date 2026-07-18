@@ -114,7 +114,7 @@ From the repository root:
 
 ```bash
 cd examples/device_ptx/fill_indices
-PYTHONPATH=../../../src python3 -m pascal1981 --target ptx \
+PYTHONPATH=../../../src python3 -m pascal1981 --target ptx -S \
   fill.pas \
   -o fill.ptx \
   --save-llvm fill.ll \

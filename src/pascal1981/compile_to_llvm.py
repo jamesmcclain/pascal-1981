@@ -3,16 +3,26 @@
 Pascal to LLVM IR compiler driver.
 
 Usage:
-    pascal1981 [-v|--verbose] [-o output.ll] <source.pas>
+    pascal1981 [options] <source.pas>     compile, assemble, and link (a.out, or -o FILE)
+    pascal1981 -S <source.pas>            compile only: write assembly (host: ./<name>.ll;
+                                          --target ptx: ./<name>.ptx). -o - writes to stdout.
+    pascal1981 -c <source.pas>            compile and assemble to ./<name>.o (or -o FILE)
     pascal1981 -print-file-name=libpascalrt.a
 
-If -o is not specified, IR is written to stdout.
-With -v/--verbose, codegen logs each declaration/statement it processes and
+Assembling and linking run through clang; the bundled libpascalrt.a is added
+to the link automatically.  With -v/--verbose, codegen logs each
+declaration/statement it processes, echoes the clang commands it runs, and
 prints a full traceback if compilation fails.
 """
 
 import argparse
+import os
+import re
+import shlex
+import shutil
+import subprocess
 import sys
+import tempfile
 import traceback
 
 from . import runtime_lib_path
@@ -22,11 +32,58 @@ from .parser import parse_file
 from .type_checker import PascalTypeChecker
 
 
+def _default_output(source_file: str, suffix: str) -> str:
+    """gcc-style default output name: the source basename with its last
+    extension swapped for ``suffix``, in the current working directory."""
+    return os.path.splitext(os.path.basename(source_file))[0] + suffix
+
+
+def _optimize_ir_text(ir_text: str, opt_level: int) -> str:
+    """Run LLVM's O1-O3 mid-level pass pipeline over host IR and return the
+    optimized module as text (llvmlite new-PM bindings; mirrors the pipeline
+    compile_to_ptx.llvm_ir_to_ptx runs for --target ptx)."""
+    import llvmlite.binding as llvm
+
+    try:
+        llvm.initialize_all_targets()
+        llvm.initialize_all_asmprinters()
+    except Exception:
+        # llvmlite permits repeated initialization in some builds and rejects
+        # it in others; either way, continue to target lookup.
+        pass
+
+    m = re.search(r'^target triple = "([^"]+)"', ir_text, re.MULTILINE)
+    triple = m.group(1) if m else llvm.get_default_triple()
+    llvm_mod = llvm.parse_assembly(ir_text)
+    llvm_mod.verify()
+    tm = llvm.Target.from_triple(triple).create_target_machine()
+    from .codegen.llvmlite_compat import create_pipeline_tuning_options
+    pto = create_pipeline_tuning_options(llvm, speed_level=opt_level)
+    pb = llvm.create_pass_builder(tm, pto)
+    pb.getModulePassManager().run(llvm_mod, pb)
+    llvm_mod.verify()
+    return str(llvm_mod)
+
+
+def _run_clang(cmd: list, verbose: bool) -> int:
+    """Run one clang command line, echoing it under -v; return its exit code."""
+    if verbose:
+        print('+ ' + ' '.join(shlex.quote(a) for a in cmd), file=sys.stderr)
+    try:
+        return subprocess.run(cmd).returncode
+    except OSError as exc:
+        print(f'Error: failed to execute clang: {exc}', file=sys.stderr)
+        return 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Pascal to LLVM IR compiler driver.", formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument('source_file', nargs='?', type=str, help='Source Pascal file (e.g., program.pas)')
-    parser.add_argument('-o', '--output', dest='output_file', default=None, metavar='FILE', help='Write output to FILE. Without -o, output goes to stdout.')
-    parser.add_argument('-v', '--verbose', action='store_true', help='Log each declaration/statement and print a full traceback on failure.')
+    parser.add_argument('-o', '--output', dest='output_file', default=None, metavar='FILE', help='Write output to FILE (default: a.out when linking, ./<basename>.ll or .ptx with -S, ./<basename>.o with -c). With -S, -o - writes to stdout.')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Log each declaration/statement, echo clang command lines, and print a full traceback on failure.')
+    _stages = parser.add_mutually_exclusive_group()
+    _stages.add_argument('-S', dest='stage_s', action='store_true', help='Compile only: emit assembly and stop (host: LLVM IR; --target ptx: PTX). Default output ./<basename>.ll (or .ptx); -o - writes to stdout.')
+    _stages.add_argument('-c', dest='stage_c', action='store_true', help='Compile and assemble to an object file via clang (default ./<basename>.o); do not link.')
     parser.add_argument('-f', '--feature', action='append', default=[], metavar='NAME', help='Enable extension feature NAME; use no-NAME to disable. Repeatable.')
     parser.add_argument('--dialect',
                         choices=['vintage', 'extended'],
@@ -57,10 +114,10 @@ def main() -> int:
                         const=1,
                         default=None,
                         metavar='N',
-                        help='Optimization level 0-3 (gcc-style; a bare -O means -O1). With --target ptx, '
-                        'run LLVM\'s O0-O3 mid-level IR pass pipeline before NVPTX codegen (default: 0 '
-                        'for compatibility/debugging; use 2 for quality PTX). Only meaningful with '
-                        '--target ptx; an error with --target host.')
+                        help='Optimization level 0-3 (gcc-style; a bare -O means -O1). Host: with -S, '
+                        'runs LLVM\'s mid-level IR pipeline before writing IR; with -c or when linking, '
+                        'forwarded to clang. With --target ptx, runs the mid-level pipeline before NVPTX '
+                        'codegen (default: 0 for compatibility/debugging; use 2 for quality PTX).')
     parser.add_argument('--device-backend',
                         choices=['cpu', 'cuda'],
                         default='cpu',
@@ -116,13 +173,16 @@ def main() -> int:
 
     opt_level = args.opt_level if args.opt_level is not None else 0
 
-    if args.target != 'ptx' and opt_level:
-        parser.error('-O is only meaningful with --target ptx')
-
     if args.target == 'ptx':
         # Single-CLI device path: parse/check/lower to NVPTX IR, then PTX.
+        # PTX is an assembly-level artifact, so only -S applies: it cannot be
+        # assembled further (-c needs ptxas) or linked into a host executable.
         # The compile/emit/report tail is shared with compile_to_ptx.main.
         from .compile_to_ptx import run_ptx_cli
+        if args.stage_c:
+            parser.error('-c is not available with --target ptx (assembling PTX requires ptxas; emit PTX with -S)')
+        if not args.stage_s:
+            parser.error('--target ptx requires -S (device assembly cannot be assembled or linked into a host executable)')
         try:
             features = resolve_features(args.dialect, args.feature)
         except ValueError as exc:
@@ -132,9 +192,10 @@ def main() -> int:
         device_triple = args.device_triple
         if device_triple == 'x86_64-pc-linux-gnu':
             device_triple = 'nvptx64-nvidia-cuda'
+        out = args.output_file or _default_output(args.source_file, '.ptx')
         return run_ptx_cli(
             args.source_file,
-            args.output_file,
+            None if out == '-' else out,
             host_triple=args.host_triple,
             device_triple=device_triple,
             cpu=args.sm,
@@ -164,6 +225,16 @@ def main() -> int:
         print('Error: Missing source file.', file=sys.stderr)
         parser.print_help(file=sys.stderr)
         return 2
+
+    if not args.stage_s:
+        if args.output_file == '-':
+            parser.error('-o - (stdout) is only meaningful with -S')
+        if shutil.which('clang') is None:
+            parser.error('clang not found: -c and linking run through clang '
+                         '(use -S to emit LLVM IR and drive clang manually)')
+        if not args.stage_c and not os.path.exists(runtime_lib_path()):
+            parser.error(f'runtime archive not found: {runtime_lib_path()} '
+                         '(build it first: make -C runtime)')
 
     try:
         # Parse
@@ -230,16 +301,34 @@ def main() -> int:
                              embed_device_ptx_text=embed_device_ptx_text,
                              device_backend=args.device_backend)
 
-        # Output
-        if output_file:
-            with open(output_file, 'w') as f:
-                f.write(ir)
-            if verbose:
-                print(f'Wrote {output_file}', file=sys.stderr)
-        else:
-            print(ir)
+        # Stage dispatch
+        if args.stage_s:
+            if opt_level:
+                ir = _optimize_ir_text(ir, opt_level)
+            out = output_file or _default_output(source_file, '.ll')
+            if out == '-':
+                sys.stdout.write(ir if ir.endswith('\n') else ir + '\n')
+            else:
+                with open(out, 'w') as f:
+                    f.write(ir)
+                if verbose:
+                    print(f'Wrote {out}', file=sys.stderr)
+            return 0
 
-        return 0
+        # -c / link: hand the IR to clang (linking adds the bundled runtime).
+        out = output_file or (_default_output(source_file, '.o') if args.stage_c else 'a.out')
+        with tempfile.TemporaryDirectory(prefix='pascal1981-') as tmp_dir:
+            ll_path = os.path.join(tmp_dir, 'unit.ll')
+            with open(ll_path, 'w') as f:
+                f.write(ir)
+            if args.stage_c:
+                cmd = ['clang', '-c', ll_path]
+            else:
+                cmd = ['clang', ll_path, runtime_lib_path()]
+            if args.opt_level is not None:
+                cmd.append(f'-O{args.opt_level}')
+            cmd += ['-o', out]
+            return _run_clang(cmd, verbose)
 
     except Exception as exc:
         print(f'Error: {exc}', file=sys.stderr)
