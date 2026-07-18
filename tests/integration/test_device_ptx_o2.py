@@ -112,15 +112,16 @@ class TestDevicePtxO2Pipeline(unittest.TestCase):
                 except FileNotFoundError:
                     pass
 
-    def test_o2_pipeline_via_single_cli_target_ptx_flag(self):
-        """The followup names both compile_to_ptx.py and the --target ptx
-        branch of compile_to_llvm.py as touchpoints; exercise the latter."""
+    def test_o2_pipeline_via_single_cli_device_triple(self):
+        """The followup names both compile_to_ptx.py and the nvptx
+        --device-triple branch of compile_to_llvm.py as touchpoints;
+        exercise the latter."""
         repo = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         example_dir = self._example_dir('fill_indices')
         out = os.path.join(example_dir, 'fill.cli.ptx')
         try:
             result = subprocess.run(
-                [sys.executable, '-m', 'pascal1981.compile_to_llvm', 'fill.pas', '-S', '-o', out, '--target', 'ptx', '--sm', 'sm_70', '-O2'],
+                [sys.executable, '-m', 'pascal1981.compile_to_llvm', 'fill.pas', '-S', '-o', out, '--device-triple', 'nvptx64-nvidia-cuda', '--sm', 'sm_70', '-O2'],
                 cwd=example_dir,
                 env={
                     **os.environ, 'PYTHONPATH': os.path.join(repo, 'src')
@@ -138,13 +139,14 @@ class TestDevicePtxO2Pipeline(unittest.TestCase):
             except FileNotFoundError:
                 pass
 
-    def test_target_ptx_requires_dash_S(self):
-        """--target ptx emits assembly-level PTX, so the driver requires the
-        -S stage flag (it cannot be assembled or linked into a host exe)."""
+    def test_nvptx_device_triple_requires_dash_S(self):
+        """An nvptx --device-triple makes -S emit PTX device assembly, so the
+        driver requires the -S stage flag (PTX cannot be assembled or linked
+        into a host executable)."""
         repo = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         example_dir = self._example_dir('fill_indices')
         result = subprocess.run(
-            [sys.executable, '-m', 'pascal1981.compile_to_llvm', 'fill.pas', '--target', 'ptx', '-O2'],
+            [sys.executable, '-m', 'pascal1981.compile_to_llvm', 'fill.pas', '--device-triple', 'nvptx64-nvidia-cuda', '-O2'],
             cwd=example_dir,
             env={
                 **os.environ, 'PYTHONPATH': os.path.join(repo, 'src')
@@ -153,7 +155,7 @@ class TestDevicePtxO2Pipeline(unittest.TestCase):
             text=True,
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('requires -S', result.stderr)
+        self.assertIn('use -S', result.stderr)
 
 
 if __name__ == '__main__':

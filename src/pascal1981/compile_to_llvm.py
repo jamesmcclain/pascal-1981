@@ -10,9 +10,12 @@ Usage:
     pascal1981 -print-file-name=libpascalrt.a
 
 Assembling and linking run through clang; the bundled libpascalrt.a is added
-to the link automatically.  With -v/--verbose, codegen logs each
-declaration/statement it processes, echoes the clang commands it runs, and
-prints a full traceback if compilation fails.
+to the link automatically.  -l, -L, and -Wl,... options pass through to the
+link step, and -### prints the clang commands without executing them.  An
+nvptx --device-triple (with -S) emits PTX device assembly instead of host IR.
+With -v/--verbose, codegen logs each declaration/statement it processes,
+echoes the clang commands it runs, and prints a full traceback if
+compilation fails.
 """
 
 import argparse
@@ -65,10 +68,13 @@ def _optimize_ir_text(ir_text: str, opt_level: int) -> str:
     return str(llvm_mod)
 
 
-def _run_clang(cmd: list, verbose: bool) -> int:
-    """Run one clang command line, echoing it under -v; return its exit code."""
-    if verbose:
+def _run_clang(cmd: list, echo: bool, dry_run: bool = False) -> int:
+    """Run one clang command line, echoing it under -v/-###; return its exit
+    code.  With dry_run (-###) the command is printed but not executed."""
+    if echo:
         print('+ ' + ' '.join(shlex.quote(a) for a in cmd), file=sys.stderr)
+    if dry_run:
+        return 0
     try:
         return subprocess.run(cmd).returncode
     except OSError as exc:
@@ -77,12 +83,12 @@ def _run_clang(cmd: list, verbose: bool) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Pascal to LLVM IR compiler driver.", formatter_class=argparse.RawTextHelpFormatter)
+    parser = argparse.ArgumentParser(description="Pascal-1981 compiler driver (gcc-style stages: -S, -c, link).", formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument('source_file', nargs='?', type=str, help='Source Pascal file (e.g., program.pas)')
     parser.add_argument('-o', '--output', dest='output_file', default=None, metavar='FILE', help='Write output to FILE (default: a.out when linking, ./<basename>.ll or .ptx with -S, ./<basename>.o with -c). With -S, -o - writes to stdout.')
     parser.add_argument('-v', '--verbose', action='store_true', help='Log each declaration/statement, echo clang command lines, and print a full traceback on failure.')
     _stages = parser.add_mutually_exclusive_group()
-    _stages.add_argument('-S', dest='stage_s', action='store_true', help='Compile only: emit assembly and stop (host: LLVM IR; --target ptx: PTX). Default output ./<basename>.ll (or .ptx); -o - writes to stdout.')
+    _stages.add_argument('-S', dest='stage_s', action='store_true', help='Compile only: emit assembly and stop (host: LLVM IR; PTX with an nvptx --device-triple). Default output ./<basename>.ll (or .ptx); -o - writes to stdout.')
     _stages.add_argument('-c', dest='stage_c', action='store_true', help='Compile and assemble to an object file via clang (default ./<basename>.o); do not link.')
     parser.add_argument('-f', '--feature', action='append', default=[], metavar='NAME', help='Enable extension feature NAME; use no-NAME to disable. Repeatable.')
     parser.add_argument('--dialect',
@@ -97,15 +103,15 @@ def main() -> int:
                         metavar='TRIPLE',
                         help='LLVM target triple for DEVICE MODULE units; e.g. nvptx64-nvidia-cuda or '
                         'amdgcn-amd-amdhsa. Defaults to the host x86 triple (CPU-device: address '
-                        'spaces collapse to addrspace 0).')
-    parser.add_argument('--target',
-                        choices=['host', 'ptx'],
-                        default='host',
-                        help='Output target: host LLVM IR (.ll, default) or device NVPTX assembly '
-                        '(.ptx). --target ptx selects the NVPTX device triple and honors --sm; it '
-                        'is the single-CLI replacement for python -m pascal1981.compile_to_ptx.')
-    parser.add_argument('--sm', default='sm_70', metavar='ARCH', help='NVPTX target CPU for --target ptx, e.g. sm_70, sm_86 (default: sm_70).')
-    parser.add_argument('--save-llvm', default=None, metavar='PATH', help='With --target ptx, also write the intermediate NVPTX LLVM IR to PATH (gcc -save-temps style).')
+                        'spaces collapse to addrspace 0). An nvptx-family triple switches -S to '
+                        'emitting PTX device assembly (honoring --sm), the single-CLI replacement '
+                        'for python -m pascal1981.compile_to_ptx.')
+    parser.add_argument('--sm', default='sm_70', metavar='ARCH', help='NVPTX target CPU when emitting PTX (nvptx --device-triple), e.g. sm_70, sm_86 (default: sm_70).')
+    parser.add_argument('--save-llvm', default=None, metavar='PATH', help='When emitting PTX (nvptx --device-triple), also write the intermediate NVPTX LLVM IR to PATH (gcc -save-temps style).')
+    parser.add_argument('-###', dest='dry_run', action='store_true', help='Print (do not execute) the clang commands this driver would run, gcc-style.')
+    parser.add_argument('-L', dest='link_dirs', action='append', default=[], metavar='DIR', help='Add DIR to the library search path (passed through to the clang link step).')
+    parser.add_argument('-l', dest='link_libs', action='append', default=[], metavar='LIB', help='Link against libLIB (passed through to the clang link step).')
+    parser.add_argument('-Wl', dest='wl_args', action='append', default=[], metavar=',ARG,...', help='Pass comma-separated ARGs to the linker (forwarded verbatim to the clang link step).')
     parser.add_argument('-O',
                         dest='opt_level',
                         type=int,
@@ -116,8 +122,9 @@ def main() -> int:
                         metavar='N',
                         help='Optimization level 0-3 (gcc-style; a bare -O means -O1). Host: with -S, '
                         'runs LLVM\'s mid-level IR pipeline before writing IR; with -c or when linking, '
-                        'forwarded to clang. With --target ptx, runs the mid-level pipeline before NVPTX '
-                        'codegen (default: 0 for compatibility/debugging; use 2 for quality PTX).')
+                        'forwarded to clang. With an nvptx --device-triple, runs the mid-level '
+                        'pipeline before NVPTX codegen (default: 0 for compatibility/debugging; '
+                        'use 2 for quality PTX).')
     parser.add_argument('--device-backend',
                         choices=['cpu', 'cuda'],
                         default='cpu',
@@ -160,7 +167,12 @@ def main() -> int:
     parser.add_argument('--nilck', choices=['on', 'off', 'source'], default='source', help=_flag_help.format(name='NILCK (nil pointer dereference)'))
     parser.add_argument('--stackck', choices=['on', 'off', 'source'], default='source', help=_flag_help_noop.format(name='STACKCK (stack overflow)'))
     parser.add_argument('--initck', choices=['on', 'off', 'source'], default='source', help=_flag_help.format(name='INITCK (uninitialised variable detection)'))
-    args = parser.parse_args()
+    # argparse only attaches arguments to single-character short options, so
+    # gcc's -Wl,ARG[,ARG...] would not parse; rewrite it to the equivalent
+    # -Wl=,ARG form (keeping the comma, which we reattach for clang).
+    argv = [a if not a.startswith('-Wl,') else '-Wl=' + a[3:]
+            for a in sys.argv[1:]]
+    args = parser.parse_args(argv)
 
     if args.print_file_name is not None:
         # gcc semantics: print the located path, or echo the name back when it
@@ -173,31 +185,29 @@ def main() -> int:
 
     opt_level = args.opt_level if args.opt_level is not None else 0
 
-    if args.target == 'ptx':
-        # Single-CLI device path: parse/check/lower to NVPTX IR, then PTX.
-        # PTX is an assembly-level artifact, so only -S applies: it cannot be
-        # assembled further (-c needs ptxas) or linked into a host executable.
-        # The compile/emit/report tail is shared with compile_to_ptx.main.
+    if args.device_triple.startswith('nvptx'):
+        # Device path: an nvptx --device-triple makes the driver's assembly
+        # output PTX.  PTX is an assembly-level artifact, so only -S applies:
+        # it cannot be assembled further (-c needs ptxas) or linked into a
+        # host executable.  The compile/emit/report tail is shared with
+        # compile_to_ptx.main.
         from .compile_to_ptx import run_ptx_cli
         if args.stage_c:
-            parser.error('-c is not available with --target ptx (assembling PTX requires ptxas; emit PTX with -S)')
+            parser.error('-c is not available with an nvptx --device-triple (assembling PTX requires ptxas; emit PTX with -S)')
         if not args.stage_s:
-            parser.error('--target ptx requires -S (device assembly cannot be assembled or linked into a host executable)')
+            parser.error(f'an nvptx --device-triple ({args.device_triple}) emits PTX device assembly; use -S (it cannot be assembled or linked into a host executable)')
         try:
             features = resolve_features(args.dialect, args.feature)
         except ValueError as exc:
             parser.error(str(exc))
         if not args.source_file:
-            parser.error('--target ptx requires a source file')
-        device_triple = args.device_triple
-        if device_triple == 'x86_64-pc-linux-gnu':
-            device_triple = 'nvptx64-nvidia-cuda'
+            parser.error('an nvptx --device-triple requires a source file')
         out = args.output_file or _default_output(args.source_file, '.ptx')
         return run_ptx_cli(
             args.source_file,
             None if out == '-' else out,
             host_triple=args.host_triple,
-            device_triple=device_triple,
+            device_triple=args.device_triple,
             cpu=args.sm,
             features=features,
             emit_llvm_path=args.save_llvm,
@@ -229,6 +239,8 @@ def main() -> int:
     if not args.stage_s:
         if args.output_file == '-':
             parser.error('-o - (stdout) is only meaningful with -S')
+        if args.stage_c and (args.link_dirs or args.link_libs or args.wl_args):
+            print('warning: linker flags (-l/-L/-Wl) ignored with -c', file=sys.stderr)
         if shutil.which('clang') is None:
             parser.error('clang not found: -c and linking run through clang '
                          '(use -S to emit LLVM IR and drive clang manually)')
@@ -324,11 +336,15 @@ def main() -> int:
             if args.stage_c:
                 cmd = ['clang', '-c', ll_path]
             else:
-                cmd = ['clang', ll_path, runtime_lib_path()]
+                cmd = ['clang', ll_path]
+                cmd += [f'-L{d}' for d in args.link_dirs]
+                cmd += [f'-l{lib}' for lib in args.link_libs]
+                cmd.append(runtime_lib_path())
+                cmd += ['-Wl' + a for a in args.wl_args]
             if args.opt_level is not None:
                 cmd.append(f'-O{args.opt_level}')
             cmd += ['-o', out]
-            return _run_clang(cmd, verbose)
+            return _run_clang(cmd, verbose or args.dry_run, dry_run=args.dry_run)
 
     except Exception as exc:
         print(f'Error: {exc}', file=sys.stderr)

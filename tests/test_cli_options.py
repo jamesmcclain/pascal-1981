@@ -6,7 +6,9 @@ Covers the `pascal1981` (compile_to_llvm) driver:
   • -o FILE and the -o - stdout extension (with -S)
   • -O0..-O3 (bare -O = -O1): host -S pipeline, clang forwarding, PTX pipeline
   • -print-file-name=libpascalrt.a as the gcc-style runtime-path query
-  • --target ptx gating (-S required; -c rejected)
+  • nvptx --device-triple gating (-S required; -c rejected; --target retired)
+  • -### dry run and -l/-L/-Wl passthrough to the clang link step
+  • -h/--help
 and the compile_to_ptx driver's default output naming.
 """
 
@@ -180,13 +182,18 @@ class TestStageGates(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertIn('only meaningful with -S', err)
 
-    def test_ptx_requires_dash_S(self):
+    def test_target_flag_retired(self):
         rc, _, err = _run_main(llvm_main, ['pascal1981', 'prog.pas', '--target', 'ptx'])
         self.assertEqual(rc, 2)
-        self.assertIn('requires -S', err)
+        self.assertIn('unrecognized arguments', err)
 
-    def test_ptx_dash_c_rejected(self):
-        rc, _, err = _run_main(llvm_main, ['pascal1981', '-c', 'prog.pas', '--target', 'ptx'])
+    def test_nvptx_device_triple_requires_dash_S(self):
+        rc, _, err = _run_main(llvm_main, ['pascal1981', 'prog.pas', '--device-triple', 'nvptx64-nvidia-cuda'])
+        self.assertEqual(rc, 2)
+        self.assertIn('use -S', err)
+
+    def test_nvptx_device_triple_dash_c_rejected(self):
+        rc, _, err = _run_main(llvm_main, ['pascal1981', '-c', 'prog.pas', '--device-triple', 'nvptx64-nvidia-cuda'])
         self.assertEqual(rc, 2)
         self.assertIn('ptxas', err)
 
@@ -216,6 +223,71 @@ class TestDashOptLevel(unittest.TestCase):
                 rc, out, err = _run_main(llvm_main, ['pascal1981', '-S', '-O2', '-o', '-', 'p.pas'])
                 self.assertEqual(rc, 0, err)
                 self.assertIn('define', out)
+
+
+@requires_llvm
+class TestHelp(unittest.TestCase):
+
+    def test_help_long_and_short(self):
+        for flag in ('-h', '--help'):
+            with self.subTest(flag=flag):
+                rc, out, _ = _run_main(llvm_main, ['pascal1981', flag])
+                self.assertEqual(rc, 0)
+                self.assertIn('usage:', out)
+                for needle in ('-S', '-c', '-O', '-o', '-###', '-print-file-name'):
+                    self.assertIn(needle, out)
+
+
+@requires_llvm
+class TestDryRun(unittest.TestCase):
+
+    def test_triple_hash_prints_commands_without_executing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_minimal(tmp)
+            with _cwd(tmp):
+                rc, _, err = _run_main(llvm_main, ['pascal1981', '-###', 'p.pas'])
+                self.assertEqual(rc, 0, err)
+                self.assertIn('+ clang', err)
+                self.assertFalse(os.path.exists('a.out'))
+
+
+@requires_llvm
+class TestLinkFlagPassthrough(unittest.TestCase):
+
+    def test_dash_l_L_Wl_forwarded_to_link(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_minimal(tmp)
+            with _cwd(tmp):
+                rc, _, err = _run_main(llvm_main, ['pascal1981', '-###', 'p.pas',
+                                                   '-L', '/x', '-lm', '-Wl,--foo'])
+                self.assertEqual(rc, 0, err)
+                self.assertIn('-L/x', err)
+                self.assertIn('-lm', err)
+                self.assertIn('-Wl,--foo', err)
+
+    @requires_exe
+    def test_dash_l_real_link(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_minimal(tmp)
+            with _cwd(tmp):
+                rc, _, err = _run_main(llvm_main, ['pascal1981', 'p.pas', '-l', 'm'])
+                self.assertEqual(rc, 0, err)
+                run = subprocess.run(['./a.out'], capture_output=True, text=True)
+                self.assertEqual(run.returncode, 0)
+                self.assertIn('phase2 ok', run.stdout)
+
+
+@requires_llvm
+class TestNvptxDeviceTriple(unittest.TestCase):
+
+    def test_nvptx_device_triple_dash_S_emits_ptx(self):
+        with temporary_pascal_project({'fill': _PTX_IFACE, 'fill.pas': _PTX_IMPL}) as project_dir:
+            with _cwd(project_dir):
+                rc, _, err = _run_main(llvm_main, ['pascal1981', '-S', 'fill.pas',
+                                                   '--device-triple', 'nvptx64-nvidia-cuda'])
+                self.assertEqual(rc, 0, err)
+                with open('fill.ptx') as f:
+                    self.assertIn('.visible .entry fill_indices', f.read())
 
 
 @requires_llvm

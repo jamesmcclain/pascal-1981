@@ -57,14 +57,16 @@ pascal1981 myprogram.pas -o myprogram
 The `pascal1981` command line follows gcc conventions. Stage flags select how
 far compilation goes: with no stage flag the driver compiles, assembles, and
 links an executable (`a.out`, or `-o FILE`); `-S` stops at assembly (host:
-LLVM IR, `./<name>.ll`; `--target ptx`: `./<name>.ptx`); `-c` stops at an
-object file (`./<name>.o`). Assembling and linking run through clang. `-o
-FILE` names the output, and with `-S` the extension `-o -` writes to stdout.
-`-O0`/`-O1`/`-O2`/`-O3` (or a bare `-O`, meaning `-O1`) selects an
+LLVM IR, `./<name>.ll`; an nvptx `--device-triple`: `./<name>.ptx`); `-c`
+stops at an object file (`./<name>.o`). Assembling and linking run through
+clang. `-o FILE` names the output, and with `-S` the extension `-o -` writes
+to stdout. `-O0`/`-O1`/`-O2`/`-O3` (or a bare `-O`, meaning `-O1`) selects an
 optimization level: with host `-S` it runs LLVM's mid-level IR pipeline, with
-`-c`/linking it is forwarded to clang, and with `--target ptx` it runs the
-pipeline before NVPTX codegen. `-print-file-name=libpascalrt.a` prints the
-absolute path of the bundled runtime archive.
+`-c`/linking it is forwarded to clang, and with an nvptx `--device-triple` it
+runs the pipeline before NVPTX codegen. `-print-file-name=libpascalrt.a`
+prints the absolute path of the bundled runtime archive. `-l LIB`, `-L DIR`,
+and `-Wl,ARG` pass through to the clang link step, and `-###` prints the
+clang commands without executing them (gcc-style dry run).
 
 You can also locate the runtime archive from Python:
 
@@ -459,14 +461,16 @@ Two CLI flags select the target triples, independently:
 - `--device-triple TRIPLE` — the triple for `DEVICE MODULE` units; set it to
   `nvptx64-nvidia-cuda` or `amdgcn-amd-amdhsa` for a real GPU. It defaults to the
   host x86 triple (the CPU-device case, where address spaces collapse to
-  addrspace 0).
+  addrspace 0). An nvptx-family device triple makes `-S` emit PTX device
+  assembly instead of host LLVM IR.
 
 ```bash
 # CPU device (runnable here): spaces collapse to addrspace 0
 pascal1981 -S kernel.pas -o kernel.ll
 
-# GPU device: IR carries addrspace(1)/addrspace(3)/... (needs a GPU toolchain to run)
-pascal1981 -S --device-triple nvptx64-nvidia-cuda kernel.pas -o kernel.ll
+# GPU device: an nvptx --device-triple makes -S emit PTX device assembly;
+# --save-llvm keeps the NVPTX IR (addrspace(1)/addrspace(3)/...) alongside
+pascal1981 -S --device-triple nvptx64-nvidia-cuda kernel.pas -o kernel.ptx --save-llvm kernel.ll
 
 # Cross-compile the host side too (triples are independent)
 pascal1981 -S --host-triple aarch64-unknown-linux-gnu kernel.pas -o kernel.ll

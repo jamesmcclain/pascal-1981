@@ -55,7 +55,7 @@ ifeq ($(DEVICE),cuda)
 #   make -C runtime cuda
 # (this Makefile does not rebuild it on every example build).
 $(BUILD)/dev.ptx: $(DEVICE_UNIT) | $(BUILD)
-	$(PAS) --target ptx -S $< -o $@ --sm $(SM) -O2 $(FEATURES)
+	$(PAS) -S --device-triple nvptx64-nvidia-cuda $< -o $@ --sm $(SM) -O2 $(FEATURES)
 
 # Objectify the PTX into a single data symbol the host links against.  This is a
 # data blob (PTX *text* + a trailing NUL for the shim's C-string read), NOT

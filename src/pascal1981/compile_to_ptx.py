@@ -98,8 +98,8 @@ def run_ptx_cli(source_file: str, output_file: str | None, *, host_triple: str, 
                 verbose: bool) -> int:
     """Shared CLI tail for PTX emission: compile, write-or-print, report.
 
-    Used by both this module's `main` and `compile_to_llvm.main`'s
-    `--target ptx` branch, which previously duplicated this block verbatim.
+    Used by both this module's `main` and `compile_to_llvm.main`'s nvptx
+    `--device-triple` branch, which previously duplicated this block verbatim.
     Returns a process exit code.
     """
     try:
