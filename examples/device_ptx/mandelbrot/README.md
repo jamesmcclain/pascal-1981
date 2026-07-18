@@ -59,7 +59,7 @@ drop-in described next. Build rules live in
 [`../device-example.mk`](../device-example.mk).
 
 The GPU build is now three commands (the runtime archive is prebuilt once with
-`make -C runtime cuda`): device unit -> PTX (`--target ptx`); host program ->
+`make -C runtime cuda`): device unit -> PTX (nvptx `--device-triple` + `-S`); host program ->
 `.ll` (`--device-backend cuda`, which emits no launch thunk and no kernel-symbol
 reference, so there is **no** second device compile); then one `clang` link of
 `host.ll` + the PTX-blob object + `libpascalrt_cuda.a` `-lcuda`. The PTX text is
@@ -88,15 +88,15 @@ parameters are genuinely 32-bit; `mandelbrot_f64` uses `REAL64` (≡ `REAL`, f64
 ## Build the PTX
 
 ```bash
-PYTHONPATH=src python3 -m pascal1981 --target ptx \
+PYTHONPATH=src python3 -m pascal1981 -S --device-triple nvptx64-nvidia-cuda \
   examples/device_ptx/mandelbrot/mandelbrot.pas \
-  examples/device_ptx/mandelbrot/mandelbrot.ptx \
+  -o examples/device_ptx/mandelbrot/mandelbrot.ptx \
   --sm sm_86 -f wide-integers
 ```
 
-`--target ptx` on the single `pascal1981` driver replaces the old
-`python -m pascal1981.compile_to_ptx` (still accepted as a deprecated alias;
-`--sm` replaces `--cpu`). It needs `llvmlite`/LLVM with the NVPTX backend; it
+An nvptx `--device-triple` with `-S` on the single `pascal1981` driver
+replaces the old `python -m pascal1981.compile_to_ptx` invocation; `--sm`
+replaces `--cpu`. It needs `llvmlite`/LLVM with the NVPTX backend; it
 needs **no** NVIDIA device, CUDA driver/runtime, `nvcc`, or the Pascal runtime
 library.
 

@@ -33,16 +33,16 @@ not the same as a successful CUDA launch.  The machine knows when you lie.
 From this example directory in the Pascal repository:
 
 ```bash
-PYTHONPATH=../../../src python3 -m pascal1981 --target ptx \
+PYTHONPATH=../../../src python3 -m pascal1981 -S --device-triple nvptx64-nvidia-cuda \
   fill.pas \
-  fill.ptx \
-  --emit-llvm fill.ll \
+  -o fill.ptx \
+  --save-llvm fill.ll \
   --sm sm_70
 ```
 
-(`--target ptx` on the single `pascal1981` driver replaces the old
-`python -m pascal1981.compile_to_ptx`, still accepted as a deprecated alias;
-`--sm` replaces `--cpu`.)
+(An nvptx `--device-triple` with `-S` on the single `pascal1981` driver
+replaces the old `python -m pascal1981.compile_to_ptx` invocation; `--sm`
+replaces `--cpu`.)
 
 Inspect:
 

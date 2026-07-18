@@ -6,3 +6,6 @@ runtime/build/
 build/
 src/pascal1981/libpascalrt*.a
 src/*.egg-info/
+.venv/
+venv/
+dist/

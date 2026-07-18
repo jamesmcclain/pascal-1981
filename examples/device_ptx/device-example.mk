@@ -55,7 +55,7 @@ ifeq ($(DEVICE),cuda)
 #   make -C runtime cuda
 # (this Makefile does not rebuild it on every example build).
 $(BUILD)/dev.ptx: $(DEVICE_UNIT) | $(BUILD)
-	$(PAS) --target ptx $< $@ --sm $(SM) --opt-level 2 $(FEATURES)
+	$(PAS) -S --device-triple nvptx64-nvidia-cuda $< -o $@ --sm $(SM) -O2 $(FEATURES)
 
 # Objectify the PTX into a single data symbol the host links against.  This is a
 # data blob (PTX *text* + a trailing NUL for the shim's C-string read), NOT
@@ -67,7 +67,7 @@ $(BUILD)/dev_ptx_blob.o: $(BUILD)/dev_ptx_blob.s
 	clang -c $< -o $@
 
 $(BUILD)/host.ll: $(HOST_SRC) | $(BUILD)
-	$(PAS) $(FEATURES) --device-backend cuda $< $@
+	$(PAS) -S $(FEATURES) --device-backend cuda $< -o $@
 
 $(EXE): $(BUILD)/host.ll $(BUILD)/dev_ptx_blob.o
 	clang $(BUILD)/host.ll $(BUILD)/dev_ptx_blob.o $(RUNTIME_CUDA) \
@@ -84,10 +84,10 @@ else ifeq ($(DEVICE),cpu)
 # Build the cpu runtime archive once with:  make -C runtime
 # (this Makefile does not rebuild it on every example build).
 $(BUILD)/dev.ll: $(DEVICE_UNIT) | $(BUILD)
-	$(PAS) $(FEATURES) $< $@
+	$(PAS) -S $(FEATURES) $< -o $@
 
 $(BUILD)/host.ll: $(HOST_SRC) | $(BUILD)
-	$(PAS) $(FEATURES) $< $@
+	$(PAS) -S $(FEATURES) $< -o $@
 
 $(EXE): $(BUILD)/host.ll $(BUILD)/dev.ll
 	clang $(BUILD)/host.ll $(BUILD)/dev.ll $(RUNTIME_LIB) -lm -o $@

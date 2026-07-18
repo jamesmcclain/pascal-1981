@@ -22,30 +22,51 @@ From a checkout of this repository:
 python3 -m pip install .
 ```
 
-The pip build invokes:
+The pip build compiles the C runtime with `make` and `clang` (both required:
+the build fails early with a clear message if either is missing):
 
 ```bash
-make -C runtime
+make -C runtime all        # CPU shim + libpascalrt.a alias -- always
+make -C runtime cuda       # CUDA shim -- added automatically when the
+                           # CUDA toolkit headers are visible to clang
+                           # ($CUDA_HOME/include/cuda.h; CUDA_HOME defaults
+                           # to /usr/local/cuda)
 ```
 
-That Makefile uses `clang` to compile the C runtime and bundles the resulting
-static archive, `libpascalrt.a`, inside the installed Python package.
+The resulting static archives (`libpascalrt.a`, `libpascalrt_cpu.a`, and
+`libpascalrt_cuda.a` when CUDA was found) are bundled inside the installed
+Python package, and the wheel carries the PEP 600 perennial tag of the build
+machine (e.g. `py3-none-manylinux_2_39_x86_64` when built on Ubuntu 24.04):
+the archives are compiled against the build machine's glibc, so pip refuses
+the wheel on older-glibc machines instead of letting them fail at link time.  On a machine
+with the CUDA toolkit installed (such as the `docker/Dockerfile` image),
+`pip install .` or `python -m build` therefore produces a full host+CUDA
+wheel with no extra flags.
 
 Compile and link a program after installation:
 
 ```bash
-# Pascal source -> LLVM IR  (parse + type-check + codegen)
-pascal1981 myprogram.pas myprogram.ll
-
-# Locate the bundled runtime archive
-pascal1981 --print-runtime-path
-
-# LLVM IR -> native executable
-clang myprogram.ll "$(pascal1981 --print-runtime-path)" -o myprogram
+# Pascal source -> native executable (compile + assemble + link via clang;
+# the bundled libpascalrt.a is added to the link automatically)
+pascal1981 myprogram.pas -o myprogram
 
 # Run it
 ./myprogram
 ```
+
+The `pascal1981` command line follows gcc conventions. Stage flags select how
+far compilation goes: with no stage flag the driver compiles, assembles, and
+links an executable (`a.out`, or `-o FILE`); `-S` stops at assembly (host:
+LLVM IR, `./<name>.ll`; an nvptx `--device-triple`: `./<name>.ptx`); `-c`
+stops at an object file (`./<name>.o`). Assembling and linking run through
+clang. `-o FILE` names the output, and with `-S` the extension `-o -` writes
+to stdout. `-O0`/`-O1`/`-O2`/`-O3` (or a bare `-O`, meaning `-O1`) selects an
+optimization level: with host `-S` it runs LLVM's mid-level IR pipeline, with
+`-c`/linking it is forwarded to clang, and with an nvptx `--device-triple` it
+runs the pipeline before NVPTX codegen. `-print-file-name=libpascalrt.a`
+prints the absolute path of the bundled runtime archive. `-l LIB`, `-L DIR`,
+and `-Wl,ARG` pass through to the clang link step, and `-###` prints the
+clang commands without executing them (gcc-style dry run).
 
 You can also locate the runtime archive from Python:
 
@@ -53,13 +74,35 @@ You can also locate the runtime archive from Python:
 python3 -c 'from pascal1981 import runtime_lib_path; print(runtime_lib_path())'
 ```
 
+### Build a wheel
+
+On any machine with `make` + `clang`:
+
+```bash
+python3 -m pip wheel . --no-deps -w dist
+```
+
+The build self-configures: a visible CUDA toolkit produces a full host+CUDA
+wheel, otherwise the wheel is CPU-only.  To guarantee the full wheel, build
+inside the CUDA development image (no GPU needed for the build itself):
+
+```bash
+docker build -t pascal-1981:latest -f docker/Dockerfile .   # once; see docker/README.md
+docker run --rm -v "$PWD":/work pascal-1981:latest sh -c "pip wheel . --no-deps -w /work/dist"
+```
+
+Either way the wheel lands in `dist/`, tagged with the build machine's glibc
+floor (e.g. `pascal1981-1.0.0-py3-none-manylinux_2_39_x86_64.whl` from the
+container).  Check its cargo with
+`unzip -l dist/*.whl | grep '\.a$'` (three archives with CUDA, two without).
+
 ### Run from a source checkout without pip installing
 
 If you do not want to install the package, run the compiler from the checkout by
 putting `src/` on `PYTHONPATH`:
 
 ```bash
-PYTHONPATH=src python3 -m pascal1981 myprogram.pas myprogram.ll
+PYTHONPATH=src python3 -m pascal1981 -S myprogram.pas -o myprogram.ll
 ```
 
 Build the runtime static library manually:
@@ -84,14 +127,14 @@ clang myprogram.ll runtime/build/libpascalrt.a -o myprogram
 After `make -C runtime`, the source-tree CLI can also print that archive path:
 
 ```bash
-PYTHONPATH=src python3 -m pascal1981 --print-runtime-path
+PYTHONPATH=src python3 -m pascal1981 -print-file-name=libpascalrt.a
 ```
 
 For quick source-tree experiments, you may also link the runtime C files
 directly instead of building the archive:
 
 ```bash
-PYTHONPATH=src python3 -m pascal1981 myprogram.pas myprogram.ll
+PYTHONPATH=src python3 -m pascal1981 -S myprogram.pas -o myprogram.ll
 clang myprogram.ll runtime/*.c -o myprogram
 ```
 
@@ -104,9 +147,9 @@ you the truth with `undefined reference to pas_...`. Cold, but fair.
 Add `-v` / `--verbose` for detailed output and full Python tracebacks if compilation fails:
 
 ```bash
-pascal1981 -v myprogram.pas myprogram.ll
+pascal1981 -v -S myprogram.pas -o myprogram.ll
 # or, from a source checkout:
-PYTHONPATH=src python3 -m pascal1981 -v myprogram.pas myprogram.ll
+PYTHONPATH=src python3 -m pascal1981 -v -S myprogram.pas -o myprogram.ll
 ```
 
 Optional dialect extensions are controlled with feature flags. The default dialect is vintage IBM Pascal behavior; wider integer types and symbolic enum I/O are off unless explicitly enabled:
@@ -117,10 +160,10 @@ pascal1981 --list-features
 
 # Enable the wide/narrow integer extension family (INTEGER8/32/64,
 # WORD8/32/64, MAXINT32/MAXINT64, MAXWORD32/MAXWORD64, WRD8)
-pascal1981 -f wide-integers myprogram.pas myprogram.ll
+pascal1981 -f wide-integers -S myprogram.pas -o myprogram.ll
 
 # Enable name-based user enum WRITE and READ as an extension
-pascal1981 -f symbolic-enum-io myprogram.pas myprogram.ll
+pascal1981 -f symbolic-enum-io -S myprogram.pas -o myprogram.ll
 ```
 
 By default the dialect already enforces the vintage WORD/INTEGER rules: a signed
@@ -138,19 +181,22 @@ out of the extended dialect.
 
 ```bash
 # Make every non-constant WORD/INTEGER expression mix a hard error
-pascal1981 -f strict-word-int myprogram.pas myprogram.ll
+pascal1981 -f strict-word-int -S myprogram.pas -o myprogram.ll
 ```
 
-If no output file is specified, LLVM IR is written to stdout:
+Without a stage flag the driver links an executable; intermediate artifacts
+follow gcc's naming rules (`-S` writes `./<name>.ll`, `-c` writes
+`./<name>.o`, linking writes `./a.out`) unless `-o` says otherwise. To stream
+LLVM IR to stdout -- e.g. to drive clang yourself in a pipe -- use `-S -o -`:
 
 ```bash
-pascal1981 myprogram.pas | clang -x ir - "$(pascal1981 --print-runtime-path)" -o myprogram
+pascal1981 -S -o - myprogram.pas | clang -x ir - "$(pascal1981 -print-file-name=libpascalrt.a)" -o myprogram
 ```
 
 Source-tree equivalent:
 
 ```bash
-PYTHONPATH=src python3 -m pascal1981 myprogram.pas | clang -x ir - runtime/build/libpascalrt.a -o myprogram
+PYTHONPATH=src python3 -m pascal1981 -S -o - myprogram.pas | clang -x ir - runtime/build/libpascalrt.a -o myprogram
 ```
 
 ## Device PTX artifact generation
@@ -165,10 +211,10 @@ From a source checkout, compile a device implementation directly to PTX:
 ```bash
 PYTHONPATH=src python3 -m pascal1981.compile_to_ptx \
   examples/device_ptx/fill_indices/fill.pas \
-  examples/device_ptx/fill_indices/fill.ptx \
-  --emit-llvm examples/device_ptx/fill_indices/fill.ll \
+  -o examples/device_ptx/fill_indices/fill.ptx \
+  --save-llvm examples/device_ptx/fill_indices/fill.ll \
   --cpu sm_70 \
-  --opt-level 2
+  -O2
 ```
 
 The source file is a `DEVICE IMPLEMENTATION OF` whose sibling interface file
@@ -415,17 +461,19 @@ Two CLI flags select the target triples, independently:
 - `--device-triple TRIPLE` — the triple for `DEVICE MODULE` units; set it to
   `nvptx64-nvidia-cuda` or `amdgcn-amd-amdhsa` for a real GPU. It defaults to the
   host x86 triple (the CPU-device case, where address spaces collapse to
-  addrspace 0).
+  addrspace 0). An nvptx-family device triple makes `-S` emit PTX device
+  assembly instead of host LLVM IR.
 
 ```bash
 # CPU device (runnable here): spaces collapse to addrspace 0
-pascal1981 kernel.pas kernel.ll
+pascal1981 -S kernel.pas -o kernel.ll
 
-# GPU device: IR carries addrspace(1)/addrspace(3)/... (needs a GPU toolchain to run)
-pascal1981 --device-triple nvptx64-nvidia-cuda kernel.pas kernel.ll
+# GPU device: an nvptx --device-triple makes -S emit PTX device assembly;
+# --save-llvm keeps the NVPTX IR (addrspace(1)/addrspace(3)/...) alongside
+pascal1981 -S --device-triple nvptx64-nvidia-cuda kernel.pas -o kernel.ptx --save-llvm kernel.ll
 
 # Cross-compile the host side too (triples are independent)
-pascal1981 --host-triple aarch64-unknown-linux-gnu kernel.pas kernel.ll
+pascal1981 -S --host-triple aarch64-unknown-linux-gnu kernel.pas -o kernel.ll
 ```
 
 The same triples are available on the `compile_to_llvm` package API:

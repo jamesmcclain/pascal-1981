@@ -1,6 +1,6 @@
 """Item 5 (docs/followups.md): O2 pipeline on the PTX path.
 
-Proves `--opt-level`/`opt_level=` actually runs LLVM's mid-level pass
+Proves `-O`/`opt_level=` actually runs LLVM's mid-level pass
 pipeline before NVPTX codegen, that the default (0) is a byte-identical
 no-op (so the existing exact-mnemonic PTX tests are undisturbed), and that
 the ABI-level facts a caller depends on (entry name, parameter shapes,
@@ -24,7 +24,7 @@ from tests.support import requires_llvm
 def _run_compile_to_ptx(example_dir, source, ptx_path, *extra_args):
     repo = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
     result = subprocess.run(
-        [sys.executable, '-m', 'pascal1981.compile_to_ptx', source, ptx_path, *extra_args],
+        [sys.executable, '-m', 'pascal1981.compile_to_ptx', source, '-o', ptx_path, *extra_args],
         cwd=example_dir,
         env={
             **os.environ, 'PYTHONPATH': os.path.join(repo, 'src')
@@ -52,7 +52,7 @@ class TestDevicePtxO2Pipeline(unittest.TestCase):
         implicit = os.path.join(example_dir, 'fill.implicit0.ptx')
         try:
             r1 = _run_compile_to_ptx(example_dir, 'fill.pas', implicit, '--cpu', 'sm_70')
-            r2 = _run_compile_to_ptx(example_dir, 'fill.pas', explicit, '--cpu', 'sm_70', '--opt-level', '0')
+            r2 = _run_compile_to_ptx(example_dir, 'fill.pas', explicit, '--cpu', 'sm_70', '-O0')
             self.assertEqual(r1.returncode, 0, r1.stderr)
             self.assertEqual(r2.returncode, 0, r2.stderr)
             with open(implicit) as f:
@@ -71,7 +71,7 @@ class TestDevicePtxO2Pipeline(unittest.TestCase):
         example_dir = self._example_dir('fill_indices')
         out = os.path.join(example_dir, 'fill.bad.ptx')
         try:
-            result = _run_compile_to_ptx(example_dir, 'fill.pas', out, '--opt-level', '9')
+            result = _run_compile_to_ptx(example_dir, 'fill.pas', out, '-O9')
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('invalid choice', result.stderr)
         finally:
@@ -90,15 +90,15 @@ class TestDevicePtxO2Pipeline(unittest.TestCase):
         o0 = os.path.join(example_dir, 'mb.o0.ptx')
         o2 = os.path.join(example_dir, 'mb.o2.ptx')
         try:
-            r0 = _run_compile_to_ptx(example_dir, 'mandelbrot.pas', o0, '--cpu', 'sm_86', '--opt-level', '0')
-            r2 = _run_compile_to_ptx(example_dir, 'mandelbrot.pas', o2, '--cpu', 'sm_86', '--opt-level', '2')
+            r0 = _run_compile_to_ptx(example_dir, 'mandelbrot.pas', o0, '--cpu', 'sm_86', '-O0')
+            r2 = _run_compile_to_ptx(example_dir, 'mandelbrot.pas', o2, '--cpu', 'sm_86', '-O2')
             self.assertEqual(r0.returncode, 0, r0.stderr)
             self.assertEqual(r2.returncode, 0, r2.stderr)
             with open(o0) as f:
                 o0_ptx = f.read()
             with open(o2) as f:
                 o2_ptx = f.read()
-            self.assertNotEqual(o0_ptx, o2_ptx, 'expected --opt-level 2 to change the emitted PTX')
+            self.assertNotEqual(o0_ptx, o2_ptx, 'expected -O2 to change the emitted PTX')
             # ABI-level facts must survive optimization: both are still real,
             # launchable void entries with the same parameter count/order.
             for ptx in (o0_ptx, o2_ptx):
@@ -112,15 +112,16 @@ class TestDevicePtxO2Pipeline(unittest.TestCase):
                 except FileNotFoundError:
                     pass
 
-    def test_o2_pipeline_via_single_cli_target_ptx_flag(self):
-        """The followup names both compile_to_ptx.py and the --target ptx
-        branch of compile_to_llvm.py as touchpoints; exercise the latter."""
+    def test_o2_pipeline_via_single_cli_device_triple(self):
+        """The followup names both compile_to_ptx.py and the nvptx
+        --device-triple branch of compile_to_llvm.py as touchpoints;
+        exercise the latter."""
         repo = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         example_dir = self._example_dir('fill_indices')
         out = os.path.join(example_dir, 'fill.cli.ptx')
         try:
             result = subprocess.run(
-                [sys.executable, '-m', 'pascal1981.compile_to_llvm', 'fill.pas', out, '--target', 'ptx', '--sm', 'sm_70', '--opt-level', '2'],
+                [sys.executable, '-m', 'pascal1981.compile_to_llvm', 'fill.pas', '-S', '-o', out, '--device-triple', 'nvptx64-nvidia-cuda', '--sm', 'sm_70', '-O2'],
                 cwd=example_dir,
                 env={
                     **os.environ, 'PYTHONPATH': os.path.join(repo, 'src')
@@ -138,11 +139,14 @@ class TestDevicePtxO2Pipeline(unittest.TestCase):
             except FileNotFoundError:
                 pass
 
-    def test_opt_level_rejected_with_target_host(self):
+    def test_nvptx_device_triple_requires_dash_S(self):
+        """An nvptx --device-triple makes -S emit PTX device assembly, so the
+        driver requires the -S stage flag (PTX cannot be assembled or linked
+        into a host executable)."""
         repo = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         example_dir = self._example_dir('fill_indices')
         result = subprocess.run(
-            [sys.executable, '-m', 'pascal1981.compile_to_llvm', 'fill.pas', '--target', 'host', '--opt-level', '2'],
+            [sys.executable, '-m', 'pascal1981.compile_to_llvm', 'fill.pas', '--device-triple', 'nvptx64-nvidia-cuda', '-O2'],
             cwd=example_dir,
             env={
                 **os.environ, 'PYTHONPATH': os.path.join(repo, 'src')
@@ -151,7 +155,7 @@ class TestDevicePtxO2Pipeline(unittest.TestCase):
             text=True,
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('--opt-level', result.stderr)
+        self.assertIn('use -S', result.stderr)
 
 
 if __name__ == '__main__':
