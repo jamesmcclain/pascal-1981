@@ -138,6 +138,30 @@ END.
         self.assertFalse(too_wide.success)
         self.assertIn("out of range", " ".join(str(e) for e in too_wide.errors))
 
+    def test_untyped_const_widens_under_wide_integers(self):
+        """An untyped CONST has no declared type to serve as literal context,
+        so a literal too big for plain INTEGER is normally rejected. Under
+        -f wide-integers it instead widens to the smallest type that fits
+        (WORD, then INTEGER32, WORD32, INTEGER64, WORD64)."""
+        no_flag = typecheck_source("PROGRAM P; CONST big = 4000000; BEGIN WRITELN(big) END.")
+        self.assertFalse(no_flag.success)
+        self.assertIn("out of range", " ".join(str(e) for e in no_flag.errors))
+
+        widened = typecheck_source("PROGRAM P; CONST big = 4000000; BEGIN WRITELN(big) END.", features={'wide-integers': True})
+        self.assertTrue(widened.success, msg=" ".join(str(e) for e in widened.errors))
+
+        negative = typecheck_source("PROGRAM P; CONST neg = -4000000; BEGIN WRITELN(neg) END.", features={'wide-integers': True})
+        self.assertTrue(negative.success, msg=" ".join(str(e) for e in negative.errors))
+
+        into_wide_var = typecheck_source(
+            "PROGRAM P; CONST big = 4000000; VAR x: INTEGER32; BEGIN x := big END.", features={'wide-integers': True})
+        self.assertTrue(into_wide_var.success, msg=" ".join(str(e) for e in into_wide_var.errors))
+
+        still_too_wide = typecheck_source(
+            "PROGRAM P; CONST huge = 99999999999999999999999999999; BEGIN WRITELN(huge) END.", features={'wide-integers': True})
+        self.assertFalse(still_too_wide.success)
+        self.assertIn("out of range", " ".join(str(e) for e in still_too_wide.errors))
+
     def test_predeclared_text_input_output_string_names(self):
         """TEXT, INPUT, OUTPUT, and STRING are predeclared names."""
         result = typecheck_source("PROGRAM P; VAR f: TEXT; BEGIN WRITELN(OUTPUT, 'ok'); WRITELN(f, 'ok') END.")

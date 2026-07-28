@@ -5,6 +5,7 @@ Mixin for PascalTypeChecker, split out of type_checker.py as pure code
 movement: methods are unchanged and still reach each other through self.
 """
 
+from typing import Optional
 
 from ..ast_nodes import (
     Block,
@@ -19,7 +20,12 @@ from ..ast_nodes import (
 from ..ast_nodes import RecordType as ASTRecordType
 from ..symbol_table import Symbol
 from ..type_system import (
+    INTEGER32_TYPE,
+    INTEGER64_TYPE,
     INTEGER_TYPE,
+    WORD32_TYPE,
+    WORD64_TYPE,
+    WORD_TYPE,
     ArrayType,
     EnumType,
     FunctionType,
@@ -31,6 +37,13 @@ from ..type_system import (
     Type,
     can_assign,
 )
+
+# Candidates for widening an untyped CONST literal that overflows plain
+# 16-bit INTEGER, under -f wide-integers: smallest-first, unsigned before
+# signed of the same width (an untyped CONST has no sign context to prefer
+# otherwise, and WORD is the manual's own fallback for an INTEGER constant
+# that "changes to WORD type if necessary").
+_WIDE_CONST_CANDIDATES = (WORD_TYPE, INTEGER32_TYPE, WORD32_TYPE, INTEGER64_TYPE, WORD64_TYPE)
 
 
 class DeclsMixin:
@@ -136,13 +149,40 @@ class DeclsMixin:
             setattr(symbol, 'type_expr', decl.type_expr)
             self.symbol_table.define(name, symbol)
 
+    def _widen_untyped_const_context(self, expr) -> Optional[Type]:
+        """Pick a wide integer type for an untyped CONST literal that does not
+        fit plain 16-bit INTEGER, when -f wide-integers (or DEVICE code) makes
+        the wider types available.  Returns None when the value fits INTEGER
+        already, wide integers are not enabled, or the value overflows even
+        the widest candidate (in which case the ordinary range check reports
+        the error against plain INTEGER, as before).
+        """
+        if not (self.feature_enabled('wide-integers') or self.in_device_module):
+            return None
+        value = self._fold_int_literal_value(expr)
+        if value is None:
+            return None
+        lo, hi = self._integer_range_for_type(INTEGER_TYPE)
+        if lo <= value <= hi:
+            return None
+        for candidate in _WIDE_CONST_CANDIDATES:
+            clo, chi = self._integer_range_for_type(candidate)
+            if clo <= value <= chi:
+                return candidate
+        return None
+
     def check_const_decl(self, decl: ConstDecl) -> None:
         """Type check a constant declaration."""
         if not decl.name or not decl.value:
             return
 
-        # Evaluate the constant value and infer type
-        value_type = self.infer_expression_type(decl.value)
+        # Evaluate the constant value and infer type. An untyped CONST has no
+        # declared type to serve as literal context; under -f wide-integers a
+        # literal too big for plain INTEGER widens to the smallest type that
+        # fits it instead of being rejected (docs/features.py calls this out
+        # as "wide integer constants").
+        const_context = self._widen_untyped_const_context(decl.value)
+        value_type = self.infer_expression_type(decl.value, const_context)
         if not value_type:
             self.error("Cannot infer type of constant", decl)
             return
