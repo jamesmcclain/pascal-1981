@@ -16,7 +16,16 @@ from .types_resolve import TypeResolveMixin
 from .units import UnitsMixin
 
 __all__ = [
-    'BuiltinArgsMixin', 'ConstFoldMixin', 'DeclsMixin', 'DeviceCheckMixin',
-    'DiagnosticsMixin', 'ExprInferMixin', 'StmtsMixin', 'TypeResolveMixin',
-    'UnitsMixin', 'TypeCheckError', 'TypeCheckResult', 'TypeChecker',
+    'BuiltinArgsMixin',
+    'ConstFoldMixin',
+    'DeclsMixin',
+    'DeviceCheckMixin',
+    'DiagnosticsMixin',
+    'ExprInferMixin',
+    'StmtsMixin',
+    'TypeResolveMixin',
+    'UnitsMixin',
+    'TypeCheckError',
+    'TypeCheckResult',
+    'TypeChecker',
 ]

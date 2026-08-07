@@ -58,9 +58,7 @@ def _require_tools(*tools: str) -> None:
     missing = [tool for tool in tools if shutil.which(tool) is None]
     if missing:
         print(
-            "error: required build tool(s) not found on PATH: "
-            + ", ".join(missing)
-            + "\nThe pascal1981 build compiles its C runtime at build time, so "
+            "error: required build tool(s) not found on PATH: " + ", ".join(missing) + "\nThe pascal1981 build compiles its C runtime at build time, so "
             "'make' and 'clang' are required.  Install them "
             "(e.g. `apt-get install make clang`) and retry.",
             file=sys.stderr,
@@ -79,8 +77,7 @@ def _have_cuda_headers() -> bool:
     cuda_home = os.environ.get("CUDA_HOME", "/usr/local/cuda")
     try:
         result = subprocess.run(
-            ["clang", "-x", "c", "-fsyntax-only", "-I",
-             os.path.join(cuda_home, "include"), "-"],
+            ["clang", "-x", "c", "-fsyntax-only", "-I", os.path.join(cuda_home, "include"), "-"],
             input="#include <cuda.h>\n",
             capture_output=True,
             text=True,

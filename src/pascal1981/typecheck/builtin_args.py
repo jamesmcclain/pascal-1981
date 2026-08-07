@@ -6,42 +6,12 @@ Mixin for PascalTypeChecker, split out of type_checker.py as pure code
 movement: methods are unchanged and still reach each other through self.
 """
 
-
 from ..ast_nodes import ArrayType as ASTArrayType
-from ..ast_nodes import (
-    Designator,
-    Identifier,
-    IntLiteral,
-    NamedType,
-    ProcCallStmt,
-    SetConstructor,
-    WriteArg,
-)
+from ..ast_nodes import Designator, Identifier, IntLiteral, NamedType
 from ..ast_nodes import PointerType as ASTPointerType
-from ..type_system import (
-    BOOLEAN_TYPE,
-    CHAR_TYPE,
-    INTEGER8_TYPE,
-    INTEGER32_TYPE,
-    INTEGER64_TYPE,
-    INTEGER_TYPE,
-    REAL32_TYPE,
-    REAL_TYPE,
-    WORD8_TYPE,
-    WORD32_TYPE,
-    WORD64_TYPE,
-    WORD_TYPE,
-    ArrayType,
-    EnumType,
-    FileType,
-    LStringType,
-    PointerType,
-    SetType,
-    StringType,
-    Type,
-    can_assign,
-    is_fixed_char_array,
-)
+from ..ast_nodes import ProcCallStmt, SetConstructor, WriteArg
+from ..type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER8_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL32_TYPE, REAL_TYPE, WORD8_TYPE, WORD32_TYPE, WORD64_TYPE,
+                           WORD_TYPE, ArrayType, EnumType, FileType, LStringType, PointerType, SetType, StringType, Type, can_assign, is_fixed_char_array)
 
 
 class BuiltinArgsMixin:

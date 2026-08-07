@@ -785,11 +785,10 @@ class Lexer:
             # the comment text (e.g. mathematical notation like "p_{v+1}")
             # ends the comment right there, leaving the intended closing
             # '}' to surface here as a bare, unexpected token instead.
-            raise LexerError(
-                f"Unexpected character {ch!r} at line {line}, column {column} "
-                "-- '{ ... }' comments do not nest and cannot contain '}'; "
-                "a nearby comment likely closed early on an embedded '}'. "
-                "Use '(* ... *)' for comment text that needs to contain '}'.")
+            raise LexerError(f"Unexpected character {ch!r} at line {line}, column {column} "
+                             "-- '{ ... }' comments do not nest and cannot contain '}'; "
+                             "a nearby comment likely closed early on an embedded '}'. "
+                             "Use '(* ... *)' for comment text that needs to contain '}'.")
 
         raise LexerError(f"Unexpected character {ch!r} at line {line}, column {column}")
 

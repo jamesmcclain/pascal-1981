@@ -24,7 +24,6 @@ from unittest import mock
 from pascal1981 import runtime_lib_path
 from pascal1981.compile_to_llvm import main as llvm_main
 from pascal1981.compile_to_ptx import main as ptx_main
-
 from tests.support import requires_exe, requires_llvm, temporary_pascal_project
 
 _MINIMAL = "PROGRAM P;\nBEGIN\n  WRITELN('phase2 ok')\nEND.\n"
@@ -258,8 +257,7 @@ class TestLinkFlagPassthrough(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             _write_minimal(tmp)
             with _cwd(tmp):
-                rc, _, err = _run_main(llvm_main, ['pascal1981', '-###', 'p.pas',
-                                                   '-L', '/x', '-lm', '-Wl,--foo'])
+                rc, _, err = _run_main(llvm_main, ['pascal1981', '-###', 'p.pas', '-L', '/x', '-lm', '-Wl,--foo'])
                 self.assertEqual(rc, 0, err)
                 self.assertIn('-L/x', err)
                 self.assertIn('-lm', err)
@@ -283,8 +281,7 @@ class TestNvptxDeviceTriple(unittest.TestCase):
     def test_nvptx_device_triple_dash_S_emits_ptx(self):
         with temporary_pascal_project({'fill': _PTX_IFACE, 'fill.pas': _PTX_IMPL}) as project_dir:
             with _cwd(project_dir):
-                rc, _, err = _run_main(llvm_main, ['pascal1981', '-S', 'fill.pas',
-                                                   '--device-triple', 'nvptx64-nvidia-cuda'])
+                rc, _, err = _run_main(llvm_main, ['pascal1981', '-S', 'fill.pas', '--device-triple', 'nvptx64-nvidia-cuda'])
                 self.assertEqual(rc, 0, err)
                 with open('fill.ptx') as f:
                     self.assertIn('.visible .entry fill_indices', f.read())
