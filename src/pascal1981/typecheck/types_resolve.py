@@ -8,50 +8,20 @@ movement: methods are unchanged and still reach each other through self.
 from typing import Optional
 
 from ..ast_nodes import ArrayType as ASTArrayType
-from ..ast_nodes import (
-    BoolLiteral,
-    CharLiteral,
-    Designator,
-    Identifier,
-    IntLiteral,
-    NamedType,
-    UnaryOp,
-)
+from ..ast_nodes import BoolLiteral, CharLiteral, Designator
 from ..ast_nodes import EnumType as ASTEnumType
 from ..ast_nodes import FileType as ASTFileType
+from ..ast_nodes import Identifier, IntLiteral
 from ..ast_nodes import LStringType as ASTLStringType
+from ..ast_nodes import NamedType
 from ..ast_nodes import PointerType as ASTPointerType
 from ..ast_nodes import RecordType as ASTRecordType
 from ..ast_nodes import SetType as ASTSetType
 from ..ast_nodes import SubrangeType as ASTSubrangeType
-from ..type_system import (
-    BOOLEAN_TYPE,
-    CHAR_TYPE,
-    INTEGER8_TYPE,
-    INTEGER32_TYPE,
-    INTEGER64_TYPE,
-    INTEGER_TYPE,
-    REAL32_TYPE,
-    REAL_TYPE,
-    WORD8_TYPE,
-    WORD32_TYPE,
-    WORD64_TYPE,
-    WORD_TYPE,
-    ArrayType,
-    BooleanType,
-    CharType,
-    EnumType,
-    FileType,
-    IntegerType,
-    LStringType,
-    PointerType,
-    RealType,
-    RecordType,
-    SetType,
-    StringType,
-    Type,
-    WordType,
-)
+from ..ast_nodes import UnaryOp
+from ..type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER8_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL32_TYPE, REAL_TYPE, WORD8_TYPE, WORD32_TYPE, WORD64_TYPE,
+                           WORD_TYPE, ArrayType, BooleanType, CharType, EnumType, FileType, IntegerType, LStringType, PointerType, RealType, RecordType, SetType, StringType, Type,
+                           WordType)
 
 
 class TypeResolveMixin:

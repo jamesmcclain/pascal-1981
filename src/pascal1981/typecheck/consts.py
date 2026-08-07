@@ -7,27 +7,8 @@ movement: methods are unchanged and still reach each other through self.
 
 from typing import Optional
 
-from ..ast_nodes import (
-    BinOp,
-    Designator,
-    Expression,
-    FuncCall,
-    Identifier,
-    IntLiteral,
-    SizeofExpr,
-    UnaryOp,
-)
-from ..type_system import (
-    INTEGER8_TYPE,
-    INTEGER32_TYPE,
-    INTEGER64_TYPE,
-    INTEGER_TYPE,
-    WORD8_TYPE,
-    WORD32_TYPE,
-    WORD64_TYPE,
-    WORD_TYPE,
-    Type,
-)
+from ..ast_nodes import (BinOp, Designator, Expression, FuncCall, Identifier, IntLiteral, SizeofExpr, UnaryOp)
+from ..type_system import (INTEGER8_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, WORD8_TYPE, WORD32_TYPE, WORD64_TYPE, WORD_TYPE, Type)
 
 
 class ConstFoldMixin:

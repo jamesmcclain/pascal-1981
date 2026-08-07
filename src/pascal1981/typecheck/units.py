@@ -9,33 +9,11 @@ movement: methods are unchanged and still reach each other through self.
 from pathlib import Path
 from typing import Any, Optional
 
-from ..ast_nodes import (
-    BoolLiteral,
-    ConstDecl,
-    FuncDecl,
-    ImplementationUnit,
-    InterfaceUnit,
-    IntLiteral,
-    ModuleUnit,
-    NamedType,
-    ProcDecl,
-    ProgramUnit,
-    RealLiteral,
-    StringLiteral,
-    TypeDecl,
-    UseClause,
-    VarDecl,
-)
+from ..ast_nodes import (BoolLiteral, ConstDecl, FuncDecl, ImplementationUnit, InterfaceUnit, IntLiteral, ModuleUnit, NamedType, ProcDecl, ProgramUnit, RealLiteral, StringLiteral,
+                         TypeDecl, UseClause, VarDecl)
 from ..parser import parse_file
 from ..symbol_table import Symbol
-from ..type_system import (
-    BOOLEAN_TYPE,
-    CHAR_TYPE,
-    INTEGER_TYPE,
-    REAL_TYPE,
-    ProcedureType,
-    Type,
-)
+from ..type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, ProcedureType, Type)
 
 
 class UnitsMixin:

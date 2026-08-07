@@ -7,36 +7,12 @@ movement: methods are unchanged and still reach each other through self.
 
 from typing import Optional
 
-from ..ast_nodes import (
-    Block,
-    ConstDecl,
-    FuncDecl,
-    NamedType,
-    ProcDecl,
-    TypeDecl,
-    ValueDecl,
-    VarDecl,
-)
+from ..ast_nodes import Block, ConstDecl, FuncDecl, NamedType, ProcDecl
 from ..ast_nodes import RecordType as ASTRecordType
+from ..ast_nodes import TypeDecl, ValueDecl, VarDecl
 from ..symbol_table import Symbol
-from ..type_system import (
-    INTEGER32_TYPE,
-    INTEGER64_TYPE,
-    INTEGER_TYPE,
-    WORD32_TYPE,
-    WORD64_TYPE,
-    WORD_TYPE,
-    ArrayType,
-    EnumType,
-    FunctionType,
-    LStringType,
-    ProcedureType,
-    RecordType,
-    SetType,
-    StringType,
-    Type,
-    can_assign,
-)
+from ..type_system import (INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, WORD32_TYPE, WORD64_TYPE, WORD_TYPE, ArrayType, EnumType, FunctionType, LStringType, ProcedureType,
+                           RecordType, SetType, StringType, Type, can_assign)
 
 # Candidates for widening an untyped CONST literal that overflows plain
 # 16-bit INTEGER, under -f wide-integers: smallest-first, unsigned before

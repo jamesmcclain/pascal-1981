@@ -7,59 +7,13 @@ movement: methods are unchanged and still reach each other through self.
 
 from typing import Optional
 
-from ..ast_nodes import (
-    AdrExpr,
-    AdsExpr,
-    BinOp,
-    BoolLiteral,
-    CharLiteral,
-    Designator,
-    Expression,
-    FuncCall,
-    Identifier,
-    IntLiteral,
-    LowerExpr,
-    NamedType,
-    NilLiteral,
-    RangeExpr,
-    RealLiteral,
-    RetypeExpr,
-    SetConstructor,
-    SizeofExpr,
-    StringLiteral,
-    UnaryOp,
-    UpperExpr,
-    WriteArg,
-)
+from ..ast_nodes import (AdrExpr, AdsExpr, BinOp, BoolLiteral, CharLiteral, Designator, Expression, FuncCall, Identifier, IntLiteral, LowerExpr, NamedType, NilLiteral)
 from ..ast_nodes import PointerType as ASTPointerType
+from ..ast_nodes import (RangeExpr, RealLiteral, RetypeExpr, SetConstructor, SizeofExpr, StringLiteral, UnaryOp, UpperExpr, WriteArg)
 from ..builtins_registry import DEVICE_INDEX_BUILTIN_FUNCTIONS
-from ..type_system import (
-    BOOLEAN_TYPE,
-    CHAR_TYPE,
-    INTEGER8_TYPE,
-    INTEGER32_TYPE,
-    INTEGER64_TYPE,
-    INTEGER_TYPE,
-    REAL32_TYPE,
-    REAL_TYPE,
-    WORD8_TYPE,
-    WORD32_TYPE,
-    WORD64_TYPE,
-    WORD_TYPE,
-    ArrayType,
-    EnumType,
-    FileType,
-    FunctionType,
-    LStringType,
-    PointerType,
-    RecordType,
-    SetType,
-    StringType,
-    Type,
-    binary_op_result_type,
-    can_assign,
-    unary_op_result_type,
-)
+from ..type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER8_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, REAL32_TYPE, REAL_TYPE, WORD8_TYPE, WORD32_TYPE, WORD64_TYPE,
+                           WORD_TYPE, ArrayType, EnumType, FileType, FunctionType, LStringType, PointerType, RecordType, SetType, StringType, Type, binary_op_result_type,
+                           can_assign, unary_op_result_type)
 
 
 class ExprInferMixin:

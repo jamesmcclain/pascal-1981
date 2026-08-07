@@ -153,12 +153,10 @@ END.
         negative = typecheck_source("PROGRAM P; CONST neg = -4000000; BEGIN WRITELN(neg) END.", features={'wide-integers': True})
         self.assertTrue(negative.success, msg=" ".join(str(e) for e in negative.errors))
 
-        into_wide_var = typecheck_source(
-            "PROGRAM P; CONST big = 4000000; VAR x: INTEGER32; BEGIN x := big END.", features={'wide-integers': True})
+        into_wide_var = typecheck_source("PROGRAM P; CONST big = 4000000; VAR x: INTEGER32; BEGIN x := big END.", features={'wide-integers': True})
         self.assertTrue(into_wide_var.success, msg=" ".join(str(e) for e in into_wide_var.errors))
 
-        still_too_wide = typecheck_source(
-            "PROGRAM P; CONST huge = 99999999999999999999999999999; BEGIN WRITELN(huge) END.", features={'wide-integers': True})
+        still_too_wide = typecheck_source("PROGRAM P; CONST huge = 99999999999999999999999999999; BEGIN WRITELN(huge) END.", features={'wide-integers': True})
         self.assertFalse(still_too_wide.success)
         self.assertIn("out of range", " ".join(str(e) for e in still_too_wide.errors))
 

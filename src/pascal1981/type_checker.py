@@ -14,14 +14,13 @@ from .ast_nodes import (ASTNode, FuncDecl, ImplementationUnit, InterfaceUnit, Mo
 from .builtins_registry import register_builtins
 from .symbol_table import SymbolTable
 from .type_system import Type
-from .typecheck import (BuiltinArgsMixin, ConstFoldMixin, DeclsMixin, DeviceCheckMixin, DiagnosticsMixin, ExprInferMixin, StmtsMixin, TypeCheckError, TypeCheckResult,
-                        TypeChecker, TypeResolveMixin, UnitsMixin)
+from .typecheck import (BuiltinArgsMixin, ConstFoldMixin, DeclsMixin, DeviceCheckMixin, DiagnosticsMixin, ExprInferMixin, StmtsMixin, TypeChecker, TypeCheckError, TypeCheckResult,
+                        TypeResolveMixin, UnitsMixin)
 
 __all__ = ['PascalTypeChecker', 'TypeCheckError', 'TypeCheckResult', 'TypeChecker']
 
 
-class PascalTypeChecker(UnitsMixin, DeclsMixin, StmtsMixin, BuiltinArgsMixin, DeviceCheckMixin, ConstFoldMixin, ExprInferMixin, TypeResolveMixin, DiagnosticsMixin,
-                        TypeChecker):
+class PascalTypeChecker(UnitsMixin, DeclsMixin, StmtsMixin, BuiltinArgsMixin, DeviceCheckMixin, ConstFoldMixin, ExprInferMixin, TypeResolveMixin, DiagnosticsMixin, TypeChecker):
     """Type checker for Pascal-1981."""
 
     def __init__(self, source_file: Optional[str] = None, features: Optional[Dict[str, bool]] = None):

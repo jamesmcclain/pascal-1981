@@ -102,7 +102,7 @@ static void checked_buffer(struct pas_file_fcb *f)
  * '\n') is passed through as ordinary data.  Output keeps the host's
  * '\n' marker — this is a Linux-target adaptation, not DOS emulation.
  * Binary FILE OF T never translates (component bytes are sacred). */
-static int text_getc(FILE * h)
+static int text_getc(FILE *h)
 {
     int ch = fgetc(h);
     if (ch != '\r')
@@ -181,7 +181,7 @@ static void force_fill(struct pas_file_fcb *f)
  * otherwise the component supplied by RESET's implicit GET is lost.
  */
 
-static int fcb_next_char(struct pas_file_fcb *f, FILE * h)
+static int fcb_next_char(struct pas_file_fcb *f, FILE *h)
 {
     if (!f || !f->buffer || current_mode(f) != MODE_READ)
         return fgetc(h);
@@ -204,7 +204,7 @@ static int fcb_next_char(struct pas_file_fcb *f, FILE * h)
     return ch;
 }
 
-static void fcb_unget_char(struct pas_file_fcb *f, FILE * h, int ch)
+static void fcb_unget_char(struct pas_file_fcb *f, FILE *h, int ch)
 {
     /* Push a character back as the FCB's current component (so F^/EOF/EOLN
      * observe it), falling back to stdio pushback when there is no FCB. */
@@ -430,14 +430,14 @@ static int is_leading_skip(int ch)
     return ch == ' ' || ch == '\t' || ch == '\f' || ch == '\n';
 }
 
-static int set_contains(const uint64_t * set_words, int ch)
+static int set_contains(const uint64_t *set_words, int ch)
 {
     if (ch < 0 || ch > 255)
         return 0;
     return (set_words[ch / 64] & ((uint64_t) 1 << (ch % 64))) != 0;
 }
 
-void pas_freadset(struct pas_file_fcb *src, unsigned char *lstr, int capacity, const uint64_t * set_words)
+void pas_freadset(struct pas_file_fcb *src, unsigned char *lstr, int capacity, const uint64_t *set_words)
 {
     if (!lstr || capacity < 0 || !set_words)
         die("file runtime: bad READSET argument");
@@ -552,7 +552,7 @@ const char *pas_enum_write_token(int32_t value, const char **names, int count)
     return bufs[slot];
 }
 
-static int fcb_skip_ws_except_nl(struct pas_file_fcb *f, FILE * h)
+static int fcb_skip_ws_except_nl(struct pas_file_fcb *f, FILE *h)
 {
     int ch;
     while ((ch = fcb_next_char(f, h)) != EOF) {
@@ -562,7 +562,7 @@ static int fcb_skip_ws_except_nl(struct pas_file_fcb *f, FILE * h)
     return EOF;
 }
 
-int pas_fread_int(struct pas_file_fcb *f, int32_t * out)
+int pas_fread_int(struct pas_file_fcb *f, int32_t *out)
 {
     FILE *h = stream_for(f, 0);
     int ch = fcb_skip_ws_except_nl(f, h);
@@ -578,7 +578,7 @@ int pas_fread_int(struct pas_file_fcb *f, int32_t * out)
     return 0;
 }
 
-int pas_fread_word(struct pas_file_fcb *f, uint16_t * out)
+int pas_fread_word(struct pas_file_fcb *f, uint16_t *out)
 {
     int32_t v = 0;
     if (pas_fread_int(f, &v) != 0)
@@ -589,7 +589,7 @@ int pas_fread_word(struct pas_file_fcb *f, uint16_t * out)
     return 0;
 }
 
-int pas_fread_enum_name(struct pas_file_fcb *f, int32_t * out, const char **names, int count)
+int pas_fread_enum_name(struct pas_file_fcb *f, int32_t *out, const char **names, int count)
 {
     FILE *h = stream_for(f, 0);
     int ch = fcb_skip_ws_except_nl(f, h);
@@ -644,7 +644,7 @@ int pas_fread_real(struct pas_file_fcb *f, double *out)
     return 0;
 }
 
-int pas_fread_char(struct pas_file_fcb *f, uint8_t * out)
+int pas_fread_char(struct pas_file_fcb *f, uint8_t *out)
 {
     FILE *h = stream_for(f, 0);
     int ch = fcb_next_char(f, h);
@@ -654,7 +654,7 @@ int pas_fread_char(struct pas_file_fcb *f, uint8_t * out)
     return 0;
 }
 
-int pas_fread_lstring(struct pas_file_fcb *f, uint8_t * buf, int cap)
+int pas_fread_lstring(struct pas_file_fcb *f, uint8_t *buf, int cap)
 {
     FILE *h = stream_for(f, 0);
     int ch, n = 0;
@@ -672,7 +672,7 @@ int pas_fread_lstring(struct pas_file_fcb *f, uint8_t * buf, int cap)
     return 0;
 }
 
-int pas_fread_string(struct pas_file_fcb *f, uint8_t * buf, int cap)
+int pas_fread_string(struct pas_file_fcb *f, uint8_t *buf, int cap)
 {
     /* READ into STRING(n): copy up to cap characters, stopping early at the
      * line marker (which stays the current component, like the LSTRING

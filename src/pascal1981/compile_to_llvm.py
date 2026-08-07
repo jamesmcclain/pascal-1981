@@ -85,10 +85,19 @@ def _run_clang(cmd: list, echo: bool, dry_run: bool = False) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Pascal-1981 compiler driver (gcc-style stages: -S, -c, link).", formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument('source_file', nargs='?', type=str, help='Source Pascal file (e.g., program.pas)')
-    parser.add_argument('-o', '--output', dest='output_file', default=None, metavar='FILE', help='Write output to FILE (default: a.out when linking, ./<basename>.ll or .ptx with -S, ./<basename>.o with -c). With -S, -o - writes to stdout.')
+    parser.add_argument('-o',
+                        '--output',
+                        dest='output_file',
+                        default=None,
+                        metavar='FILE',
+                        help='Write output to FILE (default: a.out when linking, ./<basename>.ll or .ptx with -S, ./<basename>.o with -c). With -S, -o - writes to stdout.')
     parser.add_argument('-v', '--verbose', action='store_true', help='Log each declaration/statement, echo clang command lines, and print a full traceback on failure.')
     _stages = parser.add_mutually_exclusive_group()
-    _stages.add_argument('-S', dest='stage_s', action='store_true', help='Compile only: emit assembly and stop (host: LLVM IR; PTX with an nvptx --device-triple). Default output ./<basename>.ll (or .ptx); -o - writes to stdout.')
+    _stages.add_argument(
+        '-S',
+        dest='stage_s',
+        action='store_true',
+        help='Compile only: emit assembly and stop (host: LLVM IR; PTX with an nvptx --device-triple). Default output ./<basename>.ll (or .ptx); -o - writes to stdout.')
     _stages.add_argument('-c', dest='stage_c', action='store_true', help='Compile and assemble to an object file via clang (default ./<basename>.o); do not link.')
     parser.add_argument('-f', '--feature', action='append', default=[], metavar='NAME', help='Enable extension feature NAME; use no-NAME to disable. Repeatable.')
     parser.add_argument('--dialect',
@@ -96,7 +105,14 @@ def main() -> int:
                         default='vintage',
                         help='Feature umbrella: vintage enables no extensions; extended enables all registered features.')
     parser.add_argument('--list-features', action='store_true', help='List registered extension features and exit.')
-    parser.add_argument('-print-file-name', dest='print_file_name', default=None, metavar='LIB', help='Print the absolute path of the named runtime archive and exit (gcc-style; e.g. -print-file-name=libpascalrt.a). As with gcc, an unrecognized LIB is echoed back unchanged.')
+    parser.add_argument(
+        '-print-file-name',
+        dest='print_file_name',
+        default=None,
+        metavar='LIB',
+        help=
+        'Print the absolute path of the named runtime archive and exit (gcc-style; e.g. -print-file-name=libpascalrt.a). As with gcc, an unrecognized LIB is echoed back unchanged.'
+    )
     parser.add_argument('--host-triple', default='x86_64-pc-linux-gnu', metavar='TRIPLE', help='LLVM target triple for host MODULE/PROGRAM units (default: x86_64-pc-linux-gnu).')
     parser.add_argument('--device-triple',
                         default='x86_64-pc-linux-gnu',
@@ -107,11 +123,19 @@ def main() -> int:
                         'emitting PTX device assembly (honoring --sm), the single-CLI replacement '
                         'for python -m pascal1981.compile_to_ptx.')
     parser.add_argument('--sm', default='sm_70', metavar='ARCH', help='NVPTX target CPU when emitting PTX (nvptx --device-triple), e.g. sm_70, sm_86 (default: sm_70).')
-    parser.add_argument('--save-llvm', default=None, metavar='PATH', help='When emitting PTX (nvptx --device-triple), also write the intermediate NVPTX LLVM IR to PATH (gcc -save-temps style).')
+    parser.add_argument('--save-llvm',
+                        default=None,
+                        metavar='PATH',
+                        help='When emitting PTX (nvptx --device-triple), also write the intermediate NVPTX LLVM IR to PATH (gcc -save-temps style).')
     parser.add_argument('-###', dest='dry_run', action='store_true', help='Print (do not execute) the clang commands this driver would run, gcc-style.')
     parser.add_argument('-L', dest='link_dirs', action='append', default=[], metavar='DIR', help='Add DIR to the library search path (passed through to the clang link step).')
     parser.add_argument('-l', dest='link_libs', action='append', default=[], metavar='LIB', help='Link against libLIB (passed through to the clang link step).')
-    parser.add_argument('-Wl', dest='wl_args', action='append', default=[], metavar=',ARG,...', help='Pass comma-separated ARGs to the linker (forwarded verbatim to the clang link step).')
+    parser.add_argument('-Wl',
+                        dest='wl_args',
+                        action='append',
+                        default=[],
+                        metavar=',ARG,...',
+                        help='Pass comma-separated ARGs to the linker (forwarded verbatim to the clang link step).')
     parser.add_argument('-O',
                         dest='opt_level',
                         type=int,
@@ -170,8 +194,7 @@ def main() -> int:
     # argparse only attaches arguments to single-character short options, so
     # gcc's -Wl,ARG[,ARG...] would not parse; rewrite it to the equivalent
     # -Wl=,ARG form (keeping the comma, which we reattach for clang).
-    argv = [a if not a.startswith('-Wl,') else '-Wl=' + a[3:]
-            for a in sys.argv[1:]]
+    argv = [a if not a.startswith('-Wl,') else '-Wl=' + a[3:] for a in sys.argv[1:]]
     args = parser.parse_args(argv)
 
     if args.print_file_name is not None:

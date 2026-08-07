@@ -58,7 +58,7 @@ static void die(const char *msg)
     abort();
 }
 
-static int read_identifier_token(int (*next)(void), void (*push)(int), char *buf, int cap)
+static int read_identifier_token(int (*next)(void), void(*push)(int), char *buf, int cap)
 {
     int ch = skip_ws_except_nl();
     (void) next;
@@ -80,7 +80,7 @@ static int read_identifier_token(int (*next)(void), void (*push)(int), char *buf
     return 0;
 }
 
-int pas_read_enum_name(int32_t * out, const char **names, int count)
+int pas_read_enum_name(int32_t *out, const char **names, int count)
 {
     int ch = skip_ws_except_nl();
     if (ch == EOF)
@@ -106,7 +106,7 @@ int pas_read_enum_name(int32_t * out, const char **names, int count)
     return -1;
 }
 
-int pas_read_int(int32_t * out)
+int pas_read_int(int32_t *out)
 {
     int ch = skip_ws_except_nl();
     if (ch == EOF)
@@ -119,7 +119,7 @@ int pas_read_int(int32_t * out)
     return 0;
 }
 
-int pas_read_word(uint16_t * out)
+int pas_read_word(uint16_t *out)
 {
     int32_t v = 0;
     if (pas_read_int(&v) != 0)
@@ -141,7 +141,7 @@ int pas_read_real(double *out)
     return 0;
 }
 
-int pas_read_char(uint8_t * out)
+int pas_read_char(uint8_t *out)
 {
     int ch = getchar();
     if (ch == EOF)
@@ -150,7 +150,7 @@ int pas_read_char(uint8_t * out)
     return 0;
 }
 
-int pas_read_lstring(uint8_t * buf, int cap)
+int pas_read_lstring(uint8_t *buf, int cap)
 {
     int ch;
     int n = 0;
@@ -169,7 +169,7 @@ int pas_read_lstring(uint8_t * buf, int cap)
     return 0;
 }
 
-int pas_read_string(uint8_t * buf, int cap)
+int pas_read_string(uint8_t *buf, int cap)
 {
     /* stdin variant of pas_fread_string: fill up to cap chars, stop early
      * at the line marker (pushed back), blank-pad the remainder. */

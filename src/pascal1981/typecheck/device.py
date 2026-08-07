@@ -11,20 +11,10 @@ from typing import Optional
 
 from ..ast_nodes import AdrExpr, AdsExpr, Designator, Identifier, ProcCallStmt
 from ..device_limits import NVVM_AXIS_MAX, NVVM_MAX_THREADS_PER_BLOCK
-from ..type_system import (
-    CHAR_TYPE,
-    ArrayType,
-    EnumType,
-    LStringType,
-    PointerType,
-    ProcedureType,
-    RecordType,
-    StringType,
-)
+from ..type_system import (CHAR_TYPE, ArrayType, EnumType, LStringType, PointerType, ProcedureType, RecordType, StringType)
 
 
 class DeviceCheckMixin:
-
 
     # ---- ADS address-space helpers (ads-memory-spaces-design.md S3-S5) ----
 

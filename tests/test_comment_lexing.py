@@ -21,7 +21,7 @@ gives no hint about the real, distant cause. This file pins:
 
 import unittest
 
-from pascal1981.lexer import LexerError, Lexer
+from pascal1981.lexer import Lexer, LexerError
 
 
 def _tokenize(src: str):
