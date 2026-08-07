@@ -467,6 +467,20 @@ pascal-1981/
        └── old/                         # archived plans, design rationale, and settled differential questions
 ```
 
+## Source formatting
+
+`scripts/beautify.sh` formats the tree in place. It runs `isort` and `yapf` over the Python sources and GNU `indent` over the C runtime.
+
+A pre-commit hook in `scripts/hooks/` runs the formatter and re-stages the files the commit already touched. Enable it once per clone:
+
+```bash
+git config core.hooksPath scripts/hooks
+```
+
+`core.hooksPath` is local configuration. Git never clones it. A fresh checkout runs no hooks until you set it.
+
+The hook re-stages only files that were already staged. The formatter rewrites the whole tree, so a blanket `git add` would put unrelated work into the commit. A file with both staged and unstaged changes cannot be re-staged safely: `git add` would also take the unstaged part. The hook reports these files and leaves them alone. Stage such a file completely, then commit again to format it.
+
 ## Testing
 
 One unified test suite uses `pytest`. It detects optional dependencies automatically. Tests are organized by pipeline layer. Run the subset relevant to your changes. The full LLVM toolchain is not required.
