@@ -93,10 +93,17 @@ def _probe_gpu() -> bool:
 
 HAS_GPU = _probe_gpu()
 
+# The pre-commit hook (scripts/hooks/pre-commit) drives scripts/beautify.sh,
+# which shells out to isort, yapf and GNU indent. All four tools plus git are
+# hard prerequisites for exercising it, and none are needed by the compiler
+# itself, so the hook test skips cleanly wherever they are absent.
+HAS_FORMATTERS = all(shutil.which(t) is not None for t in ("git", "isort", "yapf", "indent"))
+
 # Skip decorators
 requires_llvm = unittest.skipUnless(HAS_LLVM, "requires llvmlite (IR generation)")
 requires_exe = unittest.skipUnless(CAN_BUILD_EXE, "requires llvmlite + clang (native build/run)")
 requires_gpu = unittest.skipUnless(HAS_GPU, "requires an NVIDIA GPU + NVPTX backend + libcuda")
+requires_formatters = unittest.skipUnless(HAS_FORMATTERS, "requires git + isort + yapf + indent (pre-commit hook)")
 
 # In-process helpers
 from pascal1981.lexer import LexerError, lex_file

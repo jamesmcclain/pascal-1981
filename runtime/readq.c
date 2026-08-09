@@ -58,11 +58,9 @@ static void die(const char *msg)
     abort();
 }
 
-static int read_identifier_token(int (*next)(void), void(*push)(int), char *buf, int cap)
+static int read_identifier_token(char *buf, int cap)
 {
     int ch = skip_ws_except_nl();
-    (void) next;
-    (void) push;
     if (ch == EOF)
         die("unexpected EOF while reading enum");
     if (!isalpha((unsigned char) ch)) {
@@ -95,7 +93,7 @@ int pas_read_enum_name(int32_t *out, const char **names, int count)
     }
     unread(ch);
     char tok[256];
-    read_identifier_token(NULL, NULL, tok, (int) sizeof(tok));
+    read_identifier_token(tok, (int) sizeof(tok));
     for (int i = 0; i < count; i++) {
         if (names && names[i] && strcmp(tok, names[i]) == 0) {
             *out = i;
