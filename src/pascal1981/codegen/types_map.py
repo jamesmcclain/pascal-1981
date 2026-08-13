@@ -302,7 +302,15 @@ class TypesMapMixin:
                 is_str, max_len, is_lstring = self.get_string_type_info(target_ast_type)
                 if is_str:
                     chars_ptr, length = self.get_string_chars_and_len(src_expr)
-                    buf = self.builder.alloca(target_type)
+                    # entry_alloca, not a raw self.builder.alloca: this runs
+                    # at whatever call site is coercing the literal (often
+                    # inside a loop), and a plain alloca there is a genuine
+                    # runtime stack-pointer decrement on every execution --
+                    # LLVM only reclaims it at function return, so a call
+                    # site executed thousands of times (e.g. once per token
+                    # while reading a token stream) exhausts the stack. An
+                    # entry-block alloca is the same slot reused every time.
+                    buf = self.entry_alloca(target_type, name='str_lit_coerce_buf')
                     zero = ir.Constant(ir.IntType(32), 0)
                     one = ir.Constant(ir.IntType(32), 1)
                     length_64 = self.builder.zext(length, ir.IntType(64))
