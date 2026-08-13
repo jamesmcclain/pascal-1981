@@ -139,7 +139,7 @@ END;
 PROCEDURE ReadInputAndParseTokens;
 VAR
   raw_input, old_buf: ADRMEM;
-  cap, len, i: INTEGER;
+  cap, len, i: CINT;
   input_ch, tok_count, res_c: CINT;
   p_in, p_out, p_in_base, p_out_base: ^CHAR;
   json_root, item, field, val_obj, val_str_ptr, base_ptr, val_ptr: ADRMEM;
@@ -333,6 +333,25 @@ BEGIN
   END;
 END;
 
+FUNCTION UpperStr(s: Str255): Str255;
+VAR
+  i, len: INTEGER;
+  res: Str255;
+  ch: CHAR;
+BEGIN
+  len := ORD(s[0]);
+  res[0] := CHR(len);
+  FOR i := 1 TO len DO
+  BEGIN
+    ch := s[i];
+    IF (ch >= 'a') AND (ch <= 'z') THEN
+      res[i] := CHR(ORD(ch) - 32)
+    ELSE
+      res[i] := ch;
+  END;
+  UpperStr := res;
+END;
+
 PROCEDURE Expect(k: Str255);
 VAR
   err_msg, ck, target_k: Str255;
@@ -375,9 +394,22 @@ FUNCTION ParseBooleanExpression: ADRMEM; FORWARD;
 FUNCTION ParseSimpleExpression: ADRMEM; FORWARD;
 FUNCTION ParseTerm: ADRMEM; FORWARD;
 FUNCTION ParseFactor: ADRMEM; FORWARD;
+FUNCTION ParseFactor2: ADRMEM; FORWARD;
+FUNCTION ParseType2: ADRMEM; FORWARD;
 FUNCTION ParseStatement: ADRMEM; FORWARD;
 FUNCTION ParseBlock: ADRMEM; FORWARD;
 FUNCTION ParseType: ADRMEM; FORWARD;
+FUNCTION ParseConstant: ADRMEM; FORWARD;
+FUNCTION ParseCompoundStmt: ADRMEM; FORWARD;
+FUNCTION ParseCompoundStmtList: ADRMEM; FORWARD;
+FUNCTION ParseIfStmt: ADRMEM; FORWARD;
+FUNCTION ParseForStmt: ADRMEM; FORWARD;
+FUNCTION ParseWhileStmt: ADRMEM; FORWARD;
+FUNCTION ParseRepeatStmt: ADRMEM; FORWARD;
+FUNCTION ParseCaseStmt: ADRMEM; FORWARD;
+FUNCTION ParseWithStmt: ADRMEM; FORWARD;
+FUNCTION ParseProcDecl: ADRMEM; FORWARD;
+FUNCTION ParseFuncDecl: ADRMEM; FORWARD;
 
 FUNCTION ParseIdentifier: ADRMEM;
 VAR
@@ -532,6 +564,88 @@ BEGIN
   ParseActualParameterList := args_arr;
 END;
 
+FUNCTION ParseIdentListArr: ADRMEM;
+VAR
+  arr: ADRMEM;
+BEGIN
+  arr := cJSON_CreateArray;
+  cJSON_AddItemToArray(arr, cJSON_CreateString(MakeCStr(CurLex())));
+  Expect('IDENTIFIER');
+  WHILE Match('COMMA') DO
+  BEGIN
+    cJSON_AddItemToArray(arr, cJSON_CreateString(MakeCStr(CurLex())));
+    Expect('IDENTIFIER');
+  END;
+  ParseIdentListArr := arr;
+END;
+
+FUNCTION ParseConstant: ADRMEM;
+VAR
+  node: ADRMEM;
+  val_str: Str255;
+  sign_neg: BOOLEAN;
+  res_c: CINT;
+BEGIN
+  sign_neg := FALSE;
+  IF (CurKind() = 'PLUS') OR (CurKind() = 'MINUS') THEN
+  BEGIN
+    sign_neg := (CurKind() = 'MINUS');
+    pos := pos + 1;
+  END;
+  IF CurKind() = 'INTEGER_LITERAL' THEN
+  BEGIN
+    node := CreateNode('IntLiteral');
+    val_str := CurLex();
+    Expect('INTEGER_LITERAL');
+    IF sign_neg THEN
+      AddIntField(node, 'value', -StrToIntVal(val_str))
+    ELSE
+      AddIntField(node, 'value', StrToIntVal(val_str));
+    ParseConstant := node;
+  END
+  ELSE IF CurKind() = 'CHAR_LITERAL' THEN
+  BEGIN
+    node := CreateNode('CharLiteral');
+    val_str := CurLex();
+    Expect('CHAR_LITERAL');
+    AddStringField(node, 'value', val_str);
+    ParseConstant := node;
+  END
+  ELSE IF CurKind() = 'STRING_LITERAL' THEN
+  BEGIN
+    node := CreateNode('StringLiteral');
+    val_str := CurLex();
+    Expect('STRING_LITERAL');
+    AddStringField(node, 'value', val_str);
+    ParseConstant := node;
+  END
+  ELSE IF CurKind() = 'BOOLEAN_LITERAL' THEN
+  BEGIN
+    node := CreateNode('BoolLiteral');
+    val_str := CurLex();
+    Expect('BOOLEAN_LITERAL');
+    AddBoolField(node, 'value', StringEqual(UpperStr(val_str), 'TRUE'));
+    ParseConstant := node;
+  END
+  ELSE IF CurKind() = 'NIL' THEN
+  BEGIN
+    pos := pos + 1;
+    ParseConstant := CreateNode('NilLiteral');
+  END
+  ELSE IF CurKind() = 'IDENTIFIER' THEN
+  BEGIN
+    node := CreateNode('Identifier');
+    AddStringField(node, 'name', CurLex());
+    Expect('IDENTIFIER');
+    ParseConstant := node;
+  END
+  ELSE
+  BEGIN
+    res_c := puts(MakeCStr('Parser Error: expected constant'));
+    exit(1);
+  END;
+END;
+
 FUNCTION ParseFactor: ADRMEM;
 VAR
   node, expr, args_arr: ADRMEM;
@@ -543,7 +657,11 @@ BEGIN
     pos := pos + 1;
     node := CreateNode('UnaryOp');
     AddStringField(node, 'op', 'NOT');
-    AddField(node, 'operand', ParseFactor);
+    { A function calling itself by its own bare name resolves to its own
+      return-value slot in this dialect, not a recursive call (confirmed
+      empirically -- even Foo(args) inside Foo's own body hits this), so
+      route through the ParseFactor2 forwarding wrapper below instead. }
+    AddField(node, 'operand', ParseFactor2);
     ParseFactor := node;
   END
   ELSE IF CurKind() = 'INTEGER_LITERAL' THEN
@@ -619,6 +737,11 @@ BEGIN
     res_c := puts(MakeCStr(CurKind()));
     exit(1);
   END;
+END;
+
+FUNCTION ParseFactor2: ADRMEM;
+BEGIN
+  ParseFactor2 := ParseFactor;
 END;
 
 FUNCTION ParseTerm: ADRMEM;
@@ -718,6 +841,48 @@ BEGIN
   ParseBooleanExpression := left;
 END;
 
+FUNCTION ParseWriteArg: ADRMEM;
+VAR
+  node: ADRMEM;
+BEGIN
+  node := CreateNode('WriteArg');
+  AddField(node, 'expr', ParseExpression);
+  IF Match('COLON') THEN
+  BEGIN
+    IF CurKind() = 'COLON' THEN
+    BEGIN
+      pos := pos + 1;
+      AddNullField(node, 'width');
+      AddField(node, 'precision', ParseExpression);
+    END
+    ELSE
+    BEGIN
+      AddField(node, 'width', ParseExpression);
+      IF Match('COLON') THEN
+        AddField(node, 'precision', ParseExpression)
+      ELSE
+        AddNullField(node, 'precision');
+    END;
+  END
+  ELSE
+  BEGIN
+    AddNullField(node, 'width');
+    AddNullField(node, 'precision');
+  END;
+  ParseWriteArg := node;
+END;
+
+FUNCTION ParseWriteArgList: ADRMEM;
+VAR
+  arr: ADRMEM;
+BEGIN
+  arr := cJSON_CreateArray;
+  cJSON_AddItemToArray(arr, ParseWriteArg);
+  WHILE Match('COMMA') DO
+    cJSON_AddItemToArray(arr, ParseWriteArg);
+  ParseWriteArgList := arr;
+END;
+
 FUNCTION ParseAssignOrCallStmt: ADRMEM;
 VAR
   node, target, args_arr: ADRMEM;
@@ -736,9 +901,14 @@ BEGIN
     BEGIN
       IF CurKind() <> 'RPAREN' THEN
       BEGIN
-        cJSON_AddItemToArray(args_arr, ParseExpression);
-        WHILE Match('COMMA') DO
+        IF StringEqual(UpperStr(name), 'WRITE') OR StringEqual(UpperStr(name), 'WRITELN') THEN
+          args_arr := ParseWriteArgList
+        ELSE
+        BEGIN
           cJSON_AddItemToArray(args_arr, ParseExpression);
+          WHILE Match('COMMA') DO
+            cJSON_AddItemToArray(args_arr, ParseExpression);
+        END;
       END;
       Expect('RPAREN');
     END;
@@ -777,58 +947,922 @@ BEGIN
   ParseCompoundStmt := node;
 END;
 
-FUNCTION ParseStatement: ADRMEM;
+FUNCTION ParseCompoundStmtList: ADRMEM;
+VAR
+  arr: ADRMEM;
 BEGIN
-  IF CurKind() = 'BEGIN' THEN
+  Expect('BEGIN');
+  arr := cJSON_CreateArray;
+  WHILE (CurKind() <> 'END') AND (CurKind() <> 'EOF') DO
+  BEGIN
+    cJSON_AddItemToArray(arr, ParseStatement);
+    IF CurKind() = 'SEMICOLON' THEN pos := pos + 1;
+  END;
+  Expect('END');
+  ParseCompoundStmtList := arr;
+END;
+
+FUNCTION ParseIfStmt: ADRMEM;
+VAR
+  node: ADRMEM;
+BEGIN
+  Expect('IF');
+  node := CreateNode('IfStmt');
+  AddField(node, 'cond', ParseBooleanExpression);
+  Expect('THEN');
+  AddField(node, 'then_branch', ParseStatement);
+  IF Match('ELSE') THEN
+    AddField(node, 'else_branch', ParseStatement)
+  ELSE
+    AddNullField(node, 'else_branch');
+  ParseIfStmt := node;
+END;
+
+FUNCTION ParseForStmt: ADRMEM;
+VAR
+  node: ADRMEM;
+  var_name, dir_str: Str255;
+  static_flag: BOOLEAN;
+  res_c: CINT;
+BEGIN
+  Expect('FOR');
+  node := CreateNode('ForStmt');
+  static_flag := Match('STATIC');
+  var_name := CurLex();
+  Expect('IDENTIFIER');
+  Expect('ASSIGN');
+  AddStringField(node, 'var', var_name);
+  AddField(node, 'start', ParseExpression);
+  IF (CurKind() = 'TO') OR (CurKind() = 'DOWNTO') THEN
+  BEGIN
+    dir_str := CurKind();
+    pos := pos + 1;
+  END
+  ELSE
+  BEGIN
+    res_c := puts(MakeCStr('Parser Error: expected TO or DOWNTO'));
+    exit(1);
+  END;
+  AddField(node, 'end', ParseExpression);
+  Expect('DO');
+  AddStringField(node, 'direction', dir_str);
+  AddField(node, 'body', ParseStatement);
+  AddBoolField(node, 'static', static_flag);
+  AddNullField(node, 'unroll');
+  ParseForStmt := node;
+END;
+
+FUNCTION ParseWhileStmt: ADRMEM;
+VAR
+  node: ADRMEM;
+BEGIN
+  Expect('WHILE');
+  node := CreateNode('WhileStmt');
+  AddField(node, 'cond', ParseBooleanExpression);
+  Expect('DO');
+  AddField(node, 'body', ParseStatement);
+  AddNullField(node, 'unroll');
+  ParseWhileStmt := node;
+END;
+
+FUNCTION ParseRepeatStmt: ADRMEM;
+VAR
+  node, stmts_arr: ADRMEM;
+BEGIN
+  Expect('REPEAT');
+  node := CreateNode('RepeatStmt');
+  stmts_arr := cJSON_CreateArray;
+  IF CurKind() <> 'UNTIL' THEN
+  BEGIN
+    cJSON_AddItemToArray(stmts_arr, ParseStatement);
+    WHILE Match('SEMICOLON') DO
+    BEGIN
+      IF CurKind() = 'UNTIL' THEN BREAK;
+      cJSON_AddItemToArray(stmts_arr, ParseStatement);
+    END;
+  END;
+  Expect('UNTIL');
+  AddField(node, 'body', stmts_arr);
+  AddField(node, 'cond', ParseBooleanExpression);
+  AddNullField(node, 'unroll');
+  ParseRepeatStmt := node;
+END;
+
+FUNCTION ParseCaseConstant: ADRMEM;
+VAR
+  e, high, node: ADRMEM;
+BEGIN
+  e := ParseConstant;
+  IF Match('RANGE') THEN
+  BEGIN
+    high := ParseConstant;
+    node := CreateNode('RangeExpr');
+    AddField(node, 'low', e);
+    AddField(node, 'high', high);
+    ParseCaseConstant := node;
+  END
+  ELSE
+    ParseCaseConstant := e;
+END;
+
+FUNCTION ParseCaseConstantList: ADRMEM;
+VAR
+  arr: ADRMEM;
+BEGIN
+  arr := cJSON_CreateArray;
+  cJSON_AddItemToArray(arr, ParseCaseConstant);
+  WHILE Match('COMMA') DO
+    cJSON_AddItemToArray(arr, ParseCaseConstant);
+  ParseCaseConstantList := arr;
+END;
+
+FUNCTION ParseCaseElement: ADRMEM;
+VAR
+  node, constants_arr: ADRMEM;
+BEGIN
+  node := CreateNode('CaseElement');
+  constants_arr := ParseCaseConstantList;
+  Expect('COLON');
+  AddField(node, 'constants', constants_arr);
+  AddField(node, 'stmt', ParseStatement);
+  ParseCaseElement := node;
+END;
+
+FUNCTION ParseCaseStmt: ADRMEM;
+VAR
+  node, elements_arr: ADRMEM;
+BEGIN
+  Expect('CASE');
+  node := CreateNode('CaseStmt');
+  AddField(node, 'expr', ParseExpression);
+  Expect('OF');
+  elements_arr := cJSON_CreateArray;
+  IF CurKind() <> 'END' THEN
+  BEGIN
+    cJSON_AddItemToArray(elements_arr, ParseCaseElement);
+    WHILE Match('SEMICOLON') DO
+    BEGIN
+      IF (CurKind() = 'OTHERWISE') OR (CurKind() = 'END') THEN BREAK;
+      cJSON_AddItemToArray(elements_arr, ParseCaseElement);
+    END;
+  END;
+  AddField(node, 'elements', elements_arr);
+  IF Match('OTHERWISE') THEN
+    AddField(node, 'otherwise', ParseStatement)
+  ELSE
+    AddNullField(node, 'otherwise');
+  Expect('END');
+  AddBoolField(node, 'rangeck', TRUE);
+  AddNullField(node, 'meta_flags');
+  ParseCaseStmt := node;
+END;
+
+FUNCTION ParseWithTarget: ADRMEM;
+VAR
+  node, selectors_arr, sel_obj: ADRMEM;
+  nm: Str255;
+BEGIN
+  nm := CurLex();
+  Expect('IDENTIFIER');
+  node := CreateNode('Designator');
+  AddStringField(node, 'name', nm);
+  selectors_arr := cJSON_CreateArray;
+  WHILE (CurKind() = 'LBRACKET') OR (CurKind() = 'DOT') OR (CurKind() = 'POINTER') DO
+  BEGIN
+    IF CurKind() = 'LBRACKET' THEN
+    BEGIN
+      pos := pos + 1;
+      sel_obj := CreateNode('Selector');
+      AddStringField(sel_obj, 'kind', 'INDEX');
+      AddField(sel_obj, 'index_or_field', ParseExpression);
+      Expect('RBRACKET');
+      cJSON_AddItemToArray(selectors_arr, sel_obj);
+    END
+    ELSE IF CurKind() = 'DOT' THEN
+    BEGIN
+      pos := pos + 1;
+      sel_obj := CreateNode('Selector');
+      AddStringField(sel_obj, 'kind', 'FIELD');
+      AddStringField(sel_obj, 'index_or_field', CurLex());
+      Expect('IDENTIFIER');
+      cJSON_AddItemToArray(selectors_arr, sel_obj);
+    END
+    ELSE
+    BEGIN
+      pos := pos + 1;
+      sel_obj := CreateNode('Selector');
+      AddStringField(sel_obj, 'kind', 'DEREF');
+      AddNullField(sel_obj, 'index_or_field');
+      cJSON_AddItemToArray(selectors_arr, sel_obj);
+    END;
+  END;
+  AddField(node, 'selectors', selectors_arr);
+  ParseWithTarget := node;
+END;
+
+FUNCTION ParseWithStmt: ADRMEM;
+VAR
+  node, targets_arr: ADRMEM;
+BEGIN
+  Expect('WITH');
+  node := CreateNode('WithStmt');
+  targets_arr := cJSON_CreateArray;
+  cJSON_AddItemToArray(targets_arr, ParseWithTarget);
+  WHILE Match('COMMA') DO
+    cJSON_AddItemToArray(targets_arr, ParseWithTarget);
+  Expect('DO');
+  AddField(node, 'targets', targets_arr);
+  AddField(node, 'body', ParseStatement);
+  ParseWithStmt := node;
+END;
+
+FUNCTION ParseLabelStmt: ADRMEM;
+VAR
+  node: ADRMEM;
+BEGIN
+  node := CreateNode('LabelStmt');
+  IF CurKind() = 'INTEGER_LITERAL' THEN
+  BEGIN
+    AddIntField(node, 'label', StrToIntVal(CurLex()));
+    pos := pos + 1;
+  END
+  ELSE
+  BEGIN
+    AddStringField(node, 'label', CurLex());
+    pos := pos + 1;
+  END;
+  Expect('COLON');
+  AddField(node, 'stmt', ParseStatement);
+  ParseLabelStmt := node;
+END;
+
+FUNCTION ParseStatement: ADRMEM;
+VAR
+  node: ADRMEM;
+  k: Str255;
+BEGIN
+  k := CurKind();
+  IF k = 'BEGIN' THEN
     ParseStatement := ParseCompoundStmt
-  ELSE IF CurKind() = 'IDENTIFIER' THEN
+  ELSE IF k = 'IF' THEN
+    ParseStatement := ParseIfStmt
+  ELSE IF k = 'FOR' THEN
+    ParseStatement := ParseForStmt
+  ELSE IF k = 'REPEAT' THEN
+    ParseStatement := ParseRepeatStmt
+  ELSE IF k = 'WHILE' THEN
+    ParseStatement := ParseWhileStmt
+  ELSE IF k = 'CASE' THEN
+    ParseStatement := ParseCaseStmt
+  ELSE IF k = 'WITH' THEN
+    ParseStatement := ParseWithStmt
+  ELSE IF k = 'GOTO' THEN
+  BEGIN
+    pos := pos + 1;
+    node := CreateNode('GotoStmt');
+    IF CurKind() = 'INTEGER_LITERAL' THEN
+    BEGIN
+      AddIntField(node, 'label', StrToIntVal(CurLex()));
+      pos := pos + 1;
+    END
+    ELSE
+    BEGIN
+      AddStringField(node, 'label', CurLex());
+      pos := pos + 1;
+    END;
+    ParseStatement := node;
+  END
+  ELSE IF k = 'RETURN' THEN
+  BEGIN
+    pos := pos + 1;
+    ParseStatement := CreateNode('ReturnStmt');
+  END
+  ELSE IF k = 'BREAK' THEN
+  BEGIN
+    pos := pos + 1;
+    node := CreateNode('BreakStmt');
+    IF (CurKind() = 'INTEGER_LITERAL') OR (CurKind() = 'IDENTIFIER') THEN
+    BEGIN
+      IF CurKind() = 'INTEGER_LITERAL' THEN
+        AddIntField(node, 'label', StrToIntVal(CurLex()))
+      ELSE
+        AddStringField(node, 'label', CurLex());
+      pos := pos + 1;
+    END
+    ELSE
+      AddNullField(node, 'label');
+    ParseStatement := node;
+  END
+  ELSE IF k = 'CYCLE' THEN
+  BEGIN
+    pos := pos + 1;
+    node := CreateNode('CycleStmt');
+    IF (CurKind() = 'INTEGER_LITERAL') OR (CurKind() = 'IDENTIFIER') THEN
+    BEGIN
+      IF CurKind() = 'INTEGER_LITERAL' THEN
+        AddIntField(node, 'label', StrToIntVal(CurLex()))
+      ELSE
+        AddStringField(node, 'label', CurLex());
+      pos := pos + 1;
+    END
+    ELSE
+      AddNullField(node, 'label');
+    ParseStatement := node;
+  END
+  ELSE IF ((k = 'INTEGER_LITERAL') OR (k = 'IDENTIFIER')) AND (NextKind() = 'COLON') THEN
+    ParseStatement := ParseLabelStmt
+  ELSE IF k = 'IDENTIFIER' THEN
     ParseStatement := ParseAssignOrCallStmt
   ELSE
     ParseStatement := CreateNode('EmptyStmt');
 END;
 
-FUNCTION ParseType: ADRMEM;
+FUNCTION ParseIndexRange(allow_star: BOOLEAN): ADRMEM;
 VAR
   node: ADRMEM;
 BEGIN
-  node := CreateNode('NamedType');
-  AddStringField(node, 'name', CurLex());
-  AddNullField(node, 'param');
+  node := CreateNode('IndexRange');
+  AddField(node, 'low', ParseConstant);
+  Expect('RANGE');
+  IF allow_star THEN
+  BEGIN
+    Expect('MUL');
+    AddNullField(node, 'high');
+  END
+  ELSE
+    AddField(node, 'high', ParseConstant);
+  ParseIndexRange := node;
+END;
+
+FUNCTION ParseSetBase: ADRMEM;
+VAR
+  node, low_e, high_e: ADRMEM;
+  nm: Str255;
+  res_c: CINT;
+BEGIN
+  IF CurKind() = 'IDENTIFIER' THEN
+  BEGIN
+    IF NextKind() = 'RANGE' THEN
+    BEGIN
+      low_e := ParseConstant;
+      Expect('RANGE');
+      high_e := ParseConstant;
+      node := CreateNode('SubrangeType');
+      AddField(node, 'low', low_e);
+      AddField(node, 'high', high_e);
+      AddNullField(node, 'host');
+      ParseSetBase := node;
+    END
+    ELSE
+    BEGIN
+      nm := CurLex();
+      Expect('IDENTIFIER');
+      node := CreateNode('NamedType');
+      AddStringField(node, 'name', nm);
+      AddNullField(node, 'param');
+      ParseSetBase := node;
+    END;
+  END
+  ELSE IF (CurKind() = 'INTEGER_LITERAL') OR (CurKind() = 'CHAR_LITERAL') OR
+          (CurKind() = 'STRING_LITERAL') OR (CurKind() = 'BOOLEAN_LITERAL') THEN
+  BEGIN
+    low_e := ParseConstant;
+    IF CurKind() = 'RANGE' THEN
+    BEGIN
+      pos := pos + 1;
+      high_e := ParseConstant;
+      node := CreateNode('SubrangeType');
+      AddField(node, 'low', low_e);
+      AddField(node, 'high', high_e);
+      AddNullField(node, 'host');
+      ParseSetBase := node;
+    END
+    ELSE
+    BEGIN
+      node := CreateNode('BuiltinType');
+      AddStringField(node, 'name', 'INTEGER');
+      ParseSetBase := node;
+    END;
+  END
+  ELSE IF (CurKind() = 'INTEGER') OR (CurKind() = 'REAL') OR (CurKind() = 'BOOLEAN') OR
+          (CurKind() = 'CHAR') OR (CurKind() = 'WORD') OR (CurKind() = 'ADRMEM') THEN
+  BEGIN
+    node := CreateNode('BuiltinType');
+    AddStringField(node, 'name', CurKind());
+    pos := pos + 1;
+    ParseSetBase := node;
+  END
+  ELSE
+  BEGIN
+    res_c := puts(MakeCStr('Parser Error: expected set base type'));
+    exit(1);
+  END;
+END;
+
+FUNCTION MakeTupleNode(item1, item2: ADRMEM): ADRMEM;
+VAR
+  node, items_arr: ADRMEM;
+BEGIN
+  node := cJSON_CreateObject;
+  AddBoolField(node, '__tuple__', TRUE);
+  items_arr := cJSON_CreateArray;
+  cJSON_AddItemToArray(items_arr, item1);
+  cJSON_AddItemToArray(items_arr, item2);
+  AddField(node, 'items', items_arr);
+  MakeTupleNode := node;
+END;
+
+FUNCTION ParseType: ADRMEM;
+VAR
+  node, idx_range, elem_type, base_type, space_expr: ADRMEM;
+  packed_flag, is_super: BOOLEAN;
+  nm: Str255;
+  fields_arr, names_arr, field_type, max_len_expr, param_expr, values_arr: ADRMEM;
+  max_len: INTEGER;
+  res_c: CINT;
+BEGIN
+  packed_flag := Match('PACKED');
+  IF (CurKind() = 'ARRAY') OR (CurKind() = 'SUPER') THEN
+  BEGIN
+    is_super := (CurKind() = 'SUPER');
+    IF is_super THEN
+    BEGIN
+      pos := pos + 1;
+      Expect('ARRAY');
+    END
+    ELSE
+      pos := pos + 1;
+    Expect('LBRACKET');
+    idx_range := ParseIndexRange(is_super);
+    Expect('RBRACKET');
+    Expect('OF');
+    elem_type := ParseType2;
+    node := CreateNode('ArrayType');
+    AddField(node, 'index_range', idx_range);
+    AddField(node, 'element_type', elem_type);
+    AddBoolField(node, 'packed', packed_flag);
+    AddBoolField(node, 'super', is_super);
+    ParseType := node;
+  END
+  ELSE IF CurKind() = 'RECORD' THEN
+  BEGIN
+    pos := pos + 1;
+    fields_arr := cJSON_CreateArray;
+    WHILE CurKind() <> 'END' DO
+    BEGIN
+      names_arr := ParseIdentListArr;
+      Expect('COLON');
+      field_type := ParseType2;
+      cJSON_AddItemToArray(fields_arr, MakeTupleNode(names_arr, field_type));
+      IF CurKind() = 'SEMICOLON' THEN
+        pos := pos + 1
+      ELSE
+        BREAK;
+    END;
+    Expect('END');
+    node := CreateNode('RecordType');
+    AddField(node, 'fields', fields_arr);
+    AddBoolField(node, 'packed', packed_flag);
+    ParseType := node;
+  END
+  ELSE IF CurKind() = 'SET' THEN
+  BEGIN
+    pos := pos + 1;
+    Expect('OF');
+    base_type := ParseSetBase;
+    node := CreateNode('SetType');
+    AddField(node, 'base', base_type);
+    ParseType := node;
+  END
+  ELSE IF CurKind() = 'FILE' THEN
+  BEGIN
+    pos := pos + 1;
+    Expect('OF');
+    elem_type := ParseType2;
+    node := CreateNode('FileType');
+    AddField(node, 'element_type', elem_type);
+    AddStringField(node, 'structure', 'BINARY');
+    ParseType := node;
+  END
+  ELSE IF CurKind() = 'LPAREN' THEN
+  BEGIN
+    pos := pos + 1;
+    values_arr := ParseIdentListArr;
+    Expect('RPAREN');
+    node := CreateNode('EnumType');
+    AddField(node, 'values', values_arr);
+    ParseType := node;
+  END
+  ELSE IF CurKind() = 'LSTRING' THEN
+  BEGIN
+    pos := pos + 1;
+    Expect('LPAREN');
+    max_len_expr := ParseConstant;
+    Expect('RPAREN');
+    max_len := TRUNC(cJSON_GetNumberValue(cJSON_GetObjectItem(max_len_expr, MakeCStr('value'))));
+    node := CreateNode('LStringType');
+    AddIntField(node, 'max_len', max_len);
+    ParseType := node;
+  END
+  ELSE IF CurKind() = 'POINTER' THEN
+  BEGIN
+    pos := pos + 1;
+    base_type := ParseType2;
+    node := CreateNode('PointerType');
+    AddField(node, 'base', base_type);
+    AddStringField(node, 'flavor', 'POINTER');
+    AddNullField(node, 'space');
+    ParseType := node;
+  END
+  ELSE IF CurKind() = 'ADR' THEN
+  BEGIN
+    pos := pos + 1;
+    Expect('OF');
+    base_type := ParseType2;
+    node := CreateNode('PointerType');
+    AddField(node, 'base', base_type);
+    AddStringField(node, 'flavor', 'ADR');
+    AddNullField(node, 'space');
+    ParseType := node;
+  END
+  ELSE IF CurKind() = 'ADS' THEN
+  BEGIN
+    pos := pos + 1;
+    node := CreateNode('PointerType');
+    IF Match('LPAREN') THEN
+    BEGIN
+      space_expr := ParseExpression;
+      Expect('RPAREN');
+      AddField(node, 'space', space_expr);
+    END
+    ELSE
+      AddNullField(node, 'space');
+    Expect('OF');
+    base_type := ParseType2;
+    AddField(node, 'base', base_type);
+    AddStringField(node, 'flavor', 'ADS');
+    ParseType := node;
+  END
+  ELSE IF CurKind() = 'IDENTIFIER' THEN
+  BEGIN
+    nm := CurLex();
+    pos := pos + 1;
+    node := CreateNode('NamedType');
+    AddStringField(node, 'name', nm);
+    IF Match('LPAREN') THEN
+    BEGIN
+      param_expr := ParseConstant;
+      Expect('RPAREN');
+      AddField(node, 'param', param_expr);
+    END
+    ELSE
+      AddNullField(node, 'param');
+    ParseType := node;
+  END
+  ELSE IF (CurKind() = 'INTEGER') OR (CurKind() = 'REAL') OR (CurKind() = 'BOOLEAN') OR
+          (CurKind() = 'CHAR') OR (CurKind() = 'WORD') OR (CurKind() = 'ADRMEM') THEN
+  BEGIN
+    node := CreateNode('BuiltinType');
+    AddStringField(node, 'name', CurKind());
+    pos := pos + 1;
+    ParseType := node;
+  END
+  ELSE
+  BEGIN
+    res_c := puts(MakeCStr('Parser Error: expected type'));
+    exit(1);
+  END;
+END;
+
+FUNCTION ParseType2: ADRMEM;
+BEGIN
+  ParseType2 := ParseType;
+END;
+
+FUNCTION ParseAttributeItem: ADRMEM;
+VAR
+  node: ADRMEM;
+  up, c_str: Str255;
+BEGIN
+  c_str[0] := CHR(1);
+  c_str[1] := 'C';
+  IF (CurKind() = 'READONLY') OR (CurKind() = 'PUBLIC') OR (CurKind() = 'STATIC') OR
+     (CurKind() = 'EXTERNAL') OR (CurKind() = 'EXTERN') OR (CurKind() = 'PURE') THEN
+  BEGIN
+    node := CreateNode('Attribute');
+    AddStringField(node, 'name', CurKind());
+    AddNullField(node, 'arg');
+    pos := pos + 1;
+    ParseAttributeItem := node;
+  END
+  ELSE IF CurKind() = 'IDENTIFIER' THEN
+  BEGIN
+    up := UpperStr(CurLex());
+    IF StringEqual(up, 'SPACE') THEN
+    BEGIN
+      pos := pos + 1;
+      Expect('LPAREN');
+      node := CreateNode('Attribute');
+      AddStringField(node, 'name', 'SPACE');
+      AddField(node, 'arg', ParseExpression);
+      Expect('RPAREN');
+      ParseAttributeItem := node;
+    END
+    ELSE IF ((ORD(up[0]) = 1) AND (up[1] = 'C')) OR StringEqual(up, 'CDECL') THEN
+    BEGIN
+      pos := pos + 1;
+      node := CreateNode('Attribute');
+      AddStringField(node, 'name', c_str);
+      AddNullField(node, 'arg');
+      ParseAttributeItem := node;
+    END
+    ELSE IF StringEqual(up, 'VARARGS') THEN
+    BEGIN
+      pos := pos + 1;
+      node := CreateNode('Attribute');
+      AddStringField(node, 'name', 'VARARGS');
+      AddNullField(node, 'arg');
+      ParseAttributeItem := node;
+    END
+    ELSE
+    BEGIN
+      node := CreateNode('Attribute');
+      AddStringField(node, 'name', up);
+      AddNullField(node, 'arg');
+      pos := pos + 1;
+      ParseAttributeItem := node;
+    END;
+  END
+  ELSE
+  BEGIN
+    node := CreateNode('Attribute');
+    AddStringField(node, 'name', CurKind());
+    AddNullField(node, 'arg');
+    pos := pos + 1;
+    ParseAttributeItem := node;
+  END;
+END;
+
+FUNCTION ParseAttributeSectionOptional: ADRMEM;
+VAR
+  arr: ADRMEM;
+BEGIN
+  arr := cJSON_CreateArray;
+  IF Match('LBRACKET') THEN
+  BEGIN
+    IF CurKind() <> 'RBRACKET' THEN
+    BEGIN
+      cJSON_AddItemToArray(arr, ParseAttributeItem);
+      WHILE Match('COMMA') DO
+        cJSON_AddItemToArray(arr, ParseAttributeItem);
+    END;
+    Expect('RBRACKET');
+  END;
+  ParseAttributeSectionOptional := arr;
+END;
+
+FUNCTION ParseParamGroup: ADRMEM;
+VAR
+  node, names_arr, type_expr: ADRMEM;
+  mode_str: Str255;
+  has_mode: BOOLEAN;
+BEGIN
+  has_mode := FALSE;
+  IF (CurKind() = 'VAR') OR (CurKind() = 'VARS') OR (CurKind() = 'CONST') OR (CurKind() = 'CONSTS') THEN
+  BEGIN
+    mode_str := CurKind();
+    has_mode := TRUE;
+    pos := pos + 1;
+  END;
+  names_arr := ParseIdentListArr;
+  Expect('COLON');
+  type_expr := ParseType;
+  node := CreateNode('Param');
+  IF has_mode THEN
+    AddStringField(node, 'mode', mode_str)
+  ELSE
+    AddNullField(node, 'mode');
+  AddField(node, 'names', names_arr);
+  AddField(node, 'type_expr', type_expr);
+  ParseParamGroup := node;
+END;
+
+FUNCTION ParseParamList: ADRMEM;
+VAR
+  arr: ADRMEM;
+BEGIN
+  arr := cJSON_CreateArray;
+  cJSON_AddItemToArray(arr, ParseParamGroup);
+  WHILE Match('SEMICOLON') DO
+  BEGIN
+    IF CurKind() = 'RPAREN' THEN BREAK;
+    cJSON_AddItemToArray(arr, ParseParamGroup);
+  END;
+  ParseParamList := arr;
+END;
+
+PROCEDURE ParseConstSection(decls_arr: ADRMEM);
+VAR
+  node: ADRMEM;
+  nm: Str255;
+BEGIN
+  Expect('CONST');
+  WHILE CurKind() = 'IDENTIFIER' DO
+  BEGIN
+    nm := CurLex();
+    Expect('IDENTIFIER');
+    Expect('EQ');
+    node := CreateNode('ConstDecl');
+    AddStringField(node, 'name', nm);
+    AddField(node, 'value', ParseConstant);
+    Expect('SEMICOLON');
+    cJSON_AddItemToArray(decls_arr, node);
+  END;
+END;
+
+PROCEDURE ParseTypeSection(decls_arr: ADRMEM);
+VAR
+  node: ADRMEM;
+  nm: Str255;
+BEGIN
+  Expect('TYPE');
+  WHILE CurKind() = 'IDENTIFIER' DO
+  BEGIN
+    nm := CurLex();
+    Expect('IDENTIFIER');
+    Expect('EQ');
+    node := CreateNode('TypeDecl');
+    AddStringField(node, 'name', nm);
+    AddField(node, 'type_expr', ParseType);
+    Expect('SEMICOLON');
+    cJSON_AddItemToArray(decls_arr, node);
+  END;
+END;
+
+PROCEDURE ParseVarSection(decls_arr: ADRMEM);
+VAR
+  node, names_arr, attrs_arr: ADRMEM;
+BEGIN
+  Expect('VAR');
+  WHILE (CurKind() = 'IDENTIFIER') OR (CurKind() = 'LBRACKET') DO
+  BEGIN
+    attrs_arr := ParseAttributeSectionOptional;
+    names_arr := ParseIdentListArr;
+    Expect('COLON');
+    node := CreateNode('VarDecl');
+    AddField(node, 'names', names_arr);
+    AddField(node, 'type_expr', ParseType);
+    AddField(node, 'attributes', attrs_arr);
+    AddNullField(node, 'meta_flags');
+    Expect('SEMICOLON');
+    cJSON_AddItemToArray(decls_arr, node);
+  END;
+END;
+
+PROCEDURE ParseLabelSection(decls_arr: ADRMEM);
+VAR
+  node, labels_arr: ADRMEM;
+BEGIN
+  Expect('LABEL');
+  node := CreateNode('LabelDecl');
+  labels_arr := cJSON_CreateArray;
+  IF CurKind() = 'INTEGER_LITERAL' THEN
+    cJSON_AddItemToArray(labels_arr, cJSON_CreateNumber(StrToIntVal(CurLex())))
+  ELSE
+    cJSON_AddItemToArray(labels_arr, cJSON_CreateString(MakeCStr(CurLex())));
+  pos := pos + 1;
+  WHILE Match('COMMA') DO
+  BEGIN
+    IF CurKind() = 'INTEGER_LITERAL' THEN
+      cJSON_AddItemToArray(labels_arr, cJSON_CreateNumber(StrToIntVal(CurLex())))
+    ELSE
+      cJSON_AddItemToArray(labels_arr, cJSON_CreateString(MakeCStr(CurLex())));
+    pos := pos + 1;
+  END;
+  Expect('SEMICOLON');
+  AddField(node, 'labels', labels_arr);
+  cJSON_AddItemToArray(decls_arr, node);
+END;
+
+FUNCTION ParseProcDecl: ADRMEM;
+VAR
+  node, params_arr, attrs_arr, body_node: ADRMEM;
+  nm, directive_str: Str255;
+  has_directive: BOOLEAN;
+BEGIN
+  Expect('PROCEDURE');
+  nm := CurLex();
   Expect('IDENTIFIER');
-  ParseType := node;
+  params_arr := cJSON_CreateArray;
+  IF Match('LPAREN') THEN
+  BEGIN
+    params_arr := ParseParamList;
+    Expect('RPAREN');
+  END;
+  attrs_arr := ParseAttributeSectionOptional;
+  Expect('SEMICOLON');
+  has_directive := FALSE;
+  node := CreateNode('ProcDecl');
+  AddStringField(node, 'name', nm);
+  AddField(node, 'params', params_arr);
+  AddField(node, 'attributes', attrs_arr);
+  IF (CurKind() = 'EXTERN') OR (CurKind() = 'EXTERNAL') OR (CurKind() = 'FORWARD') THEN
+  BEGIN
+    directive_str := CurKind();
+    has_directive := TRUE;
+    pos := pos + 1;
+    Expect('SEMICOLON');
+    AddNullField(node, 'body');
+  END
+  ELSE
+  BEGIN
+    body_node := ParseBlock;
+    Expect('SEMICOLON');
+    AddField(node, 'body', body_node);
+  END;
+  IF has_directive THEN
+    AddStringField(node, 'directive', directive_str)
+  ELSE
+    AddNullField(node, 'directive');
+  AddBoolField(node, 'is_exported_entry', FALSE);
+  ParseProcDecl := node;
+END;
+
+FUNCTION ParseFuncDecl: ADRMEM;
+VAR
+  node, params_arr, attrs_arr, body_node, ret_type: ADRMEM;
+  nm, directive_str: Str255;
+  has_directive: BOOLEAN;
+BEGIN
+  Expect('FUNCTION');
+  nm := CurLex();
+  Expect('IDENTIFIER');
+  params_arr := cJSON_CreateArray;
+  IF Match('LPAREN') THEN
+  BEGIN
+    params_arr := ParseParamList;
+    Expect('RPAREN');
+  END;
+  Expect('COLON');
+  ret_type := ParseType;
+  attrs_arr := ParseAttributeSectionOptional;
+  Expect('SEMICOLON');
+  has_directive := FALSE;
+  node := CreateNode('FuncDecl');
+  AddStringField(node, 'name', nm);
+  AddField(node, 'params', params_arr);
+  AddField(node, 'return_type', ret_type);
+  AddField(node, 'attributes', attrs_arr);
+  IF (CurKind() = 'EXTERN') OR (CurKind() = 'EXTERNAL') OR (CurKind() = 'FORWARD') THEN
+  BEGIN
+    directive_str := CurKind();
+    has_directive := TRUE;
+    pos := pos + 1;
+    Expect('SEMICOLON');
+    AddNullField(node, 'body');
+  END
+  ELSE
+  BEGIN
+    body_node := ParseBlock;
+    Expect('SEMICOLON');
+    AddField(node, 'body', body_node);
+  END;
+  IF has_directive THEN
+    AddStringField(node, 'directive', directive_str)
+  ELSE
+    AddNullField(node, 'directive');
+  AddBoolField(node, 'is_exported_entry', FALSE);
+  ParseFuncDecl := node;
 END;
 
 FUNCTION ParseBlock: ADRMEM;
 VAR
-  node, decls_arr, stmts_arr, var_node, names_arr: ADRMEM;
-  var_name: Str255;
+  node, decls_arr: ADRMEM;
 BEGIN
   node := CreateNode('Block');
   decls_arr := cJSON_CreateArray;
 
-  IF Match('VAR') THEN
+  WHILE (CurKind() = 'CONST') OR (CurKind() = 'TYPE') OR (CurKind() = 'VAR') OR
+        (CurKind() = 'LABEL') OR (CurKind() = 'PROCEDURE') OR (CurKind() = 'FUNCTION') DO
   BEGIN
-    WHILE CurKind() = 'IDENTIFIER' DO
-    BEGIN
-      var_name := CurLex();
-      Expect('IDENTIFIER');
-      Expect('COLON');
-      var_node := CreateNode('VarDecl');
-      names_arr := cJSON_CreateArray;
-      cJSON_AddItemToArray(names_arr, cJSON_CreateString(MakeCStr(var_name)));
-      AddField(var_node, 'names', names_arr);
-      AddField(var_node, 'type_expr', ParseType);
-      AddField(var_node, 'attributes', cJSON_CreateArray);
-      AddNullField(var_node, 'meta_flags');
-      Expect('SEMICOLON');
-      cJSON_AddItemToArray(decls_arr, var_node);
-    END;
+    IF CurKind() = 'CONST' THEN
+      ParseConstSection(decls_arr)
+    ELSE IF CurKind() = 'TYPE' THEN
+      ParseTypeSection(decls_arr)
+    ELSE IF CurKind() = 'VAR' THEN
+      ParseVarSection(decls_arr)
+    ELSE IF CurKind() = 'LABEL' THEN
+      ParseLabelSection(decls_arr)
+    ELSE IF CurKind() = 'PROCEDURE' THEN
+      cJSON_AddItemToArray(decls_arr, ParseProcDecl)
+    ELSE IF CurKind() = 'FUNCTION' THEN
+      cJSON_AddItemToArray(decls_arr, ParseFuncDecl);
   END;
 
   AddField(node, 'decls', decls_arr);
 
   IF CurKind() = 'BEGIN' THEN
-    AddField(node, 'body', ParseCompoundStmt)
+    AddField(node, 'body', ParseCompoundStmtList)
   ELSE
     AddField(node, 'body', cJSON_CreateArray);
 
