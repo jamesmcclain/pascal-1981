@@ -12,12 +12,16 @@
   expression is rejected, not silently coerced); assignment; IF/WHILE/
   REPEAT/FOR and compound statements; WRITE/WRITELN of string-literal/
   scalar arguments; and PROCEDURE/FUNCTION declarations with value and VAR
-  parameters (VAR-mode ARRAY/RECORD parameters work; value-mode ones are
-  rejected -- pass by VAR instead), including recursion. Not yet covered:
-  sets, strings/LSTRING, pointers, files, multi-dimension arrays, CASE,
-  WRITE width:precision, MATHCK/RANGECK-style runtime traps, C-ABI
-  externs, units, and DEVICE MODULE/PTX generation. Anything not yet
-  covered is rejected loudly via AbortWith rather than silently mishandled
+  parameters (VAR-mode ARRAY/RECORD/LSTRING parameters work; value-mode
+  aggregate ones are rejected -- pass by VAR instead), including recursion;
+  LSTRING(n) variables (declaration, string-literal assignment,
+  WRITE/WRITELN, 1-based character indexing s[i]) and POINTER variables
+  (^Type, NEW/DISPOSE, dereference p^ as an lvalue and rvalue). Not yet
+  covered: sets, STRING(n) (the non-length-prefixed string kind), CONCAT/
+  other string builtins, files, multi-dimension arrays, CASE, WRITE
+  width:precision, MATHCK/RANGECK-style runtime traps, C-ABI externs,
+  units, and DEVICE MODULE/PTX generation. Anything not yet covered is
+  rejected loudly via AbortWith rather than silently mishandled
   or miscompiled -- reject unhandled constructs instead of guessing, the
   same discipline the earlier native stages (lexer.pas/parser.pas/
   typechecker.pas) already follow.
@@ -45,6 +49,8 @@ FUNCTION LLVMArrayType(elem_ty: ADRMEM; count: CINT): ADRMEM [C]; EXTERN;
 FUNCTION LLVMStructTypeInContext(ctx: ADRMEM; elem_tys: ADRMEM; count: CINT; is_packed: CINT): ADRMEM [C]; EXTERN;
 FUNCTION LLVMConstNull(ty: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildGEP2(b: ADRMEM; ty: ADRMEM; ptr: ADRMEM; indices: ADRMEM; nindices: CINT; name: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMBuildBitCast(b: ADRMEM; val: ADRMEM; destty: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMBuildZExt(b: ADRMEM; val: ADRMEM; destty: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMFunctionType(ret_ty: ADRMEM; params: ADRMEM; pcount: CINT; vararg: CINT): ADRMEM [C]; EXTERN;
 FUNCTION LLVMAddFunction(m: ADRMEM; name: ADRMEM; fty: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMAppendBasicBlockInContext(ctx: ADRMEM; fn: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
@@ -83,6 +89,7 @@ FUNCTION LLVMVoidTypeInContext(ctx: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMPrintModuleToString(m: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMVerifyModule(m: ADRMEM; action: CINT; outmsg: ADRMEM): CINT [C]; EXTERN;
 FUNCTION malloc(size: CINT): ADRMEM [C]; EXTERN;
+PROCEDURE free(p: ADRMEM) [C]; EXTERN;
 FUNCTION puts(str: ADRMEM): CINT [C]; EXTERN;
 PROCEDURE exit(code: CINT) [C]; EXTERN;
 FUNCTION cJSON_GetStringValue(item: ADRMEM): ADRMEM [C]; EXTERN;
@@ -104,6 +111,8 @@ CONST
   TK_CHAR    = 4;
   TK_ARRAY   = 5;
   TK_RECORD  = 6;
+  TK_LSTRING = 7;
+  TK_POINTER = 8;
 
   MAX_SYMBOLS = 500;
   MAX_SCOPES = 64;
@@ -171,6 +180,11 @@ VAR
   i32ty, i16ty, i8ty, i1ty, dblty, i8ptrty, voidty: ADRMEM;
   main_fnty, main_fn, entry_bb: ADRMEM;
   printf_fnty, printf_fn: ADRMEM;
+  malloc_fnty, malloc_fn, free_fnty, free_fn: ADRMEM; { the *target program's*
+    malloc/free, declared+called as ordinary LLVM externs -- distinct from
+    this compiler's own host-side `malloc`/`free` FFI used by AllocPtrArray
+    and friends. NEW/DISPOSE must emit a runtime call instruction, not
+    allocate on the compiler's own process heap. }
   cur_fn: ADRMEM; { the LLVM function LLVMAppendBasicBlockInContext should
                     attach new blocks to: main_fn at top level, or the
                     routine currently being codegen'd. }
@@ -368,6 +382,37 @@ BEGIN
   RegisterType := ntypes;
 END;
 
+FUNCTION TypeSizeBytes(tid: INTEGER): INTEGER32;
+{ Used only by NEW's malloc-sized allocation; not a general ABI sizeof (no
+  struct-padding modeling), sufficient for allocating one heap block of a
+  known Pascal type. }
+VAR
+  i: INTEGER;
+  total: INTEGER32;
+BEGIN
+  IF tid = TK_INTEGER THEN TypeSizeBytes := 2
+  ELSE IF tid = TK_REAL THEN TypeSizeBytes := 8
+  ELSE IF tid = TK_BOOLEAN THEN TypeSizeBytes := 1
+  ELSE IF tid = TK_CHAR THEN TypeSizeBytes := 1
+  ELSE IF TypeKind(tid) = TK_ARRAY THEN
+    TypeSizeBytes := TypeSizeBytes(types[tid].elem_tid) * (types[tid].hi - types[tid].lo + 1)
+  ELSE IF TypeKind(tid) = TK_RECORD THEN
+  BEGIN
+    total := 0;
+    FOR i := 1 TO nfields DO
+      IF fields[i].rec_tid = tid THEN
+        total := total + TypeSizeBytes(fields[i].field_tid);
+    TypeSizeBytes := total;
+  END
+  ELSE IF TypeKind(tid) = TK_LSTRING THEN TypeSizeBytes := types[tid].hi + 1
+  ELSE IF TypeKind(tid) = TK_POINTER THEN TypeSizeBytes := 8
+  ELSE
+  BEGIN
+    AbortWith('codegen: TypeSizeBytes: unsupported type');
+    TypeSizeBytes := 0;
+  END;
+END;
+
 FUNCTION ResolveIntLiteral(node: ADRMEM): INTEGER;
 { An array index bound is a full constant-expression AST node (the parser
   never unwraps it the way it does e.g. NamedType.param) -- so reading it
@@ -462,6 +507,20 @@ BEGIN
     struct_ty := LLVMStructTypeInContext(ctx, elem_llvm_types, field_index, 0);
     types[tid].llvm_ty := struct_ty;
   END
+  ELSE IF nt = 'LStringType' THEN
+  BEGIN
+    hi := GetInt(te, 'max_len');
+    arr_ty := LLVMArrayType(i8ty, hi + 1);
+    tid := RegisterType(TK_LSTRING, TK_CHAR, 0, hi, arr_ty);
+  END
+  ELSE IF nt = 'PointerType' THEN
+  BEGIN
+    IF GetStr(te, 'flavor') <> 'POINTER' THEN
+      AbortWith('codegen: only plain POINTER (not ADR/ADS) is supported');
+    elem_tid := ResolveTypeExpr(GetObj(te, 'base'));
+    arr_ty := LLVMPointerType(LLVMTypeForTk(elem_tid), 0);
+    tid := RegisterType(TK_POINTER, elem_tid, 0, 0, arr_ty);
+  END
   ELSE
   BEGIN
     AbortWith2('codegen: unsupported type expression: ', nt);
@@ -521,7 +580,8 @@ BEGIN
   ELSE
   BEGIN
     gvar := LLVMAddGlobal(modl, LLVMTypeForTk(tk), MakeCStr(name));
-    IF (TypeKind(tk) = TK_ARRAY) OR (TypeKind(tk) = TK_RECORD) THEN
+    IF (TypeKind(tk) = TK_ARRAY) OR (TypeKind(tk) = TK_RECORD) OR
+       (TypeKind(tk) = TK_LSTRING) OR (TypeKind(tk) = TK_POINTER) THEN
       zero := LLVMConstNull(LLVMTypeForTk(tk))
     ELSE IF tk = TK_REAL THEN zero := LLVMConstReal(dblty, 0.0)
     ELSE zero := LLVMConstInt(LLVMTypeForTk(tk), 0, 0);
@@ -779,7 +839,7 @@ BEGIN
     kind := GetStr(sel, 'kind');
     IF kind = 'INDEX' THEN
     BEGIN
-      IF TypeKind(cur_tid) <> TK_ARRAY THEN
+      IF (TypeKind(cur_tid) <> TK_ARRAY) AND (TypeKind(cur_tid) <> TK_LSTRING) THEN
         AbortWith('codegen: an INDEX selector was applied to a non-array');
       idx_expr := GetObj(sel, 'index_or_field');
       idx_val := CodegenExpr(idx_expr);
@@ -790,6 +850,13 @@ BEGIN
       SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
       SetPtrArrayElem(gep_idx, 1, offset);
       base_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(cur_tid), base_ptr, gep_idx, 2, MakeCStr(''));
+      cur_tid := types[cur_tid].elem_tid;
+    END
+    ELSE IF kind = 'DEREF' THEN
+    BEGIN
+      IF TypeKind(cur_tid) <> TK_POINTER THEN
+        AbortWith('codegen: a DEREF selector was applied to a non-pointer');
+      base_ptr := LLVMBuildLoad2(builder, LLVMTypeForTk(cur_tid), base_ptr, MakeCStr(''));
       cur_tid := types[cur_tid].elem_tid;
     END
     ELSE IF kind = 'FIELD' THEN
@@ -812,6 +879,35 @@ BEGIN
 
   last_val_tk := cur_tid;
   ComputeDesignatorAddress := base_ptr;
+END;
+
+PROCEDURE CodegenLStringLiteralAssign(dest_addr: ADRMEM; dest_tid: INTEGER; s: Str255);
+{ Stores a compile-time-known string literal's characters plus its
+  length-prefix byte (LSTRING layout: byte[0] = length, byte[1..n] = chars)
+  directly into an LSTRING destination -- the counterpart of the Python
+  reference's strings.py literal-store path, but done with a plain unrolled
+  GEP+store per character since the source is always a constant here. }
+VAR
+  i, len, cap: INTEGER;
+  gep_idx, elem_ptr: ADRMEM;
+BEGIN
+  len := ORD(s[0]);
+  cap := types[dest_tid].hi;
+  IF len > cap THEN
+    AbortWith('codegen: string literal too long for LSTRING capacity');
+  FOR i := 1 TO len DO
+  BEGIN
+    gep_idx := AllocPtrArray(2);
+    SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+    SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, i, 0));
+    elem_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(dest_tid), dest_addr, gep_idx, 2, MakeCStr(''));
+    LLVMBuildStore(builder, LLVMConstInt(i8ty, ORD(s[i]), 0), elem_ptr);
+  END;
+  gep_idx := AllocPtrArray(2);
+  SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+  SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 0, 0));
+  elem_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(dest_tid), dest_addr, gep_idx, 2, MakeCStr(''));
+  LLVMBuildStore(builder, LLVMConstInt(i8ty, len, 0), elem_ptr);
 END;
 
 FUNCTION CodegenExpr(node: ADRMEM): ADRMEM;
@@ -902,21 +998,75 @@ VAR
   v: ADRMEM;
   strval: Str255;
   call_ret: ADRMEM;
+  vi: INTEGER32;
+  addr, len_ptr, chars_ptr, gep_idx, len_val: ADRMEM;
+  lstr_tid: INTEGER;
+  symi: INTEGER32;
+  is_lstring: BOOLEAN;
 BEGIN
   nargs := ArrSize(args);
   fmt := '';
-  vals := AllocPtrArray(nargs + 1);
+  vals := AllocPtrArray(nargs * 2 + 1);
+  vi := 1;
   FOR i := 0 TO nargs - 1 DO
   BEGIN
     arg_node := ArrItem(args, i);
     IF NodeType(arg_node) <> 'WriteArg' THEN
       AbortWith('codegen: expected WriteArg node');
     expr := GetObj(arg_node, 'expr');
+    is_lstring := FALSE;
     IF NodeType(expr) = 'StringLiteral' THEN
     BEGIN
       strval := DecodeStringLiteral(GetStr(expr, 'value'));
       v := LLVMBuildGlobalStringPtr(builder, MakeCStr(strval), MakeCStr('str'));
       CONCAT(fmt, '%s');
+      SetPtrArrayElem(vals, vi, v);
+      vi := vi + 1;
+    END
+    ELSE IF NodeType(expr) = 'Identifier' THEN
+    BEGIN
+      symi := LookupSym(GetStr(expr, 'name'));
+      IF (symi <> 0) AND (TypeKind(symbols[symi].tk) = TK_LSTRING) THEN
+      BEGIN
+        is_lstring := TRUE;
+        addr := symbols[symi].llvm_val;
+        lstr_tid := symbols[symi].tk;
+      END;
+      IF is_lstring THEN
+      BEGIN
+        gep_idx := AllocPtrArray(2);
+        SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+        SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 0, 0));
+        len_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(lstr_tid), addr, gep_idx, 2, MakeCStr(''));
+        len_val := LLVMBuildLoad2(builder, i8ty, len_ptr, MakeCStr(''));
+        len_val := LLVMBuildZExt(builder, len_val, i32ty, MakeCStr(''));
+        gep_idx := AllocPtrArray(2);
+        SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+        SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 1, 0));
+        chars_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(lstr_tid), addr, gep_idx, 2, MakeCStr(''));
+        CONCAT(fmt, '%.*s');
+        SetPtrArrayElem(vals, vi, len_val);
+        vi := vi + 1;
+        SetPtrArrayElem(vals, vi, chars_ptr);
+        vi := vi + 1;
+      END
+      ELSE
+      BEGIN
+        v := CodegenExpr(expr);
+        IF last_val_tk = TK_INTEGER THEN
+        BEGIN
+          v := LLVMBuildSExt(builder, v, i32ty, MakeCStr(''));
+          CONCAT(fmt, '%d');
+        END
+        ELSE IF last_val_tk = TK_REAL THEN
+          CONCAT(fmt, '%14.7E')
+        ELSE IF last_val_tk = TK_CHAR THEN
+          CONCAT(fmt, '%c')
+        ELSE
+          AbortWith('codegen: unsupported WRITE argument type');
+        SetPtrArrayElem(vals, vi, v);
+        vi := vi + 1;
+      END;
     END
     ELSE
     BEGIN
@@ -932,12 +1082,13 @@ BEGIN
         CONCAT(fmt, '%c')
       ELSE
         AbortWith('codegen: unsupported WRITE argument type');
+      SetPtrArrayElem(vals, vi, v);
+      vi := vi + 1;
     END;
-    SetPtrArrayElem(vals, i + 1, v);
   END;
   IF newline THEN AppendChar(fmt, CHR(10));
   SetPtrArrayElem(vals, 0, LLVMBuildGlobalStringPtr(builder, MakeCStr(fmt), MakeCStr('fmt')));
-  call_ret := LLVMBuildCall2(builder, printf_fnty, printf_fn, vals, nargs + 1, MakeCStr('callprintf'));
+  call_ret := LLVMBuildCall2(builder, printf_fnty, printf_fn, vals, vi, MakeCStr('callprintf'));
 END;
 
 { ============================== statements ================================ }
@@ -981,10 +1132,16 @@ BEGIN
     symi := LookupSym(nm);
     IF symi = 0 THEN
       AbortWith2('codegen: undefined variable: ', nm);
-    v := CodegenExpr(GetObj(stmt, 'expr'));
-    IF last_val_tk <> symbols[symi].tk THEN
-      AbortWith2('codegen: assignment type mismatch for: ', nm);
-    LLVMBuildStore(builder, v, symbols[symi].llvm_val);
+    IF (TypeKind(symbols[symi].tk) = TK_LSTRING) AND (NodeType(GetObj(stmt, 'expr')) = 'StringLiteral') THEN
+      CodegenLStringLiteralAssign(symbols[symi].llvm_val, symbols[symi].tk,
+        DecodeStringLiteral(GetStr(GetObj(stmt, 'expr'), 'value')))
+    ELSE
+    BEGIN
+      v := CodegenExpr(GetObj(stmt, 'expr'));
+      IF last_val_tk <> symbols[symi].tk THEN
+        AbortWith2('codegen: assignment type mismatch for: ', nm);
+      LLVMBuildStore(builder, v, symbols[symi].llvm_val);
+    END;
   END
   ELSE
   BEGIN
@@ -1131,12 +1288,48 @@ PROCEDURE CodegenProcCallStmt(stmt: ADRMEM);
 VAR
   name: Str255;
   discard: ADRMEM;
+  args, arg0: ADRMEM;
+  symi: INTEGER32;
+  ptr_tid, pointee_tid: INTEGER;
+  raw, casted, call_args: ADRMEM;
 BEGIN
   name := GetStr(stmt, 'name');
   IF name = 'WRITELN' THEN
     CodegenWriteArgs(GetObj(stmt, 'args'), TRUE)
   ELSE IF name = 'WRITE' THEN
     CodegenWriteArgs(GetObj(stmt, 'args'), FALSE)
+  ELSE IF (name = 'NEW') OR (name = 'DISPOSE') THEN
+  BEGIN
+    args := GetObj(stmt, 'args');
+    IF ArrSize(args) <> 1 THEN
+      AbortWith2('codegen: expected one pointer argument to: ', name);
+    arg0 := ArrItem(args, 0);
+    IF NodeType(arg0) <> 'Identifier' THEN
+      AbortWith2('codegen: argument must be a bare pointer variable: ', name);
+    symi := LookupSym(GetStr(arg0, 'name'));
+    IF symi = 0 THEN
+      AbortWith2('codegen: undefined variable: ', GetStr(arg0, 'name'));
+    ptr_tid := symbols[symi].tk;
+    IF TypeKind(ptr_tid) <> TK_POINTER THEN
+      AbortWith2('codegen: argument is not a POINTER variable: ', name);
+    IF name = 'NEW' THEN
+    BEGIN
+      pointee_tid := types[ptr_tid].elem_tid;
+      call_args := AllocPtrArray(1);
+      SetPtrArrayElem(call_args, 0, LLVMConstInt(i32ty, TypeSizeBytes(pointee_tid), 0));
+      raw := LLVMBuildCall2(builder, malloc_fnty, malloc_fn, call_args, 1, MakeCStr(''));
+      casted := LLVMBuildBitCast(builder, raw, LLVMTypeForTk(ptr_tid), MakeCStr(''));
+      LLVMBuildStore(builder, casted, symbols[symi].llvm_val);
+    END
+    ELSE
+    BEGIN
+      raw := LLVMBuildLoad2(builder, LLVMTypeForTk(ptr_tid), symbols[symi].llvm_val, MakeCStr(''));
+      casted := LLVMBuildBitCast(builder, raw, i8ptrty, MakeCStr(''));
+      call_args := AllocPtrArray(1);
+      SetPtrArrayElem(call_args, 0, casted);
+      discard := LLVMBuildCall2(builder, free_fnty, free_fn, call_args, 1, MakeCStr(''));
+    END;
+  END
   ELSE
     discard := CodegenCallCommon(name, GetObj(stmt, 'args'));
 END;
@@ -1207,8 +1400,8 @@ BEGIN
     param := ArrItem(params_arr, pi);
     tk := ResolveTypeExpr(GetObj(param, 'type_expr'));
     is_v := GetStr(param, 'mode') = 'VAR';
-    IF (NOT is_v) AND ((TypeKind(tk) = TK_ARRAY) OR (TypeKind(tk) = TK_RECORD)) THEN
-      AbortWith('codegen: value-mode ARRAY/RECORD parameters are not supported (pass by VAR)');
+    IF (NOT is_v) AND ((TypeKind(tk) = TK_ARRAY) OR (TypeKind(tk) = TK_RECORD) OR (TypeKind(tk) = TK_LSTRING)) THEN
+      AbortWith('codegen: value-mode ARRAY/RECORD/LSTRING parameters are not supported (pass by VAR)');
     pnames := GetObj(param, 'names');
     nn := ArrSize(pnames);
     FOR ni := 0 TO nn - 1 DO
@@ -1403,6 +1596,16 @@ BEGIN
   SetPtrArrayElem(param_arr, 0, i8ptrty);
   printf_fnty := LLVMFunctionType(i32ty, param_arr, 1, 1);
   printf_fn := LLVMAddFunction(modl, MakeCStr('printf'), printf_fnty);
+
+  param_arr := AllocPtrArray(1);
+  SetPtrArrayElem(param_arr, 0, i32ty);
+  malloc_fnty := LLVMFunctionType(i8ptrty, param_arr, 1, 0);
+  malloc_fn := LLVMAddFunction(modl, MakeCStr('malloc'), malloc_fnty);
+
+  param_arr := AllocPtrArray(1);
+  SetPtrArrayElem(param_arr, 0, i8ptrty);
+  free_fnty := LLVMFunctionType(voidty, param_arr, 1, 0);
+  free_fn := LLVMAddFunction(modl, MakeCStr('free'), free_fnty);
 
   nsymbols := 0;
   scope_top := 0;
