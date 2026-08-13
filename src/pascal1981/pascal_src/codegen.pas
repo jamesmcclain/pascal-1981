@@ -36,14 +36,28 @@
   both of which overwrite D from scratch (unlike CONCAT's append) --
   COPYLST sets D's length byte to length(S), COPYSTR blank-pads the bytes
   beyond length(S) up to D's fixed capacity with 0x20 (STRING has no
-  length byte, so every declared byte must hold a real character). Not yet
-  covered: other string builtins (LOWER/UPPER/etc.), files,
-  multi-dimension arrays, CHAR-keyed CASE, CASE label ranges, WRITE
-  width:precision, MATHCK/RANGECK-style runtime traps (including CONCAT/
-  COPYLST/COPYSTR's own capacity overflow, which is unchecked -- same
-  simplification as an unchecked array index elsewhere in this file),
-  C-ABI externs, units, and DEVICE MODULE/PTX generation. Anything not yet
-  covered is
+  length byte, so every declared byte must hold a real character); and the
+  remaining string builtins that call into libpascalrt's runtime the same
+  way printf/malloc/free already do (declared as ordinary LLVM externs a
+  program built from this file's IR must link libpascalrt.a to satisfy):
+  INSERT/DELETE (in-place shift via memmove, since the shifted range can
+  overlap itself), POSITN (1-based substring search), SCANEQ/SCANNE
+  (scan for the first character equal/not-equal to a given CHAR), and
+  ENCODE/DECODE (format/parse an INTEGER as decimal text into/out of an
+  LSTRING -- ENCODE's `value:width` argument works via the same WriteArg
+  wrapping WRITE's own width:precision arguments use, since ENCODE/DECODE
+  share that argument-list grammar; `:precision` parses but is ignored,
+  matching the runtime, which has no REAL-formatting path either; DECODE's
+  destination is scoped to INTEGER/CHAR, the two byte-widths its own
+  manual documents by name). Not yet covered: LOWER/UPPER and other
+  non-string builtins, files, multi-dimension arrays, CHAR-keyed CASE,
+  CASE label ranges, WRITE width:precision on ordinary WRITE/WRITELN
+  arguments (only ENCODE's own width argument is covered), WRITE of a
+  BOOLEAN argument, MATHCK/RANGECK-style runtime traps (including
+  CONCAT/COPYLST/COPYSTR/INSERT's own capacity overflow, which is
+  unchecked -- same simplification as an unchecked array index elsewhere
+  in this file), C-ABI externs, units, and DEVICE MODULE/PTX generation.
+  Anything not yet covered is
   rejected loudly via AbortWith rather than silently mishandled
   or miscompiled -- reject unhandled constructs instead of guessing, the
   same discipline the earlier native stages (lexer.pas/parser.pas/
@@ -232,6 +246,17 @@ VAR
     this compiler's own host-side `malloc`/`free` FFI used by AllocPtrArray
     and friends. NEW/DISPOSE must emit a runtime call instruction, not
     allocate on the compiler's own process heap. }
+  memmove_fnty, memmove_fn: ADRMEM;
+  positn_fnty, positn_fn: ADRMEM;
+  scaneq_fnty, scaneq_fn: ADRMEM;
+  scanne_fnty, scanne_fn: ADRMEM;
+  encode_fnty, encode_fn: ADRMEM;
+  decode_fnty, decode_fn: ADRMEM; { the target program's runtime-library
+    string builtins (INSERT/DELETE via libc's memmove; POSITN/SCANEQ/SCANNE/
+    ENCODE/DECODE via libpascalrt's positn/scaneq/scanne/encode_value/
+    decode_value, declared+called exactly like malloc/free/printf above --
+    a program built from this file's output must link libpascalrt.a, same
+    as one built from the Python reference's output already must. }
   cur_fn: ADRMEM; { the LLVM function LLVMAppendBasicBlockInContext should
                     attach new blocks to: main_fn at top level, or the
                     routine currently being codegen'd. }
@@ -705,6 +730,10 @@ END;
 
 FUNCTION CodegenExpr(node: ADRMEM): ADRMEM; FORWARD;
 FUNCTION ComputeDesignatorAddress(node: ADRMEM): ADRMEM; FORWARD;
+FUNCTION CodegenPositn(args: ADRMEM): ADRMEM; FORWARD;
+FUNCTION CodegenScan(stop_on_equal: INTEGER; args: ADRMEM): ADRMEM; FORWARD;
+FUNCTION CodegenEncode(args: ADRMEM): ADRMEM; FORWARD;
+FUNCTION CodegenDecode(args: ADRMEM): ADRMEM; FORWARD;
 
 { ------------------------------ sets --------------------------------------
   Every SET, regardless of its declared base range, is represented the same
@@ -1315,19 +1344,47 @@ BEGIN
   ELSE IF nt = 'FuncCall' THEN
   BEGIN
     nm := GetStr(node, 'name');
-    symi := LookupRoutine(nm);
-    IF symi = 0 THEN
+    IF nm = 'POSITN' THEN
     BEGIN
-      AbortWith2('codegen: undefined function: ', nm);
-      res := NIL;
+      res := CodegenPositn(GetObj(node, 'args'));
+      last_val_tk := TK_INTEGER;
     END
-    ELSE IF NOT routines[symi].is_func THEN
+    ELSE IF nm = 'SCANEQ' THEN
     BEGIN
-      AbortWith2('codegen: called as a function but is a PROCEDURE: ', nm);
-      res := NIL;
+      res := CodegenScan(1, GetObj(node, 'args'));
+      last_val_tk := TK_INTEGER;
+    END
+    ELSE IF nm = 'SCANNE' THEN
+    BEGIN
+      res := CodegenScan(0, GetObj(node, 'args'));
+      last_val_tk := TK_INTEGER;
+    END
+    ELSE IF nm = 'ENCODE' THEN
+    BEGIN
+      res := CodegenEncode(GetObj(node, 'args'));
+      last_val_tk := TK_BOOLEAN;
+    END
+    ELSE IF nm = 'DECODE' THEN
+    BEGIN
+      res := CodegenDecode(GetObj(node, 'args'));
+      last_val_tk := TK_BOOLEAN;
     END
     ELSE
-      res := CodegenCallCommon(nm, GetObj(node, 'args'));
+    BEGIN
+      symi := LookupRoutine(nm);
+      IF symi = 0 THEN
+      BEGIN
+        AbortWith2('codegen: undefined function: ', nm);
+        res := NIL;
+      END
+      ELSE IF NOT routines[symi].is_func THEN
+      BEGIN
+        AbortWith2('codegen: called as a function but is a PROCEDURE: ', nm);
+        res := NIL;
+      END
+      ELSE
+        res := CodegenCallCommon(nm, GetObj(node, 'args'));
+    END;
   END
   ELSE
   BEGIN
@@ -1815,6 +1872,52 @@ BEGIN
   END;
 END;
 
+PROCEDURE ResolveStringDestVar(expr: ADRMEM; VAR d_symi: INTEGER32; VAR d_tid: INTEGER;
+  VAR d_addr, chars_ptr, len_val: ADRMEM);
+{ The mutable-destination counterpart of ResolveStringExprCharsLen, for
+  INSERT/DELETE, which need the destination's own symbol/address (to write
+  a new length byte back afterward) as well as its current chars/length.
+  Scoped to a bare Identifier naming an LSTRING or STRING variable, same as
+  every other string-builtin destination in this file. }
+VAR
+  gep_idx, len_ptr: ADRMEM;
+BEGIN
+  IF NodeType(expr) <> 'Identifier' THEN
+    AbortWith('codegen: a string builtin''s destination must be a bare LSTRING/STRING variable');
+  d_symi := LookupSym(GetStr(expr, 'name'));
+  IF d_symi = 0 THEN
+    AbortWith2('codegen: undefined variable: ', GetStr(expr, 'name'));
+  d_tid := symbols[d_symi].tk;
+  d_addr := symbols[d_symi].llvm_val;
+  IF TypeKind(d_tid) = TK_LSTRING THEN
+  BEGIN
+    gep_idx := AllocPtrArray(2);
+    SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+    SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 0, 0));
+    len_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(d_tid), d_addr, gep_idx, 2, MakeCStr(''));
+    len_val := LLVMBuildLoad2(builder, i8ty, len_ptr, MakeCStr(''));
+    len_val := LLVMBuildZExt(builder, len_val, i32ty, MakeCStr(''));
+    gep_idx := AllocPtrArray(2);
+    SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+    SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 1, 0));
+    chars_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(d_tid), d_addr, gep_idx, 2, MakeCStr(''));
+  END
+  ELSE IF TypeKind(d_tid) = TK_STRING THEN
+  BEGIN
+    len_val := LLVMConstInt(i32ty, types[d_tid].hi, 0);
+    gep_idx := AllocPtrArray(2);
+    SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+    SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 0, 0));
+    chars_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(d_tid), d_addr, gep_idx, 2, MakeCStr(''));
+  END
+  ELSE
+  BEGIN
+    AbortWith2('codegen: not an LSTRING/STRING variable: ', GetStr(expr, 'name'));
+    chars_ptr := NIL;
+    len_val := NIL;
+  END;
+END;
+
 PROCEDURE EmitByteCopyLoop(dest_ptr, src_ptr: ADRMEM; count: ADRMEM);
 { Copies `count` (an i32 LLVMValueRef) bytes one at a time from src_ptr to
   dest_ptr, via an alloca'd i32 loop counter -- the same alloca-based
@@ -1983,6 +2086,294 @@ BEGIN
   EmitByteFillLoop(pad_ptr, pad_len, 32);
 END;
 
+PROCEDURE CodegenInsert(args: ADRMEM);
+{ INSERT(CONST S: STRING-or-LSTRING-or-literal; VAR D: LSTRING-or-STRING;
+  pos: INTEGER): shifts D's existing characters from `pos` onward right by
+  length(S) (via memmove, since the shifted range overlaps itself -- a
+  plain byte-by-byte forward copy like EmitByteCopyLoop would corrupt
+  overlapping data here), then writes S into the gap. Only updates the
+  length-prefix byte when D is an LSTRING; a STRING destination has no
+  length byte to update. No RANGECK-style capacity guard, same documented
+  simplification as CONCAT/COPYLST/COPYSTR. }
+VAR
+  src_chars, src_len: ADRMEM;
+  d_symi: INTEGER32;
+  d_tid: INTEGER;
+  d_addr, dst_chars, dst_len: ADRMEM;
+  pos_val, pos0, new_len, tail_len, shift_offset: ADRMEM;
+  dst_start, shift_dest, len_ptr, new_len_byte: ADRMEM;
+  gep_idx: ADRMEM;
+  call_args: ADRMEM;
+  discard: ADRMEM;
+BEGIN
+  IF ArrSize(args) <> 3 THEN
+    AbortWith('codegen: INSERT expects exactly 3 arguments');
+  ResolveStringExprCharsLen(ArrItem(args, 0), src_chars, src_len);
+  ResolveStringDestVar(ArrItem(args, 1), d_symi, d_tid, d_addr, dst_chars, dst_len);
+
+  pos_val := CodegenExpr(ArrItem(args, 2));
+  IF last_val_tk <> TK_INTEGER THEN
+    AbortWith('codegen: INSERT''s position argument must be INTEGER');
+  pos0 := LLVMBuildSExt(builder, pos_val, i32ty, MakeCStr(''));
+  pos0 := LLVMBuildSub(builder, pos0, LLVMConstInt(i32ty, 1, 0), MakeCStr(''));
+
+  new_len := LLVMBuildAdd(builder, dst_len, src_len, MakeCStr(''));
+  tail_len := LLVMBuildSub(builder, dst_len, pos0, MakeCStr(''));
+
+  gep_idx := AllocPtrArray(1);
+  SetPtrArrayElem(gep_idx, 0, pos0);
+  dst_start := LLVMBuildGEP2(builder, i8ty, dst_chars, gep_idx, 1, MakeCStr(''));
+
+  shift_offset := LLVMBuildAdd(builder, pos0, src_len, MakeCStr(''));
+  gep_idx := AllocPtrArray(1);
+  SetPtrArrayElem(gep_idx, 0, shift_offset);
+  shift_dest := LLVMBuildGEP2(builder, i8ty, dst_chars, gep_idx, 1, MakeCStr(''));
+
+  call_args := AllocPtrArray(3);
+  SetPtrArrayElem(call_args, 0, shift_dest);
+  SetPtrArrayElem(call_args, 1, dst_start);
+  SetPtrArrayElem(call_args, 2, LLVMBuildZExt(builder, tail_len, i64ty, MakeCStr('')));
+  discard := LLVMBuildCall2(builder, memmove_fnty, memmove_fn, call_args, 3, MakeCStr(''));
+
+  call_args := AllocPtrArray(3);
+  SetPtrArrayElem(call_args, 0, dst_start);
+  SetPtrArrayElem(call_args, 1, src_chars);
+  SetPtrArrayElem(call_args, 2, LLVMBuildZExt(builder, src_len, i64ty, MakeCStr('')));
+  discard := LLVMBuildCall2(builder, memmove_fnty, memmove_fn, call_args, 3, MakeCStr(''));
+
+  IF TypeKind(d_tid) = TK_LSTRING THEN
+  BEGIN
+    gep_idx := AllocPtrArray(2);
+    SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+    SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 0, 0));
+    len_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(d_tid), d_addr, gep_idx, 2, MakeCStr(''));
+    new_len_byte := LLVMBuildTrunc(builder, new_len, i8ty, MakeCStr(''));
+    LLVMBuildStore(builder, new_len_byte, len_ptr);
+  END;
+END;
+
+PROCEDURE CodegenDelete(args: ADRMEM);
+{ DELETE(VAR D: LSTRING-or-STRING; pos, count: INTEGER): removes `count`
+  characters starting at `pos` by memmove-ing the remaining tail left, and
+  (LSTRING only) shrinks the length-prefix byte by `count`. }
+VAR
+  d_symi: INTEGER32;
+  d_tid: INTEGER;
+  d_addr, dst_chars, dst_len: ADRMEM;
+  pos_val, count_val, start, count32, rem, new_len: ADRMEM;
+  src_off, len_ptr, new_len_byte: ADRMEM;
+  dst_at_start, src_at_off: ADRMEM;
+  gep_idx, call_args: ADRMEM;
+  discard: ADRMEM;
+BEGIN
+  IF ArrSize(args) <> 3 THEN
+    AbortWith('codegen: DELETE expects exactly 3 arguments');
+  ResolveStringDestVar(ArrItem(args, 0), d_symi, d_tid, d_addr, dst_chars, dst_len);
+
+  pos_val := CodegenExpr(ArrItem(args, 1));
+  IF last_val_tk <> TK_INTEGER THEN
+    AbortWith('codegen: DELETE''s position argument must be INTEGER');
+  count_val := CodegenExpr(ArrItem(args, 2));
+  IF last_val_tk <> TK_INTEGER THEN
+    AbortWith('codegen: DELETE''s count argument must be INTEGER');
+
+  start := LLVMBuildSExt(builder, pos_val, i32ty, MakeCStr(''));
+  start := LLVMBuildSub(builder, start, LLVMConstInt(i32ty, 1, 0), MakeCStr(''));
+  count32 := LLVMBuildSExt(builder, count_val, i32ty, MakeCStr(''));
+
+  src_off := LLVMBuildAdd(builder, start, count32, MakeCStr(''));
+  rem := LLVMBuildSub(builder, dst_len, src_off, MakeCStr(''));
+
+  gep_idx := AllocPtrArray(1);
+  SetPtrArrayElem(gep_idx, 0, start);
+  dst_at_start := LLVMBuildGEP2(builder, i8ty, dst_chars, gep_idx, 1, MakeCStr(''));
+  gep_idx := AllocPtrArray(1);
+  SetPtrArrayElem(gep_idx, 0, src_off);
+  src_at_off := LLVMBuildGEP2(builder, i8ty, dst_chars, gep_idx, 1, MakeCStr(''));
+
+  call_args := AllocPtrArray(3);
+  SetPtrArrayElem(call_args, 0, dst_at_start);
+  SetPtrArrayElem(call_args, 1, src_at_off);
+  SetPtrArrayElem(call_args, 2, LLVMBuildZExt(builder, rem, i64ty, MakeCStr('')));
+  discard := LLVMBuildCall2(builder, memmove_fnty, memmove_fn, call_args, 3, MakeCStr(''));
+
+  new_len := LLVMBuildSub(builder, dst_len, count32, MakeCStr(''));
+  IF TypeKind(d_tid) = TK_LSTRING THEN
+  BEGIN
+    gep_idx := AllocPtrArray(2);
+    SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+    SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 0, 0));
+    len_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(d_tid), d_addr, gep_idx, 2, MakeCStr(''));
+    new_len_byte := LLVMBuildTrunc(builder, new_len, i8ty, MakeCStr(''));
+    LLVMBuildStore(builder, new_len_byte, len_ptr);
+  END;
+END;
+
+FUNCTION CodegenPositn(args: ADRMEM): ADRMEM;
+{ POSITN(hay, needle): INTEGER -- 1-based index of the first occurrence of
+  `needle` within `hay`, or 0 if absent; the search itself is entirely
+  libpascalrt's runtime `positn` (positn.c), called exactly like printf. }
+VAR
+  hay_chars, hay_len, needle_chars, needle_len: ADRMEM;
+  call_args, res32: ADRMEM;
+BEGIN
+  IF ArrSize(args) <> 2 THEN
+    AbortWith('codegen: POSITN expects exactly 2 arguments');
+  ResolveStringExprCharsLen(ArrItem(args, 0), hay_chars, hay_len);
+  ResolveStringExprCharsLen(ArrItem(args, 1), needle_chars, needle_len);
+  call_args := AllocPtrArray(4);
+  SetPtrArrayElem(call_args, 0, hay_chars);
+  SetPtrArrayElem(call_args, 1, hay_len);
+  SetPtrArrayElem(call_args, 2, needle_chars);
+  SetPtrArrayElem(call_args, 3, needle_len);
+  res32 := LLVMBuildCall2(builder, positn_fnty, positn_fn, call_args, 4, MakeCStr(''));
+  CodegenPositn := LLVMBuildTrunc(builder, res32, i16ty, MakeCStr(''));
+END;
+
+FUNCTION CodegenScan(stop_on_equal: INTEGER; args: ADRMEM): ADRMEM;
+{ SCANEQ(L, P, S, I) / SCANNE(L, P, S, I): INTEGER -- scans up to L
+  characters of S starting at 1-based position I, stopping at the first
+  character equal to (SCANEQ) or not equal to (SCANNE) P; returns the
+  1-based position of the stopping character, entirely libpascalrt's
+  runtime `scaneq`/`scanne` (scaneq.c). }
+VAR
+  l_val, p_val, s_chars, s_len, i_val: ADRMEM;
+  call_args, res32: ADRMEM;
+BEGIN
+  IF ArrSize(args) <> 4 THEN
+    AbortWith('codegen: SCANEQ/SCANNE expects exactly 4 arguments');
+  l_val := CodegenExpr(ArrItem(args, 0));
+  IF last_val_tk <> TK_INTEGER THEN
+    AbortWith('codegen: SCANEQ/SCANNE''s L argument must be INTEGER');
+  l_val := LLVMBuildSExt(builder, l_val, i32ty, MakeCStr(''));
+  p_val := CodegenExpr(ArrItem(args, 1));
+  IF last_val_tk <> TK_CHAR THEN
+    AbortWith('codegen: SCANEQ/SCANNE''s P argument must be CHAR');
+  ResolveStringExprCharsLen(ArrItem(args, 2), s_chars, s_len);
+  i_val := CodegenExpr(ArrItem(args, 3));
+  IF last_val_tk <> TK_INTEGER THEN
+    AbortWith('codegen: SCANEQ/SCANNE''s I argument must be INTEGER');
+  i_val := LLVMBuildSExt(builder, i_val, i32ty, MakeCStr(''));
+
+  call_args := AllocPtrArray(6);
+  SetPtrArrayElem(call_args, 0, l_val);
+  SetPtrArrayElem(call_args, 1, p_val);
+  SetPtrArrayElem(call_args, 2, s_chars);
+  SetPtrArrayElem(call_args, 3, s_len);
+  SetPtrArrayElem(call_args, 4, i_val);
+  SetPtrArrayElem(call_args, 5, LLVMConstInt(i32ty, stop_on_equal, 0));
+  IF stop_on_equal <> 0 THEN
+    res32 := LLVMBuildCall2(builder, scaneq_fnty, scaneq_fn, call_args, 6, MakeCStr(''))
+  ELSE
+    res32 := LLVMBuildCall2(builder, scanne_fnty, scanne_fn, call_args, 6, MakeCStr(''));
+  CodegenScan := LLVMBuildTrunc(builder, res32, i16ty, MakeCStr(''));
+END;
+
+FUNCTION CodegenEncode(args: ADRMEM): ADRMEM;
+{ ENCODE(VAR D: LSTRING; value: INTEGER): BOOLEAN -- formats `value` as
+  decimal text into D via libpascalrt's runtime `encode_value`
+  (encode_decode.c), which also sets D's length-prefix byte on success.
+  WRITE-style `value:width` is supported (the width becomes encode_value's
+  minimum field width); `:precision` is accepted syntactically but ignored,
+  matching the runtime (REAL formatting is not implemented there either).
+  Scoped to an LSTRING destination and an INTEGER value, matching every
+  test/usage this file has verified against; the reference's own signature
+  is looser (dest could in principle be any string kind) but ENCODE always
+  needs to write a length-prefix byte in every real usage, so LSTRING-only
+  is not a meaningful narrowing in practice. }
+VAR
+  dest_expr, value_expr: ADRMEM;
+  d_symi: INTEGER32;
+  d_tid: INTEGER;
+  d_addr, dest_chars, dest_len_unused: ADRMEM;
+  val, width_val: ADRMEM;
+  call_args: ADRMEM;
+BEGIN
+  IF ArrSize(args) <> 2 THEN
+    AbortWith('codegen: ENCODE expects exactly 2 arguments');
+  dest_expr := GetObj(ArrItem(args, 0), 'expr');
+  ResolveStringDestVar(dest_expr, d_symi, d_tid, d_addr, dest_chars, dest_len_unused);
+  IF TypeKind(d_tid) <> TK_LSTRING THEN
+    AbortWith('codegen: ENCODE''s destination must be an LSTRING variable');
+
+  value_expr := GetObj(ArrItem(args, 1), 'expr');
+  val := CodegenExpr(value_expr);
+  IF last_val_tk <> TK_INTEGER THEN
+    AbortWith('codegen: ENCODE''s value argument must be INTEGER');
+  val := LLVMBuildSExt(builder, val, i32ty, MakeCStr(''));
+
+  IF GetObjOrNil(ArrItem(args, 1), 'width') <> NIL THEN
+  BEGIN
+    width_val := CodegenExpr(GetObj(ArrItem(args, 1), 'width'));
+    IF last_val_tk <> TK_INTEGER THEN
+      AbortWith('codegen: ENCODE''s width argument must be INTEGER');
+    width_val := LLVMBuildSExt(builder, width_val, i32ty, MakeCStr(''));
+  END
+  ELSE
+    width_val := LLVMConstInt(i32ty, 0, 0);
+
+  call_args := AllocPtrArray(7);
+  SetPtrArrayElem(call_args, 0, dest_chars);
+  SetPtrArrayElem(call_args, 1, LLVMConstInt(i32ty, types[d_tid].hi, 0));
+  SetPtrArrayElem(call_args, 2, LLVMBuildBitCast(builder, d_addr, i8ptrty, MakeCStr('')));
+  SetPtrArrayElem(call_args, 3, val);
+  SetPtrArrayElem(call_args, 4, width_val);
+  SetPtrArrayElem(call_args, 5, LLVMConstInt(i32ty, 0, 0));
+  SetPtrArrayElem(call_args, 6, LLVMConstInt(i32ty, 0, 0));
+  CodegenEncode := LLVMBuildICmp(builder, LLVMIntNE,
+    LLVMBuildCall2(builder, encode_fnty, encode_fn, call_args, 7, MakeCStr('')),
+    LLVMConstInt(i32ty, 0, 0), MakeCStr(''));
+END;
+
+FUNCTION CodegenDecode(args: ADRMEM): ADRMEM;
+{ DECODE(src: STRING-or-LSTRING-or-literal; VAR dest: INTEGER-or-CHAR):
+  BOOLEAN -- parses a decimal integer out of `src` and stores it into
+  `dest`, via libpascalrt's runtime `decode_value`. dest_size (the write's
+  byte width) is derived from dest's own declared scalar type -- scoped to
+  INTEGER (2 bytes) and CHAR (1 byte), the two dest_size cases
+  decode_value's own manual documents by name; anything else is rejected
+  rather than guessing a width. }
+VAR
+  src_expr, dest_expr: ADRMEM;
+  src_chars, src_len: ADRMEM;
+  d_symi: INTEGER32;
+  d_addr: ADRMEM;
+  dest_size: INTEGER;
+  call_args: ADRMEM;
+BEGIN
+  IF ArrSize(args) <> 2 THEN
+    AbortWith('codegen: DECODE expects exactly 2 arguments');
+  src_expr := GetObj(ArrItem(args, 0), 'expr');
+  ResolveStringExprCharsLen(src_expr, src_chars, src_len);
+
+  dest_expr := GetObj(ArrItem(args, 1), 'expr');
+  IF NodeType(dest_expr) <> 'Identifier' THEN
+    AbortWith('codegen: DECODE''s destination must be a bare INTEGER/CHAR variable');
+  d_symi := LookupSym(GetStr(dest_expr, 'name'));
+  IF d_symi = 0 THEN
+    AbortWith2('codegen: undefined variable: ', GetStr(dest_expr, 'name'));
+  d_addr := symbols[d_symi].llvm_val;
+  IF symbols[d_symi].tk = TK_INTEGER THEN dest_size := 2
+  ELSE IF symbols[d_symi].tk = TK_CHAR THEN dest_size := 1
+  ELSE
+  BEGIN
+    AbortWith('codegen: DECODE''s destination must be INTEGER or CHAR');
+    dest_size := 0;
+  END;
+
+  call_args := AllocPtrArray(7);
+  SetPtrArrayElem(call_args, 0, src_chars);
+  SetPtrArrayElem(call_args, 1, src_len);
+  SetPtrArrayElem(call_args, 2, LLVMBuildBitCast(builder, d_addr, i8ptrty, MakeCStr('')));
+  SetPtrArrayElem(call_args, 3, LLVMConstInt(i32ty, dest_size, 0));
+  SetPtrArrayElem(call_args, 4, LLVMConstInt(i32ty, 0, 0));
+  SetPtrArrayElem(call_args, 5, LLVMConstInt(i32ty, 0, 0));
+  SetPtrArrayElem(call_args, 6, LLVMConstInt(i32ty, 0, 0));
+  CodegenDecode := LLVMBuildICmp(builder, LLVMIntNE,
+    LLVMBuildCall2(builder, decode_fnty, decode_fn, call_args, 7, MakeCStr('')),
+    LLVMConstInt(i32ty, 0, 0), MakeCStr(''));
+END;
+
 PROCEDURE CodegenConcat(args: ADRMEM);
 { CONCAT(VAR D: LSTRING; CONST S: STRING): appends S's characters to D and
   grows D's length byte by length(S) -- manual 11-20. No RANGECK-style
@@ -2054,6 +2445,20 @@ BEGIN
     CodegenCopylst(GetObj(stmt, 'args'))
   ELSE IF name = 'COPYSTR' THEN
     CodegenCopystr(GetObj(stmt, 'args'))
+  ELSE IF name = 'INSERT' THEN
+    CodegenInsert(GetObj(stmt, 'args'))
+  ELSE IF name = 'DELETE' THEN
+    CodegenDelete(GetObj(stmt, 'args'))
+  ELSE IF name = 'POSITN' THEN
+    discard := CodegenPositn(GetObj(stmt, 'args'))
+  ELSE IF name = 'SCANEQ' THEN
+    discard := CodegenScan(1, GetObj(stmt, 'args'))
+  ELSE IF name = 'SCANNE' THEN
+    discard := CodegenScan(0, GetObj(stmt, 'args'))
+  ELSE IF name = 'ENCODE' THEN
+    discard := CodegenEncode(GetObj(stmt, 'args'))
+  ELSE IF name = 'DECODE' THEN
+    discard := CodegenDecode(GetObj(stmt, 'args'))
   ELSE IF (name = 'NEW') OR (name = 'DISPOSE') THEN
   BEGIN
     args := GetObj(stmt, 'args');
@@ -2367,6 +2772,63 @@ BEGIN
   SetPtrArrayElem(param_arr, 0, i8ptrty);
   free_fnty := LLVMFunctionType(voidty, param_arr, 1, 0);
   free_fn := LLVMAddFunction(modl, MakeCStr('free'), free_fnty);
+
+  param_arr := AllocPtrArray(3);
+  SetPtrArrayElem(param_arr, 0, i8ptrty);
+  SetPtrArrayElem(param_arr, 1, i8ptrty);
+  SetPtrArrayElem(param_arr, 2, i64ty);
+  memmove_fnty := LLVMFunctionType(i8ptrty, param_arr, 3, 0);
+  memmove_fn := LLVMAddFunction(modl, MakeCStr('memmove'), memmove_fnty);
+
+  param_arr := AllocPtrArray(4);
+  SetPtrArrayElem(param_arr, 0, i8ptrty);
+  SetPtrArrayElem(param_arr, 1, i32ty);
+  SetPtrArrayElem(param_arr, 2, i8ptrty);
+  SetPtrArrayElem(param_arr, 3, i32ty);
+  positn_fnty := LLVMFunctionType(i32ty, param_arr, 4, 0);
+  positn_fn := LLVMAddFunction(modl, MakeCStr('positn'), positn_fnty);
+
+  param_arr := AllocPtrArray(6);
+  SetPtrArrayElem(param_arr, 0, i32ty);
+  SetPtrArrayElem(param_arr, 1, i8ty);
+  SetPtrArrayElem(param_arr, 2, i8ptrty);
+  SetPtrArrayElem(param_arr, 3, i32ty);
+  SetPtrArrayElem(param_arr, 4, i32ty);
+  SetPtrArrayElem(param_arr, 5, i32ty);
+  scaneq_fnty := LLVMFunctionType(i32ty, param_arr, 6, 0);
+  scaneq_fn := LLVMAddFunction(modl, MakeCStr('scaneq'), scaneq_fnty);
+
+  param_arr := AllocPtrArray(6);
+  SetPtrArrayElem(param_arr, 0, i32ty);
+  SetPtrArrayElem(param_arr, 1, i8ty);
+  SetPtrArrayElem(param_arr, 2, i8ptrty);
+  SetPtrArrayElem(param_arr, 3, i32ty);
+  SetPtrArrayElem(param_arr, 4, i32ty);
+  SetPtrArrayElem(param_arr, 5, i32ty);
+  scanne_fnty := LLVMFunctionType(i32ty, param_arr, 6, 0);
+  scanne_fn := LLVMAddFunction(modl, MakeCStr('scanne'), scanne_fnty);
+
+  param_arr := AllocPtrArray(7);
+  SetPtrArrayElem(param_arr, 0, i8ptrty);
+  SetPtrArrayElem(param_arr, 1, i32ty);
+  SetPtrArrayElem(param_arr, 2, i8ptrty);
+  SetPtrArrayElem(param_arr, 3, i32ty);
+  SetPtrArrayElem(param_arr, 4, i32ty);
+  SetPtrArrayElem(param_arr, 5, i32ty);
+  SetPtrArrayElem(param_arr, 6, i32ty);
+  encode_fnty := LLVMFunctionType(i32ty, param_arr, 7, 0);
+  encode_fn := LLVMAddFunction(modl, MakeCStr('encode_value'), encode_fnty);
+
+  param_arr := AllocPtrArray(7);
+  SetPtrArrayElem(param_arr, 0, i8ptrty);
+  SetPtrArrayElem(param_arr, 1, i32ty);
+  SetPtrArrayElem(param_arr, 2, i8ptrty);
+  SetPtrArrayElem(param_arr, 3, i32ty);
+  SetPtrArrayElem(param_arr, 4, i32ty);
+  SetPtrArrayElem(param_arr, 5, i32ty);
+  SetPtrArrayElem(param_arr, 6, i32ty);
+  decode_fnty := LLVMFunctionType(i32ty, param_arr, 7, 0);
+  decode_fn := LLVMAddFunction(modl, MakeCStr('decode_value'), decode_fnty);
 
   nsymbols := 0;
   scope_top := 0;
