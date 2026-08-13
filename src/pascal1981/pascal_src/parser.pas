@@ -19,6 +19,9 @@ PROCEDURE cJSON_AddItemToObject(obj: ADRMEM; key: ADRMEM; item: ADRMEM) [C]; EXT
 PROCEDURE cJSON_AddItemToArray(arr: ADRMEM; item: ADRMEM) [C]; EXTERN;
 FUNCTION cJSON_Print(item: ADRMEM): ADRMEM [C]; EXTERN;
 PROCEDURE cJSON_Delete(item: ADRMEM) [C]; EXTERN;
+FUNCTION cJSON_Duplicate(item: ADRMEM; recurse: CINT): ADRMEM [C]; EXTERN;
+FUNCTION cJSON_DetachItemFromArray(arr: ADRMEM; which: CINT): ADRMEM [C]; EXTERN;
+FUNCTION cJSON_ReplaceItemInObject(obj: ADRMEM; key: ADRMEM; newitem: ADRMEM): CINT [C]; EXTERN;
 
 FUNCTION cJSON_GetStringValue(item: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION cJSON_GetNumberValue(item: ADRMEM): REAL [C]; EXTERN;
@@ -1835,13 +1838,8 @@ BEGIN
   ParseFuncDecl := node;
 END;
 
-FUNCTION ParseBlock: ADRMEM;
-VAR
-  node, decls_arr: ADRMEM;
+PROCEDURE ParseDeclSectionsInto(decls_arr: ADRMEM);
 BEGIN
-  node := CreateNode('Block');
-  decls_arr := cJSON_CreateArray;
-
   WHILE (CurKind() = 'CONST') OR (CurKind() = 'TYPE') OR (CurKind() = 'VAR') OR
         (CurKind() = 'LABEL') OR (CurKind() = 'PROCEDURE') OR (CurKind() = 'FUNCTION') DO
   BEGIN
@@ -1858,7 +1856,231 @@ BEGIN
     ELSE IF CurKind() = 'FUNCTION' THEN
       cJSON_AddItemToArray(decls_arr, ParseFuncDecl);
   END;
+END;
 
+FUNCTION ParseInterfaceProcDecl: ADRMEM;
+VAR
+  node, params_arr, attrs_arr: ADRMEM;
+  nm: Str255;
+BEGIN
+  Expect('PROCEDURE');
+  nm := CurLex();
+  Expect('IDENTIFIER');
+  params_arr := cJSON_CreateArray;
+  IF Match('LPAREN') THEN
+  BEGIN
+    params_arr := ParseParamList;
+    Expect('RPAREN');
+  END;
+  attrs_arr := ParseAttributeSectionOptional;
+  Expect('SEMICOLON');
+  node := CreateNode('ProcDecl');
+  AddStringField(node, 'name', nm);
+  AddField(node, 'params', params_arr);
+  AddField(node, 'attributes', attrs_arr);
+  AddNullField(node, 'body');
+  AddNullField(node, 'directive');
+  AddBoolField(node, 'is_exported_entry', FALSE);
+  ParseInterfaceProcDecl := node;
+END;
+
+FUNCTION ParseInterfaceFuncDecl: ADRMEM;
+VAR
+  node, params_arr, attrs_arr, ret_type: ADRMEM;
+  nm: Str255;
+BEGIN
+  Expect('FUNCTION');
+  nm := CurLex();
+  Expect('IDENTIFIER');
+  params_arr := cJSON_CreateArray;
+  IF Match('LPAREN') THEN
+  BEGIN
+    params_arr := ParseParamList;
+    Expect('RPAREN');
+  END;
+  Expect('COLON');
+  ret_type := ParseType;
+  attrs_arr := ParseAttributeSectionOptional;
+  Expect('SEMICOLON');
+  node := CreateNode('FuncDecl');
+  AddStringField(node, 'name', nm);
+  AddField(node, 'params', params_arr);
+  AddField(node, 'return_type', ret_type);
+  AddField(node, 'attributes', attrs_arr);
+  AddNullField(node, 'body');
+  AddNullField(node, 'directive');
+  AddBoolField(node, 'is_exported_entry', FALSE);
+  ParseInterfaceFuncDecl := node;
+END;
+
+PROCEDURE ParseInterfaceDeclSectionsInto(decls_arr: ADRMEM);
+BEGIN
+  WHILE (CurKind() = 'CONST') OR (CurKind() = 'TYPE') OR (CurKind() = 'VAR') OR
+        (CurKind() = 'LABEL') OR (CurKind() = 'PROCEDURE') OR (CurKind() = 'FUNCTION') DO
+  BEGIN
+    IF CurKind() = 'CONST' THEN
+      ParseConstSection(decls_arr)
+    ELSE IF CurKind() = 'TYPE' THEN
+      ParseTypeSection(decls_arr)
+    ELSE IF CurKind() = 'VAR' THEN
+      ParseVarSection(decls_arr)
+    ELSE IF CurKind() = 'LABEL' THEN
+      ParseLabelSection(decls_arr)
+    ELSE IF CurKind() = 'PROCEDURE' THEN
+      cJSON_AddItemToArray(decls_arr, ParseInterfaceProcDecl)
+    ELSE IF CurKind() = 'FUNCTION' THEN
+      cJSON_AddItemToArray(decls_arr, ParseInterfaceFuncDecl);
+  END;
+END;
+
+FUNCTION ParseUsesImport: ADRMEM;
+VAR
+  node, imports_arr: ADRMEM;
+  nm: Str255;
+BEGIN
+  nm := CurLex();
+  Expect('IDENTIFIER');
+  node := CreateNode('UseClause');
+  AddStringField(node, 'name', nm);
+  IF Match('LPAREN') THEN
+  BEGIN
+    imports_arr := ParseIdentListArr;
+    Expect('RPAREN');
+    AddField(node, 'imports', imports_arr);
+  END
+  ELSE
+    AddNullField(node, 'imports');
+  ParseUsesImport := node;
+END;
+
+PROCEDURE ParseUsesClauseInto(arr: ADRMEM);
+BEGIN
+  Expect('USES');
+  cJSON_AddItemToArray(arr, ParseUsesImport);
+  WHILE Match('COMMA') DO
+    cJSON_AddItemToArray(arr, ParseUsesImport);
+  IF CurKind() = 'SEMICOLON' THEN pos := pos + 1;
+END;
+
+FUNCTION IsAtDevicePrefix(target_kind: Str255): BOOLEAN;
+BEGIN
+  IsAtDevicePrefix := (CurKind() = 'IDENTIFIER') AND
+                       StringEqual(UpperStr(CurLex()), 'DEVICE') AND
+                       StringEqual(NextKind(), target_kind);
+END;
+
+FUNCTION ParseModuleUnit(is_device: BOOLEAN): ADRMEM;
+VAR
+  node, uses_arr, decls_arr: ADRMEM;
+  nm: Str255;
+BEGIN
+  Expect('MODULE');
+  nm := CurLex();
+  Expect('IDENTIFIER');
+  Expect('SEMICOLON');
+  node := CreateNode('ModuleUnit');
+  AddStringField(node, 'name', nm);
+  uses_arr := cJSON_CreateArray;
+  WHILE CurKind() = 'USES' DO
+    ParseUsesClauseInto(uses_arr);
+  AddField(node, 'uses', uses_arr);
+  decls_arr := cJSON_CreateArray;
+  ParseDeclSectionsInto(decls_arr);
+  AddField(node, 'decls', decls_arr);
+  IF CurKind() = 'END' THEN
+  BEGIN
+    Expect('END');
+    Expect('DOT');
+  END
+  ELSE
+    Expect('DOT');
+  AddBoolField(node, 'is_device', is_device);
+  AddField(node, 'local_interfaces', cJSON_CreateArray);
+  ParseModuleUnit := node;
+END;
+
+FUNCTION ParseInterfaceUnit(is_device: BOOLEAN): ADRMEM;
+VAR
+  node, uses_arr, decls_arr, params_arr, discard_node: ADRMEM;
+  nm: Str255;
+  has_init: BOOLEAN;
+BEGIN
+  Expect('INTERFACE');
+  Expect('SEMICOLON');
+  Expect('UNIT');
+  nm := CurLex();
+  Expect('IDENTIFIER');
+  params_arr := cJSON_CreateArray;
+  IF Match('LPAREN') THEN
+  BEGIN
+    params_arr := ParseIdentListArr;
+    Expect('RPAREN');
+  END;
+  Expect('SEMICOLON');
+  node := CreateNode('InterfaceUnit');
+  AddStringField(node, 'name', nm);
+  AddField(node, 'params', params_arr);
+  uses_arr := cJSON_CreateArray;
+  WHILE CurKind() = 'USES' DO
+    ParseUsesClauseInto(uses_arr);
+  AddField(node, 'uses', uses_arr);
+  decls_arr := cJSON_CreateArray;
+  ParseInterfaceDeclSectionsInto(decls_arr);
+  AddField(node, 'decls', decls_arr);
+  has_init := FALSE;
+  IF CurKind() = 'BEGIN' THEN
+  BEGIN
+    has_init := TRUE;
+    discard_node := ParseCompoundStmt;
+    Expect('SEMICOLON');
+  END
+  ELSE
+  BEGIN
+    Expect('END');
+    Expect('SEMICOLON');
+  END;
+  AddBoolField(node, 'is_device', is_device);
+  AddBoolField(node, 'has_init', has_init);
+  ParseInterfaceUnit := node;
+END;
+
+FUNCTION ParseImplementationUnit(is_device: BOOLEAN): ADRMEM;
+VAR
+  node, uses_arr, decls_arr: ADRMEM;
+  nm: Str255;
+BEGIN
+  Expect('IMPLEMENTATION');
+  Expect('OF');
+  nm := CurLex();
+  Expect('IDENTIFIER');
+  Expect('SEMICOLON');
+  node := CreateNode('ImplementationUnit');
+  AddStringField(node, 'name', nm);
+  uses_arr := cJSON_CreateArray;
+  WHILE CurKind() = 'USES' DO
+    ParseUsesClauseInto(uses_arr);
+  AddField(node, 'uses', uses_arr);
+  decls_arr := cJSON_CreateArray;
+  ParseDeclSectionsInto(decls_arr);
+  AddField(node, 'decls', decls_arr);
+  IF CurKind() = 'BEGIN' THEN
+    AddField(node, 'init_body', ParseCompoundStmtList)
+  ELSE
+    AddNullField(node, 'init_body');
+  Expect('DOT');
+  AddBoolField(node, 'is_device', is_device);
+  AddNullField(node, 'interface');
+  AddField(node, 'local_interfaces', cJSON_CreateArray);
+  ParseImplementationUnit := node;
+END;
+
+FUNCTION ParseBlock: ADRMEM;
+VAR
+  node, decls_arr: ADRMEM;
+BEGIN
+  node := CreateNode('Block');
+  decls_arr := cJSON_CreateArray;
+  ParseDeclSectionsInto(decls_arr);
   AddField(node, 'decls', decls_arr);
 
   IF CurKind() = 'BEGIN' THEN
@@ -1902,6 +2124,8 @@ BEGIN
   Expect('SEMICOLON');
 
   uses_arr := cJSON_CreateArray;
+  WHILE CurKind() = 'USES' DO
+    ParseUsesClauseInto(uses_arr);
   AddField(node, 'uses', uses_arr);
 
   block_node := ParseBlock;
@@ -1914,13 +2138,106 @@ BEGIN
 END;
 
 VAR
-  ast_root, json_out: ADRMEM;
+  ast_root, json_out, interfaces_arr, iface_node, local_ifaces_arr: ADRMEM;
+  cand_iface, iface_name_field, unit_type_field, matched_iface: ADRMEM;
+  standalone_iface: BOOLEAN;
+  n_ifaces, ii, rc: CINT;
   res_c: CINT;
 
 BEGIN
   pos := 0;
   ReadInputAndParseTokens;
-  ast_root := ParseProgramUnit;
+
+  interfaces_arr := cJSON_CreateArray;
+  standalone_iface := FALSE;
+
+  WHILE (NOT standalone_iface) AND ((CurKind() = 'INTERFACE') OR IsAtDevicePrefix('INTERFACE')) DO
+  BEGIN
+    IF CurKind() = 'INTERFACE' THEN
+      iface_node := ParseInterfaceUnit(FALSE)
+    ELSE
+    BEGIN
+      pos := pos + 1;
+      iface_node := ParseInterfaceUnit(TRUE);
+    END;
+    cJSON_AddItemToArray(interfaces_arr, iface_node);
+    IF CurKind() = 'EOF' THEN
+    BEGIN
+      standalone_iface := TRUE;
+      ast_root := cJSON_GetArrayItem(interfaces_arr, 0);
+    END;
+  END;
+
+  IF NOT standalone_iface THEN
+  BEGIN
+    IF CurKind() = 'PROGRAM' THEN
+      ast_root := ParseProgramUnit
+    ELSE IF CurKind() = 'MODULE' THEN
+      ast_root := ParseModuleUnit(FALSE)
+    ELSE IF IsAtDevicePrefix('MODULE') THEN
+    BEGIN
+      pos := pos + 1;
+      ast_root := ParseModuleUnit(TRUE);
+    END
+    ELSE IF CurKind() = 'INTERFACE' THEN
+      ast_root := ParseInterfaceUnit(FALSE)
+    ELSE IF IsAtDevicePrefix('INTERFACE') THEN
+    BEGIN
+      pos := pos + 1;
+      ast_root := ParseInterfaceUnit(TRUE);
+    END
+    ELSE IF CurKind() = 'IMPLEMENTATION' THEN
+      ast_root := ParseImplementationUnit(FALSE)
+    ELSE IF IsAtDevicePrefix('IMPLEMENTATION') THEN
+    BEGIN
+      pos := pos + 1;
+      ast_root := ParseImplementationUnit(TRUE);
+    END
+    ELSE
+    BEGIN
+      res_c := puts(MakeCStr('Parser Error: expected compilation unit start'));
+      exit(1);
+    END;
+
+    { Wire up any spliced leading INTERFACE header(s): attach a duplicate of
+      each to local_interfaces (present on ProgramUnit/ModuleUnit/
+      ImplementationUnit), and for an ImplementationUnit, transfer ownership
+      of the name-matching one into its 'interface' field. }
+    n_ifaces := cJSON_GetArraySize(interfaces_arr);
+    IF n_ifaces > 0 THEN
+    BEGIN
+      unit_type_field := cJSON_GetObjectItem(ast_root, MakeCStr('__node_type__'));
+      local_ifaces_arr := cJSON_GetObjectItem(ast_root, MakeCStr('local_interfaces'));
+      matched_iface := NIL;
+      FOR ii := 0 TO n_ifaces - 1 DO
+      BEGIN
+        cand_iface := cJSON_GetArrayItem(interfaces_arr, ii);
+        IF local_ifaces_arr <> NIL THEN
+          cJSON_AddItemToArray(local_ifaces_arr, cJSON_Duplicate(cand_iface, 1));
+        IF (matched_iface = NIL) AND
+           StringEqual(CStrToStr255(cJSON_GetStringValue(unit_type_field)), 'ImplementationUnit') THEN
+        BEGIN
+          iface_name_field := cJSON_GetObjectItem(cand_iface, MakeCStr('name'));
+          IF StringEqual(UpperStr(CStrToStr255(cJSON_GetStringValue(iface_name_field))),
+                          UpperStr(CStrToStr255(cJSON_GetStringValue(
+                            cJSON_GetObjectItem(ast_root, MakeCStr('name')))))) THEN
+            matched_iface := cand_iface;
+        END;
+      END;
+      IF matched_iface <> NIL THEN
+      BEGIN
+        FOR ii := 0 TO n_ifaces - 1 DO
+          IF cJSON_GetArrayItem(interfaces_arr, ii) = matched_iface THEN
+          BEGIN
+            matched_iface := cJSON_DetachItemFromArray(interfaces_arr, ii);
+            BREAK;
+          END;
+        rc := cJSON_ReplaceItemInObject(ast_root, MakeCStr('interface'), matched_iface);
+      END;
+    END;
+    cJSON_Delete(interfaces_arr);
+  END;
+
   json_out := cJSON_Print(ast_root);
   res_c := puts(json_out);
   free(json_out);
