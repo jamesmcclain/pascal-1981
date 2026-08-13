@@ -25,6 +25,9 @@ FUNCTION cJSON_ReplaceItemInObject(obj: ADRMEM; key: ADRMEM; newitem: ADRMEM): C
 
 FUNCTION cJSON_GetStringValue(item: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION cJSON_GetNumberValue(item: ADRMEM): REAL [C]; EXTERN;
+FUNCTION cJSON_IsNumber(item: ADRMEM): CINT [C]; EXTERN;
+FUNCTION cJSON_IsString(item: ADRMEM): CINT [C]; EXTERN;
+FUNCTION cJSON_IsTrue(item: ADRMEM): CINT [C]; EXTERN;
 FUNCTION puts(str: ADRMEM): CINT [C]; EXTERN;
 FUNCTION getchar: CINT [C]; EXTERN;
 FUNCTION malloc(size: CINT): ADRMEM [C]; EXTERN;
@@ -46,6 +49,9 @@ TYPE
     value_type: INTEGER32; { 0=null, 1=int, 2=real, 3=str, 4=bool }
     line: INTEGER32;
     col: INTEGER32;
+    f_brave, f_debug, f_entry, f_goto, f_indexck, f_initck, f_line, f_list,
+    f_mathck, f_nilck, f_ocode, f_rangeck, f_runtime, f_stackck, f_symtab,
+    f_warn: BOOLEAN;
   END;
 
   PToken = ^Token;
@@ -139,6 +145,22 @@ BEGIN
   CreateNode := obj;
 END;
 
+FUNCTION ReadBoolFlag(flags_json: ADRMEM; key_str: Str255): BOOLEAN;
+VAR
+  item: ADRMEM;
+BEGIN
+  IF flags_json = NIL THEN
+    ReadBoolFlag := FALSE
+  ELSE
+  BEGIN
+    item := cJSON_GetObjectItem(flags_json, MakeCStr(key_str));
+    IF item = NIL THEN
+      ReadBoolFlag := FALSE
+    ELSE
+      ReadBoolFlag := cJSON_IsTrue(item) <> 0;
+  END;
+END;
+
 PROCEDURE ReadInputAndParseTokens;
 VAR
   raw_input, old_buf: ADRMEM;
@@ -146,8 +168,9 @@ VAR
   input_ch, tok_count, res_c: CINT;
   p_in, p_out, p_in_base, p_out_base: ^CHAR;
   json_root, item, field, val_obj, val_str_ptr, base_ptr, val_ptr: ADRMEM;
-  k_kind, k_code, k_lex, k_val, k_line, k_col: ADRMEM;
+  k_kind, k_code, k_lex, k_val, k_line, k_col, k_flags: ADRMEM;
   k_val_type: ADRMEM;
+  flags_obj: ADRMEM;
   empty_s, fieldName: Str255;
   p_tok: PToken;
   p_tok_arr: PTokenBufArray;
@@ -207,6 +230,7 @@ BEGIN
   fieldName := 'value'; k_val := MakeCStr(fieldName);
   fieldName := 'line'; k_line := MakeCStr(fieldName);
   fieldName := 'column'; k_col := MakeCStr(fieldName);
+  fieldName := 'flags'; k_flags := MakeCStr(fieldName);
 
   empty_s := '';
 
@@ -234,12 +258,26 @@ BEGIN
       p_tok^.lexeme := empty_s;
 
     field := cJSON_GetObjectItem(item, k_val);
-    IF field <> NIL THEN
+    IF (field <> NIL) AND (cJSON_IsNumber(field) <> 0) THEN
     BEGIN
-      p_tok^.value_str := p_tok^.lexeme;
+      p_tok^.value_real := cJSON_GetNumberValue(field);
+      p_tok^.value_int := TRUNC(p_tok^.value_real);
+      p_tok^.value_str := empty_s;
+      p_tok^.value_type := 1;
+    END
+    ELSE IF (field <> NIL) AND (cJSON_IsString(field) <> 0) THEN
+    BEGIN
+      p_tok^.value_str := CStrToStr255(cJSON_GetStringValue(field));
       p_tok^.value_int := 0;
       p_tok^.value_real := 0.0;
       p_tok^.value_type := 3;
+    END
+    ELSE
+    BEGIN
+      p_tok^.value_str := empty_s;
+      p_tok^.value_int := 0;
+      p_tok^.value_real := 0.0;
+      p_tok^.value_type := 0;
     END;
 
     field := cJSON_GetObjectItem(item, k_line);
@@ -253,6 +291,24 @@ BEGIN
       p_tok^.col := TRUNC(cJSON_GetNumberValue(field))
     ELSE
       p_tok^.col := 1;
+
+    flags_obj := cJSON_GetObjectItem(item, k_flags);
+    p_tok^.f_brave := ReadBoolFlag(flags_obj, 'BRAVE');
+    p_tok^.f_debug := ReadBoolFlag(flags_obj, 'DEBUG');
+    p_tok^.f_entry := ReadBoolFlag(flags_obj, 'ENTRY');
+    p_tok^.f_goto := ReadBoolFlag(flags_obj, 'GOTO');
+    p_tok^.f_indexck := ReadBoolFlag(flags_obj, 'INDEXCK');
+    p_tok^.f_initck := ReadBoolFlag(flags_obj, 'INITCK');
+    p_tok^.f_line := ReadBoolFlag(flags_obj, 'LINE');
+    p_tok^.f_list := ReadBoolFlag(flags_obj, 'LIST');
+    p_tok^.f_mathck := ReadBoolFlag(flags_obj, 'MATHCK');
+    p_tok^.f_nilck := ReadBoolFlag(flags_obj, 'NILCK');
+    p_tok^.f_ocode := ReadBoolFlag(flags_obj, 'OCODE');
+    p_tok^.f_rangeck := ReadBoolFlag(flags_obj, 'RANGECK');
+    p_tok^.f_runtime := ReadBoolFlag(flags_obj, 'RUNTIME');
+    p_tok^.f_stackck := ReadBoolFlag(flags_obj, 'STACKCK');
+    p_tok^.f_symtab := ReadBoolFlag(flags_obj, 'SYMTAB');
+    p_tok^.f_warn := ReadBoolFlag(flags_obj, 'WARN');
   END;
 
   cJSON_Delete(json_root);
@@ -293,6 +349,64 @@ BEGIN
   CurLex := res;
 END;
 
+FUNCTION CurValueInt: INTEGER32;
+VAR
+  pt: PToken;
+BEGIN
+  pt := GetTok(0);
+  CurValueInt := pt^.value_int;
+END;
+
+FUNCTION CurValueReal: REAL;
+VAR
+  pt: PToken;
+BEGIN
+  pt := GetTok(0);
+  CurValueReal := pt^.value_real;
+END;
+
+FUNCTION CurValueStr: Str255;
+VAR
+  pt: PToken;
+BEGIN
+  pt := GetTok(0);
+  CurValueStr := pt^.value_str;
+END;
+
+FUNCTION CurRangeCk: BOOLEAN;
+VAR
+  pt: PToken;
+BEGIN
+  pt := GetTok(0);
+  CurRangeCk := pt^.f_rangeck;
+END;
+
+FUNCTION BuildMetaFlagsNode: ADRMEM;
+VAR
+  pt: PToken;
+  obj: ADRMEM;
+BEGIN
+  pt := GetTok(0);
+  obj := cJSON_CreateObject;
+  AddBoolField(obj, 'BRAVE', pt^.f_brave);
+  AddBoolField(obj, 'DEBUG', pt^.f_debug);
+  AddBoolField(obj, 'ENTRY', pt^.f_entry);
+  AddBoolField(obj, 'GOTO', pt^.f_goto);
+  AddBoolField(obj, 'INDEXCK', pt^.f_indexck);
+  AddBoolField(obj, 'INITCK', pt^.f_initck);
+  AddBoolField(obj, 'LINE', pt^.f_line);
+  AddBoolField(obj, 'LIST', pt^.f_list);
+  AddBoolField(obj, 'MATHCK', pt^.f_mathck);
+  AddBoolField(obj, 'NILCK', pt^.f_nilck);
+  AddBoolField(obj, 'OCODE', pt^.f_ocode);
+  AddBoolField(obj, 'RANGECK', pt^.f_rangeck);
+  AddBoolField(obj, 'RUNTIME', pt^.f_runtime);
+  AddBoolField(obj, 'STACKCK', pt^.f_stackck);
+  AddBoolField(obj, 'SYMTAB', pt^.f_symtab);
+  AddBoolField(obj, 'WARN', pt^.f_warn);
+  BuildMetaFlagsNode := obj;
+END;
+
 FUNCTION StrToIntVal(s: Str255): INTEGER;
 VAR
   i, len, val: INTEGER;
@@ -315,6 +429,61 @@ BEGIN
   END;
   IF neg THEN val := -val;
   StrToIntVal := val;
+END;
+
+FUNCTION StrToRealVal(s: Str255): REAL;
+VAR
+  i, len, exp_val: INTEGER;
+  int_part, frac_part, frac_scale, result_val, pw: REAL;
+  exp_neg: BOOLEAN;
+  k: INTEGER;
+BEGIN
+  len := ORD(s[0]);
+  i := 1;
+  int_part := 0.0;
+  WHILE (i <= len) AND (s[i] >= '0') AND (s[i] <= '9') DO
+  BEGIN
+    int_part := int_part * 10.0 + (ORD(s[i]) - ORD('0'));
+    i := i + 1;
+  END;
+  frac_part := 0.0;
+  frac_scale := 1.0;
+  IF (i <= len) AND (s[i] = '.') THEN
+  BEGIN
+    i := i + 1;
+    WHILE (i <= len) AND (s[i] >= '0') AND (s[i] <= '9') DO
+    BEGIN
+      frac_scale := frac_scale / 10.0;
+      frac_part := frac_part + (ORD(s[i]) - ORD('0')) * frac_scale;
+      i := i + 1;
+    END;
+  END;
+  exp_val := 0;
+  exp_neg := FALSE;
+  IF (i <= len) AND ((s[i] = 'E') OR (s[i] = 'e')) THEN
+  BEGIN
+    i := i + 1;
+    IF (i <= len) AND (s[i] = '+') THEN
+      i := i + 1
+    ELSE IF (i <= len) AND (s[i] = '-') THEN
+    BEGIN
+      exp_neg := TRUE;
+      i := i + 1;
+    END;
+    WHILE (i <= len) AND (s[i] >= '0') AND (s[i] <= '9') DO
+    BEGIN
+      exp_val := exp_val * 10 + (ORD(s[i]) - ORD('0'));
+      i := i + 1;
+    END;
+  END;
+  result_val := int_part + frac_part;
+  pw := 1.0;
+  FOR k := 1 TO exp_val DO
+    IF exp_neg THEN
+      pw := pw / 10.0
+    ELSE
+      pw := pw * 10.0;
+  StrToRealVal := result_val * pw;
 END;
 
 FUNCTION StringEqual(s1, s2: Str255): BOOLEAN;
@@ -402,6 +571,7 @@ FUNCTION ParseStatement: ADRMEM; FORWARD;
 FUNCTION ParseBlock: ADRMEM; FORWARD;
 FUNCTION ParseType: ADRMEM; FORWARD;
 FUNCTION ParseConstant: ADRMEM; FORWARD;
+FUNCTION ParseConstant2: ADRMEM; FORWARD;
 FUNCTION ParseCompoundStmt: ADRMEM; FORWARD;
 FUNCTION ParseCompoundStmtList: ADRMEM; FORWARD;
 FUNCTION ParseIfStmt: ADRMEM; FORWARD;
@@ -505,6 +675,13 @@ BEGIN
       sel_obj := CreateNode('Selector');
       AddStringField(sel_obj, 'kind', 'INDEX');
       AddField(sel_obj, 'index_or_field', ParseExpression);
+      WHILE Match('COMMA') DO
+      BEGIN
+        cJSON_AddItemToArray(selectors_arr, sel_obj);
+        sel_obj := CreateNode('Selector');
+        AddStringField(sel_obj, 'kind', 'INDEX');
+        AddField(sel_obj, 'index_or_field', ParseExpression);
+      END;
       Expect('RBRACKET');
       cJSON_AddItemToArray(selectors_arr, sel_obj);
     END
@@ -583,32 +760,34 @@ END;
 
 FUNCTION ParseConstant: ADRMEM;
 VAR
-  node: ADRMEM;
+  node, args_arr_const: ADRMEM;
   val_str: Str255;
   sign_neg: BOOLEAN;
   res_c: CINT;
 BEGIN
-  sign_neg := FALSE;
-  IF (CurKind() = 'PLUS') OR (CurKind() = 'MINUS') THEN
-  BEGIN
-    sign_neg := (CurKind() = 'MINUS');
-    pos := pos + 1;
-  END;
+  { Mirrors parser.py's parse_constant precedence exactly: an unsigned
+    literal/identifier is tried first (no sign consumed here), and a leading
+    +/- sign is only legal directly before INTEGER_LITERAL/REAL_LITERAL --
+    e.g. -'A' must be rejected, not silently accepted. }
   IF CurKind() = 'INTEGER_LITERAL' THEN
   BEGIN
     node := CreateNode('IntLiteral');
-    val_str := CurLex();
+    AddIntField(node, 'value', CurValueInt());
     Expect('INTEGER_LITERAL');
-    IF sign_neg THEN
-      AddIntField(node, 'value', -StrToIntVal(val_str))
-    ELSE
-      AddIntField(node, 'value', StrToIntVal(val_str));
+    ParseConstant := node;
+  END
+  ELSE IF CurKind() = 'REAL_LITERAL' THEN
+  BEGIN
+    node := CreateNode('RealLiteral');
+    val_str := CurLex();
+    Expect('REAL_LITERAL');
+    AddRealField(node, 'value', StrToRealVal(val_str));
     ParseConstant := node;
   END
   ELSE IF CurKind() = 'CHAR_LITERAL' THEN
   BEGIN
     node := CreateNode('CharLiteral');
-    val_str := CurLex();
+    val_str := CurValueStr();
     Expect('CHAR_LITERAL');
     AddStringField(node, 'value', val_str);
     ParseConstant := node;
@@ -636,10 +815,62 @@ BEGIN
   END
   ELSE IF CurKind() = 'IDENTIFIER' THEN
   BEGIN
-    node := CreateNode('Identifier');
-    AddStringField(node, 'name', CurLex());
+    val_str := CurLex();
     Expect('IDENTIFIER');
-    ParseConstant := node;
+    IF (StringEqual(UpperStr(val_str), 'WRD') OR StringEqual(UpperStr(val_str), 'BYWORD')) AND
+       (CurKind() = 'LPAREN') THEN
+    BEGIN
+      pos := pos + 1;
+      node := CreateNode('FuncCall');
+      AddStringField(node, 'name', val_str);
+      args_arr_const := cJSON_CreateArray;
+      cJSON_AddItemToArray(args_arr_const, ParseConstant2());
+      WHILE CurKind() = 'COMMA' DO
+      BEGIN
+        pos := pos + 1;
+        cJSON_AddItemToArray(args_arr_const, ParseConstant2());
+      END;
+      Expect('RPAREN');
+      AddField(node, 'args', args_arr_const);
+      ParseConstant := node;
+    END
+    ELSE
+    BEGIN
+      node := CreateNode('Identifier');
+      AddStringField(node, 'name', val_str);
+      ParseConstant := node;
+    END;
+  END
+  ELSE IF (CurKind() = 'PLUS') OR (CurKind() = 'MINUS') THEN
+  BEGIN
+    sign_neg := (CurKind() = 'MINUS');
+    pos := pos + 1;
+    IF CurKind() = 'INTEGER_LITERAL' THEN
+    BEGIN
+      node := CreateNode('IntLiteral');
+      IF sign_neg THEN
+        AddIntField(node, 'value', -CurValueInt())
+      ELSE
+        AddIntField(node, 'value', CurValueInt());
+      Expect('INTEGER_LITERAL');
+      ParseConstant := node;
+    END
+    ELSE IF CurKind() = 'REAL_LITERAL' THEN
+    BEGIN
+      node := CreateNode('RealLiteral');
+      val_str := CurLex();
+      Expect('REAL_LITERAL');
+      IF sign_neg THEN
+        AddRealField(node, 'value', -StrToRealVal(val_str))
+      ELSE
+        AddRealField(node, 'value', StrToRealVal(val_str));
+      ParseConstant := node;
+    END
+    ELSE
+    BEGIN
+      res_c := puts(MakeCStr('Parser Error: expected numeric constant'));
+      exit(1);
+    END;
   END
   ELSE
   BEGIN
@@ -648,9 +879,31 @@ BEGIN
   END;
 END;
 
+FUNCTION ParseConstant2: ADRMEM;
+BEGIN
+  ParseConstant2 := ParseConstant;
+END;
+
+FUNCTION ParseSetElement: ADRMEM;
+VAR
+  e, high, node: ADRMEM;
+BEGIN
+  e := ParseExpression;
+  IF Match('RANGE') THEN
+  BEGIN
+    high := ParseExpression;
+    node := CreateNode('RangeExpr');
+    AddField(node, 'low', e);
+    AddField(node, 'high', high);
+    ParseSetElement := node;
+  END
+  ELSE
+    ParseSetElement := e;
+END;
+
 FUNCTION ParseFactor: ADRMEM;
 VAR
-  node, expr, args_arr: ADRMEM;
+  node, expr, args_arr, elements_arr: ADRMEM;
   val_str, name, kop: Str255;
   res_c: CINT;
 BEGIN
@@ -669,15 +922,22 @@ BEGIN
   ELSE IF CurKind() = 'INTEGER_LITERAL' THEN
   BEGIN
     node := CreateNode('IntLiteral');
-    val_str := CurLex();
+    AddIntField(node, 'value', CurValueInt());
     Expect('INTEGER_LITERAL');
-    AddIntField(node, 'value', StrToIntVal(val_str));
+    ParseFactor := node;
+  END
+  ELSE IF CurKind() = 'REAL_LITERAL' THEN
+  BEGIN
+    node := CreateNode('RealLiteral');
+    val_str := CurLex();
+    Expect('REAL_LITERAL');
+    AddRealField(node, 'value', StrToRealVal(val_str));
     ParseFactor := node;
   END
   ELSE IF CurKind() = 'CHAR_LITERAL' THEN
   BEGIN
     node := CreateNode('CharLiteral');
-    val_str := CurLex();
+    val_str := CurValueStr();
     Expect('CHAR_LITERAL');
     AddStringField(node, 'value', val_str);
     ParseFactor := node;
@@ -732,6 +992,22 @@ BEGIN
     expr := ParseExpression;
     Expect('RPAREN');
     ParseFactor := expr;
+  END
+  ELSE IF CurKind() = 'LBRACKET' THEN
+  BEGIN
+    pos := pos + 1;
+    elements_arr := cJSON_CreateArray;
+    IF CurKind() <> 'RBRACKET' THEN
+    BEGIN
+      cJSON_AddItemToArray(elements_arr, ParseSetElement);
+      WHILE Match('COMMA') DO
+        cJSON_AddItemToArray(elements_arr, ParseSetElement);
+    END;
+    Expect('RBRACKET');
+    node := CreateNode('SetConstructor');
+    AddField(node, 'elements', elements_arr);
+    AddNullField(node, 'type_name');
+    ParseFactor := node;
   END
   ELSE
   BEGIN
@@ -887,11 +1163,14 @@ END;
 
 FUNCTION ParseAssignOrCallStmt: ADRMEM;
 VAR
-  node, target, args_arr: ADRMEM;
+  node, target, args_arr, saved_flags_node: ADRMEM;
   pt: PToken;
   name: Str255;
+  saved_rangeck: BOOLEAN;
 BEGIN
   name := CurLex();
+  saved_rangeck := CurRangeCk();
+  saved_flags_node := BuildMetaFlagsNode();
   pt := GetTok(1);
   IF (pt^.kind = 'LPAREN') OR (pt^.kind = 'SEMICOLON') THEN
   BEGIN
@@ -915,8 +1194,8 @@ BEGIN
       Expect('RPAREN');
     END;
     AddField(node, 'args', args_arr);
-    AddBoolField(node, 'rangeck', TRUE);
-    AddNullField(node, 'meta_flags');
+    AddBoolField(node, 'rangeck', saved_rangeck);
+    AddField(node, 'meta_flags', saved_flags_node);
     ParseAssignOrCallStmt := node;
   END
   ELSE
@@ -926,8 +1205,8 @@ BEGIN
     IF Match('ASSIGN') OR Match('EQ') THEN ;
     AddField(node, 'target', target);
     AddField(node, 'expr', ParseExpression);
-    AddBoolField(node, 'rangeck', TRUE);
-    AddNullField(node, 'meta_flags');
+    AddBoolField(node, 'rangeck', saved_rangeck);
+    AddField(node, 'meta_flags', saved_flags_node);
     ParseAssignOrCallStmt := node;
   END;
 END;
@@ -1114,8 +1393,8 @@ BEGIN
   ELSE
     AddNullField(node, 'otherwise');
   Expect('END');
-  AddBoolField(node, 'rangeck', TRUE);
-  AddNullField(node, 'meta_flags');
+  AddBoolField(node, 'rangeck', CurRangeCk());
+  AddField(node, 'meta_flags', BuildMetaFlagsNode());
   ParseCaseStmt := node;
 END;
 
@@ -1515,7 +1794,14 @@ BEGIN
     BEGIN
       param_expr := ParseConstant;
       Expect('RPAREN');
-      AddField(node, 'param', param_expr);
+      { NamedType.param is a bare int or identifier-name, not the full
+        constant-expression node, matching parser.py's unwrapping. }
+      IF StringEqual(CStrToStr255(cJSON_GetStringValue(cJSON_GetObjectItem(param_expr, MakeCStr('__node_type__')))), 'IntLiteral') THEN
+        AddIntField(node, 'param', TRUNC(cJSON_GetNumberValue(cJSON_GetObjectItem(param_expr, MakeCStr('value')))))
+      ELSE IF StringEqual(CStrToStr255(cJSON_GetStringValue(cJSON_GetObjectItem(param_expr, MakeCStr('__node_type__')))), 'Identifier') THEN
+        AddStringField(node, 'param', CStrToStr255(cJSON_GetStringValue(cJSON_GetObjectItem(param_expr, MakeCStr('name')))))
+      ELSE
+        AddNullField(node, 'param');
     END
     ELSE
       AddNullField(node, 'param');
@@ -1543,8 +1829,9 @@ END;
 
 FUNCTION ParseAttributeItem: ADRMEM;
 VAR
-  node: ADRMEM;
+  node, tuning_args: ADRMEM;
   up, c_str: Str255;
+  res_c: CINT;
 BEGIN
   c_str[0] := CHR(1);
   c_str[1] := 'C';
@@ -1566,7 +1853,7 @@ BEGIN
       Expect('LPAREN');
       node := CreateNode('Attribute');
       AddStringField(node, 'name', 'SPACE');
-      AddField(node, 'arg', ParseExpression);
+      AddField(node, 'arg', ParseExpression());
       Expect('RPAREN');
       ParseAttributeItem := node;
     END
@@ -1586,22 +1873,30 @@ BEGIN
       AddNullField(node, 'arg');
       ParseAttributeItem := node;
     END
-    ELSE
+    ELSE IF StringEqual(up, 'MAXNTID') OR StringEqual(up, 'REQNTID') OR StringEqual(up, 'MINCTASM') THEN
     BEGIN
+      pos := pos + 1;
+      Expect('LPAREN');
+      tuning_args := cJSON_CreateArray;
+      cJSON_AddItemToArray(tuning_args, ParseExpression());
+      WHILE Match('COMMA') DO
+        cJSON_AddItemToArray(tuning_args, ParseExpression());
+      Expect('RPAREN');
       node := CreateNode('Attribute');
       AddStringField(node, 'name', up);
-      AddNullField(node, 'arg');
-      pos := pos + 1;
+      AddField(node, 'arg', tuning_args);
       ParseAttributeItem := node;
+    END
+    ELSE
+    BEGIN
+      res_c := puts(MakeCStr('Parser Error: expected attribute item'));
+      exit(1);
     END;
   END
   ELSE
   BEGIN
-    node := CreateNode('Attribute');
-    AddStringField(node, 'name', CurKind());
-    AddNullField(node, 'arg');
-    pos := pos + 1;
-    ParseAttributeItem := node;
+    res_c := puts(MakeCStr('Parser Error: expected attribute item'));
+    exit(1);
   END;
 END;
 
@@ -1715,8 +2010,8 @@ BEGIN
     AddField(node, 'names', names_arr);
     AddField(node, 'type_expr', ParseType);
     AddField(node, 'attributes', attrs_arr);
-    AddNullField(node, 'meta_flags');
     Expect('SEMICOLON');
+    AddField(node, 'meta_flags', BuildMetaFlagsNode());
     cJSON_AddItemToArray(decls_arr, node);
   END;
 END;
