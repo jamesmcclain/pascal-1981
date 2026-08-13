@@ -51,7 +51,13 @@ VAR
   
   { Source input buffer }
   src_buf: ADRMEM;
-  src_len, src_pos: INTEGER;
+  { INTEGER32, not bare INTEGER: any source file over ~32KB (parser.pas is
+    ~67KB) needs a position/length wider than a 16-bit INTEGER's ~32767
+    max -- dialect gotcha #1. Every function that reads or stores a
+    position derived from these (ReadBufChar's pos param, ScanIdentifier/
+    ScanNumber's start_pos) must match this width or it silently truncates
+    on assignment. }
+  src_len, src_pos: INTEGER32;
   cur_line, cur_col: INTEGER;
 
 PROCEDURE InitFlags(VAR f: MetacmdFlags);
@@ -245,7 +251,7 @@ BEGIN
   ELSE GetKeywordCode := 0;
 END;
 
-FUNCTION ReadBufChar(pos: INTEGER): CHAR;
+FUNCTION ReadBufChar(pos: INTEGER32): CHAR;
 VAR
   p: ^CHAR;
 BEGIN
@@ -261,7 +267,12 @@ END;
 PROCEDURE ReadSourceInput;
 VAR
   input_ch: INTEGER32;
-  cap, i: INTEGER;
+  { INTEGER32, not bare INTEGER: cap doubles past the initial 32000-byte
+    allocation for any source file over ~32KB (parser.pas is ~67KB), and a
+    16-bit INTEGER silently wraps at that point (dialect gotcha #1 -- see
+    ReadInputAndParseTokens in parser.pas, which already uses INTEGER32 for
+    the identical growth pattern). }
+  cap, i: INTEGER32;
   p, p_old, p_new: ^CHAR;
   old_buf: ADRMEM;
 BEGIN
@@ -380,7 +391,8 @@ END;
 
 PROCEDURE ScanIdentifier;
 VAR
-  start_pos, start_line, start_col, len: INTEGER;
+  start_pos: INTEGER32;
+  start_line, start_col, len: INTEGER;
   lexeme, upper_str: Str255;
   i, code: INTEGER;
   ch: CHAR;
@@ -389,12 +401,19 @@ BEGIN
   start_pos := src_pos;
   start_line := cur_line;
   start_col := cur_col;
-  
+
+  { len is a plain INTEGER (never assigned from a wide src_pos-start_pos
+    subtraction, which the type checker rightly refuses to narrow
+    implicitly): count characters as they're consumed instead, capping at
+    255 the same way the old "len := src_pos - start_pos; IF len > 255..."
+    did, but without ever holding an INTEGER32 value in an INTEGER var. }
+  len := 0;
   WHILE (src_pos < src_len) AND (IsAlpha(ReadBufChar(src_pos)) OR IsDigit(ReadBufChar(src_pos))) DO
+  BEGIN
+    IF len < 255 THEN len := len + 1;
     AdvancePos(1);
-  
-  len := src_pos - start_pos;
-  IF len > 255 THEN len := 255;
+  END;
+
   lexeme[0] := CHR(len);
   upper_str[0] := CHR(len);
   FOR i := 1 TO len DO
@@ -427,9 +446,51 @@ BEGIN
   END;
 END;
 
+FUNCTION RadixDigitValue(ch: CHAR; radix: INTEGER): INTEGER;
+VAR
+  uch: CHAR;
+  v: INTEGER;
+BEGIN
+  uch := UpCaseChar(ch);
+  IF (uch >= '0') AND (uch <= '9') THEN
+    v := ORD(uch) - ORD('0')
+  ELSE IF (uch >= 'A') AND (uch <= 'F') THEN
+    v := ORD(uch) - ORD('A') + 10
+  ELSE
+    v := -1;
+  IF (v >= 0) AND (v < radix) THEN
+    RadixDigitValue := v
+  ELSE
+    RadixDigitValue := -1;
+END;
+
+FUNCTION ClampedSpanLen(start_p, end_p: INTEGER32): INTEGER;
+{ end_p - start_p, capped at 255 -- for Str255 lexeme lengths.  Computed by
+  bounded counting rather than the wide subtraction "len := end_p - start_p;
+  IF len > 255 THEN len := 255", which cannot assign its INTEGER32 result
+  into a plain INTEGER len (the type checker refuses that narrowing, even
+  though the capped value is always small in practice). }
+VAR
+  n: INTEGER;
+  p: INTEGER32;
+BEGIN
+  n := 0;
+  p := start_p;
+  WHILE (p < end_p) AND (n < 255) DO
+  BEGIN
+    n := n + 1;
+    p := p + 1;
+  END;
+  ClampedSpanLen := n;
+END;
+
 PROCEDURE ScanNumber;
 VAR
-  start_pos, start_line, start_col, len, int_val, i: INTEGER;
+  start_pos: INTEGER32;
+  start_line, start_col, len, int_val, i: INTEGER;
+  radix, digit_val, exp_val, look: INTEGER;
+  real_val, frac_part, frac_scale: REAL;
+  exp_neg: BOOLEAN;
   lexeme: Str255;
   ch: CHAR;
   kind_str: Str255;
@@ -446,19 +507,106 @@ BEGIN
     AdvancePos(1);
   END;
 
-  len := src_pos - start_pos;
-  IF len > 255 THEN len := 255;
-  lexeme[0] := CHR(len);
-  FOR i := 1 TO len DO
-    lexeme[i] := ReadBufChar(start_pos + i - 1);
+  IF (src_pos < src_len) AND (ReadBufChar(src_pos) = '#') THEN
+  BEGIN
+    { Radix literal, e.g. 16#FF -- the digit run just scanned is the base. }
+    radix := int_val;
+    AdvancePos(1); { consume '#' }
+    int_val := 0;
+    WHILE (src_pos < src_len) AND (RadixDigitValue(ReadBufChar(src_pos), radix) >= 0) DO
+    BEGIN
+      digit_val := RadixDigitValue(ReadBufChar(src_pos), radix);
+      int_val := int_val * radix + digit_val;
+      AdvancePos(1);
+    END;
 
-  kind_str := 'INTEGER_LITERAL';
-  AddToken(kind_str, 81, lexeme, 1, int_val, 0.0, lexeme, start_line, start_col);
+    len := ClampedSpanLen(start_pos, src_pos);
+    lexeme[0] := CHR(len);
+    FOR i := 1 TO len DO
+      lexeme[i] := ReadBufChar(start_pos + i - 1);
+
+    kind_str := 'INTEGER_LITERAL';
+    AddToken(kind_str, 81, lexeme, 1, int_val, 0.0, lexeme, start_line, start_col);
+  END
+  ELSE IF (src_pos < src_len) AND (ReadBufChar(src_pos) = '.') AND
+          (src_pos + 1 < src_len) AND IsDigit(ReadBufChar(src_pos + 1)) THEN
+  BEGIN
+    { Real literal: digit+ '.' digit+ [ ('E'|'e') ['+'|'-'] digit+ ].
+      The leading '..' range operator is excluded above by requiring a
+      digit right after the dot. }
+    AdvancePos(1); { consume '.' }
+    real_val := int_val;
+    frac_part := 0.0;
+    frac_scale := 1.0;
+    WHILE (src_pos < src_len) AND IsDigit(ReadBufChar(src_pos)) DO
+    BEGIN
+      ch := ReadBufChar(src_pos);
+      frac_scale := frac_scale / 10.0;
+      frac_part := frac_part + (ORD(ch) - ORD('0')) * frac_scale;
+      AdvancePos(1);
+    END;
+    real_val := real_val + frac_part;
+
+    { Only consume 'E'/'e' as an exponent marker if it is followed by an
+      optional sign and then at least one digit -- otherwise leave it for
+      the next token (matches the Python lexer's _read_exponent lookahead;
+      e.g. an identifier immediately after a real literal must not be
+      swallowed). }
+    IF (src_pos < src_len) AND
+       ((ReadBufChar(src_pos) = 'E') OR (ReadBufChar(src_pos) = 'e')) THEN
+    BEGIN
+      look := 1;
+      IF (src_pos + look < src_len) AND
+         ((ReadBufChar(src_pos + look) = '+') OR (ReadBufChar(src_pos + look) = '-')) THEN
+        look := look + 1;
+      IF (src_pos + look < src_len) AND IsDigit(ReadBufChar(src_pos + look)) THEN
+      BEGIN
+        AdvancePos(1); { consume 'E'/'e' }
+        exp_neg := FALSE;
+        IF (src_pos < src_len) AND (ReadBufChar(src_pos) = '+') THEN
+          AdvancePos(1)
+        ELSE IF (src_pos < src_len) AND (ReadBufChar(src_pos) = '-') THEN
+        BEGIN
+          exp_neg := TRUE;
+          AdvancePos(1);
+        END;
+        exp_val := 0;
+        WHILE (src_pos < src_len) AND IsDigit(ReadBufChar(src_pos)) DO
+        BEGIN
+          exp_val := exp_val * 10 + (ORD(ReadBufChar(src_pos)) - ORD('0'));
+          AdvancePos(1);
+        END;
+        FOR i := 1 TO exp_val DO
+          IF exp_neg THEN
+            real_val := real_val / 10.0
+          ELSE
+            real_val := real_val * 10.0;
+      END;
+    END;
+
+    len := ClampedSpanLen(start_pos, src_pos);
+    lexeme[0] := CHR(len);
+    FOR i := 1 TO len DO
+      lexeme[i] := ReadBufChar(start_pos + i - 1);
+
+    kind_str := 'REAL_LITERAL';
+    AddToken(kind_str, 82, lexeme, 2, 0, real_val, lexeme, start_line, start_col);
+  END
+  ELSE
+  BEGIN
+    len := ClampedSpanLen(start_pos, src_pos);
+    lexeme[0] := CHR(len);
+    FOR i := 1 TO len DO
+      lexeme[i] := ReadBufChar(start_pos + i - 1);
+
+    kind_str := 'INTEGER_LITERAL';
+    AddToken(kind_str, 81, lexeme, 1, int_val, 0.0, lexeme, start_line, start_col);
+  END;
 END;
 
 PROCEDURE ScanString;
 VAR
-  start_line, start_col, str_len: INTEGER;
+  start_line, start_col, str_len, lex_len, i: INTEGER;
   ch: CHAR;
   str_val, lexeme: Str255;
   kind_str: Str255;
@@ -494,7 +642,30 @@ BEGIN
   END;
 
   str_val[0] := CHR(str_len);
-  lexeme := str_val;
+
+  { lexeme must be the raw source text (opening quote, each embedded quote
+    doubled, closing quote) -- parser.pas's ParseConstant/ParseFactor read
+    this *lexeme*, not str_val, for StringLiteral/CharLiteral AST nodes,
+    and then decode it themselves the same way the Python lexer's own
+    "'" + value.replace("'", "''") + "'" round-trips. str_val (the
+    already-decoded value, unquoted, embedded '' collapsed to ') is a
+    separate field. }
+  lex_len := 1;
+  lexeme[1] := '''';
+  FOR i := 1 TO str_len DO
+  BEGIN
+    IF str_val[i] = '''' THEN
+    BEGIN
+      lex_len := lex_len + 1;
+      IF lex_len <= 255 THEN lexeme[lex_len] := '''';
+    END;
+    lex_len := lex_len + 1;
+    IF lex_len <= 255 THEN lexeme[lex_len] := str_val[i];
+  END;
+  lex_len := lex_len + 1;
+  IF lex_len <= 255 THEN lexeme[lex_len] := '''';
+  IF lex_len > 255 THEN lex_len := 255;
+  lexeme[0] := CHR(lex_len);
 
   IF str_len = 1 THEN
   BEGIN
