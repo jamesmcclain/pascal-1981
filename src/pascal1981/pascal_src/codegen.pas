@@ -21,13 +21,23 @@
   WRITE/WRITELN, 1-based character indexing s[i], no length prefix); and
   CONCAT(VAR D: LSTRING; CONST S: STRING-or-LSTRING-or-literal), appending
   S onto D via a runtime byte-copy loop (S's length is not always known at
-  compile time, unlike a literal assignment's). Not yet covered: sets,
-  COPYLST/COPYSTR/other string builtins, files, multi-dimension arrays,
-  CASE, WRITE width:precision, MATHCK/RANGECK-style runtime traps
-  (including CONCAT's own capacity overflow, which is unchecked -- same
-  simplification as an unchecked array index elsewhere in this file),
-  C-ABI externs, units, and DEVICE MODULE/PTX generation. Anything not yet
-  covered is
+  compile time, unlike a literal assignment's); SET OF lo..hi variables
+  (TYPE-declared, over an INTEGER subrange base only), set constructors
+  (`[..]`, both single elements and lo..hi ranges, constant or dynamic --
+  all lowered as runtime bit-set instructions rather than the Python
+  reference's compile-time-constant-folded words, a deliberate behavioral-
+  parity-over-IR-shape-parity tradeoff), the set operators +/-/*, =, <>,
+  <=, <, >=, > and IN, and set-to-set assignment; and CASE/OTHERWISE over
+  an INTEGER selector with single-constant and comma-separated labels
+  (lowered as a sequential test-block chain, not a jump table) -- a lo..hi
+  label range is rejected, matching the Python reference's own
+  not-yet-supported limitation there, not falling short of it. Not yet
+  covered: COPYLST/COPYSTR/other string builtins, files, multi-dimension
+  arrays, CHAR-keyed CASE, CASE label ranges, WRITE width:precision,
+  MATHCK/RANGECK-style runtime traps (including CONCAT's own capacity
+  overflow, which is unchecked -- same simplification as an unchecked
+  array index elsewhere in this file), C-ABI externs, units, and DEVICE
+  MODULE/PTX generation. Anything not yet covered is
   rejected loudly via AbortWith rather than silently mishandled
   or miscompiled -- reject unhandled constructs instead of guessing, the
   same discipline the earlier native stages (lexer.pas/parser.pas/
@@ -50,6 +60,7 @@ FUNCTION LLVMInt32TypeInContext(ctx: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMInt16TypeInContext(ctx: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMInt8TypeInContext(ctx: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMInt1TypeInContext(ctx: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMInt64TypeInContext(ctx: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMDoubleTypeInContext(ctx: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMPointerType(elem_ty: ADRMEM; addr_space: CINT): ADRMEM [C]; EXTERN;
 FUNCTION LLVMArrayType(elem_ty: ADRMEM; count: CINT): ADRMEM [C]; EXTERN;
@@ -83,6 +94,12 @@ FUNCTION LLVMBuildFDiv(b: ADRMEM; lhs: ADRMEM; rhs: ADRMEM; name: ADRMEM): ADRME
 FUNCTION LLVMBuildAnd(b: ADRMEM; lhs: ADRMEM; rhs: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildOr(b: ADRMEM; lhs: ADRMEM; rhs: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildXor(b: ADRMEM; lhs: ADRMEM; rhs: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMBuildNot(b: ADRMEM; val: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMBuildShl(b: ADRMEM; lhs: ADRMEM; rhs: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMBuildUDiv(b: ADRMEM; lhs: ADRMEM; rhs: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMBuildURem(b: ADRMEM; lhs: ADRMEM; rhs: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMBuildExtractValue(b: ADRMEM; agg: ADRMEM; idx: CINT; name: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMBuildInsertValue(b: ADRMEM; agg: ADRMEM; elt: ADRMEM; idx: CINT; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildICmp(b: ADRMEM; pred: CINT; lhs: ADRMEM; rhs: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildFCmp(b: ADRMEM; pred: CINT; lhs: ADRMEM; rhs: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildSExt(b: ADRMEM; val: ADRMEM; destty: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
@@ -122,6 +139,7 @@ CONST
   TK_LSTRING = 7;
   TK_POINTER = 8;
   TK_STRING  = 9;
+  TK_SET     = 10;
 
   MAX_SYMBOLS = 500;
   MAX_SCOPES = 64;
@@ -186,7 +204,21 @@ TYPE
 
 VAR
   ctx, modl, builder: ADRMEM;
-  i32ty, i16ty, i8ty, i1ty, dblty, i8ptrty, voidty: ADRMEM;
+  i32ty, i16ty, i8ty, i1ty, i64ty, dblty, i8ptrty, voidty: ADRMEM;
+  setty: ADRMEM; { the one physical set representation shared by every SET
+                   type regardless of declared base range, matching the
+                   Python reference's set_llvm_type: a fixed [4 x i64]
+                   256-bit bitvector. }
+  generic_set_tid: INTEGER; { lazily registered the first time a "set value
+                   with no single declared named type" is produced (a set
+                   constructor's result, or a set binop's result) -- see
+                   EnsureGenericSetType. Every SET type shares the same
+                   physical layout, so operations that mix two differently
+                   *named* set types (or an anonymous constructor value with
+                   a named one) are still valid; TypesCompatibleForAssign
+                   below is what actually allows that, this tid just needs
+                   to be *some* valid registered TK_SET entry to satisfy
+                   TypeKind's table lookup. }
   main_fnty, main_fn, entry_bb: ADRMEM;
   printf_fnty, printf_fn: ADRMEM;
   malloc_fnty, malloc_fn, free_fnty, free_fn: ADRMEM; { the *target program's*
@@ -391,6 +423,30 @@ BEGIN
   RegisterType := ntypes;
 END;
 
+FUNCTION EnsureGenericSetType: INTEGER;
+{ Lazily registers (once) a canonical TK_SET table entry with no declared
+  base range, for set-typed values that have no single named declared type
+  of their own -- a set constructor's result, or a set binop's result.
+  Every SET type shares the exact same physical layout (setty), so this is
+  always a safe stand-in tid; see TypesCompatibleForAssign, which is the
+  part that actually allows mixing this with a specifically-named SET type. }
+BEGIN
+  IF generic_set_tid = 0 THEN
+    generic_set_tid := RegisterType(TK_SET, TK_INTEGER, 0, 255, setty);
+  EnsureGenericSetType := generic_set_tid;
+END;
+
+FUNCTION TypesCompatibleForAssign(from_tid, to_tid: INTEGER): BOOLEAN;
+{ Exact tid equality is the normal rule everywhere else in this file, but
+  two SET types are freely assignment-compatible with each other regardless
+  of which specific TYPE declaration (or none, for a constructor/binop
+  result) produced their tid, since every SET physically is the same
+  [4 x i64] bitvector -- see EnsureGenericSetType. }
+BEGIN
+  TypesCompatibleForAssign := (from_tid = to_tid) OR
+    ((TypeKind(from_tid) = TK_SET) AND (TypeKind(to_tid) = TK_SET));
+END;
+
 FUNCTION TypeSizeBytes(tid: INTEGER): INTEGER32;
 { Used only by NEW's malloc-sized allocation; not a general ABI sizeof (no
   struct-padding modeling), sufficient for allocating one heap block of a
@@ -415,6 +471,7 @@ BEGIN
   END
   ELSE IF TypeKind(tid) = TK_LSTRING THEN TypeSizeBytes := types[tid].hi + 1
   ELSE IF TypeKind(tid) = TK_STRING THEN TypeSizeBytes := types[tid].hi
+  ELSE IF TypeKind(tid) = TK_SET THEN TypeSizeBytes := 32
   ELSE IF TypeKind(tid) = TK_POINTER THEN TypeSizeBytes := 8
   ELSE
   BEGIN
@@ -538,6 +595,20 @@ BEGIN
     arr_ty := LLVMPointerType(LLVMTypeForTk(elem_tid), 0);
     tid := RegisterType(TK_POINTER, elem_tid, 0, 0, arr_ty);
   END
+  ELSE IF nt = 'SetType' THEN
+  BEGIN
+    { Every SET type shares the same physical [4 x i64] 256-bit-bitvector
+      representation regardless of declared base range (matching the Python
+      reference's set_llvm_type) -- only the base's low/high are kept, and
+      only to know the ordinal's legal range, not to size the storage.
+      Scoped to a SubrangeType base (SET OF lo..hi); a bare enum/named-type
+      base is not yet supported. }
+    IF NodeType(GetObj(te, 'base')) <> 'SubrangeType' THEN
+      AbortWith('codegen: SET OF <base> is only supported over a lo..hi subrange');
+    lo := ResolveIntLiteral(GetObj(GetObj(te, 'base'), 'low'));
+    hi := ResolveIntLiteral(GetObj(GetObj(te, 'base'), 'high'));
+    tid := RegisterType(TK_SET, TK_INTEGER, lo, hi, setty);
+  END
   ELSE
   BEGIN
     AbortWith2('codegen: unsupported type expression: ', nt);
@@ -599,7 +670,7 @@ BEGIN
     gvar := LLVMAddGlobal(modl, LLVMTypeForTk(tk), MakeCStr(name));
     IF (TypeKind(tk) = TK_ARRAY) OR (TypeKind(tk) = TK_RECORD) OR
        (TypeKind(tk) = TK_LSTRING) OR (TypeKind(tk) = TK_POINTER) OR
-       (TypeKind(tk) = TK_STRING) THEN
+       (TypeKind(tk) = TK_STRING) OR (TypeKind(tk) = TK_SET) THEN
       zero := LLVMConstNull(LLVMTypeForTk(tk))
     ELSE IF tk = TK_REAL THEN zero := LLVMConstReal(dblty, 0.0)
     ELSE zero := LLVMConstInt(LLVMTypeForTk(tk), 0, 0);
@@ -629,6 +700,225 @@ END;
 FUNCTION CodegenExpr(node: ADRMEM): ADRMEM; FORWARD;
 FUNCTION ComputeDesignatorAddress(node: ADRMEM): ADRMEM; FORWARD;
 
+{ ------------------------------ sets --------------------------------------
+  Every SET, regardless of its declared base range, is represented the same
+  physical way the Python reference represents it: a fixed 256-bit bitvector
+  (setty = [4 x i64]), ordinal N's bit living at word N DIV 64, bit N MOD 64.
+  Unlike the reference, nothing here is constant-folded at compile time --
+  every element (even a literal like `[1, 2, 3]`) is set via a real runtime
+  OR-in instruction sequence. That is behaviorally identical and much
+  simpler to implement correctly than carrying a parallel compile-time-words
+  accumulator through SetConstructor the way strings.py does, at the cost of
+  a few more instructions in the emitted IR -- an acceptable tradeoff given
+  this file's methodology is behavioral parity, not IR-shape parity. }
+
+PROCEDURE SetRuntimeBit(slot: ADRMEM; ordinal_val: ADRMEM);
+{ ordinal_val is an already-codegen'd i16 INTEGER SSA value; slot is the
+  address of a setty-typed alloca. ORs ordinal_val's bit into *slot. }
+VAR
+  ord64, word_idx, bit_idx, mask, word_val, new_word: ADRMEM;
+  gep_idx, word_ptr: ADRMEM;
+BEGIN
+  ord64 := LLVMBuildSExt(builder, ordinal_val, i64ty, MakeCStr(''));
+  word_idx := LLVMBuildUDiv(builder, ord64, LLVMConstInt(i64ty, 64, 0), MakeCStr(''));
+  bit_idx := LLVMBuildURem(builder, ord64, LLVMConstInt(i64ty, 64, 0), MakeCStr(''));
+  gep_idx := AllocPtrArray(2);
+  SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+  SetPtrArrayElem(gep_idx, 1, word_idx);
+  word_ptr := LLVMBuildGEP2(builder, setty, slot, gep_idx, 2, MakeCStr(''));
+  mask := LLVMBuildShl(builder, LLVMConstInt(i64ty, 1, 0), bit_idx, MakeCStr(''));
+  word_val := LLVMBuildLoad2(builder, i64ty, word_ptr, MakeCStr(''));
+  new_word := LLVMBuildOr(builder, word_val, mask, MakeCStr(''));
+  LLVMBuildStore(builder, new_word, word_ptr);
+END;
+
+PROCEDURE EmitSetRangeLoop(slot: ADRMEM; low_node, high_node: ADRMEM);
+{ FOR i := low TO high DO SetRuntimeBit(slot, i) -- same alloca-counter loop
+  idiom as CodegenForStmt/EmitByteCopyLoop, done here instead of reusing
+  CodegenForStmt directly since there is no surface-syntax FOR loop AST node
+  to hand it (RangeExpr's bounds are arbitrary INTEGER expressions, not
+  necessarily a declared loop variable). A reversed range (low > high) is
+  simply empty, exactly like the Python reference. }
+VAR
+  low_val, high_val: ADRMEM;
+  i_slot: ADRMEM;
+  loop_bb, body_bb, end_bb: ADRMEM;
+  cur_i, cmp_val, next_i: ADRMEM;
+BEGIN
+  low_val := CodegenExpr(low_node);
+  IF last_val_tk <> TK_INTEGER THEN AbortWith('codegen: a set range bound must be INTEGER');
+  high_val := CodegenExpr(high_node);
+  IF last_val_tk <> TK_INTEGER THEN AbortWith('codegen: a set range bound must be INTEGER');
+
+  i_slot := LLVMBuildAlloca(builder, i16ty, MakeCStr(''));
+  LLVMBuildStore(builder, low_val, i_slot);
+
+  loop_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('setrange_loop'));
+  body_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('setrange_body'));
+  end_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('setrange_end'));
+
+  LLVMBuildBr(builder, loop_bb);
+  LLVMPositionBuilderAtEnd(builder, loop_bb);
+  cur_i := LLVMBuildLoad2(builder, i16ty, i_slot, MakeCStr(''));
+  cmp_val := LLVMBuildICmp(builder, LLVMIntSLE, cur_i, high_val, MakeCStr(''));
+  LLVMBuildCondBr(builder, cmp_val, body_bb, end_bb);
+
+  LLVMPositionBuilderAtEnd(builder, body_bb);
+  cur_i := LLVMBuildLoad2(builder, i16ty, i_slot, MakeCStr(''));
+  SetRuntimeBit(slot, cur_i);
+  next_i := LLVMBuildAdd(builder, cur_i, LLVMConstInt(i16ty, 1, 0), MakeCStr(''));
+  LLVMBuildStore(builder, next_i, i_slot);
+  LLVMBuildBr(builder, loop_bb);
+
+  LLVMPositionBuilderAtEnd(builder, end_bb);
+END;
+
+FUNCTION CodegenSetConstructor(node: ADRMEM): ADRMEM;
+VAR
+  slot: ADRMEM;
+  elements, el: ADRMEM;
+  n, i: INTEGER32;
+  ordv: ADRMEM;
+BEGIN
+  slot := LLVMBuildAlloca(builder, setty, MakeCStr(''));
+  LLVMBuildStore(builder, LLVMConstNull(setty), slot);
+  elements := GetObj(node, 'elements');
+  n := ArrSize(elements);
+  FOR i := 0 TO n - 1 DO
+  BEGIN
+    el := ArrItem(elements, i);
+    IF NodeType(el) = 'RangeExpr' THEN
+      EmitSetRangeLoop(slot, GetObj(el, 'low'), GetObj(el, 'high'))
+    ELSE
+    BEGIN
+      ordv := CodegenExpr(el);
+      IF last_val_tk <> TK_INTEGER THEN
+        AbortWith('codegen: a set element must be INTEGER');
+      SetRuntimeBit(slot, ordv);
+    END;
+  END;
+  CodegenSetConstructor := LLVMBuildLoad2(builder, setty, slot, MakeCStr(''));
+  last_val_tk := EnsureGenericSetType;
+END;
+
+FUNCTION CodegenSetMember(ordinal_val, set_val: ADRMEM): ADRMEM;
+{ Lowers ordinal IN set to a bit test, mirroring codegen_set_member. }
+VAR
+  slot: ADRMEM;
+  ord64, word_idx, bit_idx, mask, word_val, anded: ADRMEM;
+  gep_idx, word_ptr: ADRMEM;
+BEGIN
+  slot := LLVMBuildAlloca(builder, setty, MakeCStr(''));
+  LLVMBuildStore(builder, set_val, slot);
+  ord64 := LLVMBuildSExt(builder, ordinal_val, i64ty, MakeCStr(''));
+  word_idx := LLVMBuildUDiv(builder, ord64, LLVMConstInt(i64ty, 64, 0), MakeCStr(''));
+  bit_idx := LLVMBuildURem(builder, ord64, LLVMConstInt(i64ty, 64, 0), MakeCStr(''));
+  gep_idx := AllocPtrArray(2);
+  SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+  SetPtrArrayElem(gep_idx, 1, word_idx);
+  word_ptr := LLVMBuildGEP2(builder, setty, slot, gep_idx, 2, MakeCStr(''));
+  word_val := LLVMBuildLoad2(builder, i64ty, word_ptr, MakeCStr(''));
+  mask := LLVMBuildShl(builder, LLVMConstInt(i64ty, 1, 0), bit_idx, MakeCStr(''));
+  anded := LLVMBuildAnd(builder, word_val, mask, MakeCStr(''));
+  CodegenSetMember := LLVMBuildICmp(builder, LLVMIntNE, anded, LLVMConstInt(i64ty, 0, 0), MakeCStr(''));
+END;
+
+FUNCTION CodegenSetBinOp(op: Str255; lval, rval: ADRMEM): ADRMEM;
+{ Extracts all 4 words of each operand via compile-time-constant-index
+  ExtractValue (no loop needed, unlike the constructor/membership paths
+  above), combines them per-word, and (for +/-/*) reassembles a result set
+  via InsertValue starting from an all-zero aggregate. Sets last_val_tk
+  itself: TK_BOOLEAN for the comparison operators, EnsureGenericSetType
+  for the set-valued ones. }
+VAR
+  lw, rw, res_words: ARRAY [0..3] OF ADRMEM;
+  i: INTEGER;
+  res: ADRMEM;
+  eq_all, sub_all, wc: ADRMEM;
+  le_ok, ge_ok, eqv: ADRMEM;
+BEGIN
+  FOR i := 0 TO 3 DO
+  BEGIN
+    lw[i] := LLVMBuildExtractValue(builder, lval, i, MakeCStr(''));
+    rw[i] := LLVMBuildExtractValue(builder, rval, i, MakeCStr(''));
+  END;
+
+  IF op = 'PLUS' THEN
+  BEGIN
+    res := LLVMConstNull(setty);
+    FOR i := 0 TO 3 DO
+      res := LLVMBuildInsertValue(builder, res, LLVMBuildOr(builder, lw[i], rw[i], MakeCStr('')), i, MakeCStr(''));
+    CodegenSetBinOp := res;
+    last_val_tk := EnsureGenericSetType;
+  END
+  ELSE IF op = 'MUL' THEN
+  BEGIN
+    res := LLVMConstNull(setty);
+    FOR i := 0 TO 3 DO
+      res := LLVMBuildInsertValue(builder, res, LLVMBuildAnd(builder, lw[i], rw[i], MakeCStr('')), i, MakeCStr(''));
+    CodegenSetBinOp := res;
+    last_val_tk := EnsureGenericSetType;
+  END
+  ELSE IF op = 'MINUS' THEN
+  BEGIN
+    res := LLVMConstNull(setty);
+    FOR i := 0 TO 3 DO
+    BEGIN
+      wc := LLVMBuildNot(builder, rw[i], MakeCStr(''));
+      res := LLVMBuildInsertValue(builder, res, LLVMBuildAnd(builder, lw[i], wc, MakeCStr('')), i, MakeCStr(''));
+    END;
+    CodegenSetBinOp := res;
+    last_val_tk := EnsureGenericSetType;
+  END
+  ELSE IF (op = 'EQ') OR (op = 'NEQ') THEN
+  BEGIN
+    eq_all := LLVMBuildICmp(builder, LLVMIntEQ, lw[0], rw[0], MakeCStr(''));
+    FOR i := 1 TO 3 DO
+      eq_all := LLVMBuildAnd(builder, eq_all, LLVMBuildICmp(builder, LLVMIntEQ, lw[i], rw[i], MakeCStr('')), MakeCStr(''));
+    IF op = 'EQ' THEN CodegenSetBinOp := eq_all
+    ELSE CodegenSetBinOp := LLVMBuildXor(builder, eq_all, LLVMConstInt(i1ty, 1, 0), MakeCStr(''));
+    last_val_tk := TK_BOOLEAN;
+  END
+  ELSE IF (op = 'LE') OR (op = 'LT') OR (op = 'GE') OR (op = 'GT') THEN
+  BEGIN
+    { subset(A, B): every bit in A is also in B, i.e. (A AND NOT B) = 0 for
+      every word. LE/LT test subset(left, right); GE/GT test the reverse. }
+    IF (op = 'LE') OR (op = 'LT') THEN
+    BEGIN
+      sub_all := LLVMBuildICmp(builder, LLVMIntEQ, LLVMBuildAnd(builder, lw[0], LLVMBuildNot(builder, rw[0], MakeCStr('')), MakeCStr('')), LLVMConstInt(i64ty, 0, 0), MakeCStr(''));
+      FOR i := 1 TO 3 DO
+      BEGIN
+        wc := LLVMBuildICmp(builder, LLVMIntEQ, LLVMBuildAnd(builder, lw[i], LLVMBuildNot(builder, rw[i], MakeCStr('')), MakeCStr('')), LLVMConstInt(i64ty, 0, 0), MakeCStr(''));
+        sub_all := LLVMBuildAnd(builder, sub_all, wc, MakeCStr(''));
+      END;
+    END
+    ELSE
+    BEGIN
+      sub_all := LLVMBuildICmp(builder, LLVMIntEQ, LLVMBuildAnd(builder, rw[0], LLVMBuildNot(builder, lw[0], MakeCStr('')), MakeCStr('')), LLVMConstInt(i64ty, 0, 0), MakeCStr(''));
+      FOR i := 1 TO 3 DO
+      BEGIN
+        wc := LLVMBuildICmp(builder, LLVMIntEQ, LLVMBuildAnd(builder, rw[i], LLVMBuildNot(builder, lw[i], MakeCStr('')), MakeCStr('')), LLVMConstInt(i64ty, 0, 0), MakeCStr(''));
+        sub_all := LLVMBuildAnd(builder, sub_all, wc, MakeCStr(''));
+      END;
+    END;
+    IF (op = 'LE') OR (op = 'GE') THEN
+      CodegenSetBinOp := sub_all
+    ELSE
+    BEGIN
+      eqv := LLVMBuildICmp(builder, LLVMIntEQ, lw[0], rw[0], MakeCStr(''));
+      FOR i := 1 TO 3 DO
+        eqv := LLVMBuildAnd(builder, eqv, LLVMBuildICmp(builder, LLVMIntEQ, lw[i], rw[i], MakeCStr('')), MakeCStr(''));
+      CodegenSetBinOp := LLVMBuildAnd(builder, sub_all, LLVMBuildXor(builder, eqv, LLVMConstInt(i1ty, 1, 0), MakeCStr('')), MakeCStr(''));
+    END;
+    last_val_tk := TK_BOOLEAN;
+  END
+  ELSE
+  BEGIN
+    AbortWith2('codegen: unsupported SET operator: ', op);
+    CodegenSetBinOp := NIL;
+  END;
+END;
+
 FUNCTION CodegenBinOp(op: Str255; left_node, right_node: ADRMEM): ADRMEM;
 VAR
   lval, rval, res: ADRMEM;
@@ -654,6 +944,17 @@ BEGIN
     ELSE res := LLVMBuildOr(builder, lval, rval, MakeCStr(''));
     last_val_tk := TK_BOOLEAN;
   END
+  ELSE IF op = 'IN' THEN
+  BEGIN
+    IF ltk <> TK_INTEGER THEN
+      AbortWith('codegen: IN requires an INTEGER left operand');
+    IF TypeKind(rtk) <> TK_SET THEN
+      AbortWith('codegen: IN requires a SET right operand');
+    res := CodegenSetMember(lval, rval);
+    last_val_tk := TK_BOOLEAN;
+  END
+  ELSE IF (TypeKind(ltk) = TK_SET) AND (TypeKind(rtk) = TK_SET) THEN
+    res := CodegenSetBinOp(op, lval, rval)
   ELSE IF ltk <> rtk THEN
   BEGIN
     AbortWith('codegen: mixed-type operands are not supported (no implicit promotion)');
@@ -1001,6 +1302,8 @@ BEGIN
   END
   ELSE IF nt = 'BinOp' THEN
     res := CodegenBinOp(GetStr(node, 'op'), GetObj(node, 'left'), GetObj(node, 'right'))
+  ELSE IF nt = 'SetConstructor' THEN
+    res := CodegenSetConstructor(node)
   ELSE IF nt = 'UnaryOp' THEN
     res := CodegenUnaryOp(GetStr(node, 'op'), GetObj(node, 'operand'))
   ELSE IF nt = 'FuncCall' THEN
@@ -1184,7 +1487,7 @@ BEGIN
     { `FuncName := expr` inside FuncName's own body assigns through the
       return-value slot, not a symbol -- see cur_func_name's declaration. }
     v := CodegenExpr(GetObj(stmt, 'expr'));
-    IF last_val_tk <> cur_func_ret_tk THEN
+    IF NOT TypesCompatibleForAssign(last_val_tk, cur_func_ret_tk) THEN
       AbortWith2('codegen: return-value type mismatch in: ', nm);
     LLVMBuildStore(builder, v, cur_func_ret_slot);
   END
@@ -1202,7 +1505,7 @@ BEGIN
     ELSE
     BEGIN
       v := CodegenExpr(GetObj(stmt, 'expr'));
-      IF last_val_tk <> symbols[symi].tk THEN
+      IF NOT TypesCompatibleForAssign(last_val_tk, symbols[symi].tk) THEN
         AbortWith2('codegen: assignment type mismatch for: ', nm);
       LLVMBuildStore(builder, v, symbols[symi].llvm_val);
     END;
@@ -1212,7 +1515,7 @@ BEGIN
     addr := ComputeDesignatorAddress(target);
     target_tid := last_val_tk;
     v := CodegenExpr(GetObj(stmt, 'expr'));
-    IF last_val_tk <> target_tid THEN
+    IF NOT TypesCompatibleForAssign(last_val_tk, target_tid) THEN
       AbortWith2('codegen: assignment type mismatch for: ', nm);
     LLVMBuildStore(builder, v, addr);
   END;
@@ -1246,6 +1549,101 @@ BEGIN
   BEGIN
     LLVMPositionBuilderAtEnd(builder, else_bb);
     CodegenStmt(else_branch);
+    LLVMBuildBr(builder, end_bb);
+  END;
+
+  LLVMPositionBuilderAtEnd(builder, end_bb);
+END;
+
+PROCEDURE CodegenCaseStmt(stmt: ADRMEM);
+{ Lowered as a sequential chain of test/body block pairs (like a chain of
+  IFs), not a jump table -- simplicity over the optimization the Python
+  reference doesn't attempt either at this level (llvmlite's own -O passes
+  are what would turn either shape into a real jump table). Scoped to an
+  INTEGER selector: a CHAR-keyed CASE is not yet supported, consistent with
+  CodegenBinOp's relational operators also only covering INTEGER/REAL. }
+VAR
+  case_val: ADRMEM;
+  case_tk: INTEGER;
+  elements, el, constants, c: ADRMEM;
+  n, i, nc, ci: INTEGER32;
+  end_bb, cur_test_bb, next_test_bb, body_bb: ADRMEM;
+  otherwise_stmt: ADRMEM;
+  cond_val, one_cond, cval: ADRMEM;
+BEGIN
+  case_val := CodegenExpr(GetObj(stmt, 'expr'));
+  case_tk := last_val_tk;
+  IF case_tk <> TK_INTEGER THEN
+    AbortWith('codegen: CASE selector must be INTEGER (CHAR-keyed CASE is not yet supported)');
+
+  elements := GetObj(stmt, 'elements');
+  n := ArrSize(elements);
+  otherwise_stmt := GetObjOrNil(stmt, 'otherwise');
+  end_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('case_end'));
+
+  cur_test_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('case_test'));
+  LLVMBuildBr(builder, cur_test_bb);
+
+  FOR i := 0 TO n - 1 DO
+  BEGIN
+    LLVMPositionBuilderAtEnd(builder, cur_test_bb);
+    el := ArrItem(elements, i);
+    constants := GetObj(el, 'constants');
+    nc := ArrSize(constants);
+    cond_val := NIL;
+    FOR ci := 0 TO nc - 1 DO
+    BEGIN
+      c := ArrItem(constants, ci);
+      IF NodeType(c) = 'RangeExpr' THEN
+      BEGIN
+        { The Python reference's codegen_case_stmt does not support a
+          RangeExpr CASE constant either (it raises "Expression type
+          RangeExpr not yet supported"), so rejecting it here too is
+          matching that limitation, not falling short of it -- confirmed by
+          running the same input through both pipelines. }
+        AbortWith('codegen: a CASE label range (lo..hi) is not yet supported');
+        one_cond := NIL;
+      END
+      ELSE
+      BEGIN
+        cval := CodegenExpr(c);
+        IF last_val_tk <> TK_INTEGER THEN
+          AbortWith('codegen: a CASE constant must be INTEGER');
+        one_cond := LLVMBuildICmp(builder, LLVMIntEQ, case_val, cval, MakeCStr(''));
+      END;
+      IF cond_val = NIL THEN cond_val := one_cond
+      ELSE cond_val := LLVMBuildOr(builder, cond_val, one_cond, MakeCStr(''));
+    END;
+
+    body_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('case_body'));
+    IF i = n - 1 THEN
+    BEGIN
+      IF otherwise_stmt <> NIL THEN
+        next_test_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('case_otherwise'))
+      ELSE
+        next_test_bb := end_bb;
+    END
+    ELSE
+      next_test_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('case_test'));
+
+    LLVMBuildCondBr(builder, cond_val, body_bb, next_test_bb);
+
+    LLVMPositionBuilderAtEnd(builder, body_bb);
+    CodegenStmt(GetObj(el, 'stmt'));
+    LLVMBuildBr(builder, end_bb);
+
+    cur_test_bb := next_test_bb;
+  END;
+
+  IF (n = 0) OR (otherwise_stmt <> NIL) THEN
+  BEGIN
+    { n = 0: cur_test_bb is still the never-entered initial block (an empty
+      CASE with only OTHERWISE, or entirely empty). n > 0: cur_test_bb is
+      the dedicated case_otherwise block the last iteration created above,
+      still needing its body emitted. Either way it must end in a branch to
+      end_bb, or it is left as an unterminated block. }
+    LLVMPositionBuilderAtEnd(builder, cur_test_bb);
+    IF otherwise_stmt <> NIL THEN CodegenStmt(otherwise_stmt);
     LLVMBuildBr(builder, end_bb);
   END;
 
@@ -1570,6 +1968,7 @@ BEGIN
   ELSE IF nt = 'WhileStmt' THEN CodegenWhileStmt(stmt)
   ELSE IF nt = 'RepeatStmt' THEN CodegenRepeatStmt(stmt)
   ELSE IF nt = 'ForStmt' THEN CodegenForStmt(stmt)
+  ELSE IF nt = 'CaseStmt' THEN CodegenCaseStmt(stmt)
   ELSE IF nt = 'ProcCallStmt' THEN CodegenProcCallStmt(stmt)
   ELSE
   BEGIN
@@ -1807,9 +2206,12 @@ BEGIN
   i16ty := LLVMInt16TypeInContext(ctx);
   i8ty := LLVMInt8TypeInContext(ctx);
   i1ty := LLVMInt1TypeInContext(ctx);
+  i64ty := LLVMInt64TypeInContext(ctx);
   dblty := LLVMDoubleTypeInContext(ctx);
   i8ptrty := LLVMPointerType(i8ty, 0);
   voidty := LLVMVoidTypeInContext(ctx);
+  setty := LLVMArrayType(i64ty, 4);
+  generic_set_tid := 0;
 
   main_fnty := LLVMFunctionType(i32ty, NIL, 0, 0);
   main_fn := LLVMAddFunction(modl, MakeCStr('main'), main_fnty);
