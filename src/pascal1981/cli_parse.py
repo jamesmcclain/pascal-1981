@@ -11,7 +11,6 @@ from typing import Sequence
 from .features import resolve_features
 from .parser import Parser, ParserError
 from .serialization import ast_to_json, tokens_from_json
-from .type_checker import PascalTypeChecker
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -21,7 +20,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--source-file", type=str, default=None, help="Original Pascal source file path (for error messages / module resolution)")
     parser.add_argument("--dialect", choices=["vintage", "extended", "device"], default="vintage", help="Language dialect")
     parser.add_argument("-f", "--feature", action="append", default=[], help="Enable/disable feature flags (e.g. -f c_interop or -f -c_interop)")
-    parser.add_argument("--no-typecheck", action="store_true", help="Skip type checking step")
     parser.add_argument("--indent", type=int, default=None, help="JSON indentation level for human readability")
 
     args = parser.parse_args(argv)
@@ -41,21 +39,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         tokens = tokens_from_json(token_data)
         ast = Parser(tokens).parse()
-
-        if not args.no_typecheck:
-            source_file = args.source_file or (args.token_file if args.token_file != "-" else None)
-            type_checker = PascalTypeChecker(source_file=source_file, features=features)
-            check_result = type_checker.check(ast)
-
-            if not check_result.success:
-                print("Type checking failed:", file=sys.stderr)
-                for error in check_result.errors:
-                    print(f"  {error}", file=sys.stderr)
-                return 1
-
-            if check_result.warnings:
-                for warning in check_result.warnings:
-                    print(f"Warning: {warning}", file=sys.stderr)
 
         json_out = ast_to_json(ast, indent=args.indent)
 

@@ -283,6 +283,14 @@ def main() -> int:
             parse_proc = subprocess.Popen(parse_cmd, stdin=lex_proc.stdout, stdout=subprocess.PIPE)
             if lex_proc.stdout:
                 lex_proc.stdout.close()
+
+            typecheck_cmd = [sys.executable, '-m', 'pascal1981.cli_typecheck', '--source-file', source_file, '--dialect', args.dialect]
+            for f in args.feature:
+                typecheck_cmd.extend(['-f', f])
+            typecheck_proc = subprocess.Popen(typecheck_cmd, stdin=parse_proc.stdout, stdout=subprocess.PIPE)
+            if parse_proc.stdout:
+                parse_proc.stdout.close()
+
             codegen_cmd = [sys.executable, '-m', 'pascal1981.cli_codegen', '--source-file', source_file, '--dialect', args.dialect, '--device-backend', args.device_backend]
             if args.host_triple:
                 codegen_cmd.extend(['--host-triple', args.host_triple])
@@ -292,9 +300,9 @@ def main() -> int:
                 codegen_cmd.extend(['-f', f])
             if verbose:
                 codegen_cmd.append('-v')
-            codegen_proc = subprocess.Popen(codegen_cmd, stdin=parse_proc.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            if parse_proc.stdout:
-                parse_proc.stdout.close()
+            codegen_proc = subprocess.Popen(codegen_cmd, stdin=typecheck_proc.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if typecheck_proc.stdout:
+                typecheck_proc.stdout.close()
             ir_out, err_out = codegen_proc.communicate()
             if codegen_proc.returncode != 0:
                 print(f'Error in multi-process pipeline: {err_out.decode("utf-8")}', file=sys.stderr)

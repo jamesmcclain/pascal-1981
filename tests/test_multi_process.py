@@ -38,17 +38,46 @@ def test_cli_parse_stdout(tmp_path):
     assert ast.name == "Minimal"
 
 
+def test_cli_typecheck_stdout(tmp_path):
+    pas_file = tmp_path / "test.pas"
+    pas_file.write_text(MINIMAL_PAS)
+
+    lex_res = subprocess.run([sys.executable, "-m", "pascal1981.cli_lex", str(pas_file)], capture_output=True, text=True, check=True)
+    parse_res = subprocess.run([sys.executable, "-m", "pascal1981.cli_parse", "--source-file", str(pas_file)], input=lex_res.stdout, capture_output=True, text=True, check=True)
+    tc_res = subprocess.run([sys.executable, "-m", "pascal1981.cli_typecheck", "--source-file", str(pas_file)], input=parse_res.stdout, capture_output=True, text=True, check=True)
+
+    ast = ast_from_json(tc_res.stdout)
+    assert ast.__class__.__name__ == "ProgramUnit"
+    assert ast.name == "Minimal"
+
+
+def test_cli_typecheck_failure(tmp_path):
+    bad_pas = """PROGRAM Bad;
+VAR
+  x: INTEGER;
+BEGIN
+  x := 'invalid_type';
+END.
+"""
+    pas_file = tmp_path / "bad.pas"
+    pas_file.write_text(bad_pas)
+
+    lex_res = subprocess.run([sys.executable, "-m", "pascal1981.cli_lex", str(pas_file)], capture_output=True, text=True, check=True)
+    parse_res = subprocess.run([sys.executable, "-m", "pascal1981.cli_parse", "--source-file", str(pas_file)], input=lex_res.stdout, capture_output=True, text=True, check=True)
+    tc_res = subprocess.run([sys.executable, "-m", "pascal1981.cli_typecheck", "--source-file", str(pas_file)], input=parse_res.stdout, capture_output=True, text=True)
+
+    assert tc_res.returncode != 0
+    assert "Type checking failed" in tc_res.stderr
+
+
 def test_cli_codegen_stdout(tmp_path):
     pas_file = tmp_path / "test.pas"
     pas_file.write_text(MINIMAL_PAS)
 
     lex_res = subprocess.run([sys.executable, "-m", "pascal1981.cli_lex", str(pas_file)], capture_output=True, text=True, check=True)
     parse_res = subprocess.run([sys.executable, "-m", "pascal1981.cli_parse", "--source-file", str(pas_file)], input=lex_res.stdout, capture_output=True, text=True, check=True)
-    codegen_res = subprocess.run([sys.executable, "-m", "pascal1981.cli_codegen", "--source-file", str(pas_file)],
-                                 input=parse_res.stdout,
-                                 capture_output=True,
-                                 text=True,
-                                 check=True)
+    tc_res = subprocess.run([sys.executable, "-m", "pascal1981.cli_typecheck", "--source-file", str(pas_file)], input=parse_res.stdout, capture_output=True, text=True, check=True)
+    codegen_res = subprocess.run([sys.executable, "-m", "pascal1981.cli_codegen", "--source-file", str(pas_file)], input=tc_res.stdout, capture_output=True, text=True, check=True)
 
     assert "define i32 @\"main\"" in codegen_res.stdout
 
@@ -56,7 +85,8 @@ def test_cli_codegen_stdout(tmp_path):
 def test_file_based_stages(tmp_path):
     pas_file = tmp_path / "test.pas"
     tok_file = tmp_path / "test.tok"
-    ast_file = tmp_path / "test.ast"
+    raw_ast_file = tmp_path / "test_raw.ast"
+    checked_ast_file = tmp_path / "test_checked.ast"
     ll_file = tmp_path / "test.ll"
 
     pas_file.write_text(MINIMAL_PAS)
@@ -64,10 +94,13 @@ def test_file_based_stages(tmp_path):
     subprocess.run([sys.executable, "-m", "pascal1981.cli_lex", str(pas_file), "-o", str(tok_file)], check=True)
     assert tok_file.exists()
 
-    subprocess.run([sys.executable, "-m", "pascal1981.cli_parse", str(tok_file), "-o", str(ast_file), "--source-file", str(pas_file)], check=True)
-    assert ast_file.exists()
+    subprocess.run([sys.executable, "-m", "pascal1981.cli_parse", str(tok_file), "-o", str(raw_ast_file), "--source-file", str(pas_file)], check=True)
+    assert raw_ast_file.exists()
 
-    subprocess.run([sys.executable, "-m", "pascal1981.cli_codegen", str(ast_file), "-o", str(ll_file), "--source-file", str(pas_file)], check=True)
+    subprocess.run([sys.executable, "-m", "pascal1981.cli_typecheck", str(raw_ast_file), "-o", str(checked_ast_file), "--source-file", str(pas_file)], check=True)
+    assert checked_ast_file.exists()
+
+    subprocess.run([sys.executable, "-m", "pascal1981.cli_codegen", str(checked_ast_file), "-o", str(ll_file), "--source-file", str(pas_file)], check=True)
     assert ll_file.exists()
 
     ll_content = ll_file.read_text()
