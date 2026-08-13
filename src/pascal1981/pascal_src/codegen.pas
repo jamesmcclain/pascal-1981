@@ -4,15 +4,19 @@
   (src/pascal1981/codegen/). Built up incrementally -- each supported
   construct is real, but the construct set covered so far is a proper
   subset of the reference. Currently covers: PROGRAM-level and routine-local
-  scalar VAR declarations (INTEGER/REAL/BOOLEAN/CHAR); the full arithmetic/
-  relational/logical expression operator set (no implicit cross-type
-  promotion -- mixing INTEGER and REAL in one expression is rejected, not
-  silently coerced); assignment; IF/WHILE/REPEAT/FOR and compound
-  statements; WRITE/WRITELN of string-literal/scalar arguments; and
-  PROCEDURE/FUNCTION declarations with value and VAR parameters, including
-  recursion. Not yet covered: aggregates (arrays/records/sets/pointers/
-  files), CASE, WRITE width:precision, MATHCK/RANGECK-style runtime traps,
-  C-ABI externs, units, and DEVICE MODULE/PTX generation. Anything not yet
+  scalar VAR declarations (INTEGER/REAL/BOOLEAN/CHAR); TYPE-declared and
+  inline ARRAY/RECORD types (single-dimension, non-PACKED, non-SUPER),
+  including arrays of records and indexed/field designator reads and
+  writes; the full arithmetic/relational/logical expression operator set
+  (no implicit cross-type promotion -- mixing INTEGER and REAL in one
+  expression is rejected, not silently coerced); assignment; IF/WHILE/
+  REPEAT/FOR and compound statements; WRITE/WRITELN of string-literal/
+  scalar arguments; and PROCEDURE/FUNCTION declarations with value and VAR
+  parameters (VAR-mode ARRAY/RECORD parameters work; value-mode ones are
+  rejected -- pass by VAR instead), including recursion. Not yet covered:
+  sets, strings/LSTRING, pointers, files, multi-dimension arrays, CASE,
+  WRITE width:precision, MATHCK/RANGECK-style runtime traps, C-ABI
+  externs, units, and DEVICE MODULE/PTX generation. Anything not yet
   covered is rejected loudly via AbortWith rather than silently mishandled
   or miscompiled -- reject unhandled constructs instead of guessing, the
   same discipline the earlier native stages (lexer.pas/parser.pas/
@@ -37,6 +41,10 @@ FUNCTION LLVMInt8TypeInContext(ctx: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMInt1TypeInContext(ctx: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMDoubleTypeInContext(ctx: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMPointerType(elem_ty: ADRMEM; addr_space: CINT): ADRMEM [C]; EXTERN;
+FUNCTION LLVMArrayType(elem_ty: ADRMEM; count: CINT): ADRMEM [C]; EXTERN;
+FUNCTION LLVMStructTypeInContext(ctx: ADRMEM; elem_tys: ADRMEM; count: CINT; is_packed: CINT): ADRMEM [C]; EXTERN;
+FUNCTION LLVMConstNull(ty: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMBuildGEP2(b: ADRMEM; ty: ADRMEM; ptr: ADRMEM; indices: ADRMEM; nindices: CINT; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMFunctionType(ret_ty: ADRMEM; params: ADRMEM; pcount: CINT; vararg: CINT): ADRMEM [C]; EXTERN;
 FUNCTION LLVMAddFunction(m: ADRMEM; name: ADRMEM; fty: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMAppendBasicBlockInContext(ctx: ADRMEM; fn: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
@@ -94,14 +102,42 @@ CONST
   TK_REAL    = 2;
   TK_BOOLEAN = 3;
   TK_CHAR    = 4;
+  TK_ARRAY   = 5;
+  TK_RECORD  = 6;
 
   MAX_SYMBOLS = 500;
   MAX_SCOPES = 64;
   MAX_PARAMS = 16;
   MAX_ROUTINES = 200;
+  MAX_TYPES = 200;
+  MAX_FIELDS = 500;
+  MAX_RECORD_FIELDS = 32;
 
 TYPE
   PAdr = ^ADRMEM;
+
+  { A type id ("tid") is either a bare scalar TK_* constant (1..4) or an
+    index into `types` (5..) for an ARRAY/RECORD -- see TypeKind/
+    RegisterType below. Every "tk"/"tid"-named field or parameter in this
+    file holds one of these; MAX_TYPES/MAX_FIELDS are both comfortably
+    under INTEGER's 16-bit range, so plain INTEGER (not INTEGER32) is
+    correct here, unlike a count/size/loop-index field. }
+
+  TypeRec = RECORD
+    name: Str255;    { the TYPE decl's name that introduced this entry, ''
+                        for an anonymous inline ARRAY/RECORD type_expr }
+    tk: INTEGER;      { TK_ARRAY or TK_RECORD }
+    elem_tid: INTEGER; { ARRAY only: the element type's id }
+    lo, hi: INTEGER;   { ARRAY only: the index range's bounds }
+    llvm_ty: ADRMEM;   { the cached LLVMTypeRef for this type }
+  END;
+
+  FieldRec = RECORD
+    rec_tid: INTEGER;
+    fname: Str255;
+    field_tid: INTEGER;
+    field_index: INTEGER; { 0-based, matches the LLVM struct's GEP index }
+  END;
 
   SymRec = RECORD
     name: Str255;
@@ -138,6 +174,17 @@ VAR
   cur_fn: ADRMEM; { the LLVM function LLVMAppendBasicBlockInContext should
                     attach new blocks to: main_fn at top level, or the
                     routine currently being codegen'd. }
+
+  types: ARRAY [1..MAX_TYPES] OF TypeRec;
+  ntypes: INTEGER; { MAX_TYPES=200 is well under INTEGER's 16-bit range, so
+                     unlike nsymbols/nroutines this stays plain INTEGER --
+                     matches every tid value it produces, which also flow
+                     into plain-INTEGER tk/tid fields (SymRec.tk,
+                     TypeRec.elem_tid, RoutineRec.param_tk, ...); mixing
+                     INTEGER32 in here would just create narrowing-assignment
+                     friction against those fields for no value-range benefit. }
+  fields: ARRAY [1..MAX_FIELDS] OF FieldRec;
+  nfields: INTEGER;
 
   symbols: ARRAY [1..MAX_SYMBOLS] OF SymRec;
   nsymbols: INTEGER32;
@@ -266,35 +313,161 @@ END;
 
 { ============================== type model =============================== }
 
-FUNCTION ResolveTypeExpr(te: ADRMEM): INTEGER;
-VAR
-  nm: Str255;
-BEGIN
-  IF NodeType(te) <> 'NamedType' THEN
-    AbortWith('codegen: only bare scalar type names are supported');
-  nm := GetStr(te, 'name');
-  IF nm = 'INTEGER' THEN ResolveTypeExpr := TK_INTEGER
-  ELSE IF nm = 'REAL' THEN ResolveTypeExpr := TK_REAL
-  ELSE IF nm = 'BOOLEAN' THEN ResolveTypeExpr := TK_BOOLEAN
-  ELSE IF nm = 'CHAR' THEN ResolveTypeExpr := TK_CHAR
-  ELSE
-  BEGIN
-    AbortWith2('codegen: unsupported scalar type: ', nm);
-    ResolveTypeExpr := TK_UNKNOWN;
-  END;
-END;
-
 FUNCTION LLVMTypeForTk(tk: INTEGER): ADRMEM;
 BEGIN
   IF tk = TK_INTEGER THEN LLVMTypeForTk := i16ty
   ELSE IF tk = TK_REAL THEN LLVMTypeForTk := dblty
   ELSE IF tk = TK_BOOLEAN THEN LLVMTypeForTk := i1ty
   ELSE IF tk = TK_CHAR THEN LLVMTypeForTk := i8ty
+  ELSE IF tk >= 5 THEN LLVMTypeForTk := types[tk].llvm_ty
   ELSE
   BEGIN
     AbortWith('codegen: LLVMTypeForTk: unknown type kind');
     LLVMTypeForTk := NIL;
   END;
+END;
+
+FUNCTION TypeKind(tid: INTEGER): INTEGER;
+{ tid <= 4 IS its own kind (a bare scalar TK_* constant); tid >= 5 is an
+  index into `types`, whose own .tk says ARRAY or RECORD. }
+BEGIN
+  IF tid <= 4 THEN TypeKind := tid
+  ELSE TypeKind := types[tid].tk;
+END;
+
+FUNCTION LookupNamedType(name: Str255): INTEGER;
+VAR
+  i, found: INTEGER;
+BEGIN
+  found := 0;
+  FOR i := 5 TO ntypes DO
+    IF types[i].name = name THEN found := i;
+  LookupNamedType := found;
+END;
+
+FUNCTION LookupField(rec_tid: INTEGER; fname: Str255): INTEGER;
+VAR
+  i, found: INTEGER;
+BEGIN
+  found := 0;
+  FOR i := 1 TO nfields DO
+    IF (fields[i].rec_tid = rec_tid) AND (fields[i].fname = fname) THEN found := i;
+  LookupField := found;
+END;
+
+FUNCTION RegisterType(tk: INTEGER; elem_tid, lo, hi: INTEGER; llvm_ty: ADRMEM): INTEGER;
+BEGIN
+  IF ntypes >= MAX_TYPES THEN AbortWith('codegen: too many types');
+  ntypes := ntypes + 1;
+  types[ntypes].name := '';
+  types[ntypes].tk := tk;
+  types[ntypes].elem_tid := elem_tid;
+  types[ntypes].lo := lo;
+  types[ntypes].hi := hi;
+  types[ntypes].llvm_ty := llvm_ty;
+  RegisterType := ntypes;
+END;
+
+FUNCTION ResolveIntLiteral(node: ADRMEM): INTEGER;
+{ An array index bound is a full constant-expression AST node (the parser
+  never unwraps it the way it does e.g. NamedType.param) -- so reading it
+  needs to drill into the node's own 'value' field, not treat the node
+  itself as a bare JSON number. Scoped to the literal case only; a CONST-
+  identifier or computed bound is not yet supported. }
+BEGIN
+  IF NodeType(node) <> 'IntLiteral' THEN
+    AbortWith('codegen: array index bounds must be integer literals');
+  ResolveIntLiteral := GetInt(node, 'value');
+END;
+
+FUNCTION ResolveTypeExpr(te: ADRMEM): INTEGER;
+VAR
+  nm: Str255;
+  nt: Str255;
+  tid: INTEGER;
+  elem_tid, lo, hi, count: INTEGER;
+  arr_ty: ADRMEM;
+  fields_arr, field_tuple, items, fnames_arr, ftype_expr: ADRMEM;
+  nfd, fi, fn2, fni: INTEGER;
+  field_tid: INTEGER;
+  fname: Str255;
+  elem_llvm_types: ADRMEM;
+  struct_ty: ADRMEM;
+  field_index: INTEGER;
+BEGIN
+  nt := NodeType(te);
+  IF nt = 'NamedType' THEN
+  BEGIN
+    nm := GetStr(te, 'name');
+    IF nm = 'INTEGER' THEN tid := TK_INTEGER
+    ELSE IF nm = 'REAL' THEN tid := TK_REAL
+    ELSE IF nm = 'BOOLEAN' THEN tid := TK_BOOLEAN
+    ELSE IF nm = 'CHAR' THEN tid := TK_CHAR
+    ELSE
+    BEGIN
+      tid := LookupNamedType(nm);
+      IF tid = 0 THEN
+      BEGIN
+        AbortWith2('codegen: unsupported or undeclared type: ', nm);
+        tid := TK_UNKNOWN;
+      END;
+    END;
+  END
+  ELSE IF nt = 'ArrayType' THEN
+  BEGIN
+    IF GetBool(te, 'packed') OR GetBool(te, 'super') THEN
+      AbortWith('codegen: PACKED/SUPER arrays are not supported');
+    lo := ResolveIntLiteral(GetObj(GetObj(te, 'index_range'), 'low'));
+    hi := ResolveIntLiteral(GetObj(GetObj(te, 'index_range'), 'high'));
+    elem_tid := ResolveTypeExpr(GetObj(te, 'element_type'));
+    count := hi - lo + 1;
+    arr_ty := LLVMArrayType(LLVMTypeForTk(elem_tid), count);
+    tid := RegisterType(TK_ARRAY, elem_tid, lo, hi, arr_ty);
+  END
+  ELSE IF nt = 'RecordType' THEN
+  BEGIN
+    IF GetBool(te, 'packed') THEN
+      AbortWith('codegen: PACKED records are not supported');
+    fields_arr := GetObj(te, 'fields');
+    nfd := ArrSize(fields_arr);
+    { First pass: flatten every (names, type_expr) group into one struct
+      field per name, in declaration order, and register each in `fields`.
+      Two passes because the LLVM struct type itself needs the flattened
+      element-type array built before LLVMStructTypeInContext is called. }
+    field_index := 0;
+    elem_llvm_types := AllocPtrArray(MAX_RECORD_FIELDS);
+    tid := RegisterType(TK_RECORD, 0, 0, 0, NIL); { placeholder; llvm_ty patched below }
+    FOR fi := 0 TO nfd - 1 DO
+    BEGIN
+      field_tuple := ArrItem(fields_arr, fi);
+      items := GetObj(field_tuple, 'items');
+      fnames_arr := ArrItem(items, 0);
+      ftype_expr := ArrItem(items, 1);
+      field_tid := ResolveTypeExpr(ftype_expr);
+      fn2 := ArrSize(fnames_arr);
+      FOR fni := 0 TO fn2 - 1 DO
+      BEGIN
+        IF field_index >= MAX_RECORD_FIELDS THEN AbortWith('codegen: too many record fields');
+        fname := CStrToStr255(cJSON_GetStringValue(ArrItem(fnames_arr, fni)));
+        IF nfields >= MAX_FIELDS THEN AbortWith('codegen: too many record fields overall');
+        nfields := nfields + 1;
+        fields[nfields].rec_tid := tid;
+        fields[nfields].fname := fname;
+        fields[nfields].field_tid := field_tid;
+        fields[nfields].field_index := field_index;
+        SetPtrArrayElem(elem_llvm_types, field_index, LLVMTypeForTk(field_tid));
+        field_index := field_index + 1;
+      END;
+    END;
+    struct_ty := LLVMStructTypeInContext(ctx, elem_llvm_types, field_index, 0);
+    types[tid].llvm_ty := struct_ty;
+  END
+  ELSE
+  BEGIN
+    AbortWith2('codegen: unsupported type expression: ', nt);
+    tid := TK_UNKNOWN;
+  END;
+  ResolveTypeExpr := tid;
 END;
 
 { ============================ symbol table ============================== }
@@ -348,7 +521,9 @@ BEGIN
   ELSE
   BEGIN
     gvar := LLVMAddGlobal(modl, LLVMTypeForTk(tk), MakeCStr(name));
-    IF tk = TK_REAL THEN zero := LLVMConstReal(dblty, 0.0)
+    IF (TypeKind(tk) = TK_ARRAY) OR (TypeKind(tk) = TK_RECORD) THEN
+      zero := LLVMConstNull(LLVMTypeForTk(tk))
+    ELSE IF tk = TK_REAL THEN zero := LLVMConstReal(dblty, 0.0)
     ELSE zero := LLVMConstInt(LLVMTypeForTk(tk), 0, 0);
     LLVMSetInitializer(gvar, zero);
   END;
@@ -374,6 +549,7 @@ END;
 { ============================== expressions =============================== }
 
 FUNCTION CodegenExpr(node: ADRMEM): ADRMEM; FORWARD;
+FUNCTION ComputeDesignatorAddress(node: ADRMEM): ADRMEM; FORWARD;
 
 FUNCTION CodegenBinOp(op: Str255; left_node, right_node: ADRMEM): ADRMEM;
 VAR
@@ -534,15 +710,27 @@ BEGIN
       arg_node := ArrItem(args_arr, i);
       IF routines[ri].param_is_var[i + 1] THEN
       BEGIN
-        IF NodeType(arg_node) <> 'Identifier' THEN
-          AbortWith2('codegen: a VAR argument must be a bare variable name, calling: ', name);
-        arg_nm := GetStr(arg_node, 'name');
-        symi := LookupSym(arg_nm);
-        IF symi = 0 THEN
-          AbortWith2('codegen: undefined variable: ', arg_nm);
-        IF symbols[symi].tk <> routines[ri].param_tk[i + 1] THEN
-          AbortWith2('codegen: VAR argument type mismatch calling: ', name);
-        v := symbols[symi].llvm_val;
+        IF NodeType(arg_node) = 'Identifier' THEN
+        BEGIN
+          arg_nm := GetStr(arg_node, 'name');
+          symi := LookupSym(arg_nm);
+          IF symi = 0 THEN
+            AbortWith2('codegen: undefined variable: ', arg_nm);
+          IF symbols[symi].tk <> routines[ri].param_tk[i + 1] THEN
+            AbortWith2('codegen: VAR argument type mismatch calling: ', name);
+          v := symbols[symi].llvm_val;
+        END
+        ELSE IF NodeType(arg_node) = 'Designator' THEN
+        BEGIN
+          v := ComputeDesignatorAddress(arg_node);
+          IF last_val_tk <> routines[ri].param_tk[i + 1] THEN
+            AbortWith2('codegen: VAR argument type mismatch calling: ', name);
+        END
+        ELSE
+        BEGIN
+          AbortWith2('codegen: a VAR argument must be an lvalue, calling: ', name);
+          v := NIL;
+        END;
       END
       ELSE
       BEGIN
@@ -558,13 +746,82 @@ BEGIN
   CodegenCallCommon := res;
 END;
 
+FUNCTION ComputeDesignatorAddress(node: ADRMEM): ADRMEM;
+{ Shared by a Designator read (CodegenExpr) and a Designator write
+  (CodegenAssignStmt): walk `name` plus zero or more INDEX/FIELD selectors,
+  emitting one GEP per selector, and return the final element/field's
+  address. Sets last_val_tk to that final element/field's type id, exactly
+  like CodegenExpr's own convention -- callers load or store through the
+  returned pointer using that type. }
+VAR
+  nm: Str255;
+  symi: INTEGER32;
+  base_ptr: ADRMEM;
+  cur_tid: INTEGER;
+  selectors, sel, idx_expr, gep_idx: ADRMEM;
+  nsel, si: INTEGER32;
+  kind, fname: Str255;
+  idx_val, offset: ADRMEM;
+  fi: INTEGER;
+BEGIN
+  nm := GetStr(node, 'name');
+  symi := LookupSym(nm);
+  IF symi = 0 THEN
+    AbortWith2('codegen: undefined variable: ', nm);
+  base_ptr := symbols[symi].llvm_val;
+  cur_tid := symbols[symi].tk;
+
+  selectors := GetObj(node, 'selectors');
+  nsel := ArrSize(selectors);
+  FOR si := 0 TO nsel - 1 DO
+  BEGIN
+    sel := ArrItem(selectors, si);
+    kind := GetStr(sel, 'kind');
+    IF kind = 'INDEX' THEN
+    BEGIN
+      IF TypeKind(cur_tid) <> TK_ARRAY THEN
+        AbortWith('codegen: an INDEX selector was applied to a non-array');
+      idx_expr := GetObj(sel, 'index_or_field');
+      idx_val := CodegenExpr(idx_expr);
+      IF last_val_tk <> TK_INTEGER THEN
+        AbortWith('codegen: an array index must be INTEGER');
+      offset := LLVMBuildSub(builder, idx_val, LLVMConstInt(i16ty, types[cur_tid].lo, 1), MakeCStr(''));
+      gep_idx := AllocPtrArray(2);
+      SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+      SetPtrArrayElem(gep_idx, 1, offset);
+      base_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(cur_tid), base_ptr, gep_idx, 2, MakeCStr(''));
+      cur_tid := types[cur_tid].elem_tid;
+    END
+    ELSE IF kind = 'FIELD' THEN
+    BEGIN
+      IF TypeKind(cur_tid) <> TK_RECORD THEN
+        AbortWith('codegen: a FIELD selector was applied to a non-record');
+      fname := GetStr(sel, 'index_or_field');
+      fi := LookupField(cur_tid, fname);
+      IF fi = 0 THEN
+        AbortWith2('codegen: unknown record field: ', fname);
+      gep_idx := AllocPtrArray(2);
+      SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+      SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, fields[fi].field_index, 0));
+      base_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(cur_tid), base_ptr, gep_idx, 2, MakeCStr(''));
+      cur_tid := fields[fi].field_tid;
+    END
+    ELSE
+      AbortWith2('codegen: unhandled selector kind: ', kind);
+  END;
+
+  last_val_tk := cur_tid;
+  ComputeDesignatorAddress := base_ptr;
+END;
+
 FUNCTION CodegenExpr(node: ADRMEM): ADRMEM;
 VAR
   nt: Str255;
   nm: Str255;
   symi: INTEGER32;
   ch: Str255;
-  res: ADRMEM;
+  res, addr: ADRMEM;
+  result_tid: INTEGER;
 BEGIN
   nt := NodeType(node);
   IF nt = 'IntLiteral' THEN
@@ -597,6 +854,13 @@ BEGIN
       res := LLVMBuildLoad2(builder, LLVMTypeForTk(symbols[symi].tk), symbols[symi].llvm_val, MakeCStr(''));
       last_val_tk := symbols[symi].tk;
     END;
+  END
+  ELSE IF nt = 'Designator' THEN
+  BEGIN
+    addr := ComputeDesignatorAddress(node);
+    result_tid := last_val_tk;
+    res := LLVMBuildLoad2(builder, LLVMTypeForTk(result_tid), addr, MakeCStr(''));
+    last_val_tk := result_tid;
   END
   ELSE IF nt = 'BinOp' THEN
     res := CodegenBinOp(GetStr(node, 'op'), GetObj(node, 'left'), GetObj(node, 'right'))
@@ -694,17 +958,16 @@ VAR
   target, sel: ADRMEM;
   nm: Str255;
   symi: INTEGER32;
-  v: ADRMEM;
+  v, addr: ADRMEM;
+  target_tid: INTEGER;
 BEGIN
   target := GetObj(stmt, 'target');
   IF NodeType(target) <> 'Designator' THEN
     AbortWith('codegen: unsupported assignment target');
   sel := GetObj(target, 'selectors');
-  IF ArrSize(sel) <> 0 THEN
-    AbortWith('codegen: indexed/field assignment targets are not supported');
   nm := GetStr(target, 'name');
 
-  IF (cur_func_name <> '') AND (nm = cur_func_name) THEN
+  IF (ArrSize(sel) = 0) AND (cur_func_name <> '') AND (nm = cur_func_name) THEN
   BEGIN
     { `FuncName := expr` inside FuncName's own body assigns through the
       return-value slot, not a symbol -- see cur_func_name's declaration. }
@@ -713,7 +976,7 @@ BEGIN
       AbortWith2('codegen: return-value type mismatch in: ', nm);
     LLVMBuildStore(builder, v, cur_func_ret_slot);
   END
-  ELSE
+  ELSE IF ArrSize(sel) = 0 THEN
   BEGIN
     symi := LookupSym(nm);
     IF symi = 0 THEN
@@ -722,6 +985,15 @@ BEGIN
     IF last_val_tk <> symbols[symi].tk THEN
       AbortWith2('codegen: assignment type mismatch for: ', nm);
     LLVMBuildStore(builder, v, symbols[symi].llvm_val);
+  END
+  ELSE
+  BEGIN
+    addr := ComputeDesignatorAddress(target);
+    target_tid := last_val_tk;
+    v := CodegenExpr(GetObj(stmt, 'expr'));
+    IF last_val_tk <> target_tid THEN
+      AbortWith2('codegen: assignment type mismatch for: ', nm);
+    LLVMBuildStore(builder, v, addr);
   END;
 END;
 
@@ -935,6 +1207,8 @@ BEGIN
     param := ArrItem(params_arr, pi);
     tk := ResolveTypeExpr(GetObj(param, 'type_expr'));
     is_v := GetStr(param, 'mode') = 'VAR';
+    IF (NOT is_v) AND ((TypeKind(tk) = TK_ARRAY) OR (TypeKind(tk) = TK_RECORD)) THEN
+      AbortWith('codegen: value-mode ARRAY/RECORD parameters are not supported (pass by VAR)');
     pnames := GetObj(param, 'names');
     nn := ArrSize(pnames);
     FOR ni := 0 TO nn - 1 DO
@@ -1064,12 +1338,27 @@ BEGIN
   LLVMPositionBuilderAtEnd(builder, entry_bb);
 END;
 
+PROCEDURE CodegenTypeDecl(decl: ADRMEM);
+VAR
+  name: Str255;
+  tid: INTEGER;
+BEGIN
+  name := GetStr(decl, 'name');
+  IF LookupNamedType(name) <> 0 THEN
+    AbortWith2('codegen: duplicate type declaration: ', name);
+  tid := ResolveTypeExpr(GetObj(decl, 'type_expr'));
+  IF tid < 5 THEN
+    AbortWith2('codegen: TYPE cannot alias a bare scalar name: ', name);
+  types[tid].name := name;
+END;
+
 PROCEDURE CodegenDecl(decl: ADRMEM);
 VAR
   nt: Str255;
 BEGIN
   nt := NodeType(decl);
   IF nt = 'VarDecl' THEN CodegenVarDecl(decl)
+  ELSE IF nt = 'TypeDecl' THEN CodegenTypeDecl(decl)
   ELSE IF nt = 'ProcDecl' THEN CodegenRoutineDecl(decl, FALSE)
   ELSE IF nt = 'FuncDecl' THEN CodegenRoutineDecl(decl, TRUE)
   ELSE
@@ -1120,6 +1409,10 @@ BEGIN
   in_local_scope := FALSE;
   nroutines := 0;
   cur_func_name := '';
+  ntypes := 4; { ids 1..4 are the bare TK_INTEGER..TK_CHAR scalars, not
+                 `types` table entries -- the first RegisterType call must
+                 hand out id 5, not 1. }
+  nfields := 0;
 
   block := GetObj(root, 'block');
   IF NodeType(block) <> 'Block' THEN
