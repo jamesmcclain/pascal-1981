@@ -997,6 +997,22 @@ BEGIN
     AddNullField(node, 'type_name');
     ParseFactor := node;
   END
+  ELSE IF CurKind = 'SIZEOF' THEN
+  BEGIN
+    pos := pos + 1;
+    Expect('LPAREN');
+    node := CreateNode('SizeofExpr');
+    IF CurKind = 'IDENTIFIER' THEN
+    BEGIN
+      name := CurLex;
+      pos := pos + 1;
+      AddStringField(node, 'target', name);
+    END
+    ELSE
+      AddField(node, 'target', ParseType);
+    Expect('RPAREN');
+    ParseFactor := node;
+  END
   ELSE
   BEGIN
     res_c := puts(MakeCStr('Parser Error: Invalid factor expression'));
@@ -1155,7 +1171,27 @@ BEGIN
   saved_rangeck := CurRangeCk();
   saved_flags_node := BuildMetaFlagsNode();
   pt := GetTok(1);
-  IF (pt^.kind = 'LPAREN') OR (pt^.kind = 'SEMICOLON') THEN
+  { A bare (no-parens) procedure call is legal Pascal wherever a statement
+    can appear, so its next token can be anything a statement can be
+    followed by -- END, ELSE, UNTIL, SEMICOLON, ... -- not just SEMICOLON.
+    The only tokens that mean "this identifier is an assignment target,
+    not a call" are ASSIGN/EQ directly, or a selector (LBRACKET/DOT/
+    POINTER) that leads into one; anything else is a proc call, mirroring
+    parser.py's parse_assignment_or_proc_call (checks for ASSIGN after
+    selectors, falls through to a call otherwise). }
+  IF (pt^.kind = 'ASSIGN') OR (pt^.kind = 'EQ') OR (pt^.kind = 'LBRACKET') OR
+     (pt^.kind = 'DOT') OR (pt^.kind = 'POINTER') THEN
+  BEGIN
+    node := CreateNode('AssignStmt');
+    target := ParseDesignator;
+    IF Match('ASSIGN') OR Match('EQ') THEN ;
+    AddField(node, 'target', target);
+    AddField(node, 'expr', ParseExpression);
+    AddBoolField(node, 'rangeck', saved_rangeck);
+    AddField(node, 'meta_flags', saved_flags_node);
+    ParseAssignOrCallStmt := node;
+  END
+  ELSE
   BEGIN
     node := CreateNode('ProcCallStmt');
     Expect('IDENTIFIER');
@@ -1177,17 +1213,6 @@ BEGIN
       Expect('RPAREN');
     END;
     AddField(node, 'args', args_arr);
-    AddBoolField(node, 'rangeck', saved_rangeck);
-    AddField(node, 'meta_flags', saved_flags_node);
-    ParseAssignOrCallStmt := node;
-  END
-  ELSE
-  BEGIN
-    node := CreateNode('AssignStmt');
-    target := ParseDesignator;
-    IF Match('ASSIGN') OR Match('EQ') THEN ;
-    AddField(node, 'target', target);
-    AddField(node, 'expr', ParseExpression);
     AddBoolField(node, 'rangeck', saved_rangeck);
     AddField(node, 'meta_flags', saved_flags_node);
     ParseAssignOrCallStmt := node;
