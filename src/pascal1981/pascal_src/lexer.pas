@@ -23,6 +23,11 @@ FUNCTION malloc(size: CINT): ADRMEM [C]; EXTERN;
 PROCEDURE free(ptr: ADRMEM) [C]; EXTERN;
 PROCEDURE c_exit(code: CINT) [C]; EXTERN;
 PROCEDURE exit(code: CINT) [C]; EXTERN;
+FUNCTION fopen(path: ADRMEM; mode: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION fgetc(stream: ADRMEM): CINT [C]; EXTERN;
+PROCEDURE fclose(stream: ADRMEM) [C]; EXTERN;
+
+PROCEDURE TokenizeBuffer; FORWARD;
 
 TYPE
   MetacmdFlags = RECORD
@@ -320,6 +325,60 @@ BEGIN
   END;
 END;
 
+FUNCTION ReadFileToBuf(path: Str255; VAR out_buf: ADRMEM; VAR out_len: INTEGER32): BOOLEAN;
+{ Reads an entire file (opened relative to the current working directory) into
+  a freshly malloc'd buffer, growing it the same way ReadSourceInput grows the
+  stdin buffer.  Used to splice $INCLUDE'd files' contents in as their own
+  freshly-lexed token runs (see TryIncludeDirective). }
+VAR
+  f, path_ptr, mode_ptr: ADRMEM;
+  mode_str: Str255;
+  cap, i: INTEGER32;
+  ch: CINT;
+  p, p_old, p_new: ^CHAR;
+  old_buf: ADRMEM;
+BEGIN
+  mode_str[0] := CHR(1);
+  mode_str[1] := 'r';
+  path_ptr := MakeCStr(path);
+  mode_ptr := MakeCStr(mode_str);
+  f := fopen(path_ptr, mode_ptr);
+  IF f = NIL THEN
+  BEGIN
+    out_len := 0;
+    ReadFileToBuf := FALSE;
+  END
+  ELSE
+  BEGIN
+    cap := 4000;
+    out_buf := malloc(cap);
+    out_len := 0;
+    ch := fgetc(f);
+    WHILE ch <> -1 DO
+    BEGIN
+      IF out_len >= cap THEN
+      BEGIN
+        old_buf := out_buf;
+        cap := cap * 2;
+        out_buf := malloc(cap);
+        FOR i := 0 TO out_len - 1 DO
+        BEGIN
+          p_old := old_buf + i;
+          p_new := out_buf + i;
+          p_new^ := p_old^;
+        END;
+        free(old_buf);
+      END;
+      p := out_buf + out_len;
+      p^ := CHR(ch);
+      out_len := out_len + 1;
+      ch := fgetc(f);
+    END;
+    fclose(f);
+    ReadFileToBuf := TRUE;
+  END;
+END;
+
 PROCEDURE AdvancePos(count: INTEGER);
 VAR
   i: INTEGER;
@@ -613,22 +672,55 @@ BEGIN
   ReadQuotedFilename := res;
 END;
 
-FUNCTION TryIncludeDirective: BOOLEAN;
-{ Matches Python's try_include_directive(): recognizes
-  a paren-comment or brace-comment $INCLUDE directive giving a filename,
-  and emits a single
-  INCLUDE_DIRECTIVE token (code 86) carrying the filename. Splicing the
-  named file's contents in is a driver-level concern (mirrors how
-  cli_lex.py only splices when invoked with a file path, not on stdin) --
-  this stage, like the Python Lexer class read from a string, just emits
-  the directive token. }
+PROCEDURE SpliceIncludedFile(fname: Str255);
+{ Reads fname (relative to the current working directory -- the native
+  pipeline's caller is expected to run from the including file's directory,
+  same as this repository's own build/test invocations) and lexes its
+  contents in place as their own fresh token run, starting at line 1 column
+  1 (matching Python's lex_file, which recursively re-lexes the included
+  file from scratch rather than splicing raw characters into the host
+  buffer's position stream). No token is emitted for the directive itself. }
 VAR
-  start_line, start_col: INTEGER;
-  fname, kind_str: Str255;
+  save_buf: ADRMEM;
+  save_len, save_pos: INTEGER32;
+  save_line, save_col: INTEGER;
+  new_buf: ADRMEM;
+  new_len: INTEGER32;
+  ok: BOOLEAN;
+BEGIN
+  save_buf := src_buf;
+  save_len := src_len;
+  save_pos := src_pos;
+  save_line := cur_line;
+  save_col := cur_col;
+
+  ok := ReadFileToBuf(fname, new_buf, new_len);
+  IF NOT ok THEN exit(1);
+
+  src_buf := new_buf;
+  src_len := new_len;
+  src_pos := 0;
+  cur_line := 1;
+  cur_col := 1;
+
+  TokenizeBuffer;
+
+  free(new_buf);
+  src_buf := save_buf;
+  src_len := save_len;
+  src_pos := save_pos;
+  cur_line := save_line;
+  cur_col := save_col;
+END;
+
+FUNCTION TryIncludeDirective: BOOLEAN;
+{ Recognizes a paren-comment or brace-comment $INCLUDE directive giving a
+  filename, and splices the named file's contents in via
+  SpliceIncludedFile. }
+VAR
+  fname: Str255;
 BEGIN
   TryIncludeDirective := FALSE;
-  start_line := cur_line;
-  start_col := cur_col;
   IF StartsWithLit('(*$INCLUDE:') THEN
   BEGIN
     AdvancePos(11);
@@ -640,8 +732,7 @@ BEGIN
       IF StartsWithLit('*)') THEN
       BEGIN
         AdvancePos(2);
-        kind_str := 'INCLUDE_DIRECTIVE';
-        AddToken(kind_str, 86, fname, 3, 0, 0.0, fname, start_line, start_col);
+        SpliceIncludedFile(fname);
         TryIncludeDirective := TRUE;
       END;
     END;
@@ -657,8 +748,7 @@ BEGIN
       IF StartsWithLit(brace_str) THEN
       BEGIN
         AdvancePos(1);
-        kind_str := 'INCLUDE_DIRECTIVE';
-        AddToken(kind_str, 86, fname, 3, 0, 0.0, fname, start_line, start_col);
+        SpliceIncludedFile(fname);
         TryIncludeDirective := TRUE;
       END;
     END;
@@ -1419,8 +1509,29 @@ BEGIN
   END;
 END;
 
+PROCEDURE TokenizeBuffer;
 VAR
   ch: CHAR;
+BEGIN
+  WHILE src_pos < src_len DO
+  BEGIN
+    SkipWhitespace;
+    SkipComments;
+    IF src_pos >= src_len THEN BREAK;
+
+    ch := ReadBufChar(src_pos);
+    IF IsAlpha(ch) THEN
+      ScanIdentifier
+    ELSE IF IsDigit(ch) THEN
+      ScanNumber
+    ELSE IF ch = '''' THEN
+      ScanString
+    ELSE
+      ScanSymbol;
+  END;
+END;
+
+VAR
   empty_str, eof_kind: Str255;
 
 BEGIN
@@ -1437,22 +1548,7 @@ BEGIN
 
   ReadSourceInput;
 
-  WHILE src_pos < src_len DO
-  BEGIN
-    SkipWhitespace;
-    SkipComments;
-    IF src_pos >= src_len THEN BREAK;
-    
-    ch := ReadBufChar(src_pos);
-    IF IsAlpha(ch) THEN
-      ScanIdentifier
-    ELSE IF IsDigit(ch) THEN
-      ScanNumber
-    ELSE IF ch = '''' THEN
-      ScanString
-    ELSE
-      ScanSymbol;
-  END;
+  TokenizeBuffer;
 
   { Add EOF token at end }
   eof_kind := 'EOF';

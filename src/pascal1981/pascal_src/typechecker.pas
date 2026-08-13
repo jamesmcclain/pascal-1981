@@ -171,7 +171,7 @@ VAR
   i: INTEGER32;
 BEGIN
   i := nsymbols;
-  WHILE (i >= 1) AND (symbols[i].name <> name) DO
+  WHILE (i >= 1) AND THEN (symbols[i].name <> name) DO
     i := i - 1;
   LookupSymbol := i;
 END;
@@ -194,7 +194,7 @@ VAR
   i: INTEGER32;
 BEGIN
   i := ntypes;
-  WHILE (i >= 1) AND (types[i].name <> name) DO
+  WHILE (i >= 1) AND THEN (types[i].name <> name) DO
     i := i - 1;
   LookupType := i;
 END;
@@ -215,7 +215,7 @@ VAR
   i: INTEGER32;
 BEGIN
   i := nfields;
-  WHILE (i >= 1) AND ((fields[i].record_id <> record_id) OR (fields[i].fname <> fname)) DO
+  WHILE (i >= 1) AND THEN ((fields[i].record_id <> record_id) OR (fields[i].fname <> fname)) DO
     i := i - 1;
   LookupField := i;
 END;
