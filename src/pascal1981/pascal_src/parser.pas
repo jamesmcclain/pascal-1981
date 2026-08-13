@@ -565,13 +565,10 @@ FUNCTION ParseBooleanExpression: ADRMEM; FORWARD;
 FUNCTION ParseSimpleExpression: ADRMEM; FORWARD;
 FUNCTION ParseTerm: ADRMEM; FORWARD;
 FUNCTION ParseFactor: ADRMEM; FORWARD;
-FUNCTION ParseFactor2: ADRMEM; FORWARD;
-FUNCTION ParseType2: ADRMEM; FORWARD;
 FUNCTION ParseStatement: ADRMEM; FORWARD;
 FUNCTION ParseBlock: ADRMEM; FORWARD;
 FUNCTION ParseType: ADRMEM; FORWARD;
 FUNCTION ParseConstant: ADRMEM; FORWARD;
-FUNCTION ParseConstant2: ADRMEM; FORWARD;
 FUNCTION ParseCompoundStmt: ADRMEM; FORWARD;
 FUNCTION ParseCompoundStmtList: ADRMEM; FORWARD;
 FUNCTION ParseIfStmt: ADRMEM; FORWARD;
@@ -824,11 +821,11 @@ BEGIN
       node := CreateNode('FuncCall');
       AddStringField(node, 'name', val_str);
       args_arr_const := cJSON_CreateArray;
-      cJSON_AddItemToArray(args_arr_const, ParseConstant2());
+      cJSON_AddItemToArray(args_arr_const, ParseConstant());
       WHILE CurKind() = 'COMMA' DO
       BEGIN
         pos := pos + 1;
-        cJSON_AddItemToArray(args_arr_const, ParseConstant2());
+        cJSON_AddItemToArray(args_arr_const, ParseConstant());
       END;
       Expect('RPAREN');
       AddField(node, 'args', args_arr_const);
@@ -879,11 +876,6 @@ BEGIN
   END;
 END;
 
-FUNCTION ParseConstant2: ADRMEM;
-BEGIN
-  ParseConstant2 := ParseConstant;
-END;
-
 FUNCTION ParseSetElement: ADRMEM;
 VAR
   e, high, node: ADRMEM;
@@ -912,11 +904,7 @@ BEGIN
     pos := pos + 1;
     node := CreateNode('UnaryOp');
     AddStringField(node, 'op', 'NOT');
-    { A function calling itself by its own bare name resolves to its own
-      return-value slot in this dialect, not a recursive call (confirmed
-      empirically -- even Foo(args) inside Foo's own body hits this), so
-      route through the ParseFactor2 forwarding wrapper below instead. }
-    AddField(node, 'operand', ParseFactor2);
+    AddField(node, 'operand', ParseFactor);
     ParseFactor := node;
   END
   ELSE IF CurKind() = 'INTEGER_LITERAL' THEN
@@ -1015,11 +1003,6 @@ BEGIN
     res_c := puts(MakeCStr(CurKind()));
     exit(1);
   END;
-END;
-
-FUNCTION ParseFactor2: ADRMEM;
-BEGIN
-  ParseFactor2 := ParseFactor;
 END;
 
 FUNCTION ParseTerm: ADRMEM;
@@ -1677,7 +1660,7 @@ BEGIN
     idx_range := ParseIndexRange(is_super);
     Expect('RBRACKET');
     Expect('OF');
-    elem_type := ParseType2;
+    elem_type := ParseType;
     node := CreateNode('ArrayType');
     AddField(node, 'index_range', idx_range);
     AddField(node, 'element_type', elem_type);
@@ -1693,7 +1676,7 @@ BEGIN
     BEGIN
       names_arr := ParseIdentListArr;
       Expect('COLON');
-      field_type := ParseType2;
+      field_type := ParseType;
       cJSON_AddItemToArray(fields_arr, MakeTupleNode(names_arr, field_type));
       IF CurKind() = 'SEMICOLON' THEN
         pos := pos + 1
@@ -1719,7 +1702,7 @@ BEGIN
   BEGIN
     pos := pos + 1;
     Expect('OF');
-    elem_type := ParseType2;
+    elem_type := ParseType;
     node := CreateNode('FileType');
     AddField(node, 'element_type', elem_type);
     AddStringField(node, 'structure', 'BINARY');
@@ -1748,7 +1731,7 @@ BEGIN
   ELSE IF CurKind() = 'POINTER' THEN
   BEGIN
     pos := pos + 1;
-    base_type := ParseType2;
+    base_type := ParseType;
     node := CreateNode('PointerType');
     AddField(node, 'base', base_type);
     AddStringField(node, 'flavor', 'POINTER');
@@ -1759,7 +1742,7 @@ BEGIN
   BEGIN
     pos := pos + 1;
     Expect('OF');
-    base_type := ParseType2;
+    base_type := ParseType;
     node := CreateNode('PointerType');
     AddField(node, 'base', base_type);
     AddStringField(node, 'flavor', 'ADR');
@@ -1779,7 +1762,7 @@ BEGIN
     ELSE
       AddNullField(node, 'space');
     Expect('OF');
-    base_type := ParseType2;
+    base_type := ParseType;
     AddField(node, 'base', base_type);
     AddStringField(node, 'flavor', 'ADS');
     ParseType := node;
@@ -1820,11 +1803,6 @@ BEGIN
     res_c := puts(MakeCStr('Parser Error: expected type'));
     exit(1);
   END;
-END;
-
-FUNCTION ParseType2: ADRMEM;
-BEGIN
-  ParseType2 := ParseType;
 END;
 
 FUNCTION ParseAttributeItem: ADRMEM;
