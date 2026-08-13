@@ -1054,10 +1054,12 @@ class DeclsMixin:
         entry_block = func.append_basic_block(name='entry')
         prev_builder = self.builder
         prev_func = self.current_function
+        prev_pascal_name = self.current_function_pascal_name
         prev_scope = self.scope
 
         self.builder = IRBuilder(entry_block)
         self.current_function = func
+        self.current_function_pascal_name = decl.name if is_function else None
         self.scope = Scope(parent=prev_scope)
 
         # Bind parameters to the scope
@@ -1108,6 +1110,7 @@ class DeclsMixin:
         # Restore context
         self.builder = prev_builder
         self.current_function = prev_func
+        self.current_function_pascal_name = prev_pascal_name
         self.scope = prev_scope
 
     def codegen_func_decl(self, decl: FuncDecl) -> None:

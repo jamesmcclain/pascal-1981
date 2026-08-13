@@ -169,6 +169,19 @@ class ExprsMixin:
                 self.builder.call(self.runtime_extern('pas_file_attach_std'), [fcb_ptr, out_fcb])
                 fn = self.runtime_extern('pas_file_eof' if key == 'EOF' else 'pas_file_eoln')
                 return self.builder.icmp_unsigned('!=', self.builder.call(fn, [fcb_ptr]), ir.Constant(ir.IntType(32), 0))
+            # A bare occurrence of the enclosing function's own name in an
+            # expression invokes it recursively (manual: the function
+            # identifier read in an expression, other than as a call
+            # argument, is a recursive self-call, not the current
+            # return value -- that requires RESULT(name), which this
+            # dialect does not implement). The routine's local scope
+            # shadows its own name with the return-value alloca (so
+            # RETURN-by-assignment `Foo := ...` works), which would
+            # otherwise make the plain lookup below resolve to that alloca
+            # instead of the function.
+            if (self.current_function_pascal_name and expr.name.lower() == self.current_function_pascal_name.lower() and not self.proc_param_types.get(expr.name.lower())):
+                return self.codegen_func_call(FuncCall(expr.name, []))
+
             symbol = self.scope.lookup(expr.name)
             if not symbol:
                 raise CodegenError(f'Undefined variable: {expr.name}')
@@ -199,6 +212,16 @@ class ExprsMixin:
                 alias = self.type_aliases.get(expr.name.upper())
                 if isinstance(self.resolve_type_alias(alias), SetType):
                     return self.codegen_set_constructor(SetConstructor([sel.index_or_field for sel in expr.selectors], expr.name))
+
+            # A bare occurrence of the enclosing function's own name in an
+            # expression invokes it recursively (manual: the function
+            # identifier read in an expression, other than as a call
+            # argument, is a recursive self-call, not the current
+            # return value -- that requires RESULT(name), which this
+            # dialect does not implement).
+            if (not expr.selectors and self.current_function_pascal_name and expr.name.lower() == self.current_function_pascal_name.lower()
+                    and not self.proc_param_types.get(expr.name.lower())):
+                return self.codegen_func_call(FuncCall(expr.name, []))
 
             symbol = self.scope.lookup(expr.name)
             if not symbol:
@@ -633,10 +656,17 @@ class ExprsMixin:
             nbytes = self._to_i64(self.codegen_expr(expr.args[0]))
             return self.builder.call(self.runtime_extern('pas_dev_alloc'), [nbytes])
 
-        symbol = self.scope.lookup(lookup_name)
+        # A call to the enclosing function's own name is self-recursion. The
+        # routine's local scope shadows that name with the return-value
+        # alloca (so RETURN-by-assignment `Foo := ...` works), which means a
+        # plain scope lookup here would resolve to that alloca instead of the
+        # function -- go straight to the ir.Function this body is being
+        # lowered into instead.
+        is_self_recursive_call = (self.current_function_pascal_name is not None and lookup_name == self.current_function_pascal_name.upper())
+        symbol = None if is_self_recursive_call else self.scope.lookup(lookup_name)
 
-        if symbol:
-            fn = symbol.llvm_value
+        if symbol or is_self_recursive_call:
+            fn = self.current_function if is_self_recursive_call else symbol.llvm_value
             c_plan = self.c_abi_plans.get(expr.name.lower())
             if c_plan is not None:
                 modes = self.proc_param_modes.get(expr.name.lower(), [])

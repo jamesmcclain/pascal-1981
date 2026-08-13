@@ -152,6 +152,12 @@ class CodegenBase:
         # infinite recursion: the handle is cached before its body is set.
         self._identified_records: Dict[str, ir.Type] = {}
         self.current_function: Optional[ir.Function] = None
+        # Pascal-source name of the routine self.current_function was lowered
+        # from, or None inside main/unit-init bodies that have no Pascal name.
+        # Lets a bare occurrence of this name in an expression be recognized
+        # as self-recursion (manual: referencing a function's own identifier
+        # in an expression invokes it recursively).
+        self.current_function_pascal_name: Optional[str] = None
         self.current_return_block: Optional[ir.BasicBlock] = None
         self.features: Dict[str, bool] = features if features is not None else {}
         # Compile-time constants keyed UPPER.  Values are int for INTEGER/BOOL/CHAR
