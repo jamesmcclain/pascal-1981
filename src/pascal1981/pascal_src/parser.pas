@@ -38,14 +38,14 @@ TYPE
 
   Token = RECORD
     kind: Str255;
-    code: CINT;
+    code: INTEGER32;
     lexeme: Str255;
     value_str: Str255;
-    value_int: CINT;
+    value_int: INTEGER32;
     value_real: REAL;
-    value_type: CINT; { 0=null, 1=int, 2=real, 3=str, 4=bool }
-    line: CINT;
-    col: CINT;
+    value_type: INTEGER32; { 0=null, 1=int, 2=real, 3=str, 4=bool }
+    line: INTEGER32;
+    col: INTEGER32;
   END;
 
   PToken = ^Token;
@@ -54,7 +54,7 @@ TYPE
 
 VAR
   tokens_buf: ADRMEM; { heap allocated array of Token }
-  num_tokens, pos: CINT;
+  num_tokens, pos: INTEGER32;
 
 FUNCTION MakeCStr(s: Str255): ADRMEM;
 VAR
@@ -142,7 +142,7 @@ END;
 PROCEDURE ReadInputAndParseTokens;
 VAR
   raw_input, old_buf: ADRMEM;
-  cap, len, i: CINT;
+  cap, len, i: INTEGER32;
   input_ch, tok_count, res_c: CINT;
   p_in, p_out, p_in_base, p_out_base: ^CHAR;
   json_root, item, field, val_obj, val_str_ptr, base_ptr, val_ptr: ADRMEM;
@@ -258,10 +258,9 @@ BEGIN
   cJSON_Delete(json_root);
 END;
 
-FUNCTION GetTok(off: CINT): PToken;
+FUNCTION GetTok(off: INTEGER32): PToken;
 VAR
-  idx: CINT;
-  res_c: CINT;
+  idx: INTEGER32;
 BEGIN
   idx := pos + off;
   IF (idx >= 0) AND (idx < num_tokens) THEN
@@ -2141,7 +2140,8 @@ VAR
   ast_root, json_out, interfaces_arr, iface_node, local_ifaces_arr: ADRMEM;
   cand_iface, iface_name_field, unit_type_field, matched_iface: ADRMEM;
   standalone_iface: BOOLEAN;
-  n_ifaces, ii, rc: CINT;
+  n_ifaces, rc: CINT;
+  ii: INTEGER32;
   res_c: CINT;
 
 BEGIN
