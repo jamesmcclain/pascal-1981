@@ -20,8 +20,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--source-file", type=str, default=None, help="Original Pascal source file path (for error/debug metadata)")
     parser.add_argument("--dialect", choices=["vintage", "extended", "device"], default="vintage", help="Language dialect")
     parser.add_argument("-f", "--feature", action="append", default=[], help="Enable/disable feature flags")
-    parser.add_argument("--host-triple", type=str, default=None, help="Target LLVM host triple")
-    parser.add_argument("--device-triple", type=str, default="nvptx64-nvidia-cuda", help="Target device triple")
+    parser.add_argument("--host-triple", type=str, default="x86_64-pc-linux-gnu", help="Target LLVM host triple")
+    parser.add_argument("--device-triple", type=str, default="x86_64-pc-linux-gnu", help="Target device triple")
     parser.add_argument("--device-backend", choices=["cpu", "cuda"], default="cpu", help="Backend for device code")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose codegen output")
 
