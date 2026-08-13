@@ -57,7 +57,10 @@ class StringsMixin:
                     t = t.return_type
                 is_bare_func_ref = isinstance(symbol.llvm_value, ir.Function)
             if is_bare_func_ref:
-                val_res = self.codegen_expr(expr)
+                # A bare niladic-call Designator/Identifier has side effects
+                # (the call), same as a FuncCall -- honor a caller-supplied
+                # precomputed_value instead of invoking the function again.
+                val_res = precomputed_value if precomputed_value is not None else self.codegen_expr(expr)
                 if isinstance(val_res.type, ir.ArrayType):
                     val_ptr = self.builder.alloca(val_res.type)
                     self.builder.store(val_res, val_ptr)

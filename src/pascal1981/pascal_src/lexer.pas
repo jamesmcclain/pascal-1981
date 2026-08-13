@@ -19,6 +19,7 @@ FUNCTION getchar: CINT [C]; EXTERN;
 FUNCTION malloc(size: CINT): ADRMEM [C]; EXTERN;
 PROCEDURE free(ptr: ADRMEM) [C]; EXTERN;
 PROCEDURE c_exit(code: CINT) [C]; EXTERN;
+PROCEDURE exit(code: CINT) [C]; EXTERN;
 
 TYPE
   Str255     = LSTRING(255);
@@ -59,6 +60,30 @@ VAR
     on assignment. }
   src_len, src_pos: INTEGER32;
   cur_line, cur_col: INTEGER;
+
+  { One-shot $UNROLL(n) count, stamped onto the flags of exactly the next
+    emitted token (mirrors Python Lexer._pending_unroll). }
+  pending_unroll_set: BOOLEAN;
+  pending_unroll_val: INTEGER;
+
+  { $PUSH/$POP stack of ON/OFF flag snapshots. Fixed depth is fine: no
+    real source nests metacommand PUSH/POP anywhere near this deep. }
+  flag_stack: ARRAY [1..32] OF MetacmdFlags;
+  flag_stack_top: INTEGER;
+
+  { $INCONST-registered meta-constant names -> values (always 0 for a
+    non-interactive build, matching the Python reference). }
+  meta_const_names: ARRAY [1..32] OF Str255;
+  meta_const_vals: ARRAY [1..32] OF INTEGER;
+  meta_const_count: INTEGER;
+
+  { A one-character LSTRING holding a close-brace character. A bare quoted
+    single character lexes as a CHAR_LITERAL, not a STRING_LITERAL, so it
+    cannot be passed directly where a Str255/LSTRING parameter is expected
+    (only 2+ character quoted literals, like '*)', lex as strings). This is
+    built once at startup and reused everywhere a one-character closer
+    string is needed. }
+  brace_str: Str255;
 
 PROCEDURE InitFlags(VAR f: MetacmdFlags);
 BEGIN
@@ -133,7 +158,7 @@ END;
 
 PROCEDURE AddToken(kind: Str255; code: INTEGER; lexeme: Str255; val_type: INTEGER; int_val: INTEGER; real_val: REAL; str_val: Str255; line, col: INTEGER);
 VAR
-  tok_obj, val_item: ADRMEM;
+  tok_obj, val_item, flags_obj: ADRMEM;
   kind_ptr, lex_ptr, str_ptr, key_ptr: ADRMEM;
   fieldName: Str255;
 BEGIN
@@ -175,8 +200,15 @@ BEGIN
   fieldName := 'column'; key_ptr := MakeCStr(fieldName);
   cJSON_AddItemToObject(tok_obj, key_ptr, cJSON_CreateNumber(col));
 
+  flags_obj := CreateFlagsObj(flags);
+  IF pending_unroll_set THEN
+  BEGIN
+    fieldName := 'UNROLL'; key_ptr := MakeCStr(fieldName);
+    cJSON_AddItemToObject(flags_obj, key_ptr, cJSON_CreateNumber(pending_unroll_val));
+    pending_unroll_set := FALSE;
+  END;
   fieldName := 'flags'; key_ptr := MakeCStr(fieldName);
-  cJSON_AddItemToObject(tok_obj, key_ptr, CreateFlagsObj(flags));
+  cJSON_AddItemToObject(tok_obj, key_ptr, flags_obj);
 
   cJSON_AddItemToArray(root_array, tok_obj);
 END;
@@ -342,35 +374,6 @@ BEGIN
   END;
 END;
 
-PROCEDURE SkipComments;
-VAR
-  ch, c2: CHAR;
-  done: BOOLEAN;
-BEGIN
-  done := FALSE;
-  WHILE (src_pos < src_len) AND NOT done DO
-  BEGIN
-    ch := ReadBufChar(src_pos);
-    c2 := ReadBufChar(src_pos + 1);
-    IF (ch = '(') AND (c2 = '*') THEN
-    BEGIN
-      AdvancePos(2);
-      WHILE (src_pos < src_len) AND NOT ((ReadBufChar(src_pos) = '*') AND (ReadBufChar(src_pos + 1) = ')')) DO
-        AdvancePos(1);
-      IF src_pos < src_len THEN AdvancePos(2);
-    END
-    ELSE IF ch = '{' THEN
-    BEGIN
-      AdvancePos(1);
-      WHILE (src_pos < src_len) AND (ReadBufChar(src_pos) <> '}') DO
-        AdvancePos(1);
-      IF src_pos < src_len THEN AdvancePos(1);
-    END
-    ELSE
-      done := TRUE;
-  END;
-END;
-
 FUNCTION IsAlpha(ch: CHAR): BOOLEAN;
 BEGIN
   IsAlpha := ((ch >= 'a') AND (ch <= 'z')) OR ((ch >= 'A') AND (ch <= 'Z')) OR (ch = '_');
@@ -381,12 +384,693 @@ BEGIN
   IsDigit := (ch >= '0') AND (ch <= '9');
 END;
 
+FUNCTION IsAlphaOnly(ch: CHAR): BOOLEAN;
+{ Like IsAlpha but without '_' -- matches Python's str.isalpha(), used only
+  for the inline $THEN-lookahead scan inside a skipped $IF block. }
+BEGIN
+  IsAlphaOnly := ((ch >= 'a') AND (ch <= 'z')) OR ((ch >= 'A') AND (ch <= 'Z'));
+END;
+
 FUNCTION UpCaseChar(ch: CHAR): CHAR;
 BEGIN
   IF (ch >= 'a') AND (ch <= 'z') THEN
     UpCaseChar := CHR(ORD(ch) - 32)
   ELSE
     UpCaseChar := ch;
+END;
+
+FUNCTION StartsWithLit(lit: Str255): BOOLEAN;
+VAR
+  i, n: INTEGER;
+BEGIN
+  n := ORD(lit[0]);
+  StartsWithLit := TRUE;
+  FOR i := 1 TO n DO
+    IF ReadBufChar(src_pos + i - 1) <> lit[i] THEN StartsWithLit := FALSE;
+END;
+
+PROCEDURE ConsumeToLit(lit: Str255);
+BEGIN
+  WHILE (src_pos < src_len) AND NOT StartsWithLit(lit) DO
+    AdvancePos(1);
+  IF src_pos < src_len THEN AdvancePos(ORD(lit[0]));
+END;
+
+FUNCTION ReadMetaName: Str255;
+VAR
+  res: Str255;
+  len: INTEGER;
+BEGIN
+  len := 0;
+  WHILE (src_pos < src_len) AND (IsAlpha(ReadBufChar(src_pos)) OR IsDigit(ReadBufChar(src_pos))) DO
+  BEGIN
+    len := len + 1;
+    IF len <= 255 THEN res[len] := UpCaseChar(ReadBufChar(src_pos));
+    AdvancePos(1);
+  END;
+  res[0] := CHR(len);
+  ReadMetaName := res;
+END;
+
+FUNCTION ParseSignedIntStr(s: Str255; VAR ok: BOOLEAN): INTEGER;
+{ Optional leading '-' followed by 1+ digits; ok is FALSE (v=0) otherwise. }
+VAR
+  i, len, start, v: INTEGER;
+  neg, bad: BOOLEAN;
+BEGIN
+  len := ORD(s[0]);
+  ok := FALSE;
+  v := 0;
+  IF len > 0 THEN
+  BEGIN
+    neg := FALSE;
+    start := 1;
+    IF s[1] = '-' THEN
+    BEGIN
+      neg := TRUE;
+      start := 2;
+    END;
+    bad := (start > len);
+    FOR i := start TO len DO
+      IF NOT ((s[i] >= '0') AND (s[i] <= '9')) THEN bad := TRUE;
+    IF NOT bad THEN
+    BEGIN
+      FOR i := start TO len DO
+        v := v * 10 + (ORD(s[i]) - ORD('0'));
+      IF neg THEN v := -v;
+      ok := TRUE;
+    END;
+  END;
+  ParseSignedIntStr := v;
+END;
+
+FUNCTION IsFlagName(name: Str255): BOOLEAN;
+BEGIN
+  IsFlagName := (name = 'BRAVE') OR (name = 'DEBUG') OR (name = 'ENTRY') OR (name = 'GOTO') OR
+                (name = 'INDEXCK') OR (name = 'INITCK') OR (name = 'LINE') OR (name = 'LIST') OR
+                (name = 'MATHCK') OR (name = 'NILCK') OR (name = 'OCODE') OR (name = 'RANGECK') OR
+                (name = 'RUNTIME') OR (name = 'STACKCK') OR (name = 'SYMTAB') OR (name = 'WARN');
+END;
+
+FUNCTION GetFlagValue(name: Str255): BOOLEAN;
+BEGIN
+  IF name = 'BRAVE' THEN GetFlagValue := flags.Brave
+  ELSE IF name = 'DEBUG' THEN GetFlagValue := flags.Debug
+  ELSE IF name = 'ENTRY' THEN GetFlagValue := flags.Entry
+  ELSE IF name = 'GOTO' THEN GetFlagValue := flags.GotoFlag
+  ELSE IF name = 'INDEXCK' THEN GetFlagValue := flags.IndexCk
+  ELSE IF name = 'INITCK' THEN GetFlagValue := flags.InitCk
+  ELSE IF name = 'LINE' THEN GetFlagValue := flags.LineFlag
+  ELSE IF name = 'LIST' THEN GetFlagValue := flags.List
+  ELSE IF name = 'MATHCK' THEN GetFlagValue := flags.MathCk
+  ELSE IF name = 'NILCK' THEN GetFlagValue := flags.NilCk
+  ELSE IF name = 'OCODE' THEN GetFlagValue := flags.Ocode
+  ELSE IF name = 'RANGECK' THEN GetFlagValue := flags.RangeCk
+  ELSE IF name = 'RUNTIME' THEN GetFlagValue := flags.Runtime
+  ELSE IF name = 'STACKCK' THEN GetFlagValue := flags.StackCk
+  ELSE IF name = 'SYMTAB' THEN GetFlagValue := flags.Symtab
+  ELSE IF name = 'WARN' THEN GetFlagValue := flags.Warn
+  ELSE GetFlagValue := FALSE;
+END;
+
+PROCEDURE SetFlagByName(name: Str255; val: BOOLEAN);
+BEGIN
+  IF name = 'BRAVE' THEN flags.Brave := val
+  ELSE IF name = 'DEBUG' THEN flags.Debug := val
+  ELSE IF name = 'ENTRY' THEN flags.Entry := val
+  ELSE IF name = 'GOTO' THEN flags.GotoFlag := val
+  ELSE IF name = 'INDEXCK' THEN flags.IndexCk := val
+  ELSE IF name = 'INITCK' THEN flags.InitCk := val
+  ELSE IF name = 'LINE' THEN flags.LineFlag := val
+  ELSE IF name = 'LIST' THEN flags.List := val
+  ELSE IF name = 'MATHCK' THEN flags.MathCk := val
+  ELSE IF name = 'NILCK' THEN flags.NilCk := val
+  ELSE IF name = 'OCODE' THEN flags.Ocode := val
+  ELSE IF name = 'RANGECK' THEN flags.RangeCk := val
+  ELSE IF name = 'RUNTIME' THEN flags.Runtime := val
+  ELSE IF name = 'STACKCK' THEN flags.StackCk := val
+  ELSE IF name = 'SYMTAB' THEN flags.Symtab := val
+  ELSE IF name = 'WARN' THEN flags.Warn := val;
+END;
+
+PROCEDURE ApplyDebugCoupling(val: BOOLEAN);
+{ $DEBUG master switch controls these sub-flags (manual Sec.4-11). }
+BEGIN
+  flags.Entry := val;
+  flags.IndexCk := val;
+  flags.InitCk := val;
+  flags.MathCk := val;
+  flags.NilCk := val;
+  flags.RangeCk := val;
+  flags.StackCk := val;
+END;
+
+FUNCTION IsIntMetaName(name: Str255): BOOLEAN;
+BEGIN
+  IsIntMetaName := (name = 'ERRORS') OR (name = 'LINESIZE') OR (name = 'PAGE') OR
+                   (name = 'PAGEIF') OR (name = 'PAGESIZE') OR (name = 'SKIP');
+END;
+
+FUNCTION IsStrMetaName(name: Str255): BOOLEAN;
+BEGIN
+  IsStrMetaName := (name = 'SUBTITLE') OR (name = 'TITLE');
+END;
+
+PROCEDURE AddMetaConst(name: Str255; val: INTEGER);
+VAR
+  i: INTEGER;
+  found: BOOLEAN;
+BEGIN
+  found := FALSE;
+  FOR i := 1 TO meta_const_count DO
+    IF meta_const_names[i] = name THEN
+    BEGIN
+      meta_const_vals[i] := val;
+      found := TRUE;
+    END;
+  IF NOT found THEN
+    IF meta_const_count < 32 THEN
+    BEGIN
+      meta_const_count := meta_const_count + 1;
+      meta_const_names[meta_const_count] := name;
+      meta_const_vals[meta_const_count] := val;
+    END;
+END;
+
+FUNCTION LookupMetaConst(name: Str255; VAR found: BOOLEAN): INTEGER;
+VAR
+  i: INTEGER;
+BEGIN
+  found := FALSE;
+  LookupMetaConst := 0;
+  FOR i := 1 TO meta_const_count DO
+    IF meta_const_names[i] = name THEN
+    BEGIN
+      found := TRUE;
+      LookupMetaConst := meta_const_vals[i];
+    END;
+END;
+
+FUNCTION EvalMetaConst(token: Str255): INTEGER;
+VAR
+  v: INTEGER;
+  ok, found: BOOLEAN;
+BEGIN
+  v := ParseSignedIntStr(token, ok);
+  IF ok THEN
+    EvalMetaConst := v
+  ELSE
+  BEGIN
+    v := LookupMetaConst(token, found);
+    IF found THEN
+      EvalMetaConst := v
+    ELSE IF IsFlagName(token) THEN
+    BEGIN
+      IF GetFlagValue(token) THEN EvalMetaConst := 1 ELSE EvalMetaConst := 0;
+    END
+    ELSE
+      EvalMetaConst := 0;
+  END;
+END;
+
+PROCEDURE PushFlags;
+BEGIN
+  IF flag_stack_top < 32 THEN
+  BEGIN
+    flag_stack_top := flag_stack_top + 1;
+    flag_stack[flag_stack_top] := flags;
+  END;
+END;
+
+PROCEDURE PopFlags;
+BEGIN
+  IF flag_stack_top > 0 THEN
+  BEGIN
+    flags := flag_stack[flag_stack_top];
+    flag_stack_top := flag_stack_top - 1;
+  END;
+END;
+
+FUNCTION ReadQuotedFilename: Str255;
+VAR
+  res: Str255;
+  len: INTEGER;
+BEGIN
+  AdvancePos(1); { opening quote }
+  len := 0;
+  WHILE (src_pos < src_len) AND (ReadBufChar(src_pos) <> '''') DO
+  BEGIN
+    len := len + 1;
+    IF len <= 255 THEN res[len] := ReadBufChar(src_pos);
+    AdvancePos(1);
+  END;
+  IF src_pos < src_len THEN AdvancePos(1); { closing quote }
+  res[0] := CHR(len);
+  ReadQuotedFilename := res;
+END;
+
+FUNCTION TryIncludeDirective: BOOLEAN;
+{ Matches Python's try_include_directive(): recognizes
+  a paren-comment or brace-comment $INCLUDE directive giving a filename,
+  and emits a single
+  INCLUDE_DIRECTIVE token (code 86) carrying the filename. Splicing the
+  named file's contents in is a driver-level concern (mirrors how
+  cli_lex.py only splices when invoked with a file path, not on stdin) --
+  this stage, like the Python Lexer class read from a string, just emits
+  the directive token. }
+VAR
+  start_line, start_col: INTEGER;
+  fname, kind_str: Str255;
+BEGIN
+  TryIncludeDirective := FALSE;
+  start_line := cur_line;
+  start_col := cur_col;
+  IF StartsWithLit('(*$INCLUDE:') THEN
+  BEGIN
+    AdvancePos(11);
+    SkipWhitespace;
+    IF ReadBufChar(src_pos) = '''' THEN
+    BEGIN
+      fname := ReadQuotedFilename;
+      SkipWhitespace;
+      IF StartsWithLit('*)') THEN
+      BEGIN
+        AdvancePos(2);
+        kind_str := 'INCLUDE_DIRECTIVE';
+        AddToken(kind_str, 86, fname, 3, 0, 0.0, fname, start_line, start_col);
+        TryIncludeDirective := TRUE;
+      END;
+    END;
+  END
+  ELSE IF StartsWithLit('{$INCLUDE:') THEN
+  BEGIN
+    AdvancePos(10);
+    SkipWhitespace;
+    IF ReadBufChar(src_pos) = '''' THEN
+    BEGIN
+      fname := ReadQuotedFilename;
+      SkipWhitespace;
+      IF StartsWithLit(brace_str) THEN
+      BEGIN
+        AdvancePos(1);
+        kind_str := 'INCLUDE_DIRECTIVE';
+        AddToken(kind_str, 86, fname, 3, 0, 0.0, fname, start_line, start_col);
+        TryIncludeDirective := TRUE;
+      END;
+    END;
+  END;
+END;
+
+FUNCTION SkipSourceBlock(closer: Str255): Str255;
+{ Skips a conditional-compilation source block, tracking $IF nesting, per
+  Python's _skip_source_block. Assumes the current metacommand comment is
+  still open; closes it (via `closer`) before scanning forward. String
+  literals in the skipped text are honored so an embedded brace or paren
+  comment opener cannot derail $IF/$END tracking. Returns 'ELSE' or 'END'. }
+VAR
+  depth, wlen: INTEGER;
+  ch: CHAR;
+  is_paren: BOOLEAN;
+  inner_closer, tag, word: Str255;
+BEGIN
+  ConsumeToLit(closer);
+  depth := 1;
+  WHILE src_pos < src_len DO
+  BEGIN
+    ch := ReadBufChar(src_pos);
+    IF ch = '''' THEN
+    BEGIN
+      AdvancePos(1);
+      WHILE (src_pos < src_len) AND (ReadBufChar(src_pos) <> '''') DO
+        AdvancePos(1);
+      IF src_pos < src_len THEN AdvancePos(1);
+    END
+    ELSE IF ((ch = '(') AND (ReadBufChar(src_pos + 1) = '*')) OR (ch = '{') THEN
+    BEGIN
+      is_paren := (ch = '(');
+      IF is_paren THEN
+      BEGIN
+        AdvancePos(2);
+        inner_closer := '*)';
+      END
+      ELSE
+      BEGIN
+        AdvancePos(1);
+        inner_closer := brace_str;
+      END;
+      IF ReadBufChar(src_pos) = '$' THEN
+      BEGIN
+        AdvancePos(1);
+        SkipWhitespace;
+        tag := ReadMetaName;
+        IF tag = 'IF' THEN
+        BEGIN
+          WHILE (src_pos < src_len) AND NOT StartsWithLit(inner_closer) DO
+          BEGIN
+            IF IsAlphaOnly(ReadBufChar(src_pos)) THEN
+            BEGIN
+              wlen := 0;
+              WHILE IsAlphaOnly(ReadBufChar(src_pos)) DO
+              BEGIN
+                wlen := wlen + 1;
+                IF wlen <= 255 THEN word[wlen] := UpCaseChar(ReadBufChar(src_pos));
+                AdvancePos(1);
+              END;
+              word[0] := CHR(wlen);
+              IF word = 'THEN' THEN BREAK;
+            END
+            ELSE
+              AdvancePos(1);
+          END;
+          depth := depth + 1;
+          ConsumeToLit(inner_closer);
+        END
+        ELSE IF (tag = 'END') AND (depth = 1) THEN
+        BEGIN
+          ConsumeToLit(inner_closer);
+          SkipSourceBlock := 'END';
+          RETURN;
+        END
+        ELSE IF (tag = 'ELSE') AND (depth = 1) THEN
+        BEGIN
+          ConsumeToLit(inner_closer);
+          SkipSourceBlock := 'ELSE';
+          RETURN;
+        END
+        ELSE IF tag = 'END' THEN
+        BEGIN
+          depth := depth - 1;
+          ConsumeToLit(inner_closer);
+        END
+        ELSE
+          ConsumeToLit(inner_closer);
+      END
+      ELSE
+        ConsumeToLit(inner_closer);
+    END
+    ELSE
+      AdvancePos(1);
+  END;
+  SkipSourceBlock := 'END';
+END;
+
+PROCEDURE ParseMetacommandComment(closer: Str255);
+{ Parses and acts on one or more comma-separated metacommands, per Python's
+  parse_metacommand_comment. Called with '$' as the current character;
+  advances past `closer` before returning. }
+VAR
+  name, const_token, kw, ident, count_token, numstr, result_str: Str255;
+  cond, nlen: INTEGER;
+  ok, val: BOOLEAN;
+  ch: CHAR;
+BEGIN
+  AdvancePos(1); { consume '$' }
+  WHILE TRUE DO
+  BEGIN
+    SkipWhitespace;
+    IF (src_pos >= src_len) OR StartsWithLit(closer) THEN BREAK;
+    IF NOT IsAlpha(ReadBufChar(src_pos)) THEN BREAK;
+
+    name := ReadMetaName;
+    SkipWhitespace;
+
+    IF name = 'IF' THEN
+    BEGIN
+      const_token[0] := CHR(0);
+      IF IsDigit(ReadBufChar(src_pos)) THEN
+      BEGIN
+        nlen := 0;
+        WHILE IsDigit(ReadBufChar(src_pos)) DO
+        BEGIN
+          nlen := nlen + 1;
+          IF nlen <= 255 THEN const_token[nlen] := ReadBufChar(src_pos);
+          AdvancePos(1);
+        END;
+        const_token[0] := CHR(nlen);
+      END
+      ELSE IF (ReadBufChar(src_pos) = '-') AND IsDigit(ReadBufChar(src_pos + 1)) THEN
+      BEGIN
+        const_token[1] := '-';
+        nlen := 1;
+        AdvancePos(1);
+        WHILE IsDigit(ReadBufChar(src_pos)) DO
+        BEGIN
+          nlen := nlen + 1;
+          IF nlen <= 255 THEN const_token[nlen] := ReadBufChar(src_pos);
+          AdvancePos(1);
+        END;
+        const_token[0] := CHR(nlen);
+      END
+      ELSE IF IsAlpha(ReadBufChar(src_pos)) THEN
+        const_token := ReadMetaName;
+
+      SkipWhitespace;
+      IF ReadBufChar(src_pos) = '$' THEN
+      BEGIN
+        AdvancePos(1);
+        SkipWhitespace;
+        kw := ReadMetaName;
+        IF kw <> 'THEN' THEN
+        BEGIN
+          ConsumeToLit(closer);
+          RETURN;
+        END;
+      END;
+
+      cond := EvalMetaConst(const_token);
+      IF cond <= 0 THEN
+      BEGIN
+        result_str := SkipSourceBlock(closer);
+        IF result_str = 'END' THEN RETURN;
+        { result_str = 'ELSE': fall through, resume normal tokenizing into
+          the else-branch; the eventual $END marker will be a no-op. }
+      END
+      ELSE
+        ConsumeToLit(closer);
+      RETURN;
+    END
+
+    ELSE IF name = 'ELSE' THEN
+    BEGIN
+      SkipSourceBlock(closer);
+      RETURN;
+    END
+
+    ELSE IF name = 'END' THEN
+    BEGIN
+      ConsumeToLit(closer);
+      RETURN;
+    END
+
+    ELSE IF name = 'PUSH' THEN
+      PushFlags
+
+    ELSE IF name = 'POP' THEN
+      PopFlags
+
+    ELSE IF name = 'MESSAGE' THEN
+    BEGIN
+      IF ReadBufChar(src_pos) = ':' THEN
+      BEGIN
+        AdvancePos(1);
+        SkipWhitespace;
+      END;
+      IF ReadBufChar(src_pos) = '''' THEN
+      BEGIN
+        AdvancePos(1);
+        WHILE (src_pos < src_len) AND (ReadBufChar(src_pos) <> '''') DO
+          AdvancePos(1);
+        IF src_pos < src_len THEN AdvancePos(1);
+      END;
+    END
+
+    ELSE IF name = 'INCONST' THEN
+    BEGIN
+      IF ReadBufChar(src_pos) = ':' THEN
+      BEGIN
+        AdvancePos(1);
+        SkipWhitespace;
+      END;
+      ident[0] := CHR(0);
+      IF IsAlpha(ReadBufChar(src_pos)) THEN
+        ident := ReadMetaName;
+      IF ORD(ident[0]) > 0 THEN
+        AddMetaConst(ident, 0);
+    END
+
+    ELSE IF name = 'UNROLL' THEN
+    BEGIN
+      IF ReadBufChar(src_pos) = ':' THEN AdvancePos(1);
+      SkipWhitespace;
+      count_token[0] := CHR(0);
+      IF IsDigit(ReadBufChar(src_pos)) THEN
+      BEGIN
+        nlen := 0;
+        WHILE IsDigit(ReadBufChar(src_pos)) DO
+        BEGIN
+          nlen := nlen + 1;
+          IF nlen <= 255 THEN count_token[nlen] := ReadBufChar(src_pos);
+          AdvancePos(1);
+        END;
+        count_token[0] := CHR(nlen);
+      END
+      ELSE IF IsAlpha(ReadBufChar(src_pos)) THEN
+        count_token := ReadMetaName;
+      IF ORD(count_token[0]) > 0 THEN
+      BEGIN
+        pending_unroll_set := TRUE;
+        pending_unroll_val := EvalMetaConst(count_token);
+      END;
+    END
+
+    ELSE IF IsFlagName(name) THEN
+    BEGIN
+      IF ReadBufChar(src_pos) = '+' THEN
+      BEGIN
+        AdvancePos(1);
+        val := TRUE;
+      END
+      ELSE IF ReadBufChar(src_pos) = '-' THEN
+      BEGIN
+        AdvancePos(1);
+        val := FALSE;
+      END
+      ELSE IF ReadBufChar(src_pos) = ':' THEN
+      BEGIN
+        AdvancePos(1);
+        SkipWhitespace;
+        nlen := 0;
+        IF (ReadBufChar(src_pos) = '+') OR (ReadBufChar(src_pos) = '-') THEN
+        BEGIN
+          nlen := 1;
+          numstr[1] := ReadBufChar(src_pos);
+          AdvancePos(1);
+        END;
+        WHILE IsDigit(ReadBufChar(src_pos)) DO
+        BEGIN
+          nlen := nlen + 1;
+          IF nlen <= 255 THEN numstr[nlen] := ReadBufChar(src_pos);
+          AdvancePos(1);
+        END;
+        numstr[0] := CHR(nlen);
+        val := ParseSignedIntStr(numstr, ok) > 0;
+        IF NOT ok THEN val := TRUE;
+      END
+      ELSE
+        val := TRUE;
+
+      SetFlagByName(name, val);
+      IF name = 'DEBUG' THEN ApplyDebugCoupling(val);
+      IF (name = 'LINE') AND val THEN flags.Entry := TRUE;
+    END
+
+    ELSE IF IsIntMetaName(name) THEN
+    BEGIN
+      IF ReadBufChar(src_pos) = ':' THEN
+      BEGIN
+        AdvancePos(1);
+        SkipWhitespace;
+        IF (ReadBufChar(src_pos) = '+') OR (ReadBufChar(src_pos) = '-') THEN AdvancePos(1);
+        WHILE IsDigit(ReadBufChar(src_pos)) DO AdvancePos(1);
+      END;
+    END
+
+    ELSE IF IsStrMetaName(name) THEN
+    BEGIN
+      IF ReadBufChar(src_pos) = ':' THEN
+      BEGIN
+        AdvancePos(1);
+        SkipWhitespace;
+        IF ReadBufChar(src_pos) = '''' THEN
+        BEGIN
+          AdvancePos(1);
+          WHILE (src_pos < src_len) AND (ReadBufChar(src_pos) <> '''') DO
+            AdvancePos(1);
+          IF src_pos < src_len THEN AdvancePos(1);
+        END
+        ELSE IF IsAlpha(ReadBufChar(src_pos)) THEN
+          ident := ReadMetaName; { discard }
+      END;
+    END
+
+    ELSE
+    BEGIN
+      IF (ReadBufChar(src_pos) = '+') OR (ReadBufChar(src_pos) = '-') THEN
+        AdvancePos(1)
+      ELSE IF ReadBufChar(src_pos) = ':' THEN
+      BEGIN
+        AdvancePos(1);
+        SkipWhitespace;
+        IF ReadBufChar(src_pos) = '''' THEN
+        BEGIN
+          AdvancePos(1);
+          WHILE (src_pos < src_len) AND (ReadBufChar(src_pos) <> '''') DO
+            AdvancePos(1);
+          IF src_pos < src_len THEN AdvancePos(1);
+        END
+        ELSE
+        BEGIN
+          ch := ReadBufChar(src_pos);
+          WHILE (src_pos < src_len) AND (ch <> ' ') AND (ch <> CHR(9)) AND
+                (ch <> ',') AND (ch <> '}') AND NOT StartsWithLit('*)') DO
+          BEGIN
+            AdvancePos(1);
+            ch := ReadBufChar(src_pos);
+          END;
+        END;
+      END;
+    END;
+
+    SkipWhitespace;
+    IF ReadBufChar(src_pos) = ',' THEN
+    BEGIN
+      AdvancePos(1);
+      SkipWhitespace;
+      IF ReadBufChar(src_pos) = '$' THEN AdvancePos(1);
+    END
+    ELSE
+      BREAK;
+  END;
+  ConsumeToLit(closer);
+END;
+
+PROCEDURE SkipComments;
+{ Skips whitespace, $INCLUDE directives (emitting a token for each),
+  and comments/metacommands, repeatedly, until a real token start or EOF
+  is reached. Mirrors the effect of Python tokenize()'s per-iteration
+  try_include_directive()/skip_comment() calls. }
+VAR
+  keep_going: BOOLEAN;
+BEGIN
+  keep_going := TRUE;
+  WHILE keep_going DO
+  BEGIN
+    SkipWhitespace;
+    keep_going := FALSE;
+    IF src_pos < src_len THEN
+    BEGIN
+      IF TryIncludeDirective THEN
+        keep_going := TRUE
+      ELSE IF (ReadBufChar(src_pos) = '(') AND (ReadBufChar(src_pos + 1) = '*') THEN
+      BEGIN
+        AdvancePos(2);
+        IF ReadBufChar(src_pos) = '$' THEN
+          ParseMetacommandComment('*)')
+        ELSE
+          ConsumeToLit('*)');
+        keep_going := TRUE;
+      END
+      ELSE IF ReadBufChar(src_pos) = '{' THEN
+      BEGIN
+        AdvancePos(1);
+        IF ReadBufChar(src_pos) = '$' THEN
+          ParseMetacommandComment(brace_str)
+        ELSE
+          ConsumeToLit(brace_str);
+        keep_going := TRUE;
+      END;
+    END;
+  END;
 END;
 
 PROCEDURE ScanIdentifier;
@@ -739,7 +1423,15 @@ BEGIN
     ELSE IF ch = ';' THEN BEGIN kind_str := 'SEMICOLON'; AddToken(kind_str, 76, lex_str, 3, 0, 0.0, lex_str, start_line, start_col); END
     ELSE IF ch = ',' THEN BEGIN kind_str := 'COMMA'; AddToken(kind_str, 77, lex_str, 3, 0, 0.0, lex_str, start_line, start_col); END
     ELSE IF ch = ':' THEN BEGIN kind_str := 'COLON'; AddToken(kind_str, 78, lex_str, 3, 0, 0.0, lex_str, start_line, start_col); END
-    ELSE IF ch = '.' THEN BEGIN kind_str := 'DOT'; AddToken(kind_str, 79, lex_str, 3, 0, 0.0, lex_str, start_line, start_col); END;
+    ELSE IF ch = '.' THEN BEGIN kind_str := 'DOT'; AddToken(kind_str, 79, lex_str, 3, 0, 0.0, lex_str, start_line, start_col); END
+    ELSE
+    BEGIN
+      { Unrecognized character (e.g. a bare dollar sign outside any comment,
+        or a stray close-brace): the Python reference raises LexerError here
+        rather than silently accepting it. Match that failure mode with a
+        nonzero exit rather than emitting a bogus token. }
+      exit(1);
+    END;
   END;
 END;
 
@@ -749,6 +1441,11 @@ VAR
 
 BEGIN
   InitFlags(flags);
+  flag_stack_top := 0;
+  meta_const_count := 0;
+  pending_unroll_set := FALSE;
+  brace_str[0] := CHR(1);
+  brace_str[1] := '}';
   root_array := cJSON_CreateArray;
   cur_line := 1;
   cur_col := 1;

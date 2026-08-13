@@ -110,6 +110,25 @@ class StmtsMixin:
         else:
             raise CodegenError(f'Unknown statement: {type(stmt).__name__}')
 
+    def _is_call_expr(self, expr: Expression) -> bool:
+        """True if evaluating `expr` invokes a routine (has side effects),
+        matching the same niladic-call recognition codegen_expr's
+        Identifier/Designator branches use: an explicit FuncCall, a bare
+        Identifier/Designator naming the enclosing function itself
+        (self-recursion), or a bare Identifier/Designator naming a
+        zero-argument function symbol (vintage Pascal permits omitting the
+        empty argument list)."""
+        if isinstance(expr, FuncCall):
+            return True
+        if isinstance(expr, (Identifier, Designator)):
+            if isinstance(expr, Designator) and expr.selectors:
+                return False
+            if (self.current_function_pascal_name and expr.name.lower() == self.current_function_pascal_name.lower() and not self.proc_param_types.get(expr.name.lower())):
+                return True
+            symbol = self.scope.lookup(expr.name)
+            return bool(symbol and isinstance(symbol.llvm_value, ir.Function) and len(symbol.llvm_value.function_type.args) == 0)
+        return False
+
     def codegen_assign_stmt(self, stmt: AssignStmt) -> None:
         """Codegen for assignment statement."""
         target_name = stmt.target.name
@@ -133,11 +152,16 @@ class StmtsMixin:
 
         # For whole-string assignments the RHS is independently re-evaluated
         # below by get_string_chars_and_len. That's harmless for a plain
-        # designator/literal RHS, but a FuncCall RHS has side effects (the
-        # call itself), so it must not be evaluated twice: precompute it once
-        # here and hand the value through instead.
+        # variable designator or literal RHS, but a call has side effects,
+        # so it must not be evaluated twice: precompute it once here and
+        # hand the value through instead. A niladic function call written
+        # without parens (vintage Pascal permits omitting the empty
+        # argument list) parses as a bare Identifier/Designator rather than
+        # a FuncCall, so it needs the same treatment or get_string_chars_and_len
+        # re-invokes the function a second time (e.g. re-running any loop
+        # inside it against state the first call already advanced).
         precomputed_str_value = None
-        if is_str and isinstance(stmt.expr, FuncCall):
+        if is_str and self._is_call_expr(stmt.expr):
             precomputed_str_value = self.codegen_expr(stmt.expr)
             value = precomputed_str_value
         else:
@@ -202,7 +226,16 @@ class StmtsMixin:
                     self.builder.position_at_end(end_block)
         else:
             pointee = getattr(ptr.type, 'pointee', None)
-            if pointee is not None and value.type != pointee:
+            if pointee is not None and isinstance(value.type, ir.PointerType) and value.type.pointee == pointee:
+                # `value` is a pointer to an aggregate (record/array) rvalue:
+                # codegen_expr returns aggregate designators/parameters by
+                # pointer rather than loading them, for the inline-aggregate
+                # callers (memcpy-style string/array helpers) that want the
+                # address. A plain assignment needs the actual value copied
+                # into the destination, not this source pointer stored
+                # in place of it -- load through it here instead.
+                value = self.builder.load(value)
+            elif pointee is not None and value.type != pointee:
                 ptr = self.builder.bitcast(ptr, value.type.as_pointer())
             self.emit_store(value, ptr)
 
@@ -965,10 +998,20 @@ class StmtsMixin:
         self.builder.position_at_end(end_block)
 
     def codegen_return_stmt(self, stmt: ReturnStmt) -> None:
-        """Codegen for RETURN statement."""
+        """Codegen for RETURN statement.
+
+        RETURN exits the current routine immediately with whatever value is
+        currently held in the function's return-value alloca (the same slot
+        `FuncName := ...` assigns and which the implicit end-of-body return
+        loads) -- it does not reset the result to a fixed constant.
+        """
         ret_t = self.current_function.function_type.return_type
         if isinstance(ret_t, ir.VoidType):
             self.builder.ret_void()
+        elif self.current_function_pascal_name is not None:
+            symbol = self.scope.lookup(self.current_function_pascal_name)
+            result = self.builder.load(symbol.llvm_value)
+            self.builder.ret(result)
         else:
             self.builder.ret(ir.Constant(ir.IntType(32), 0))
 
