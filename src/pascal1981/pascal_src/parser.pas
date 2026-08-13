@@ -529,7 +529,7 @@ VAR
   res_c: CINT;
 BEGIN
   target_k := k;
-  ck := CurKind();
+  ck := CurKind;
   IF StringEqual(ck, target_k) THEN
   BEGIN
     pos := pos + 1;
@@ -549,7 +549,7 @@ VAR
   target_k: Str255;
 BEGIN
   target_k := k;
-  IF StringEqual(CurKind(), target_k) THEN
+  IF StringEqual(CurKind, target_k) THEN
   BEGIN
     pos := pos + 1;
     Match := TRUE;
@@ -586,7 +586,7 @@ VAR
   name: Str255;
 BEGIN
   node := CreateNode('Identifier');
-  name := CurLex();
+  name := CurLex;
   Expect('IDENTIFIER');
   AddStringField(node, 'name', name);
   ParseIdentifier := node;
@@ -600,10 +600,10 @@ BEGIN
   selectors_arr := cJSON_CreateArray;
   has_sel := FALSE;
 
-  WHILE (CurKind() = 'LBRACKET') OR (CurKind() = 'DOT') OR (CurKind() = 'POINTER') DO
+  WHILE (CurKind = 'LBRACKET') OR (CurKind = 'DOT') OR (CurKind = 'POINTER') DO
   BEGIN
     has_sel := TRUE;
-    IF CurKind() = 'LBRACKET' THEN
+    IF CurKind = 'LBRACKET' THEN
     BEGIN
       pos := pos + 1;
       sel_obj := CreateNode('Selector');
@@ -619,16 +619,16 @@ BEGIN
       Expect('RBRACKET');
       cJSON_AddItemToArray(selectors_arr, sel_obj);
     END
-    ELSE IF CurKind() = 'DOT' THEN
+    ELSE IF CurKind = 'DOT' THEN
     BEGIN
       pos := pos + 1;
       sel_obj := CreateNode('Selector');
       AddStringField(sel_obj, 'kind', 'FIELD');
-      AddStringField(sel_obj, 'index_or_field', CurLex());
+      AddStringField(sel_obj, 'index_or_field', CurLex);
       Expect('IDENTIFIER');
       cJSON_AddItemToArray(selectors_arr, sel_obj);
     END
-    ELSE IF CurKind() = 'POINTER' THEN
+    ELSE IF CurKind = 'POINTER' THEN
     BEGIN
       pos := pos + 1;
       sel_obj := CreateNode('Selector');
@@ -659,14 +659,14 @@ VAR
   name: Str255;
 BEGIN
   node := CreateNode('Designator');
-  name := CurLex();
+  name := CurLex;
   Expect('IDENTIFIER');
   AddStringField(node, 'name', name);
   selectors_arr := cJSON_CreateArray;
 
-  WHILE (CurKind() = 'LBRACKET') OR (CurKind() = 'DOT') OR (CurKind() = 'POINTER') DO
+  WHILE (CurKind = 'LBRACKET') OR (CurKind = 'DOT') OR (CurKind = 'POINTER') DO
   BEGIN
-    IF CurKind() = 'LBRACKET' THEN
+    IF CurKind = 'LBRACKET' THEN
     BEGIN
       pos := pos + 1;
       sel_obj := CreateNode('Selector');
@@ -682,16 +682,16 @@ BEGIN
       Expect('RBRACKET');
       cJSON_AddItemToArray(selectors_arr, sel_obj);
     END
-    ELSE IF CurKind() = 'DOT' THEN
+    ELSE IF CurKind = 'DOT' THEN
     BEGIN
       pos := pos + 1;
       sel_obj := CreateNode('Selector');
       AddStringField(sel_obj, 'kind', 'FIELD');
-      AddStringField(sel_obj, 'index_or_field', CurLex());
+      AddStringField(sel_obj, 'index_or_field', CurLex);
       Expect('IDENTIFIER');
       cJSON_AddItemToArray(selectors_arr, sel_obj);
     END
-    ELSE IF CurKind() = 'POINTER' THEN
+    ELSE IF CurKind = 'POINTER' THEN
     BEGIN
       pos := pos + 1;
       sel_obj := CreateNode('Selector');
@@ -731,7 +731,7 @@ VAR
   args_arr: ADRMEM;
 BEGIN
   args_arr := cJSON_CreateArray;
-  IF CurKind() <> 'RPAREN' THEN
+  IF CurKind <> 'RPAREN' THEN
   BEGIN
     cJSON_AddItemToArray(args_arr, ParseExpression);
     WHILE Match('COMMA') DO
@@ -745,11 +745,11 @@ VAR
   arr: ADRMEM;
 BEGIN
   arr := cJSON_CreateArray;
-  cJSON_AddItemToArray(arr, cJSON_CreateString(MakeCStr(CurLex())));
+  cJSON_AddItemToArray(arr, cJSON_CreateString(MakeCStr(CurLex)));
   Expect('IDENTIFIER');
   WHILE Match('COMMA') DO
   BEGIN
-    cJSON_AddItemToArray(arr, cJSON_CreateString(MakeCStr(CurLex())));
+    cJSON_AddItemToArray(arr, cJSON_CreateString(MakeCStr(CurLex)));
     Expect('IDENTIFIER');
   END;
   ParseIdentListArr := arr;
@@ -766,63 +766,63 @@ BEGIN
     literal/identifier is tried first (no sign consumed here), and a leading
     +/- sign is only legal directly before INTEGER_LITERAL/REAL_LITERAL --
     e.g. -'A' must be rejected, not silently accepted. }
-  IF CurKind() = 'INTEGER_LITERAL' THEN
+  IF CurKind = 'INTEGER_LITERAL' THEN
   BEGIN
     node := CreateNode('IntLiteral');
     AddIntField(node, 'value', CurValueInt());
     Expect('INTEGER_LITERAL');
     ParseConstant := node;
   END
-  ELSE IF CurKind() = 'REAL_LITERAL' THEN
+  ELSE IF CurKind = 'REAL_LITERAL' THEN
   BEGIN
     node := CreateNode('RealLiteral');
-    val_str := CurLex();
+    val_str := CurLex;
     Expect('REAL_LITERAL');
     AddRealField(node, 'value', StrToRealVal(val_str));
     ParseConstant := node;
   END
-  ELSE IF CurKind() = 'CHAR_LITERAL' THEN
+  ELSE IF CurKind = 'CHAR_LITERAL' THEN
   BEGIN
     node := CreateNode('CharLiteral');
-    val_str := CurValueStr();
+    val_str := CurValueStr;
     Expect('CHAR_LITERAL');
     AddStringField(node, 'value', val_str);
     ParseConstant := node;
   END
-  ELSE IF CurKind() = 'STRING_LITERAL' THEN
+  ELSE IF CurKind = 'STRING_LITERAL' THEN
   BEGIN
     node := CreateNode('StringLiteral');
-    val_str := CurLex();
+    val_str := CurLex;
     Expect('STRING_LITERAL');
     AddStringField(node, 'value', val_str);
     ParseConstant := node;
   END
-  ELSE IF CurKind() = 'BOOLEAN_LITERAL' THEN
+  ELSE IF CurKind = 'BOOLEAN_LITERAL' THEN
   BEGIN
     node := CreateNode('BoolLiteral');
-    val_str := CurLex();
+    val_str := CurLex;
     Expect('BOOLEAN_LITERAL');
     AddBoolField(node, 'value', StringEqual(UpperStr(val_str), 'TRUE'));
     ParseConstant := node;
   END
-  ELSE IF CurKind() = 'NIL' THEN
+  ELSE IF CurKind = 'NIL' THEN
   BEGIN
     pos := pos + 1;
     ParseConstant := CreateNode('NilLiteral');
   END
-  ELSE IF CurKind() = 'IDENTIFIER' THEN
+  ELSE IF CurKind = 'IDENTIFIER' THEN
   BEGIN
-    val_str := CurLex();
+    val_str := CurLex;
     Expect('IDENTIFIER');
     IF (StringEqual(UpperStr(val_str), 'WRD') OR StringEqual(UpperStr(val_str), 'BYWORD')) AND
-       (CurKind() = 'LPAREN') THEN
+       (CurKind = 'LPAREN') THEN
     BEGIN
       pos := pos + 1;
       node := CreateNode('FuncCall');
       AddStringField(node, 'name', val_str);
       args_arr_const := cJSON_CreateArray;
       cJSON_AddItemToArray(args_arr_const, ParseConstant());
-      WHILE CurKind() = 'COMMA' DO
+      WHILE CurKind = 'COMMA' DO
       BEGIN
         pos := pos + 1;
         cJSON_AddItemToArray(args_arr_const, ParseConstant());
@@ -838,11 +838,11 @@ BEGIN
       ParseConstant := node;
     END;
   END
-  ELSE IF (CurKind() = 'PLUS') OR (CurKind() = 'MINUS') THEN
+  ELSE IF (CurKind = 'PLUS') OR (CurKind = 'MINUS') THEN
   BEGIN
-    sign_neg := (CurKind() = 'MINUS');
+    sign_neg := (CurKind = 'MINUS');
     pos := pos + 1;
-    IF CurKind() = 'INTEGER_LITERAL' THEN
+    IF CurKind = 'INTEGER_LITERAL' THEN
     BEGIN
       node := CreateNode('IntLiteral');
       IF sign_neg THEN
@@ -852,10 +852,10 @@ BEGIN
       Expect('INTEGER_LITERAL');
       ParseConstant := node;
     END
-    ELSE IF CurKind() = 'REAL_LITERAL' THEN
+    ELSE IF CurKind = 'REAL_LITERAL' THEN
     BEGIN
       node := CreateNode('RealLiteral');
-      val_str := CurLex();
+      val_str := CurLex;
       Expect('REAL_LITERAL');
       IF sign_neg THEN
         AddRealField(node, 'value', -StrToRealVal(val_str))
@@ -899,7 +899,7 @@ VAR
   val_str, name, kop: Str255;
   res_c: CINT;
 BEGIN
-  IF CurKind() = 'NOT' THEN
+  IF CurKind = 'NOT' THEN
   BEGIN
     pos := pos + 1;
     node := CreateNode('UnaryOp');
@@ -907,58 +907,58 @@ BEGIN
     AddField(node, 'operand', ParseFactor);
     ParseFactor := node;
   END
-  ELSE IF CurKind() = 'INTEGER_LITERAL' THEN
+  ELSE IF CurKind = 'INTEGER_LITERAL' THEN
   BEGIN
     node := CreateNode('IntLiteral');
     AddIntField(node, 'value', CurValueInt());
     Expect('INTEGER_LITERAL');
     ParseFactor := node;
   END
-  ELSE IF CurKind() = 'REAL_LITERAL' THEN
+  ELSE IF CurKind = 'REAL_LITERAL' THEN
   BEGIN
     node := CreateNode('RealLiteral');
-    val_str := CurLex();
+    val_str := CurLex;
     Expect('REAL_LITERAL');
     AddRealField(node, 'value', StrToRealVal(val_str));
     ParseFactor := node;
   END
-  ELSE IF CurKind() = 'CHAR_LITERAL' THEN
+  ELSE IF CurKind = 'CHAR_LITERAL' THEN
   BEGIN
     node := CreateNode('CharLiteral');
-    val_str := CurValueStr();
+    val_str := CurValueStr;
     Expect('CHAR_LITERAL');
     AddStringField(node, 'value', val_str);
     ParseFactor := node;
   END
-  ELSE IF CurKind() = 'STRING_LITERAL' THEN
+  ELSE IF CurKind = 'STRING_LITERAL' THEN
   BEGIN
     node := CreateNode('StringLiteral');
-    val_str := CurLex();
+    val_str := CurLex;
     Expect('STRING_LITERAL');
     AddStringField(node, 'value', val_str);
     ParseFactor := node;
   END
-  ELSE IF CurKind() = 'BOOLEAN_LITERAL' THEN
+  ELSE IF CurKind = 'BOOLEAN_LITERAL' THEN
   BEGIN
     node := CreateNode('BoolLiteral');
-    val_str := CurLex();
+    val_str := CurLex;
     Expect('BOOLEAN_LITERAL');
     AddBoolField(node, 'value', StringEqual(val_str, 'TRUE') OR StringEqual(val_str, 'true'));
     ParseFactor := node;
   END
-  ELSE IF CurKind() = 'NIL' THEN
+  ELSE IF CurKind = 'NIL' THEN
   BEGIN
     pos := pos + 1;
     node := CreateNode('NilLiteral');
     ParseFactor := node;
   END
-  ELSE IF CurKind() = 'IDENTIFIER' THEN
+  ELSE IF CurKind = 'IDENTIFIER' THEN
   BEGIN
-    name := CurLex();
-    IF NextKind() = 'LPAREN' THEN
+    name := CurLex;
+    IF NextKind = 'LPAREN' THEN
     BEGIN
       pos := pos + 2;
-      IF CurKind() <> 'RPAREN' THEN
+      IF CurKind <> 'RPAREN' THEN
         args_arr := ParseActualParameterList
       ELSE
         args_arr := cJSON_CreateArray;
@@ -974,18 +974,18 @@ BEGIN
       ParseFactor := ParseDesignatorRest(name);
     END;
   END
-  ELSE IF CurKind() = 'LPAREN' THEN
+  ELSE IF CurKind = 'LPAREN' THEN
   BEGIN
     Expect('LPAREN');
     expr := ParseExpression;
     Expect('RPAREN');
     ParseFactor := expr;
   END
-  ELSE IF CurKind() = 'LBRACKET' THEN
+  ELSE IF CurKind = 'LBRACKET' THEN
   BEGIN
     pos := pos + 1;
     elements_arr := cJSON_CreateArray;
-    IF CurKind() <> 'RBRACKET' THEN
+    IF CurKind <> 'RBRACKET' THEN
     BEGIN
       cJSON_AddItemToArray(elements_arr, ParseSetElement);
       WHILE Match('COMMA') DO
@@ -1000,7 +1000,7 @@ BEGIN
   ELSE
   BEGIN
     res_c := puts(MakeCStr('Parser Error: Invalid factor expression'));
-    res_c := puts(MakeCStr(CurKind()));
+    res_c := puts(MakeCStr(CurKind));
     exit(1);
   END;
 END;
@@ -1012,17 +1012,17 @@ VAR
   k: Str255;
 BEGIN
   left := ParseFactor;
-  k := CurKind();
+  k := CurKind;
   WHILE (k = 'MUL') OR (k = 'SLASH') OR (k = 'DIV') OR (k = 'MOD') OR (k = 'AND') DO
   BEGIN
-    IF (k = 'AND') AND (NextKind() = 'THEN') THEN
+    IF (k = 'AND') AND (NextKind = 'THEN') THEN
       k := ''
     ELSE
     BEGIN
       op_str := k;
       pos := pos + 1;
       left := MakeBinOp(op_str, left, ParseFactor);
-      k := CurKind();
+      k := CurKind;
     END;
   END;
   ParseTerm := left;
@@ -1036,12 +1036,12 @@ VAR
   un: ADRMEM;
 BEGIN
   sign_minus := FALSE;
-  IF CurKind() = 'MINUS' THEN
+  IF CurKind = 'MINUS' THEN
   BEGIN
     sign_minus := TRUE;
     pos := pos + 1;
   END
-  ELSE IF CurKind() = 'PLUS' THEN
+  ELSE IF CurKind = 'PLUS' THEN
     pos := pos + 1;
   left := ParseTerm;
   IF sign_minus THEN
@@ -1051,17 +1051,17 @@ BEGIN
     AddField(un, 'operand', left);
     left := un;
   END;
-  k := CurKind();
+  k := CurKind;
   WHILE (k = 'PLUS') OR (k = 'MINUS') OR (k = 'OR') OR (k = 'XOR') DO
   BEGIN
-    IF (k = 'OR') AND (NextKind() = 'ELSE') THEN
+    IF (k = 'OR') AND (NextKind = 'ELSE') THEN
       k := ''
     ELSE
     BEGIN
       op_str := k;
       pos := pos + 1;
       left := MakeBinOp(op_str, left, ParseTerm);
-      k := CurKind();
+      k := CurKind;
     END;
   END;
   ParseSimpleExpression := left;
@@ -1073,7 +1073,7 @@ VAR
   op_str, k: Str255;
 BEGIN
   left := ParseSimpleExpression;
-  k := CurKind();
+  k := CurKind;
   IF (k = 'EQ') OR (k = 'NEQ') OR (k = 'LT') OR (k = 'LE') OR (k = 'GT') OR (k = 'GE') OR (k = 'IN') THEN
   BEGIN
     op_str := k;
@@ -1090,9 +1090,9 @@ VAR
   op_str: Str255;
 BEGIN
   left := ParseExpression;
-  WHILE ((CurKind() = 'AND') AND (NextKind() = 'THEN')) OR ((CurKind() = 'OR') AND (NextKind() = 'ELSE')) DO
+  WHILE ((CurKind = 'AND') AND (NextKind = 'THEN')) OR ((CurKind = 'OR') AND (NextKind = 'ELSE')) DO
   BEGIN
-    IF CurKind() = 'AND' THEN
+    IF CurKind = 'AND' THEN
       op_str := 'AND_THEN'
     ELSE
       op_str := 'OR_ELSE';
@@ -1110,7 +1110,7 @@ BEGIN
   AddField(node, 'expr', ParseExpression);
   IF Match('COLON') THEN
   BEGIN
-    IF CurKind() = 'COLON' THEN
+    IF CurKind = 'COLON' THEN
     BEGIN
       pos := pos + 1;
       AddNullField(node, 'width');
@@ -1151,7 +1151,7 @@ VAR
   name: Str255;
   saved_rangeck: BOOLEAN;
 BEGIN
-  name := CurLex();
+  name := CurLex;
   saved_rangeck := CurRangeCk();
   saved_flags_node := BuildMetaFlagsNode();
   pt := GetTok(1);
@@ -1163,7 +1163,7 @@ BEGIN
     args_arr := cJSON_CreateArray;
     IF Match('LPAREN') THEN
     BEGIN
-      IF CurKind() <> 'RPAREN' THEN
+      IF CurKind <> 'RPAREN' THEN
       BEGIN
         IF StringEqual(UpperStr(name), 'WRITE') OR StringEqual(UpperStr(name), 'WRITELN') THEN
           args_arr := ParseWriteArgList
@@ -1201,10 +1201,10 @@ BEGIN
   Expect('BEGIN');
   node := CreateNode('CompoundStmt');
   stmts_arr := cJSON_CreateArray;
-  WHILE (CurKind() <> 'END') AND (CurKind() <> 'EOF') DO
+  WHILE (CurKind <> 'END') AND (CurKind <> 'EOF') DO
   BEGIN
     cJSON_AddItemToArray(stmts_arr, ParseStatement);
-    IF CurKind() = 'SEMICOLON' THEN pos := pos + 1;
+    IF CurKind = 'SEMICOLON' THEN pos := pos + 1;
   END;
   Expect('END');
   AddField(node, 'stmts', stmts_arr);
@@ -1217,10 +1217,10 @@ VAR
 BEGIN
   Expect('BEGIN');
   arr := cJSON_CreateArray;
-  WHILE (CurKind() <> 'END') AND (CurKind() <> 'EOF') DO
+  WHILE (CurKind <> 'END') AND (CurKind <> 'EOF') DO
   BEGIN
     cJSON_AddItemToArray(arr, ParseStatement);
-    IF CurKind() = 'SEMICOLON' THEN pos := pos + 1;
+    IF CurKind = 'SEMICOLON' THEN pos := pos + 1;
   END;
   Expect('END');
   ParseCompoundStmtList := arr;
@@ -1252,14 +1252,14 @@ BEGIN
   Expect('FOR');
   node := CreateNode('ForStmt');
   static_flag := Match('STATIC');
-  var_name := CurLex();
+  var_name := CurLex;
   Expect('IDENTIFIER');
   Expect('ASSIGN');
   AddStringField(node, 'var', var_name);
   AddField(node, 'start', ParseExpression);
-  IF (CurKind() = 'TO') OR (CurKind() = 'DOWNTO') THEN
+  IF (CurKind = 'TO') OR (CurKind = 'DOWNTO') THEN
   BEGIN
-    dir_str := CurKind();
+    dir_str := CurKind;
     pos := pos + 1;
   END
   ELSE
@@ -1296,12 +1296,12 @@ BEGIN
   Expect('REPEAT');
   node := CreateNode('RepeatStmt');
   stmts_arr := cJSON_CreateArray;
-  IF CurKind() <> 'UNTIL' THEN
+  IF CurKind <> 'UNTIL' THEN
   BEGIN
     cJSON_AddItemToArray(stmts_arr, ParseStatement);
     WHILE Match('SEMICOLON') DO
     BEGIN
-      IF CurKind() = 'UNTIL' THEN BREAK;
+      IF CurKind = 'UNTIL' THEN BREAK;
       cJSON_AddItemToArray(stmts_arr, ParseStatement);
     END;
   END;
@@ -1361,12 +1361,12 @@ BEGIN
   AddField(node, 'expr', ParseExpression);
   Expect('OF');
   elements_arr := cJSON_CreateArray;
-  IF CurKind() <> 'END' THEN
+  IF CurKind <> 'END' THEN
   BEGIN
     cJSON_AddItemToArray(elements_arr, ParseCaseElement);
     WHILE Match('SEMICOLON') DO
     BEGIN
-      IF (CurKind() = 'OTHERWISE') OR (CurKind() = 'END') THEN BREAK;
+      IF (CurKind = 'OTHERWISE') OR (CurKind = 'END') THEN BREAK;
       cJSON_AddItemToArray(elements_arr, ParseCaseElement);
     END;
   END;
@@ -1386,14 +1386,14 @@ VAR
   node, selectors_arr, sel_obj: ADRMEM;
   nm: Str255;
 BEGIN
-  nm := CurLex();
+  nm := CurLex;
   Expect('IDENTIFIER');
   node := CreateNode('Designator');
   AddStringField(node, 'name', nm);
   selectors_arr := cJSON_CreateArray;
-  WHILE (CurKind() = 'LBRACKET') OR (CurKind() = 'DOT') OR (CurKind() = 'POINTER') DO
+  WHILE (CurKind = 'LBRACKET') OR (CurKind = 'DOT') OR (CurKind = 'POINTER') DO
   BEGIN
-    IF CurKind() = 'LBRACKET' THEN
+    IF CurKind = 'LBRACKET' THEN
     BEGIN
       pos := pos + 1;
       sel_obj := CreateNode('Selector');
@@ -1402,12 +1402,12 @@ BEGIN
       Expect('RBRACKET');
       cJSON_AddItemToArray(selectors_arr, sel_obj);
     END
-    ELSE IF CurKind() = 'DOT' THEN
+    ELSE IF CurKind = 'DOT' THEN
     BEGIN
       pos := pos + 1;
       sel_obj := CreateNode('Selector');
       AddStringField(sel_obj, 'kind', 'FIELD');
-      AddStringField(sel_obj, 'index_or_field', CurLex());
+      AddStringField(sel_obj, 'index_or_field', CurLex);
       Expect('IDENTIFIER');
       cJSON_AddItemToArray(selectors_arr, sel_obj);
     END
@@ -1445,14 +1445,14 @@ VAR
   node: ADRMEM;
 BEGIN
   node := CreateNode('LabelStmt');
-  IF CurKind() = 'INTEGER_LITERAL' THEN
+  IF CurKind = 'INTEGER_LITERAL' THEN
   BEGIN
-    AddIntField(node, 'label', StrToIntVal(CurLex()));
+    AddIntField(node, 'label', StrToIntVal(CurLex));
     pos := pos + 1;
   END
   ELSE
   BEGIN
-    AddStringField(node, 'label', CurLex());
+    AddStringField(node, 'label', CurLex);
     pos := pos + 1;
   END;
   Expect('COLON');
@@ -1465,7 +1465,7 @@ VAR
   node: ADRMEM;
   k: Str255;
 BEGIN
-  k := CurKind();
+  k := CurKind;
   IF k = 'BEGIN' THEN
     ParseStatement := ParseCompoundStmt
   ELSE IF k = 'IF' THEN
@@ -1484,14 +1484,14 @@ BEGIN
   BEGIN
     pos := pos + 1;
     node := CreateNode('GotoStmt');
-    IF CurKind() = 'INTEGER_LITERAL' THEN
+    IF CurKind = 'INTEGER_LITERAL' THEN
     BEGIN
-      AddIntField(node, 'label', StrToIntVal(CurLex()));
+      AddIntField(node, 'label', StrToIntVal(CurLex));
       pos := pos + 1;
     END
     ELSE
     BEGIN
-      AddStringField(node, 'label', CurLex());
+      AddStringField(node, 'label', CurLex);
       pos := pos + 1;
     END;
     ParseStatement := node;
@@ -1505,12 +1505,12 @@ BEGIN
   BEGIN
     pos := pos + 1;
     node := CreateNode('BreakStmt');
-    IF (CurKind() = 'INTEGER_LITERAL') OR (CurKind() = 'IDENTIFIER') THEN
+    IF (CurKind = 'INTEGER_LITERAL') OR (CurKind = 'IDENTIFIER') THEN
     BEGIN
-      IF CurKind() = 'INTEGER_LITERAL' THEN
-        AddIntField(node, 'label', StrToIntVal(CurLex()))
+      IF CurKind = 'INTEGER_LITERAL' THEN
+        AddIntField(node, 'label', StrToIntVal(CurLex))
       ELSE
-        AddStringField(node, 'label', CurLex());
+        AddStringField(node, 'label', CurLex);
       pos := pos + 1;
     END
     ELSE
@@ -1521,19 +1521,19 @@ BEGIN
   BEGIN
     pos := pos + 1;
     node := CreateNode('CycleStmt');
-    IF (CurKind() = 'INTEGER_LITERAL') OR (CurKind() = 'IDENTIFIER') THEN
+    IF (CurKind = 'INTEGER_LITERAL') OR (CurKind = 'IDENTIFIER') THEN
     BEGIN
-      IF CurKind() = 'INTEGER_LITERAL' THEN
-        AddIntField(node, 'label', StrToIntVal(CurLex()))
+      IF CurKind = 'INTEGER_LITERAL' THEN
+        AddIntField(node, 'label', StrToIntVal(CurLex))
       ELSE
-        AddStringField(node, 'label', CurLex());
+        AddStringField(node, 'label', CurLex);
       pos := pos + 1;
     END
     ELSE
       AddNullField(node, 'label');
     ParseStatement := node;
   END
-  ELSE IF ((k = 'INTEGER_LITERAL') OR (k = 'IDENTIFIER')) AND (NextKind() = 'COLON') THEN
+  ELSE IF ((k = 'INTEGER_LITERAL') OR (k = 'IDENTIFIER')) AND (NextKind = 'COLON') THEN
     ParseStatement := ParseLabelStmt
   ELSE IF k = 'IDENTIFIER' THEN
     ParseStatement := ParseAssignOrCallStmt
@@ -1564,9 +1564,9 @@ VAR
   nm: Str255;
   res_c: CINT;
 BEGIN
-  IF CurKind() = 'IDENTIFIER' THEN
+  IF CurKind = 'IDENTIFIER' THEN
   BEGIN
-    IF NextKind() = 'RANGE' THEN
+    IF NextKind = 'RANGE' THEN
     BEGIN
       low_e := ParseConstant;
       Expect('RANGE');
@@ -1579,7 +1579,7 @@ BEGIN
     END
     ELSE
     BEGIN
-      nm := CurLex();
+      nm := CurLex;
       Expect('IDENTIFIER');
       node := CreateNode('NamedType');
       AddStringField(node, 'name', nm);
@@ -1587,11 +1587,11 @@ BEGIN
       ParseSetBase := node;
     END;
   END
-  ELSE IF (CurKind() = 'INTEGER_LITERAL') OR (CurKind() = 'CHAR_LITERAL') OR
-          (CurKind() = 'STRING_LITERAL') OR (CurKind() = 'BOOLEAN_LITERAL') THEN
+  ELSE IF (CurKind = 'INTEGER_LITERAL') OR (CurKind = 'CHAR_LITERAL') OR
+          (CurKind = 'STRING_LITERAL') OR (CurKind = 'BOOLEAN_LITERAL') THEN
   BEGIN
     low_e := ParseConstant;
-    IF CurKind() = 'RANGE' THEN
+    IF CurKind = 'RANGE' THEN
     BEGIN
       pos := pos + 1;
       high_e := ParseConstant;
@@ -1608,11 +1608,11 @@ BEGIN
       ParseSetBase := node;
     END;
   END
-  ELSE IF (CurKind() = 'INTEGER') OR (CurKind() = 'REAL') OR (CurKind() = 'BOOLEAN') OR
-          (CurKind() = 'CHAR') OR (CurKind() = 'WORD') OR (CurKind() = 'ADRMEM') THEN
+  ELSE IF (CurKind = 'INTEGER') OR (CurKind = 'REAL') OR (CurKind = 'BOOLEAN') OR
+          (CurKind = 'CHAR') OR (CurKind = 'WORD') OR (CurKind = 'ADRMEM') THEN
   BEGIN
     node := CreateNode('BuiltinType');
-    AddStringField(node, 'name', CurKind());
+    AddStringField(node, 'name', CurKind);
     pos := pos + 1;
     ParseSetBase := node;
   END
@@ -1646,9 +1646,9 @@ VAR
   res_c: CINT;
 BEGIN
   packed_flag := Match('PACKED');
-  IF (CurKind() = 'ARRAY') OR (CurKind() = 'SUPER') THEN
+  IF (CurKind = 'ARRAY') OR (CurKind = 'SUPER') THEN
   BEGIN
-    is_super := (CurKind() = 'SUPER');
+    is_super := (CurKind = 'SUPER');
     IF is_super THEN
     BEGIN
       pos := pos + 1;
@@ -1668,17 +1668,17 @@ BEGIN
     AddBoolField(node, 'super', is_super);
     ParseType := node;
   END
-  ELSE IF CurKind() = 'RECORD' THEN
+  ELSE IF CurKind = 'RECORD' THEN
   BEGIN
     pos := pos + 1;
     fields_arr := cJSON_CreateArray;
-    WHILE CurKind() <> 'END' DO
+    WHILE CurKind <> 'END' DO
     BEGIN
       names_arr := ParseIdentListArr;
       Expect('COLON');
       field_type := ParseType;
       cJSON_AddItemToArray(fields_arr, MakeTupleNode(names_arr, field_type));
-      IF CurKind() = 'SEMICOLON' THEN
+      IF CurKind = 'SEMICOLON' THEN
         pos := pos + 1
       ELSE
         BREAK;
@@ -1689,7 +1689,7 @@ BEGIN
     AddBoolField(node, 'packed', packed_flag);
     ParseType := node;
   END
-  ELSE IF CurKind() = 'SET' THEN
+  ELSE IF CurKind = 'SET' THEN
   BEGIN
     pos := pos + 1;
     Expect('OF');
@@ -1698,7 +1698,7 @@ BEGIN
     AddField(node, 'base', base_type);
     ParseType := node;
   END
-  ELSE IF CurKind() = 'FILE' THEN
+  ELSE IF CurKind = 'FILE' THEN
   BEGIN
     pos := pos + 1;
     Expect('OF');
@@ -1708,7 +1708,7 @@ BEGIN
     AddStringField(node, 'structure', 'BINARY');
     ParseType := node;
   END
-  ELSE IF CurKind() = 'LPAREN' THEN
+  ELSE IF CurKind = 'LPAREN' THEN
   BEGIN
     pos := pos + 1;
     values_arr := ParseIdentListArr;
@@ -1717,7 +1717,7 @@ BEGIN
     AddField(node, 'values', values_arr);
     ParseType := node;
   END
-  ELSE IF CurKind() = 'LSTRING' THEN
+  ELSE IF CurKind = 'LSTRING' THEN
   BEGIN
     pos := pos + 1;
     Expect('LPAREN');
@@ -1728,7 +1728,7 @@ BEGIN
     AddIntField(node, 'max_len', max_len);
     ParseType := node;
   END
-  ELSE IF CurKind() = 'POINTER' THEN
+  ELSE IF CurKind = 'POINTER' THEN
   BEGIN
     pos := pos + 1;
     base_type := ParseType;
@@ -1738,7 +1738,7 @@ BEGIN
     AddNullField(node, 'space');
     ParseType := node;
   END
-  ELSE IF CurKind() = 'ADR' THEN
+  ELSE IF CurKind = 'ADR' THEN
   BEGIN
     pos := pos + 1;
     Expect('OF');
@@ -1749,7 +1749,7 @@ BEGIN
     AddNullField(node, 'space');
     ParseType := node;
   END
-  ELSE IF CurKind() = 'ADS' THEN
+  ELSE IF CurKind = 'ADS' THEN
   BEGIN
     pos := pos + 1;
     node := CreateNode('PointerType');
@@ -1767,9 +1767,9 @@ BEGIN
     AddStringField(node, 'flavor', 'ADS');
     ParseType := node;
   END
-  ELSE IF CurKind() = 'IDENTIFIER' THEN
+  ELSE IF CurKind = 'IDENTIFIER' THEN
   BEGIN
-    nm := CurLex();
+    nm := CurLex;
     pos := pos + 1;
     node := CreateNode('NamedType');
     AddStringField(node, 'name', nm);
@@ -1790,11 +1790,11 @@ BEGIN
       AddNullField(node, 'param');
     ParseType := node;
   END
-  ELSE IF (CurKind() = 'INTEGER') OR (CurKind() = 'REAL') OR (CurKind() = 'BOOLEAN') OR
-          (CurKind() = 'CHAR') OR (CurKind() = 'WORD') OR (CurKind() = 'ADRMEM') THEN
+  ELSE IF (CurKind = 'INTEGER') OR (CurKind = 'REAL') OR (CurKind = 'BOOLEAN') OR
+          (CurKind = 'CHAR') OR (CurKind = 'WORD') OR (CurKind = 'ADRMEM') THEN
   BEGIN
     node := CreateNode('BuiltinType');
-    AddStringField(node, 'name', CurKind());
+    AddStringField(node, 'name', CurKind);
     pos := pos + 1;
     ParseType := node;
   END
@@ -1813,18 +1813,18 @@ VAR
 BEGIN
   c_str[0] := CHR(1);
   c_str[1] := 'C';
-  IF (CurKind() = 'READONLY') OR (CurKind() = 'PUBLIC') OR (CurKind() = 'STATIC') OR
-     (CurKind() = 'EXTERNAL') OR (CurKind() = 'EXTERN') OR (CurKind() = 'PURE') THEN
+  IF (CurKind = 'READONLY') OR (CurKind = 'PUBLIC') OR (CurKind = 'STATIC') OR
+     (CurKind = 'EXTERNAL') OR (CurKind = 'EXTERN') OR (CurKind = 'PURE') THEN
   BEGIN
     node := CreateNode('Attribute');
-    AddStringField(node, 'name', CurKind());
+    AddStringField(node, 'name', CurKind);
     AddNullField(node, 'arg');
     pos := pos + 1;
     ParseAttributeItem := node;
   END
-  ELSE IF CurKind() = 'IDENTIFIER' THEN
+  ELSE IF CurKind = 'IDENTIFIER' THEN
   BEGIN
-    up := UpperStr(CurLex());
+    up := UpperStr(CurLex);
     IF StringEqual(up, 'SPACE') THEN
     BEGIN
       pos := pos + 1;
@@ -1885,7 +1885,7 @@ BEGIN
   arr := cJSON_CreateArray;
   IF Match('LBRACKET') THEN
   BEGIN
-    IF CurKind() <> 'RBRACKET' THEN
+    IF CurKind <> 'RBRACKET' THEN
     BEGIN
       cJSON_AddItemToArray(arr, ParseAttributeItem);
       WHILE Match('COMMA') DO
@@ -1903,9 +1903,9 @@ VAR
   has_mode: BOOLEAN;
 BEGIN
   has_mode := FALSE;
-  IF (CurKind() = 'VAR') OR (CurKind() = 'VARS') OR (CurKind() = 'CONST') OR (CurKind() = 'CONSTS') THEN
+  IF (CurKind = 'VAR') OR (CurKind = 'VARS') OR (CurKind = 'CONST') OR (CurKind = 'CONSTS') THEN
   BEGIN
-    mode_str := CurKind();
+    mode_str := CurKind;
     has_mode := TRUE;
     pos := pos + 1;
   END;
@@ -1930,7 +1930,7 @@ BEGIN
   cJSON_AddItemToArray(arr, ParseParamGroup);
   WHILE Match('SEMICOLON') DO
   BEGIN
-    IF CurKind() = 'RPAREN' THEN BREAK;
+    IF CurKind = 'RPAREN' THEN BREAK;
     cJSON_AddItemToArray(arr, ParseParamGroup);
   END;
   ParseParamList := arr;
@@ -1942,9 +1942,9 @@ VAR
   nm: Str255;
 BEGIN
   Expect('CONST');
-  WHILE CurKind() = 'IDENTIFIER' DO
+  WHILE CurKind = 'IDENTIFIER' DO
   BEGIN
-    nm := CurLex();
+    nm := CurLex;
     Expect('IDENTIFIER');
     Expect('EQ');
     node := CreateNode('ConstDecl');
@@ -1961,9 +1961,9 @@ VAR
   nm: Str255;
 BEGIN
   Expect('TYPE');
-  WHILE CurKind() = 'IDENTIFIER' DO
+  WHILE CurKind = 'IDENTIFIER' DO
   BEGIN
-    nm := CurLex();
+    nm := CurLex;
     Expect('IDENTIFIER');
     Expect('EQ');
     node := CreateNode('TypeDecl');
@@ -1979,7 +1979,7 @@ VAR
   node, names_arr, attrs_arr: ADRMEM;
 BEGIN
   Expect('VAR');
-  WHILE (CurKind() = 'IDENTIFIER') OR (CurKind() = 'LBRACKET') DO
+  WHILE (CurKind = 'IDENTIFIER') OR (CurKind = 'LBRACKET') DO
   BEGIN
     attrs_arr := ParseAttributeSectionOptional;
     names_arr := ParseIdentListArr;
@@ -2001,17 +2001,17 @@ BEGIN
   Expect('LABEL');
   node := CreateNode('LabelDecl');
   labels_arr := cJSON_CreateArray;
-  IF CurKind() = 'INTEGER_LITERAL' THEN
-    cJSON_AddItemToArray(labels_arr, cJSON_CreateNumber(StrToIntVal(CurLex())))
+  IF CurKind = 'INTEGER_LITERAL' THEN
+    cJSON_AddItemToArray(labels_arr, cJSON_CreateNumber(StrToIntVal(CurLex)))
   ELSE
-    cJSON_AddItemToArray(labels_arr, cJSON_CreateString(MakeCStr(CurLex())));
+    cJSON_AddItemToArray(labels_arr, cJSON_CreateString(MakeCStr(CurLex)));
   pos := pos + 1;
   WHILE Match('COMMA') DO
   BEGIN
-    IF CurKind() = 'INTEGER_LITERAL' THEN
-      cJSON_AddItemToArray(labels_arr, cJSON_CreateNumber(StrToIntVal(CurLex())))
+    IF CurKind = 'INTEGER_LITERAL' THEN
+      cJSON_AddItemToArray(labels_arr, cJSON_CreateNumber(StrToIntVal(CurLex)))
     ELSE
-      cJSON_AddItemToArray(labels_arr, cJSON_CreateString(MakeCStr(CurLex())));
+      cJSON_AddItemToArray(labels_arr, cJSON_CreateString(MakeCStr(CurLex)));
     pos := pos + 1;
   END;
   Expect('SEMICOLON');
@@ -2026,7 +2026,7 @@ VAR
   has_directive: BOOLEAN;
 BEGIN
   Expect('PROCEDURE');
-  nm := CurLex();
+  nm := CurLex;
   Expect('IDENTIFIER');
   params_arr := cJSON_CreateArray;
   IF Match('LPAREN') THEN
@@ -2041,9 +2041,9 @@ BEGIN
   AddStringField(node, 'name', nm);
   AddField(node, 'params', params_arr);
   AddField(node, 'attributes', attrs_arr);
-  IF (CurKind() = 'EXTERN') OR (CurKind() = 'EXTERNAL') OR (CurKind() = 'FORWARD') THEN
+  IF (CurKind = 'EXTERN') OR (CurKind = 'EXTERNAL') OR (CurKind = 'FORWARD') THEN
   BEGIN
-    directive_str := CurKind();
+    directive_str := CurKind;
     has_directive := TRUE;
     pos := pos + 1;
     Expect('SEMICOLON');
@@ -2070,7 +2070,7 @@ VAR
   has_directive: BOOLEAN;
 BEGIN
   Expect('FUNCTION');
-  nm := CurLex();
+  nm := CurLex;
   Expect('IDENTIFIER');
   params_arr := cJSON_CreateArray;
   IF Match('LPAREN') THEN
@@ -2088,9 +2088,9 @@ BEGIN
   AddField(node, 'params', params_arr);
   AddField(node, 'return_type', ret_type);
   AddField(node, 'attributes', attrs_arr);
-  IF (CurKind() = 'EXTERN') OR (CurKind() = 'EXTERNAL') OR (CurKind() = 'FORWARD') THEN
+  IF (CurKind = 'EXTERN') OR (CurKind = 'EXTERNAL') OR (CurKind = 'FORWARD') THEN
   BEGIN
-    directive_str := CurKind();
+    directive_str := CurKind;
     has_directive := TRUE;
     pos := pos + 1;
     Expect('SEMICOLON');
@@ -2112,20 +2112,20 @@ END;
 
 PROCEDURE ParseDeclSectionsInto(decls_arr: ADRMEM);
 BEGIN
-  WHILE (CurKind() = 'CONST') OR (CurKind() = 'TYPE') OR (CurKind() = 'VAR') OR
-        (CurKind() = 'LABEL') OR (CurKind() = 'PROCEDURE') OR (CurKind() = 'FUNCTION') DO
+  WHILE (CurKind = 'CONST') OR (CurKind = 'TYPE') OR (CurKind = 'VAR') OR
+        (CurKind = 'LABEL') OR (CurKind = 'PROCEDURE') OR (CurKind = 'FUNCTION') DO
   BEGIN
-    IF CurKind() = 'CONST' THEN
+    IF CurKind = 'CONST' THEN
       ParseConstSection(decls_arr)
-    ELSE IF CurKind() = 'TYPE' THEN
+    ELSE IF CurKind = 'TYPE' THEN
       ParseTypeSection(decls_arr)
-    ELSE IF CurKind() = 'VAR' THEN
+    ELSE IF CurKind = 'VAR' THEN
       ParseVarSection(decls_arr)
-    ELSE IF CurKind() = 'LABEL' THEN
+    ELSE IF CurKind = 'LABEL' THEN
       ParseLabelSection(decls_arr)
-    ELSE IF CurKind() = 'PROCEDURE' THEN
+    ELSE IF CurKind = 'PROCEDURE' THEN
       cJSON_AddItemToArray(decls_arr, ParseProcDecl)
-    ELSE IF CurKind() = 'FUNCTION' THEN
+    ELSE IF CurKind = 'FUNCTION' THEN
       cJSON_AddItemToArray(decls_arr, ParseFuncDecl);
   END;
 END;
@@ -2136,7 +2136,7 @@ VAR
   nm: Str255;
 BEGIN
   Expect('PROCEDURE');
-  nm := CurLex();
+  nm := CurLex;
   Expect('IDENTIFIER');
   params_arr := cJSON_CreateArray;
   IF Match('LPAREN') THEN
@@ -2162,7 +2162,7 @@ VAR
   nm: Str255;
 BEGIN
   Expect('FUNCTION');
-  nm := CurLex();
+  nm := CurLex;
   Expect('IDENTIFIER');
   params_arr := cJSON_CreateArray;
   IF Match('LPAREN') THEN
@@ -2187,20 +2187,20 @@ END;
 
 PROCEDURE ParseInterfaceDeclSectionsInto(decls_arr: ADRMEM);
 BEGIN
-  WHILE (CurKind() = 'CONST') OR (CurKind() = 'TYPE') OR (CurKind() = 'VAR') OR
-        (CurKind() = 'LABEL') OR (CurKind() = 'PROCEDURE') OR (CurKind() = 'FUNCTION') DO
+  WHILE (CurKind = 'CONST') OR (CurKind = 'TYPE') OR (CurKind = 'VAR') OR
+        (CurKind = 'LABEL') OR (CurKind = 'PROCEDURE') OR (CurKind = 'FUNCTION') DO
   BEGIN
-    IF CurKind() = 'CONST' THEN
+    IF CurKind = 'CONST' THEN
       ParseConstSection(decls_arr)
-    ELSE IF CurKind() = 'TYPE' THEN
+    ELSE IF CurKind = 'TYPE' THEN
       ParseTypeSection(decls_arr)
-    ELSE IF CurKind() = 'VAR' THEN
+    ELSE IF CurKind = 'VAR' THEN
       ParseVarSection(decls_arr)
-    ELSE IF CurKind() = 'LABEL' THEN
+    ELSE IF CurKind = 'LABEL' THEN
       ParseLabelSection(decls_arr)
-    ELSE IF CurKind() = 'PROCEDURE' THEN
+    ELSE IF CurKind = 'PROCEDURE' THEN
       cJSON_AddItemToArray(decls_arr, ParseInterfaceProcDecl)
-    ELSE IF CurKind() = 'FUNCTION' THEN
+    ELSE IF CurKind = 'FUNCTION' THEN
       cJSON_AddItemToArray(decls_arr, ParseInterfaceFuncDecl);
   END;
 END;
@@ -2210,7 +2210,7 @@ VAR
   node, imports_arr: ADRMEM;
   nm: Str255;
 BEGIN
-  nm := CurLex();
+  nm := CurLex;
   Expect('IDENTIFIER');
   node := CreateNode('UseClause');
   AddStringField(node, 'name', nm);
@@ -2231,14 +2231,14 @@ BEGIN
   cJSON_AddItemToArray(arr, ParseUsesImport);
   WHILE Match('COMMA') DO
     cJSON_AddItemToArray(arr, ParseUsesImport);
-  IF CurKind() = 'SEMICOLON' THEN pos := pos + 1;
+  IF CurKind = 'SEMICOLON' THEN pos := pos + 1;
 END;
 
 FUNCTION IsAtDevicePrefix(target_kind: Str255): BOOLEAN;
 BEGIN
-  IsAtDevicePrefix := (CurKind() = 'IDENTIFIER') AND
-                       StringEqual(UpperStr(CurLex()), 'DEVICE') AND
-                       StringEqual(NextKind(), target_kind);
+  IsAtDevicePrefix := (CurKind = 'IDENTIFIER') AND
+                       StringEqual(UpperStr(CurLex), 'DEVICE') AND
+                       StringEqual(NextKind, target_kind);
 END;
 
 FUNCTION ParseModuleUnit(is_device: BOOLEAN): ADRMEM;
@@ -2247,19 +2247,19 @@ VAR
   nm: Str255;
 BEGIN
   Expect('MODULE');
-  nm := CurLex();
+  nm := CurLex;
   Expect('IDENTIFIER');
   Expect('SEMICOLON');
   node := CreateNode('ModuleUnit');
   AddStringField(node, 'name', nm);
   uses_arr := cJSON_CreateArray;
-  WHILE CurKind() = 'USES' DO
+  WHILE CurKind = 'USES' DO
     ParseUsesClauseInto(uses_arr);
   AddField(node, 'uses', uses_arr);
   decls_arr := cJSON_CreateArray;
   ParseDeclSectionsInto(decls_arr);
   AddField(node, 'decls', decls_arr);
-  IF CurKind() = 'END' THEN
+  IF CurKind = 'END' THEN
   BEGIN
     Expect('END');
     Expect('DOT');
@@ -2280,7 +2280,7 @@ BEGIN
   Expect('INTERFACE');
   Expect('SEMICOLON');
   Expect('UNIT');
-  nm := CurLex();
+  nm := CurLex;
   Expect('IDENTIFIER');
   params_arr := cJSON_CreateArray;
   IF Match('LPAREN') THEN
@@ -2293,14 +2293,14 @@ BEGIN
   AddStringField(node, 'name', nm);
   AddField(node, 'params', params_arr);
   uses_arr := cJSON_CreateArray;
-  WHILE CurKind() = 'USES' DO
+  WHILE CurKind = 'USES' DO
     ParseUsesClauseInto(uses_arr);
   AddField(node, 'uses', uses_arr);
   decls_arr := cJSON_CreateArray;
   ParseInterfaceDeclSectionsInto(decls_arr);
   AddField(node, 'decls', decls_arr);
   has_init := FALSE;
-  IF CurKind() = 'BEGIN' THEN
+  IF CurKind = 'BEGIN' THEN
   BEGIN
     has_init := TRUE;
     discard_node := ParseCompoundStmt;
@@ -2323,19 +2323,19 @@ VAR
 BEGIN
   Expect('IMPLEMENTATION');
   Expect('OF');
-  nm := CurLex();
+  nm := CurLex;
   Expect('IDENTIFIER');
   Expect('SEMICOLON');
   node := CreateNode('ImplementationUnit');
   AddStringField(node, 'name', nm);
   uses_arr := cJSON_CreateArray;
-  WHILE CurKind() = 'USES' DO
+  WHILE CurKind = 'USES' DO
     ParseUsesClauseInto(uses_arr);
   AddField(node, 'uses', uses_arr);
   decls_arr := cJSON_CreateArray;
   ParseDeclSectionsInto(decls_arr);
   AddField(node, 'decls', decls_arr);
-  IF CurKind() = 'BEGIN' THEN
+  IF CurKind = 'BEGIN' THEN
     AddField(node, 'init_body', ParseCompoundStmtList)
   ELSE
     AddNullField(node, 'init_body');
@@ -2355,7 +2355,7 @@ BEGIN
   ParseDeclSectionsInto(decls_arr);
   AddField(node, 'decls', decls_arr);
 
-  IF CurKind() = 'BEGIN' THEN
+  IF CurKind = 'BEGIN' THEN
     AddField(node, 'body', ParseCompoundStmtList)
   ELSE
     AddField(node, 'body', cJSON_CreateArray);
@@ -2370,7 +2370,7 @@ VAR
   res_c: CINT;
 BEGIN
   Expect('PROGRAM');
-  name := CurLex();
+  name := CurLex;
   Expect('IDENTIFIER');
 
   node := CreateNode('ProgramUnit');
@@ -2379,13 +2379,13 @@ BEGIN
   params_arr := cJSON_CreateArray;
   IF Match('LPAREN') THEN
   BEGIN
-    IF CurKind() <> 'RPAREN' THEN
+    IF CurKind <> 'RPAREN' THEN
     BEGIN
-      cJSON_AddItemToArray(params_arr, cJSON_CreateString(MakeCStr(CurLex())));
+      cJSON_AddItemToArray(params_arr, cJSON_CreateString(MakeCStr(CurLex)));
       Expect('IDENTIFIER');
       WHILE Match('COMMA') DO
       BEGIN
-        cJSON_AddItemToArray(params_arr, cJSON_CreateString(MakeCStr(CurLex())));
+        cJSON_AddItemToArray(params_arr, cJSON_CreateString(MakeCStr(CurLex)));
         Expect('IDENTIFIER');
       END;
     END;
@@ -2396,7 +2396,7 @@ BEGIN
   Expect('SEMICOLON');
 
   uses_arr := cJSON_CreateArray;
-  WHILE CurKind() = 'USES' DO
+  WHILE CurKind = 'USES' DO
     ParseUsesClauseInto(uses_arr);
   AddField(node, 'uses', uses_arr);
 
@@ -2424,9 +2424,9 @@ BEGIN
   interfaces_arr := cJSON_CreateArray;
   standalone_iface := FALSE;
 
-  WHILE (NOT standalone_iface) AND ((CurKind() = 'INTERFACE') OR IsAtDevicePrefix('INTERFACE')) DO
+  WHILE (NOT standalone_iface) AND ((CurKind = 'INTERFACE') OR IsAtDevicePrefix('INTERFACE')) DO
   BEGIN
-    IF CurKind() = 'INTERFACE' THEN
+    IF CurKind = 'INTERFACE' THEN
       iface_node := ParseInterfaceUnit(FALSE)
     ELSE
     BEGIN
@@ -2434,7 +2434,7 @@ BEGIN
       iface_node := ParseInterfaceUnit(TRUE);
     END;
     cJSON_AddItemToArray(interfaces_arr, iface_node);
-    IF CurKind() = 'EOF' THEN
+    IF CurKind = 'EOF' THEN
     BEGIN
       standalone_iface := TRUE;
       ast_root := cJSON_GetArrayItem(interfaces_arr, 0);
@@ -2443,23 +2443,23 @@ BEGIN
 
   IF NOT standalone_iface THEN
   BEGIN
-    IF CurKind() = 'PROGRAM' THEN
+    IF CurKind = 'PROGRAM' THEN
       ast_root := ParseProgramUnit
-    ELSE IF CurKind() = 'MODULE' THEN
+    ELSE IF CurKind = 'MODULE' THEN
       ast_root := ParseModuleUnit(FALSE)
     ELSE IF IsAtDevicePrefix('MODULE') THEN
     BEGIN
       pos := pos + 1;
       ast_root := ParseModuleUnit(TRUE);
     END
-    ELSE IF CurKind() = 'INTERFACE' THEN
+    ELSE IF CurKind = 'INTERFACE' THEN
       ast_root := ParseInterfaceUnit(FALSE)
     ELSE IF IsAtDevicePrefix('INTERFACE') THEN
     BEGIN
       pos := pos + 1;
       ast_root := ParseInterfaceUnit(TRUE);
     END
-    ELSE IF CurKind() = 'IMPLEMENTATION' THEN
+    ELSE IF CurKind = 'IMPLEMENTATION' THEN
       ast_root := ParseImplementationUnit(FALSE)
     ELSE IF IsAtDevicePrefix('IMPLEMENTATION') THEN
     BEGIN
