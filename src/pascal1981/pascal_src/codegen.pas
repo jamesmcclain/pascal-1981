@@ -1,17 +1,22 @@
 { Native Pascal Code Generator, pascal1981-dialect implementation.
 
-  Scope (v1, scalar core): a PROGRAM whose declarations are top-level scalar
-  VAR declarations (INTEGER/REAL/BOOLEAN/CHAR) and whose body is built from
-  assignment, IF/WHILE/REPEAT/FOR, compound statements, and WRITE/WRITELN of
-  string-literal/scalar arguments. Integer/real/boolean/char expressions
-  support the full arithmetic/relational/logical operator set, but operand
-  types are not implicitly promoted (mixing INTEGER and REAL in one
-  expression is rejected, not silently coerced). Everything else --
-  procedures/functions, arrays/records/sets/pointers/files, C-ABI, units,
-  CASE, WRITE width:precision, MATHCK/RANGECK-style runtime traps -- is out
-  of scope for v1 and is rejected loudly via AbortWith rather than silently
-  mishandled or miscompiled. This mirrors the phasing of the earlier native
-  stages: reject unhandled constructs instead of guessing.
+  Goal: full parity with the Python reference code generator
+  (src/pascal1981/codegen/). Built up incrementally -- each supported
+  construct is real, but the construct set covered so far is a proper
+  subset of the reference. Currently covers: PROGRAM-level and routine-local
+  scalar VAR declarations (INTEGER/REAL/BOOLEAN/CHAR); the full arithmetic/
+  relational/logical expression operator set (no implicit cross-type
+  promotion -- mixing INTEGER and REAL in one expression is rejected, not
+  silently coerced); assignment; IF/WHILE/REPEAT/FOR and compound
+  statements; WRITE/WRITELN of string-literal/scalar arguments; and
+  PROCEDURE/FUNCTION declarations with value and VAR parameters, including
+  recursion. Not yet covered: aggregates (arrays/records/sets/pointers/
+  files), CASE, WRITE width:precision, MATHCK/RANGECK-style runtime traps,
+  C-ABI externs, units, and DEVICE MODULE/PTX generation. Anything not yet
+  covered is rejected loudly via AbortWith rather than silently mishandled
+  or miscompiled -- reject unhandled constructs instead of guessing, the
+  same discipline the earlier native stages (lexer.pas/parser.pas/
+  typechecker.pas) already follow.
 
   Reads the annotated JSON AST produced by pascal1981-typecheck on standard
   input, builds an LLVM module via the LLVM-C API (linked against
@@ -63,6 +68,10 @@ PROCEDURE LLVMBuildBr(b: ADRMEM; dest: ADRMEM) [C]; EXTERN;
 PROCEDURE LLVMBuildCondBr(b: ADRMEM; cond: ADRMEM; then_bb: ADRMEM; else_bb: ADRMEM) [C]; EXTERN;
 FUNCTION LLVMBuildCall2(b: ADRMEM; fty: ADRMEM; fn: ADRMEM; args: ADRMEM; nargs: CINT; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildRet(b: ADRMEM; v: ADRMEM): ADRMEM [C]; EXTERN;
+PROCEDURE LLVMBuildRetVoid(b: ADRMEM) [C]; EXTERN;
+FUNCTION LLVMBuildAlloca(b: ADRMEM; ty: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMGetParam(fn: ADRMEM; idx: CINT): ADRMEM [C]; EXTERN;
+FUNCTION LLVMVoidTypeInContext(ctx: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMPrintModuleToString(m: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMVerifyModule(m: ADRMEM; action: CINT; outmsg: ADRMEM): CINT [C]; EXTERN;
 FUNCTION malloc(size: CINT): ADRMEM [C]; EXTERN;
@@ -87,6 +96,9 @@ CONST
   TK_CHAR    = 4;
 
   MAX_SYMBOLS = 500;
+  MAX_SCOPES = 64;
+  MAX_PARAMS = 16;
+  MAX_ROUTINES = 200;
 
 TYPE
   PAdr = ^ADRMEM;
@@ -94,17 +106,61 @@ TYPE
   SymRec = RECORD
     name: Str255;
     tk: INTEGER;
-    llvm_val: ADRMEM; { the LLVMValueRef of the global variable slot }
+    llvm_val: ADRMEM; { the LLVMValueRef of the variable's storage: an
+                        LLVMAddGlobal for a global, an LLVMBuildAlloca for a
+                        local or a value-mode parameter, or the raw incoming
+                        pointer argument itself for a VAR-mode parameter --
+                        all three are just opaque pointers to CodegenExpr's
+                        LLVMBuildLoad2/LLVMBuildStore call sites, so no
+                        separate "kind" tag is needed. }
+  END;
+
+  ParamNameArr = ARRAY [1..MAX_PARAMS] OF Str255;
+  ParamTkArr = ARRAY [1..MAX_PARAMS] OF INTEGER;
+  ParamVarArr = ARRAY [1..MAX_PARAMS] OF BOOLEAN;
+
+  RoutineRec = RECORD
+    name: Str255;
+    is_func: BOOLEAN;
+    fn: ADRMEM;
+    fnty: ADRMEM;
+    ret_tk: INTEGER;
+    nparams: INTEGER32;
+    param_tk: ParamTkArr;
+    param_is_var: ParamVarArr;
   END;
 
 VAR
   ctx, modl, builder: ADRMEM;
-  i32ty, i16ty, i8ty, i1ty, dblty, i8ptrty: ADRMEM;
+  i32ty, i16ty, i8ty, i1ty, dblty, i8ptrty, voidty: ADRMEM;
   main_fnty, main_fn, entry_bb: ADRMEM;
   printf_fnty, printf_fn: ADRMEM;
+  cur_fn: ADRMEM; { the LLVM function LLVMAppendBasicBlockInContext should
+                    attach new blocks to: main_fn at top level, or the
+                    routine currently being codegen'd. }
 
   symbols: ARRAY [1..MAX_SYMBOLS] OF SymRec;
   nsymbols: INTEGER32;
+  scope_stack: ARRAY [1..MAX_SCOPES] OF INTEGER32;
+  scope_top: INTEGER32;
+  in_local_scope: BOOLEAN; { FALSE while codegen'ing top-level VAR decls
+                             (global storage), TRUE while inside a routine
+                             body (alloca'd local storage). }
+
+  routines: ARRAY [1..MAX_ROUTINES] OF RoutineRec;
+  nroutines: INTEGER32;
+
+  cur_func_name: Str255; { '' unless codegen'ing a FUNCTION body, in which
+                           case it is that function's own name -- mirrors
+                           typechecker.pas's cur_func_name: `Name := expr`
+                           inside a FUNCTION's own body assigns through the
+                           return-value slot rather than any symbol-table
+                           entry, and (as in typechecker.pas) the function's
+                           own name is deliberately never registered as a
+                           symbol, so a recursive call resolves through the
+                           routine table instead of being shadowed. }
+  cur_func_ret_tk: INTEGER;
+  cur_func_ret_slot: ADRMEM;
 
   last_val_tk: INTEGER; { side-channel result of CodegenExpr, mirroring the
                           typechecker's own aux-field convention: the dialect
@@ -158,7 +214,7 @@ VAR
 BEGIN
   len := ORD(raw[0]);
   outlen := 0;
-  IF len < 2 THEN AbortWith('codegen v1: malformed string literal');
+  IF len < 2 THEN AbortWith('codegen: malformed string literal');
   i := 2;
   WHILE i <= len - 1 DO
   BEGIN
@@ -215,7 +271,7 @@ VAR
   nm: Str255;
 BEGIN
   IF NodeType(te) <> 'NamedType' THEN
-    AbortWith('codegen v1: only bare scalar type names are supported');
+    AbortWith('codegen: only bare scalar type names are supported');
   nm := GetStr(te, 'name');
   IF nm = 'INTEGER' THEN ResolveTypeExpr := TK_INTEGER
   ELSE IF nm = 'REAL' THEN ResolveTypeExpr := TK_REAL
@@ -223,7 +279,7 @@ BEGIN
   ELSE IF nm = 'CHAR' THEN ResolveTypeExpr := TK_CHAR
   ELSE
   BEGIN
-    AbortWith2('codegen v1: unsupported scalar type: ', nm);
+    AbortWith2('codegen: unsupported scalar type: ', nm);
     ResolveTypeExpr := TK_UNKNOWN;
   END;
 END;
@@ -236,7 +292,7 @@ BEGIN
   ELSE IF tk = TK_CHAR THEN LLVMTypeForTk := i8ty
   ELSE
   BEGIN
-    AbortWith('codegen v1: LLVMTypeForTk: unknown type kind');
+    AbortWith('codegen: LLVMTypeForTk: unknown type kind');
     LLVMTypeForTk := NIL;
   END;
 END;
@@ -254,20 +310,65 @@ BEGIN
   LookupSym := found;
 END;
 
+PROCEDURE PushScope;
+BEGIN
+  scope_top := scope_top + 1;
+  scope_stack[scope_top] := nsymbols;
+END;
+
+PROCEDURE PopScope;
+BEGIN
+  nsymbols := scope_stack[scope_top];
+  scope_top := scope_top - 1;
+END;
+
+FUNCTION CurScopeBase: INTEGER32;
+BEGIN
+  IF scope_top = 0 THEN CurScopeBase := 0
+  ELSE CurScopeBase := scope_stack[scope_top];
+END;
+
 PROCEDURE DeclareVar(name: Str255; tk: INTEGER);
 VAR
   gvar, zero: ADRMEM;
+  i, base: INTEGER32;
+  dup: BOOLEAN;
 BEGIN
-  IF LookupSym(name) <> 0 THEN
-    AbortWith2('codegen v1: duplicate declaration: ', name);
-  gvar := LLVMAddGlobal(modl, LLVMTypeForTk(tk), MakeCStr(name));
-  IF tk = TK_REAL THEN zero := LLVMConstReal(dblty, 0.0)
-  ELSE zero := LLVMConstInt(LLVMTypeForTk(tk), 0, 0);
-  LLVMSetInitializer(gvar, zero);
+  { Only the current scope's own slice of the symbol table can collide --
+    a local is allowed (expected, even) to shadow an outer/global variable
+    of the same name, matching ordinary Pascal scoping. }
+  base := CurScopeBase;
+  dup := FALSE;
+  FOR i := base + 1 TO nsymbols DO
+    IF symbols[i].name = name THEN dup := TRUE;
+  IF dup THEN
+    AbortWith2('codegen: duplicate declaration: ', name);
+  IF in_local_scope THEN
+    gvar := LLVMBuildAlloca(builder, LLVMTypeForTk(tk), MakeCStr(name))
+  ELSE
+  BEGIN
+    gvar := LLVMAddGlobal(modl, LLVMTypeForTk(tk), MakeCStr(name));
+    IF tk = TK_REAL THEN zero := LLVMConstReal(dblty, 0.0)
+    ELSE zero := LLVMConstInt(LLVMTypeForTk(tk), 0, 0);
+    LLVMSetInitializer(gvar, zero);
+  END;
   nsymbols := nsymbols + 1;
   symbols[nsymbols].name := name;
   symbols[nsymbols].tk := tk;
   symbols[nsymbols].llvm_val := gvar;
+END;
+
+{ ============================ routine table =============================== }
+
+FUNCTION LookupRoutine(name: Str255): INTEGER32;
+VAR
+  i: INTEGER32;
+  found: INTEGER32;
+BEGIN
+  found := 0;
+  FOR i := 1 TO nroutines DO
+    IF routines[i].name = name THEN found := i;
+  LookupRoutine := found;
 END;
 
 { ============================== expressions =============================== }
@@ -294,14 +395,14 @@ BEGIN
   IF (op = 'AND') OR (op = 'OR') THEN
   BEGIN
     IF (ltk <> TK_BOOLEAN) OR (rtk <> TK_BOOLEAN) THEN
-      AbortWith('codegen v1: AND/OR require BOOLEAN operands');
+      AbortWith('codegen: AND/OR require BOOLEAN operands');
     IF op = 'AND' THEN res := LLVMBuildAnd(builder, lval, rval, MakeCStr(''))
     ELSE res := LLVMBuildOr(builder, lval, rval, MakeCStr(''));
     last_val_tk := TK_BOOLEAN;
   END
   ELSE IF ltk <> rtk THEN
   BEGIN
-    AbortWith('codegen v1: mixed-type operands are not supported (no implicit promotion)');
+    AbortWith('codegen: mixed-type operands are not supported (no implicit promotion)');
     res := NIL;
   END
   ELSE IF (op = 'EQ') OR (op = 'NEQ') OR (op = 'LT') OR (op = 'LE') OR (op = 'GT') OR (op = 'GE') THEN
@@ -326,7 +427,7 @@ BEGIN
     END
     ELSE
     BEGIN
-      AbortWith('codegen v1: relational operators support only INTEGER/REAL operands');
+      AbortWith('codegen: relational operators support only INTEGER/REAL operands');
       res := NIL;
     END;
     last_val_tk := TK_BOOLEAN;
@@ -340,7 +441,7 @@ BEGIN
     ELSE IF op = 'MOD' THEN res := LLVMBuildSRem(builder, lval, rval, MakeCStr(''))
     ELSE
     BEGIN
-      AbortWith2('codegen v1: unhandled INTEGER operator: ', op);
+      AbortWith2('codegen: unhandled INTEGER operator: ', op);
       res := NIL;
     END;
     last_val_tk := TK_INTEGER;
@@ -353,14 +454,14 @@ BEGIN
     ELSE IF op = 'SLASH' THEN res := LLVMBuildFDiv(builder, lval, rval, MakeCStr(''))
     ELSE
     BEGIN
-      AbortWith2('codegen v1: unhandled REAL operator: ', op);
+      AbortWith2('codegen: unhandled REAL operator: ', op);
       res := NIL;
     END;
     last_val_tk := TK_REAL;
   END
   ELSE
   BEGIN
-    AbortWith('codegen v1: arithmetic operators support only INTEGER/REAL operands');
+    AbortWith('codegen: arithmetic operators support only INTEGER/REAL operands');
     res := NIL;
   END;
   CodegenBinOp := res;
@@ -379,7 +480,7 @@ BEGIN
     ELSE IF tk = TK_REAL THEN res := LLVMBuildFSub(builder, LLVMConstReal(dblty, 0.0), v, MakeCStr(''))
     ELSE
     BEGIN
-      AbortWith('codegen v1: unary MINUS requires INTEGER/REAL operand');
+      AbortWith('codegen: unary MINUS requires INTEGER/REAL operand');
       res := NIL;
     END;
     last_val_tk := tk;
@@ -387,16 +488,74 @@ BEGIN
   ELSE IF op = 'NOT' THEN
   BEGIN
     IF tk <> TK_BOOLEAN THEN
-      AbortWith('codegen v1: NOT requires a BOOLEAN operand');
+      AbortWith('codegen: NOT requires a BOOLEAN operand');
     res := LLVMBuildXor(builder, v, LLVMConstInt(i1ty, 1, 0), MakeCStr(''));
     last_val_tk := TK_BOOLEAN;
   END
   ELSE
   BEGIN
-    AbortWith2('codegen v1: unhandled unary operator: ', op);
+    AbortWith2('codegen: unhandled unary operator: ', op);
     res := NIL;
   END;
   CodegenUnaryOp := res;
+END;
+
+FUNCTION CodegenCallCommon(name: Str255; args_arr: ADRMEM): ADRMEM;
+{ Shared by a FuncCall expression and a bare ProcCallStmt that isn't
+  WRITE/WRITELN: look up a user-declared routine, marshal its arguments
+  (VAR-mode: the callee needs the callee's storage address directly, so the
+  actual argument must be a bare Identifier and is passed unloaded; value
+  mode: CodegenExpr as usual), and build the call. Sets last_val_tk to the
+  routine's return type kind (TK_UNKNOWN for a PROCEDURE, meaningless to
+  the caller in that case). }
+VAR
+  ri: INTEGER32;
+  nargs, i: INTEGER32;
+  call_args: ADRMEM;
+  arg_node, v: ADRMEM;
+  arg_nm: Str255;
+  symi: INTEGER32;
+  res: ADRMEM;
+BEGIN
+  ri := LookupRoutine(name);
+  IF ri = 0 THEN
+  BEGIN
+    AbortWith2('codegen: undefined procedure/function: ', name);
+    res := NIL;
+  END
+  ELSE
+  BEGIN
+    nargs := ArrSize(args_arr);
+    IF nargs <> routines[ri].nparams THEN
+      AbortWith2('codegen: argument count mismatch calling: ', name);
+    call_args := AllocPtrArray(nargs);
+    FOR i := 0 TO nargs - 1 DO
+    BEGIN
+      arg_node := ArrItem(args_arr, i);
+      IF routines[ri].param_is_var[i + 1] THEN
+      BEGIN
+        IF NodeType(arg_node) <> 'Identifier' THEN
+          AbortWith2('codegen: a VAR argument must be a bare variable name, calling: ', name);
+        arg_nm := GetStr(arg_node, 'name');
+        symi := LookupSym(arg_nm);
+        IF symi = 0 THEN
+          AbortWith2('codegen: undefined variable: ', arg_nm);
+        IF symbols[symi].tk <> routines[ri].param_tk[i + 1] THEN
+          AbortWith2('codegen: VAR argument type mismatch calling: ', name);
+        v := symbols[symi].llvm_val;
+      END
+      ELSE
+      BEGIN
+        v := CodegenExpr(arg_node);
+        IF last_val_tk <> routines[ri].param_tk[i + 1] THEN
+          AbortWith2('codegen: argument type mismatch calling: ', name);
+      END;
+      SetPtrArrayElem(call_args, i, v);
+    END;
+    res := LLVMBuildCall2(builder, routines[ri].fnty, routines[ri].fn, call_args, nargs, MakeCStr(''));
+    last_val_tk := routines[ri].ret_tk;
+  END;
+  CodegenCallCommon := res;
 END;
 
 FUNCTION CodegenExpr(node: ADRMEM): ADRMEM;
@@ -430,7 +589,7 @@ BEGIN
     symi := LookupSym(nm);
     IF symi = 0 THEN
     BEGIN
-      AbortWith2('codegen v1: undefined variable: ', nm);
+      AbortWith2('codegen: undefined variable: ', nm);
       res := NIL;
     END
     ELSE
@@ -443,9 +602,26 @@ BEGIN
     res := CodegenBinOp(GetStr(node, 'op'), GetObj(node, 'left'), GetObj(node, 'right'))
   ELSE IF nt = 'UnaryOp' THEN
     res := CodegenUnaryOp(GetStr(node, 'op'), GetObj(node, 'operand'))
+  ELSE IF nt = 'FuncCall' THEN
+  BEGIN
+    nm := GetStr(node, 'name');
+    symi := LookupRoutine(nm);
+    IF symi = 0 THEN
+    BEGIN
+      AbortWith2('codegen: undefined function: ', nm);
+      res := NIL;
+    END
+    ELSE IF NOT routines[symi].is_func THEN
+    BEGIN
+      AbortWith2('codegen: called as a function but is a PROCEDURE: ', nm);
+      res := NIL;
+    END
+    ELSE
+      res := CodegenCallCommon(nm, GetObj(node, 'args'));
+  END
   ELSE
   BEGIN
-    AbortWith2('codegen v1: unhandled expression kind: ', nt);
+    AbortWith2('codegen: unhandled expression kind: ', nt);
     res := NIL;
   END;
   CodegenExpr := res;
@@ -470,7 +646,7 @@ BEGIN
   BEGIN
     arg_node := ArrItem(args, i);
     IF NodeType(arg_node) <> 'WriteArg' THEN
-      AbortWith('codegen v1: expected WriteArg node');
+      AbortWith('codegen: expected WriteArg node');
     expr := GetObj(arg_node, 'expr');
     IF NodeType(expr) = 'StringLiteral' THEN
     BEGIN
@@ -491,7 +667,7 @@ BEGIN
       ELSE IF last_val_tk = TK_CHAR THEN
         CONCAT(fmt, '%c')
       ELSE
-        AbortWith('codegen v1: unsupported WRITE argument type');
+        AbortWith('codegen: unsupported WRITE argument type');
     END;
     SetPtrArrayElem(vals, i + 1, v);
   END;
@@ -522,18 +698,31 @@ VAR
 BEGIN
   target := GetObj(stmt, 'target');
   IF NodeType(target) <> 'Designator' THEN
-    AbortWith('codegen v1: unsupported assignment target');
+    AbortWith('codegen: unsupported assignment target');
   sel := GetObj(target, 'selectors');
   IF ArrSize(sel) <> 0 THEN
-    AbortWith('codegen v1: indexed/field assignment targets are not supported');
+    AbortWith('codegen: indexed/field assignment targets are not supported');
   nm := GetStr(target, 'name');
-  symi := LookupSym(nm);
-  IF symi = 0 THEN
-    AbortWith2('codegen v1: undefined variable: ', nm);
-  v := CodegenExpr(GetObj(stmt, 'expr'));
-  IF last_val_tk <> symbols[symi].tk THEN
-    AbortWith2('codegen v1: assignment type mismatch for: ', nm);
-  LLVMBuildStore(builder, v, symbols[symi].llvm_val);
+
+  IF (cur_func_name <> '') AND (nm = cur_func_name) THEN
+  BEGIN
+    { `FuncName := expr` inside FuncName's own body assigns through the
+      return-value slot, not a symbol -- see cur_func_name's declaration. }
+    v := CodegenExpr(GetObj(stmt, 'expr'));
+    IF last_val_tk <> cur_func_ret_tk THEN
+      AbortWith2('codegen: return-value type mismatch in: ', nm);
+    LLVMBuildStore(builder, v, cur_func_ret_slot);
+  END
+  ELSE
+  BEGIN
+    symi := LookupSym(nm);
+    IF symi = 0 THEN
+      AbortWith2('codegen: undefined variable: ', nm);
+    v := CodegenExpr(GetObj(stmt, 'expr'));
+    IF last_val_tk <> symbols[symi].tk THEN
+      AbortWith2('codegen: assignment type mismatch for: ', nm);
+    LLVMBuildStore(builder, v, symbols[symi].llvm_val);
+  END;
 END;
 
 PROCEDURE CodegenIfStmt(stmt: ADRMEM);
@@ -544,13 +733,13 @@ VAR
 BEGIN
   cond_val := CodegenExpr(GetObj(stmt, 'cond'));
   IF last_val_tk <> TK_BOOLEAN THEN
-    AbortWith('codegen v1: IF condition must be BOOLEAN');
+    AbortWith('codegen: IF condition must be BOOLEAN');
 
-  then_bb := LLVMAppendBasicBlockInContext(ctx, main_fn, MakeCStr('if_then'));
-  end_bb := LLVMAppendBasicBlockInContext(ctx, main_fn, MakeCStr('if_end'));
+  then_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('if_then'));
+  end_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('if_end'));
   else_branch := GetObjOrNil(stmt, 'else_branch');
   IF else_branch <> NIL THEN
-    else_bb := LLVMAppendBasicBlockInContext(ctx, main_fn, MakeCStr('if_else'))
+    else_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('if_else'))
   ELSE
     else_bb := end_bb;
 
@@ -574,15 +763,15 @@ PROCEDURE CodegenWhileStmt(stmt: ADRMEM);
 VAR
   loop_bb, body_bb, end_bb, cond_val: ADRMEM;
 BEGIN
-  loop_bb := LLVMAppendBasicBlockInContext(ctx, main_fn, MakeCStr('while_loop'));
-  body_bb := LLVMAppendBasicBlockInContext(ctx, main_fn, MakeCStr('while_body'));
-  end_bb := LLVMAppendBasicBlockInContext(ctx, main_fn, MakeCStr('while_end'));
+  loop_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('while_loop'));
+  body_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('while_body'));
+  end_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('while_end'));
 
   LLVMBuildBr(builder, loop_bb);
   LLVMPositionBuilderAtEnd(builder, loop_bb);
   cond_val := CodegenExpr(GetObj(stmt, 'cond'));
   IF last_val_tk <> TK_BOOLEAN THEN
-    AbortWith('codegen v1: WHILE condition must be BOOLEAN');
+    AbortWith('codegen: WHILE condition must be BOOLEAN');
   LLVMBuildCondBr(builder, cond_val, body_bb, end_bb);
 
   LLVMPositionBuilderAtEnd(builder, body_bb);
@@ -596,15 +785,15 @@ PROCEDURE CodegenRepeatStmt(stmt: ADRMEM);
 VAR
   loop_bb, end_bb, cond_val: ADRMEM;
 BEGIN
-  loop_bb := LLVMAppendBasicBlockInContext(ctx, main_fn, MakeCStr('repeat_loop'));
-  end_bb := LLVMAppendBasicBlockInContext(ctx, main_fn, MakeCStr('repeat_end'));
+  loop_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('repeat_loop'));
+  end_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('repeat_end'));
 
   LLVMBuildBr(builder, loop_bb);
   LLVMPositionBuilderAtEnd(builder, loop_bb);
   CodegenStmtArray(GetObj(stmt, 'body'));
   cond_val := CodegenExpr(GetObj(stmt, 'cond'));
   IF last_val_tk <> TK_BOOLEAN THEN
-    AbortWith('codegen v1: REPEAT..UNTIL condition must be BOOLEAN');
+    AbortWith('codegen: REPEAT..UNTIL condition must be BOOLEAN');
   LLVMBuildCondBr(builder, cond_val, end_bb, loop_bb);
 
   LLVMPositionBuilderAtEnd(builder, end_bb);
@@ -621,25 +810,25 @@ BEGIN
   var_name := GetStr(stmt, 'var');
   symi := LookupSym(var_name);
   IF symi = 0 THEN
-    AbortWith2('codegen v1: undefined FOR loop variable: ', var_name);
+    AbortWith2('codegen: undefined FOR loop variable: ', var_name);
   IF symbols[symi].tk <> TK_INTEGER THEN
-    AbortWith('codegen v1: FOR loop variable must be INTEGER');
+    AbortWith('codegen: FOR loop variable must be INTEGER');
 
   start_val := CodegenExpr(GetObj(stmt, 'start'));
   IF last_val_tk <> TK_INTEGER THEN
-    AbortWith('codegen v1: FOR loop bounds must be INTEGER');
+    AbortWith('codegen: FOR loop bounds must be INTEGER');
   LLVMBuildStore(builder, start_val, symbols[symi].llvm_val);
 
   end_val := CodegenExpr(GetObj(stmt, 'end'));
   IF last_val_tk <> TK_INTEGER THEN
-    AbortWith('codegen v1: FOR loop bounds must be INTEGER');
+    AbortWith('codegen: FOR loop bounds must be INTEGER');
 
   down := GetStr(stmt, 'direction') = 'DOWNTO';
 
-  loop_bb := LLVMAppendBasicBlockInContext(ctx, main_fn, MakeCStr('for_loop'));
-  body_bb := LLVMAppendBasicBlockInContext(ctx, main_fn, MakeCStr('for_body'));
-  step_bb := LLVMAppendBasicBlockInContext(ctx, main_fn, MakeCStr('for_step'));
-  end_bb := LLVMAppendBasicBlockInContext(ctx, main_fn, MakeCStr('for_end'));
+  loop_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('for_loop'));
+  body_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('for_body'));
+  step_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('for_step'));
+  end_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('for_end'));
 
   LLVMBuildBr(builder, loop_bb);
   LLVMPositionBuilderAtEnd(builder, loop_bb);
@@ -668,7 +857,8 @@ END;
 
 PROCEDURE CodegenProcCallStmt(stmt: ADRMEM);
 VAR
-  name, msg: Str255;
+  name: Str255;
+  discard: ADRMEM;
 BEGIN
   name := GetStr(stmt, 'name');
   IF name = 'WRITELN' THEN
@@ -676,11 +866,7 @@ BEGIN
   ELSE IF name = 'WRITE' THEN
     CodegenWriteArgs(GetObj(stmt, 'args'), FALSE)
   ELSE
-  BEGIN
-    msg := 'codegen v1: unhandled procedure call: ';
-    CONCAT(msg, name);
-    AbortWith(msg);
-  END;
+    discard := CodegenCallCommon(name, GetObj(stmt, 'args'));
 END;
 
 PROCEDURE CodegenStmt(stmt: ADRMEM);
@@ -697,7 +883,7 @@ BEGIN
   ELSE IF nt = 'ProcCallStmt' THEN CodegenProcCallStmt(stmt)
   ELSE
   BEGIN
-    msg := 'codegen v1: unhandled statement kind: ';
+    msg := 'codegen: unhandled statement kind: ';
     CONCAT(msg, nt);
     AbortWith(msg);
   END;
@@ -705,14 +891,23 @@ END;
 
 { ============================== declarations =============================== }
 
-PROCEDURE CodegenDecl(decl: ADRMEM);
+PROCEDURE CodegenDecl(decl: ADRMEM); FORWARD;
+
+PROCEDURE CodegenDeclList(decls_arr: ADRMEM);
+VAR
+  n, i: INTEGER32;
+BEGIN
+  n := ArrSize(decls_arr);
+  FOR i := 0 TO n - 1 DO
+    CodegenDecl(ArrItem(decls_arr, i));
+END;
+
+PROCEDURE CodegenVarDecl(decl: ADRMEM);
 VAR
   names: ADRMEM;
   tk: INTEGER;
   n, i: INTEGER32;
 BEGIN
-  IF NodeType(decl) <> 'VarDecl' THEN
-    AbortWith2('codegen v1: unhandled declaration kind: ', NodeType(decl));
   tk := ResolveTypeExpr(GetObj(decl, 'type_expr'));
   names := GetObj(decl, 'names');
   n := ArrSize(names);
@@ -720,11 +915,171 @@ BEGIN
     DeclareVar(CStrToStr255(cJSON_GetStringValue(ArrItem(names, i))), tk);
 END;
 
+PROCEDURE FlattenParams(params_arr: ADRMEM; VAR n: INTEGER32; VAR names: ParamNameArr;
+                         VAR tks: ParamTkArr; VAR isvar: ParamVarArr);
+{ A Pascal formal-parameter section groups several names under one type
+  (`a, b: INTEGER`); this flattens that grouping into parallel arrays of
+  one entry per actual parameter, matching how llvm-c's LLVMFunctionType
+  and the routine table both want one slot per parameter, not one per
+  group. }
+VAR
+  np, pi, nn, ni: INTEGER32;
+  param, pnames: ADRMEM;
+  tk: INTEGER;
+  is_v: BOOLEAN;
+BEGIN
+  n := 0;
+  np := ArrSize(params_arr);
+  FOR pi := 0 TO np - 1 DO
+  BEGIN
+    param := ArrItem(params_arr, pi);
+    tk := ResolveTypeExpr(GetObj(param, 'type_expr'));
+    is_v := GetStr(param, 'mode') = 'VAR';
+    pnames := GetObj(param, 'names');
+    nn := ArrSize(pnames);
+    FOR ni := 0 TO nn - 1 DO
+    BEGIN
+      IF n >= MAX_PARAMS THEN AbortWith('codegen: too many parameters');
+      n := n + 1;
+      names[n] := CStrToStr255(cJSON_GetStringValue(ArrItem(pnames, ni)));
+      tks[n] := tk;
+      isvar[n] := is_v;
+    END;
+  END;
+END;
+
+PROCEDURE CodegenRoutineDecl(decl: ADRMEM; is_func: BOOLEAN);
+VAR
+  name: Str255;
+  params_arr, body_blk: ADRMEM;
+  n: INTEGER32;
+  names: ParamNameArr;
+  tks: ParamTkArr;
+  isvar: ParamVarArr;
+  param_llvm_types: ADRMEM;
+  i: INTEGER32;
+  ret_tk: INTEGER;
+  ret_llvm_ty, fnty, fn, entry_bb2: ADRMEM;
+  param_val, palloca, ret_load: ADRMEM;
+BEGIN
+  name := GetStr(decl, 'name');
+  IF LookupRoutine(name) <> 0 THEN
+    AbortWith2('codegen: duplicate routine declaration: ', name);
+
+  params_arr := GetObj(decl, 'params');
+  FlattenParams(params_arr, n, names, tks, isvar);
+
+  param_llvm_types := AllocPtrArray(n);
+  FOR i := 1 TO n DO
+  BEGIN
+    IF isvar[i] THEN
+      SetPtrArrayElem(param_llvm_types, i - 1, LLVMPointerType(LLVMTypeForTk(tks[i]), 0))
+    ELSE
+      SetPtrArrayElem(param_llvm_types, i - 1, LLVMTypeForTk(tks[i]));
+  END;
+
+  IF is_func THEN
+  BEGIN
+    ret_tk := ResolveTypeExpr(GetObj(decl, 'return_type'));
+    ret_llvm_ty := LLVMTypeForTk(ret_tk);
+  END
+  ELSE
+  BEGIN
+    ret_tk := TK_UNKNOWN;
+    ret_llvm_ty := voidty;
+  END;
+
+  fnty := LLVMFunctionType(ret_llvm_ty, param_llvm_types, n, 0);
+  fn := LLVMAddFunction(modl, MakeCStr(name), fnty);
+
+  { Register the routine before codegen'ing its body -- direct
+    self-recursion (Fact calling Fact) needs the routine table entry to
+    already exist when the body's own FuncCall/ProcCallStmt nodes resolve
+    it. Mutual recursion (A calls B declared later) is out of scope, same
+    as it would be without a FORWARD declaration in standard Pascal. }
+  nroutines := nroutines + 1;
+  routines[nroutines].name := name;
+  routines[nroutines].is_func := is_func;
+  routines[nroutines].fn := fn;
+  routines[nroutines].fnty := fnty;
+  routines[nroutines].ret_tk := ret_tk;
+  routines[nroutines].nparams := n;
+  FOR i := 1 TO n DO
+  BEGIN
+    routines[nroutines].param_tk[i] := tks[i];
+    routines[nroutines].param_is_var[i] := isvar[i];
+  END;
+
+  entry_bb2 := LLVMAppendBasicBlockInContext(ctx, fn, MakeCStr('entry'));
+  LLVMPositionBuilderAtEnd(builder, entry_bb2);
+  cur_fn := fn;
+  PushScope;
+  in_local_scope := TRUE;
+
+  IF is_func THEN
+  BEGIN
+    cur_func_name := name;
+    cur_func_ret_tk := ret_tk;
+    cur_func_ret_slot := LLVMBuildAlloca(builder, ret_llvm_ty, MakeCStr('return_value'));
+    IF ret_tk = TK_REAL THEN LLVMBuildStore(builder, LLVMConstReal(dblty, 0.0), cur_func_ret_slot)
+    ELSE LLVMBuildStore(builder, LLVMConstInt(ret_llvm_ty, 0, 0), cur_func_ret_slot);
+  END
+  ELSE
+    cur_func_name := '';
+
+  FOR i := 1 TO n DO
+  BEGIN
+    param_val := LLVMGetParam(fn, i - 1);
+    IF isvar[i] THEN
+      palloca := param_val { the incoming pointer already IS the storage }
+    ELSE
+    BEGIN
+      palloca := LLVMBuildAlloca(builder, LLVMTypeForTk(tks[i]), MakeCStr(names[i]));
+      LLVMBuildStore(builder, param_val, palloca);
+    END;
+    nsymbols := nsymbols + 1;
+    symbols[nsymbols].name := names[i];
+    symbols[nsymbols].tk := tks[i];
+    symbols[nsymbols].llvm_val := palloca;
+  END;
+
+  body_blk := GetObj(decl, 'body');
+  IF NodeType(body_blk) <> 'Block' THEN
+    AbortWith('codegen: expected Block as routine body');
+  CodegenDeclList(GetObj(body_blk, 'decls'));
+  CodegenStmtArray(GetObj(body_blk, 'body'));
+
+  IF is_func THEN
+  BEGIN
+    ret_load := LLVMBuildLoad2(builder, ret_llvm_ty, cur_func_ret_slot, MakeCStr(''));
+    ret_load := LLVMBuildRet(builder, ret_load);
+  END
+  ELSE
+    LLVMBuildRetVoid(builder);
+
+  PopScope;
+  in_local_scope := FALSE;
+  cur_func_name := '';
+  cur_fn := main_fn;
+  LLVMPositionBuilderAtEnd(builder, entry_bb);
+END;
+
+PROCEDURE CodegenDecl(decl: ADRMEM);
+VAR
+  nt: Str255;
+BEGIN
+  nt := NodeType(decl);
+  IF nt = 'VarDecl' THEN CodegenVarDecl(decl)
+  ELSE IF nt = 'ProcDecl' THEN CodegenRoutineDecl(decl, FALSE)
+  ELSE IF nt = 'FuncDecl' THEN CodegenRoutineDecl(decl, TRUE)
+  ELSE
+    AbortWith2('codegen: unhandled declaration kind: ', nt);
+END;
+
 { ============================== driver =================================== }
 
 VAR
-  root, block, decls, body: ADRMEM;
-  ndecls, i: INTEGER32;
+  root, block, body: ADRMEM;
   param_arr: ADRMEM;
   ret_val: ADRMEM;
   verify_msg_raw: ADRMEM;
@@ -736,7 +1091,7 @@ VAR
 BEGIN
   root := ReadAllStdin;
   IF NodeType(root) <> 'ProgramUnit' THEN
-    AbortWith('codegen v1: expected ProgramUnit at root');
+    AbortWith('codegen: expected ProgramUnit at root');
 
   ctx := LLVMContextCreate;
   modl := LLVMModuleCreateWithNameInContext(MakeCStr('pascal_program'), ctx);
@@ -746,12 +1101,14 @@ BEGIN
   i1ty := LLVMInt1TypeInContext(ctx);
   dblty := LLVMDoubleTypeInContext(ctx);
   i8ptrty := LLVMPointerType(i8ty, 0);
+  voidty := LLVMVoidTypeInContext(ctx);
 
   main_fnty := LLVMFunctionType(i32ty, NIL, 0, 0);
   main_fn := LLVMAddFunction(modl, MakeCStr('main'), main_fnty);
   entry_bb := LLVMAppendBasicBlockInContext(ctx, main_fn, MakeCStr('entry'));
   builder := LLVMCreateBuilderInContext(ctx);
   LLVMPositionBuilderAtEnd(builder, entry_bb);
+  cur_fn := main_fn;
 
   param_arr := AllocPtrArray(1);
   SetPtrArrayElem(param_arr, 0, i8ptrty);
@@ -759,15 +1116,16 @@ BEGIN
   printf_fn := LLVMAddFunction(modl, MakeCStr('printf'), printf_fnty);
 
   nsymbols := 0;
+  scope_top := 0;
+  in_local_scope := FALSE;
+  nroutines := 0;
+  cur_func_name := '';
 
   block := GetObj(root, 'block');
   IF NodeType(block) <> 'Block' THEN
-    AbortWith('codegen v1: expected Block under ProgramUnit');
+    AbortWith('codegen: expected Block under ProgramUnit');
 
-  decls := GetObj(block, 'decls');
-  ndecls := ArrSize(decls);
-  FOR i := 0 TO ndecls - 1 DO
-    CodegenDecl(ArrItem(decls, i));
+  CodegenDeclList(GetObj(block, 'decls'));
 
   body := GetObj(block, 'body');
   CodegenStmtArray(body);
@@ -780,7 +1138,7 @@ BEGIN
   ok := LLVMVerifyModule(modl, LLVMAbortProcessAction, verify_msg_raw);
   IF ok <> 0 THEN
   BEGIN
-    res_c := puts(MakeCStr('codegen v1: module verification failed:'));
+    res_c := puts(MakeCStr('codegen: module verification failed:'));
     res_c := puts(verify_msg^);
     exit(1);
   END;
