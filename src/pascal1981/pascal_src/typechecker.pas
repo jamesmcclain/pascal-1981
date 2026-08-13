@@ -6,20 +6,37 @@
   tree on standard output. On any error it prints diagnostics to stderr
   and exits 1 without emitting AST JSON, matching cli_typecheck.py.
 
-  Scope (v1): the rule set exercised by tests/fixtures/typecheck/. UNIT
-  interface/implementation signature matching, C-ABI/VARARGS attribute
-  checks, and DEVICE MODULE checks are deferred to a later pass, exactly
-  as lexer.pas/parser.pas were bootstrapped incrementally.
+  Scope (v1): the rule set exercised by tests/fixtures/typecheck/, plus
+  enough of the C-ABI/UNIT surface to self-host lex+parse+typecheck on this
+  repository's own native .pas sources: EXTERN/FORWARD declarations (no
+  body to check -- the real definition is a separately-compiled/linked
+  object, or comes later in the same file), the ADRMEM/CPTR address types
+  and the CINT/CCHAR/CSHORT/CLONG/CSIZE_T/CDOUBLE C-ABI width aliases (each
+  resolved to the vintage type of matching flavor, since this v1 type-kind
+  model doesn't track width), the wide INTEGER8/16/32/64, WORD8/16/32/64,
+  and REAL32/64 extension names (same width-collapsing treatment), and the
+  local_interfaces a USES clause splices in (their TYPE/PROC/FUNC
+  signatures are registered exactly like an EXTERN decl's). DEVICE MODULE
+  checks, VARARGS attribute checks, and UNIT interface/implementation
+  signature *matching* (validating IMPLEMENTATION bodies against their
+  INTERFACE signatures) are still deferred, as are pointer arithmetic/
+  dereference and most builtin functions (ORD/CHR/TRUNC/SIZEOF/...) --
+  self-hosting on lexer.pas/parser.pas/typechecker.pas's own sources still
+  needs those.
 
-  Annotation contract: the Python reference only ever stamps a
-  `resolved_type` attribute onto IntLiteral/RealLiteral nodes (and the
-  operand of a signed IntLiteral unary +/-), to disambiguate a literal's
-  width/precision for codegen when it sits in a WORD/INTEGERn/REAL32
-  context; codegen defaults to plain INTEGER/REAL when the attribute is
-  absent. None of the in-scope v1 rules require a non-default width, so
-  this first native pass does not emit that annotation -- it re-prints
-  the AST unmodified on success, which is a safe default for every
-  fixture in tests/fixtures/typecheck/. }
+  Annotation contract: the Python reference stamps a `resolved_type`
+  attribute onto every IntLiteral/RealLiteral node (and the operand of a
+  signed IntLiteral unary +/-), naming the literal's width/precision for
+  codegen -- context_type's exact width (e.g. Integer32Type for a CINT
+  target) when the surrounding context calls for one of the WORD/INTEGERn/
+  REAL32 family, else the default IntegerType/RealType. Because this v1
+  type-kind model collapses all integer widths into TK_INTEGER (and all
+  WORD widths into TK_WORD), it always tags the default IntegerType/
+  RealType regardless of a width-specific target context -- correct for
+  every fixture in tests/fixtures/typecheck/ (none of which need a
+  non-default width), but not yet byte-identical to the Python reference
+  when a literal is assigned into a CINT/INTEGER32/WORD32/etc.-typed
+  target. }
 
 (*$INCLUDE:'jsonutil.inc'*)
 PROGRAM pascal1981_typecheck(input, output);
@@ -256,6 +273,27 @@ BEGIN
     ELSE IF name = 'CHAR' THEN tk := TK_CHAR
     ELSE IF name = 'STRING' THEN tk := TK_STRING
     ELSE IF name = 'LSTRING' THEN tk := TK_STRING
+    { Wide-integer/real extension names (feature-gated under the extended
+      dialect): this v1 type-kind model doesn't track width, so each just
+      aliases to its base kind -- matching how INTEGER32/WORD32/etc. behave
+      identically to INTEGER/WORD for every check this stage performs. }
+    ELSE IF (name = 'INTEGER8') OR (name = 'INTEGER16') OR (name = 'INTEGER32') OR (name = 'INTEGER64') THEN tk := TK_INTEGER
+    ELSE IF (name = 'WORD8') OR (name = 'WORD16') OR (name = 'WORD32') OR (name = 'WORD64') THEN tk := TK_WORD
+    ELSE IF (name = 'REAL32') OR (name = 'REAL64') THEN tk := TK_REAL
+    { ADRMEM/ADSMEM (and the CPTR C-ABI alias) are address types -- codegen's
+      opaque-pointer model treats them as "pointer to CHAR" (see
+      types_resolve.py's resolve_type: ADRMEM -> PointerType(CHAR_TYPE)). }
+    ELSE IF (name = 'ADRMEM') OR (name = 'ADSMEM') OR (name = 'CPTR') THEN
+    BEGIN
+      tk := TK_POINTER;
+      aux := TK_CHAR;
+    END
+    { C-ABI fixed-width scalar aliases (builtins_registry.py's
+      C_ABI_TYPE_ALIASES): each resolves to the vintage type of matching
+      flavor, since this stage doesn't distinguish integer/real width. }
+    ELSE IF name = 'CCHAR' THEN tk := TK_CHAR
+    ELSE IF (name = 'CSHORT') OR (name = 'CINT') OR (name = 'CLONG') OR (name = 'CSIZE_T') THEN tk := TK_INTEGER
+    ELSE IF name = 'CDOUBLE' THEN tk := TK_REAL
     ELSE BEGIN
       ti := LookupType(name);
       IF ti = 0 THEN
@@ -873,6 +911,33 @@ BEGIN
   ReadAllStdin := json_root;
 END;
 
+PROCEDURE CheckLocalInterfaces(root: ADRMEM);
+{ USES X splices X's INTERFACE into this file's local_interfaces list (see
+  units.py's check_program_unit): each entry's decls are signature-only (no
+  body -- the real IMPLEMENTATION is a separately-compiled/linked object), so
+  running them through the ordinary CheckDecl dispatch registers their TYPEs
+  and PROC/FUNC signatures as callable symbols exactly like an EXTERN decl,
+  with no body to check. }
+VAR
+  ifaces, decls_arr: ADRMEM;
+  n, ni, m, di: INTEGER32;
+  iface: ADRMEM;
+BEGIN
+  ifaces := GetObj(root, 'local_interfaces');
+  IF ifaces <> NIL THEN
+  BEGIN
+    n := cJSON_GetArraySize(ifaces);
+    FOR ni := 0 TO n - 1 DO
+    BEGIN
+      iface := cJSON_GetArrayItem(ifaces, ni);
+      decls_arr := GetObj(iface, 'decls');
+      m := cJSON_GetArraySize(decls_arr);
+      FOR di := 0 TO m - 1 DO
+        CheckDecl(cJSON_GetArrayItem(decls_arr, di));
+    END;
+  END;
+END;
+
 VAR
   root: ADRMEM;
   out_str: ADRMEM;
@@ -889,6 +954,7 @@ BEGIN
   cur_func_ret_tk := TK_VOID;
 
   root := ReadAllStdin;
+  CheckLocalInterfaces(root);
   CheckBlock(GetObj(root, 'block'));
 
   IF nerrors > 0 THEN
