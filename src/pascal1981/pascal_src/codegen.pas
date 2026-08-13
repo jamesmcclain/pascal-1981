@@ -16,11 +16,18 @@
   aggregate ones are rejected -- pass by VAR instead), including recursion;
   LSTRING(n) variables (declaration, string-literal assignment,
   WRITE/WRITELN, 1-based character indexing s[i]) and POINTER variables
-  (^Type, NEW/DISPOSE, dereference p^ as an lvalue and rvalue). Not yet
-  covered: sets, STRING(n) (the non-length-prefixed string kind), CONCAT/
-  other string builtins, files, multi-dimension arrays, CASE, WRITE
-  width:precision, MATHCK/RANGECK-style runtime traps, C-ABI externs,
-  units, and DEVICE MODULE/PTX generation. Anything not yet covered is
+  (^Type, NEW/DISPOSE, dereference p^ as an lvalue and rvalue); STRING(n)
+  variables (declaration, exact-length string-literal assignment,
+  WRITE/WRITELN, 1-based character indexing s[i], no length prefix); and
+  CONCAT(VAR D: LSTRING; CONST S: STRING-or-LSTRING-or-literal), appending
+  S onto D via a runtime byte-copy loop (S's length is not always known at
+  compile time, unlike a literal assignment's). Not yet covered: sets,
+  COPYLST/COPYSTR/other string builtins, files, multi-dimension arrays,
+  CASE, WRITE width:precision, MATHCK/RANGECK-style runtime traps
+  (including CONCAT's own capacity overflow, which is unchecked -- same
+  simplification as an unchecked array index elsewhere in this file),
+  C-ABI externs, units, and DEVICE MODULE/PTX generation. Anything not yet
+  covered is
   rejected loudly via AbortWith rather than silently mishandled
   or miscompiled -- reject unhandled constructs instead of guessing, the
   same discipline the earlier native stages (lexer.pas/parser.pas/
@@ -51,6 +58,7 @@ FUNCTION LLVMConstNull(ty: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildGEP2(b: ADRMEM; ty: ADRMEM; ptr: ADRMEM; indices: ADRMEM; nindices: CINT; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildBitCast(b: ADRMEM; val: ADRMEM; destty: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildZExt(b: ADRMEM; val: ADRMEM; destty: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMBuildTrunc(b: ADRMEM; val: ADRMEM; destty: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMFunctionType(ret_ty: ADRMEM; params: ADRMEM; pcount: CINT; vararg: CINT): ADRMEM [C]; EXTERN;
 FUNCTION LLVMAddFunction(m: ADRMEM; name: ADRMEM; fty: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMAppendBasicBlockInContext(ctx: ADRMEM; fn: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
@@ -113,6 +121,7 @@ CONST
   TK_RECORD  = 6;
   TK_LSTRING = 7;
   TK_POINTER = 8;
+  TK_STRING  = 9;
 
   MAX_SYMBOLS = 500;
   MAX_SCOPES = 64;
@@ -405,6 +414,7 @@ BEGIN
     TypeSizeBytes := total;
   END
   ELSE IF TypeKind(tid) = TK_LSTRING THEN TypeSizeBytes := types[tid].hi + 1
+  ELSE IF TypeKind(tid) = TK_STRING THEN TypeSizeBytes := types[tid].hi
   ELSE IF TypeKind(tid) = TK_POINTER THEN TypeSizeBytes := 8
   ELSE
   BEGIN
@@ -448,6 +458,13 @@ BEGIN
     ELSE IF nm = 'REAL' THEN tid := TK_REAL
     ELSE IF nm = 'BOOLEAN' THEN tid := TK_BOOLEAN
     ELSE IF nm = 'CHAR' THEN tid := TK_CHAR
+    ELSE IF nm = 'STRING' THEN
+    BEGIN
+      IF GetObjOrNil(te, 'param') = NIL THEN hi := 256
+      ELSE hi := GetInt(te, 'param');
+      arr_ty := LLVMArrayType(i8ty, hi);
+      tid := RegisterType(TK_STRING, TK_CHAR, 1, hi, arr_ty);
+    END
     ELSE
     BEGIN
       tid := LookupNamedType(nm);
@@ -581,7 +598,8 @@ BEGIN
   BEGIN
     gvar := LLVMAddGlobal(modl, LLVMTypeForTk(tk), MakeCStr(name));
     IF (TypeKind(tk) = TK_ARRAY) OR (TypeKind(tk) = TK_RECORD) OR
-       (TypeKind(tk) = TK_LSTRING) OR (TypeKind(tk) = TK_POINTER) THEN
+       (TypeKind(tk) = TK_LSTRING) OR (TypeKind(tk) = TK_POINTER) OR
+       (TypeKind(tk) = TK_STRING) THEN
       zero := LLVMConstNull(LLVMTypeForTk(tk))
     ELSE IF tk = TK_REAL THEN zero := LLVMConstReal(dblty, 0.0)
     ELSE zero := LLVMConstInt(LLVMTypeForTk(tk), 0, 0);
@@ -839,7 +857,7 @@ BEGIN
     kind := GetStr(sel, 'kind');
     IF kind = 'INDEX' THEN
     BEGIN
-      IF (TypeKind(cur_tid) <> TK_ARRAY) AND (TypeKind(cur_tid) <> TK_LSTRING) THEN
+      IF (TypeKind(cur_tid) <> TK_ARRAY) AND (TypeKind(cur_tid) <> TK_LSTRING) AND (TypeKind(cur_tid) <> TK_STRING) THEN
         AbortWith('codegen: an INDEX selector was applied to a non-array');
       idx_expr := GetObj(sel, 'index_or_field');
       idx_val := CodegenExpr(idx_expr);
@@ -908,6 +926,29 @@ BEGIN
   SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 0, 0));
   elem_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(dest_tid), dest_addr, gep_idx, 2, MakeCStr(''));
   LLVMBuildStore(builder, LLVMConstInt(i8ty, len, 0), elem_ptr);
+END;
+
+PROCEDURE CodegenStringLiteralAssign(dest_addr: ADRMEM; dest_tid: INTEGER; s: Str255);
+{ STRING(n) counterpart of CodegenLStringLiteralAssign: no length-prefix
+  byte -- STRING is just [n x i8], 1-based chars at byte[0..n-1] -- and the
+  typechecker already guarantees an exact-length match (STRING assignment
+  requires from_type.max_len = to_type.max_len, unlike LSTRING's <=), so
+  every byte in the destination gets written here, not just a prefix. }
+VAR
+  i, len: INTEGER;
+  gep_idx, elem_ptr: ADRMEM;
+BEGIN
+  len := ORD(s[0]);
+  IF len <> types[dest_tid].hi THEN
+    AbortWith('codegen: string literal length does not match STRING capacity');
+  FOR i := 1 TO len DO
+  BEGIN
+    gep_idx := AllocPtrArray(2);
+    SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+    SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, i - 1, 0));
+    elem_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(dest_tid), dest_addr, gep_idx, 2, MakeCStr(''));
+    LLVMBuildStore(builder, LLVMConstInt(i8ty, ORD(s[i]), 0), elem_ptr);
+  END;
 END;
 
 FUNCTION CodegenExpr(node: ADRMEM): ADRMEM;
@@ -1002,7 +1043,7 @@ VAR
   addr, len_ptr, chars_ptr, gep_idx, len_val: ADRMEM;
   lstr_tid: INTEGER;
   symi: INTEGER32;
-  is_lstring: BOOLEAN;
+  is_lstring, is_string: BOOLEAN;
 BEGIN
   nargs := ArrSize(args);
   fmt := '';
@@ -1015,6 +1056,7 @@ BEGIN
       AbortWith('codegen: expected WriteArg node');
     expr := GetObj(arg_node, 'expr');
     is_lstring := FALSE;
+    is_string := FALSE;
     IF NodeType(expr) = 'StringLiteral' THEN
     BEGIN
       strval := DecodeStringLiteral(GetStr(expr, 'value'));
@@ -1031,6 +1073,12 @@ BEGIN
         is_lstring := TRUE;
         addr := symbols[symi].llvm_val;
         lstr_tid := symbols[symi].tk;
+      END
+      ELSE IF (symi <> 0) AND (TypeKind(symbols[symi].tk) = TK_STRING) THEN
+      BEGIN
+        is_string := TRUE;
+        addr := symbols[symi].llvm_val;
+        lstr_tid := symbols[symi].tk;
       END;
       IF is_lstring THEN
       BEGIN
@@ -1043,6 +1091,19 @@ BEGIN
         gep_idx := AllocPtrArray(2);
         SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
         SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 1, 0));
+        chars_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(lstr_tid), addr, gep_idx, 2, MakeCStr(''));
+        CONCAT(fmt, '%.*s');
+        SetPtrArrayElem(vals, vi, len_val);
+        vi := vi + 1;
+        SetPtrArrayElem(vals, vi, chars_ptr);
+        vi := vi + 1;
+      END
+      ELSE IF is_string THEN
+      BEGIN
+        len_val := LLVMConstInt(i32ty, types[lstr_tid].hi, 0);
+        gep_idx := AllocPtrArray(2);
+        SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+        SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 0, 0));
         chars_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(lstr_tid), addr, gep_idx, 2, MakeCStr(''));
         CONCAT(fmt, '%.*s');
         SetPtrArrayElem(vals, vi, len_val);
@@ -1134,6 +1195,9 @@ BEGIN
       AbortWith2('codegen: undefined variable: ', nm);
     IF (TypeKind(symbols[symi].tk) = TK_LSTRING) AND (NodeType(GetObj(stmt, 'expr')) = 'StringLiteral') THEN
       CodegenLStringLiteralAssign(symbols[symi].llvm_val, symbols[symi].tk,
+        DecodeStringLiteral(GetStr(GetObj(stmt, 'expr'), 'value')))
+    ELSE IF (TypeKind(symbols[symi].tk) = TK_STRING) AND (NodeType(GetObj(stmt, 'expr')) = 'StringLiteral') THEN
+      CodegenStringLiteralAssign(symbols[symi].llvm_val, symbols[symi].tk,
         DecodeStringLiteral(GetStr(GetObj(stmt, 'expr'), 'value')))
     ELSE
     BEGIN
@@ -1284,6 +1348,165 @@ BEGIN
   LLVMPositionBuilderAtEnd(builder, end_bb);
 END;
 
+PROCEDURE ResolveStringExprCharsLen(expr: ADRMEM; VAR chars_ptr: ADRMEM; VAR len_val: ADRMEM);
+{ The counterpart of the Python reference's get_string_chars_and_len: given
+  a CONST STRING-typed actual argument (a string literal, or an Identifier
+  naming an LSTRING/STRING variable), returns a pointer to its first
+  character plus its length as an i32 -- LSTRING's is the dynamic runtime
+  length byte, STRING's is its fixed declared capacity. Scoped to what
+  CONCAT/COPYLST/COPYSTR need; a designator (indexed/field string
+  sub-expression) is not yet supported here. }
+VAR
+  strval: Str255;
+  symi: INTEGER32;
+  tid: INTEGER;
+  addr, gep_idx, len_ptr: ADRMEM;
+BEGIN
+  IF NodeType(expr) = 'StringLiteral' THEN
+  BEGIN
+    strval := DecodeStringLiteral(GetStr(expr, 'value'));
+    chars_ptr := LLVMBuildGlobalStringPtr(builder, MakeCStr(strval), MakeCStr('str'));
+    len_val := LLVMConstInt(i32ty, ORD(strval[0]), 0);
+  END
+  ELSE IF NodeType(expr) = 'Identifier' THEN
+  BEGIN
+    symi := LookupSym(GetStr(expr, 'name'));
+    IF symi = 0 THEN
+      AbortWith2('codegen: undefined variable: ', GetStr(expr, 'name'));
+    tid := symbols[symi].tk;
+    addr := symbols[symi].llvm_val;
+    IF TypeKind(tid) = TK_LSTRING THEN
+    BEGIN
+      gep_idx := AllocPtrArray(2);
+      SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+      SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 0, 0));
+      len_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(tid), addr, gep_idx, 2, MakeCStr(''));
+      len_val := LLVMBuildLoad2(builder, i8ty, len_ptr, MakeCStr(''));
+      len_val := LLVMBuildZExt(builder, len_val, i32ty, MakeCStr(''));
+      gep_idx := AllocPtrArray(2);
+      SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+      SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 1, 0));
+      chars_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(tid), addr, gep_idx, 2, MakeCStr(''));
+    END
+    ELSE IF TypeKind(tid) = TK_STRING THEN
+    BEGIN
+      len_val := LLVMConstInt(i32ty, types[tid].hi, 0);
+      gep_idx := AllocPtrArray(2);
+      SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+      SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 0, 0));
+      chars_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(tid), addr, gep_idx, 2, MakeCStr(''));
+    END
+    ELSE
+    BEGIN
+      AbortWith2('codegen: not a string-typed variable: ', GetStr(expr, 'name'));
+      chars_ptr := NIL;
+      len_val := NIL;
+    END;
+  END
+  ELSE
+  BEGIN
+    AbortWith('codegen: unsupported string expression (only literals and bare variables are supported)');
+    chars_ptr := NIL;
+    len_val := NIL;
+  END;
+END;
+
+PROCEDURE EmitByteCopyLoop(dest_ptr, src_ptr: ADRMEM; count: ADRMEM);
+{ Copies `count` (an i32 LLVMValueRef) bytes one at a time from src_ptr to
+  dest_ptr, via an alloca'd i32 loop counter -- the same alloca-based
+  loop-variable idiom CodegenForStmt already uses, rather than building
+  phi nodes by hand. Used by CONCAT/COPYLST/COPYSTR, whose source length is
+  only known at runtime (an LSTRING's dynamic length byte), so the
+  compile-time-known-literal shortcut CodegenLStringLiteralAssign/
+  CodegenStringLiteralAssign use does not apply. }
+VAR
+  i_slot: ADRMEM;
+  loop_bb, body_bb, end_bb: ADRMEM;
+  cur_i, cmp_val, next_i: ADRMEM;
+  s_ptr, d_ptr, byte_val: ADRMEM;
+  gep_idx: ADRMEM;
+BEGIN
+  i_slot := LLVMBuildAlloca(builder, i32ty, MakeCStr(''));
+  LLVMBuildStore(builder, LLVMConstInt(i32ty, 0, 0), i_slot);
+
+  loop_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('strcpy_loop'));
+  body_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('strcpy_body'));
+  end_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('strcpy_end'));
+
+  LLVMBuildBr(builder, loop_bb);
+  LLVMPositionBuilderAtEnd(builder, loop_bb);
+  cur_i := LLVMBuildLoad2(builder, i32ty, i_slot, MakeCStr(''));
+  cmp_val := LLVMBuildICmp(builder, LLVMIntSLT, cur_i, count, MakeCStr(''));
+  LLVMBuildCondBr(builder, cmp_val, body_bb, end_bb);
+
+  LLVMPositionBuilderAtEnd(builder, body_bb);
+  cur_i := LLVMBuildLoad2(builder, i32ty, i_slot, MakeCStr(''));
+  gep_idx := AllocPtrArray(1);
+  SetPtrArrayElem(gep_idx, 0, cur_i);
+  s_ptr := LLVMBuildGEP2(builder, i8ty, src_ptr, gep_idx, 1, MakeCStr(''));
+  gep_idx := AllocPtrArray(1);
+  SetPtrArrayElem(gep_idx, 0, cur_i);
+  d_ptr := LLVMBuildGEP2(builder, i8ty, dest_ptr, gep_idx, 1, MakeCStr(''));
+  byte_val := LLVMBuildLoad2(builder, i8ty, s_ptr, MakeCStr(''));
+  LLVMBuildStore(builder, byte_val, d_ptr);
+  next_i := LLVMBuildAdd(builder, cur_i, LLVMConstInt(i32ty, 1, 0), MakeCStr(''));
+  LLVMBuildStore(builder, next_i, i_slot);
+  LLVMBuildBr(builder, loop_bb);
+
+  LLVMPositionBuilderAtEnd(builder, end_bb);
+END;
+
+PROCEDURE CodegenConcat(args: ADRMEM);
+{ CONCAT(VAR D: LSTRING; CONST S: STRING): appends S's characters to D and
+  grows D's length byte by length(S) -- manual 11-20. No RANGECK-style
+  capacity guard yet (matches this file's documented MATHCK/RANGECK
+  simplification elsewhere: a capacity overflow here just corrupts memory,
+  same as an unchecked array index). }
+VAR
+  d_arg: ADRMEM;
+  d_symi: INTEGER32;
+  d_tid: INTEGER;
+  d_addr, len_ptr, dest_len_byte, dest_len, new_len, new_len_byte: ADRMEM;
+  dest_chars, append_ptr: ADRMEM;
+  src_chars, src_len: ADRMEM;
+  gep_idx: ADRMEM;
+BEGIN
+  IF ArrSize(args) <> 2 THEN
+    AbortWith('codegen: CONCAT expects exactly 2 arguments');
+  d_arg := ArrItem(args, 0);
+  IF NodeType(d_arg) <> 'Identifier' THEN
+    AbortWith('codegen: CONCAT''s destination must be a bare LSTRING variable');
+  d_symi := LookupSym(GetStr(d_arg, 'name'));
+  IF d_symi = 0 THEN
+    AbortWith2('codegen: undefined variable: ', GetStr(d_arg, 'name'));
+  d_tid := symbols[d_symi].tk;
+  IF TypeKind(d_tid) <> TK_LSTRING THEN
+    AbortWith('codegen: CONCAT''s destination must be an LSTRING variable');
+  d_addr := symbols[d_symi].llvm_val;
+
+  ResolveStringExprCharsLen(ArrItem(args, 1), src_chars, src_len);
+
+  gep_idx := AllocPtrArray(2);
+  SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+  SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 0, 0));
+  len_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(d_tid), d_addr, gep_idx, 2, MakeCStr(''));
+  dest_len_byte := LLVMBuildLoad2(builder, i8ty, len_ptr, MakeCStr(''));
+  dest_len := LLVMBuildZExt(builder, dest_len_byte, i32ty, MakeCStr(''));
+  new_len := LLVMBuildAdd(builder, dest_len, src_len, MakeCStr(''));
+
+  gep_idx := AllocPtrArray(2);
+  SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+  SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 1, 0));
+  dest_chars := LLVMBuildGEP2(builder, LLVMTypeForTk(d_tid), d_addr, gep_idx, 2, MakeCStr(''));
+  gep_idx := AllocPtrArray(1);
+  SetPtrArrayElem(gep_idx, 0, dest_len);
+  append_ptr := LLVMBuildGEP2(builder, i8ty, dest_chars, gep_idx, 1, MakeCStr(''));
+  EmitByteCopyLoop(append_ptr, src_chars, src_len);
+
+  new_len_byte := LLVMBuildTrunc(builder, new_len, i8ty, MakeCStr(''));
+  LLVMBuildStore(builder, new_len_byte, len_ptr);
+END;
+
 PROCEDURE CodegenProcCallStmt(stmt: ADRMEM);
 VAR
   name: Str255;
@@ -1298,6 +1521,8 @@ BEGIN
     CodegenWriteArgs(GetObj(stmt, 'args'), TRUE)
   ELSE IF name = 'WRITE' THEN
     CodegenWriteArgs(GetObj(stmt, 'args'), FALSE)
+  ELSE IF name = 'CONCAT' THEN
+    CodegenConcat(GetObj(stmt, 'args'))
   ELSE IF (name = 'NEW') OR (name = 'DISPOSE') THEN
   BEGIN
     args := GetObj(stmt, 'args');
@@ -1400,8 +1625,9 @@ BEGIN
     param := ArrItem(params_arr, pi);
     tk := ResolveTypeExpr(GetObj(param, 'type_expr'));
     is_v := GetStr(param, 'mode') = 'VAR';
-    IF (NOT is_v) AND ((TypeKind(tk) = TK_ARRAY) OR (TypeKind(tk) = TK_RECORD) OR (TypeKind(tk) = TK_LSTRING)) THEN
-      AbortWith('codegen: value-mode ARRAY/RECORD/LSTRING parameters are not supported (pass by VAR)');
+    IF (NOT is_v) AND ((TypeKind(tk) = TK_ARRAY) OR (TypeKind(tk) = TK_RECORD) OR
+       (TypeKind(tk) = TK_LSTRING) OR (TypeKind(tk) = TK_STRING)) THEN
+      AbortWith('codegen: value-mode ARRAY/RECORD/LSTRING/STRING parameters are not supported (pass by VAR)');
     pnames := GetObj(param, 'names');
     nn := ArrSize(pnames);
     FOR ni := 0 TO nn - 1 DO
