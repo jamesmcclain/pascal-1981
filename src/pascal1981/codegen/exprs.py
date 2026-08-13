@@ -433,6 +433,18 @@ class ExprsMixin:
         if expr.op in {'AND_THEN', 'OR_ELSE'}:
             return self.codegen_short_circuit_binop(expr)
 
+        def _is_str_expr(e):
+            if isinstance(e, StringLiteral):
+                return True
+            if isinstance(e, (Identifier, Designator)):
+                sym = self.scope.lookup(e.name)
+                if sym and sym.type_expr:
+                    return self.get_string_type_info(sym.type_expr)[0]
+            return False
+
+        if (_is_str_expr(expr.left) or _is_str_expr(expr.right)) and expr.op in {'EQ', 'NEQ', 'LT', 'LE', 'GT', 'GE'}:
+            return self.codegen_string_binop(expr.op, expr.left, expr.right)
+
         left = self.codegen_expr(expr.left)
         right = self.codegen_expr(expr.right)
 
@@ -478,6 +490,16 @@ class ExprsMixin:
             right = _to_common(right)
 
         if expr.op == 'PLUS':
+            if isinstance(left.type, ir.PointerType) and isinstance(right.type, ir.IntType):
+                idx = right
+                if idx.type.width < 32:
+                    idx = self.builder.sext(idx, ir.IntType(32))
+                return self.builder.gep(left, [idx])
+            if isinstance(right.type, ir.PointerType) and isinstance(left.type, ir.IntType):
+                idx = left
+                if idx.type.width < 32:
+                    idx = self.builder.sext(idx, ir.IntType(32))
+                return self.builder.gep(right, [idx])
             return self._fp_binop('fadd', left, right) if is_real else self._mathck_arith('add', left, right, signed=not self._expr_is_unsigned_word(expr))
         elif expr.op == 'MINUS':
             return self._fp_binop('fsub', left, right) if is_real else self._mathck_arith('sub', left, right, signed=not self._expr_is_unsigned_word(expr))

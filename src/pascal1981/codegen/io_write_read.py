@@ -277,8 +277,8 @@ class IoWriteReadMixin:
             fn = self.runtime_extern('pas_fread_int' if file_fcb is not None else 'pas_read_int')
             call_args = ([file_fcb, tmp] if file_fcb is not None else [tmp])
             self.builder.call(fn, call_args)
-            val = self.builder.trunc(self.builder.load(tmp), ptr.type.pointee)
-            self.builder.store(val, ptr)
+            val = self.builder.trunc(self.builder.load(tmp), ptr.type.pointee) if hasattr(ptr.type, 'pointee') and ptr.type.pointee.width < 32 else self.builder.load(tmp)
+            self.emit_store(val, ptr)
             return
         elif ty is WORD_TYPE or ty_name == 'WORD':
             fn = self.runtime_extern('pas_fread_word' if file_fcb is not None else 'pas_read_word')
@@ -304,16 +304,16 @@ class IoWriteReadMixin:
                     call_args = [tmp, names_ptr, ir.Constant(ir.IntType(32), len(names or []))]
                 self.builder.call(fn, call_args)
                 loaded = self.builder.load(tmp)
-                val = loaded if loaded.type == ptr.type.pointee else self.builder.trunc(loaded, ptr.type.pointee)
-                self.builder.store(val, ptr)
+                val = loaded if not hasattr(ptr.type, 'pointee') or loaded.type == ptr.type.pointee else self.builder.trunc(loaded, ptr.type.pointee)
+                self.emit_store(val, ptr)
                 return
             tmp = self.builder.alloca(ir.IntType(32), name='read_enum_tmp')
             fn = self.runtime_extern('pas_fread_int' if file_fcb is not None else 'pas_read_int')
             call_args = ([file_fcb, tmp] if file_fcb is not None else [tmp])
             self.builder.call(fn, call_args)
             loaded = self.builder.load(tmp)
-            val = loaded if loaded.type == ptr.type.pointee else self.builder.trunc(loaded, ptr.type.pointee)
-            self.builder.store(val, ptr)
+            val = loaded if not hasattr(ptr.type, 'pointee') or loaded.type == ptr.type.pointee else self.builder.trunc(loaded, ptr.type.pointee)
+            self.emit_store(val, ptr)
             return
         else:
             is_str, max_len, is_lstring = self.get_string_type_info(ty)

@@ -123,16 +123,19 @@ class StmtsMixin:
         if symbol.is_parameter and not stmt.target.selectors:
             raise CodegenError(f'Cannot assign to parameter: {target_name}')
 
-        # Check if the target is a string type
+        # Check if the target is a whole string type assignment
         is_str, max_len, is_dest_lstring = self.get_string_type_info(symbol.type_expr)
+        if stmt.target.selectors:
+            is_str = False
 
-        # Resolve the pointer (handles array indexing, etc.)
-        ptr = self.resolve_designator_ptr(stmt.target)
+        # Resolve the pointer (handles array indexing, etc.) and target AST type
+        ptr, target_ast_type = self.resolve_designator_ptr_typed(stmt.target)
         value = self.codegen_expr(stmt.expr)
 
         # Handle simple type conversions
-        if not is_str and hasattr(ptr.type, 'pointee'):
-            value = self._coerce_assign_value(value, ptr.type.pointee, stmt.expr)
+        if not is_str and target_ast_type is not None:
+            target_llvm_type = self.llvm_type(target_ast_type)
+            value = self._coerce_assign_value(value, target_llvm_type, stmt.expr)
 
         rangeck_enabled = self.effective_rangeck(stmt)
 
@@ -827,11 +830,10 @@ class StmtsMixin:
             loop_var = symbol.llvm_value
 
         # Initialize loop variable
+        loop_var_ty = self.llvm_type(symbol.type_expr) if symbol and symbol.type_expr else ir.IntType(16)
         start_val = self.codegen_expr(stmt.start)
-        if isinstance(start_val.type, ir.IntType) and start_val.type != loop_var.type.pointee:
-            start_val = self.builder.trunc(start_val, loop_var.type.pointee) if start_val.type.width > loop_var.type.pointee.width else self._extend_int_for_pascal_expr(
-                start_val, loop_var.type.pointee, stmt.start)
-        self.builder.store(start_val, loop_var)
+        start_val = self._coerce_assign_value(start_val, loop_var_ty, stmt.start)
+        self.emit_store(start_val, loop_var)
 
         # Create loop blocks
         loop_block = self.current_function.append_basic_block(name='for_loop')
@@ -859,7 +861,7 @@ class StmtsMixin:
         current_val = self.builder.load(loop_var)
         one = ir.Constant(current_val.type, 1)
         next_val = self.builder.add(current_val, one) if stmt.direction == 'TO' else self.builder.sub(current_val, one)
-        self.builder.store(next_val, loop_var)
+        self.emit_store(next_val, loop_var)
         back_edge = self.builder.branch(loop_block)
         if getattr(stmt, 'unroll', None):
             self._attach_unroll_metadata(back_edge, stmt.unroll)

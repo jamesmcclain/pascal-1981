@@ -528,6 +528,13 @@ class CodegenBase:
             self._fcb_ty = ir.LiteralStructType([i32, i32, i32, i32, ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer(), i32, ir.IntType(8), i32])
         return self._fcb_ty
 
+    def memcmp_func(self) -> ir.Function:
+        name = 'memcmp'
+        if name in self.module.globals:
+            return self.module.globals[name]
+        fn_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer(), ir.IntType(64)])
+        return ir.Function(self.module, fn_ty, name=name)
+
     def _scalar_size(self, name: str) -> int:
         """Size in bytes of a scalar/built-in type, by name."""
         return _SCALAR_SIZES.get(name.upper(), 4)
@@ -552,6 +559,11 @@ class CodegenBase:
 
     def emit_store(self, value: ir.Value, ptr: ir.Value) -> ir.StoreInstr:
         """Store to ``ptr``, preserving known device-address-space alignment."""
+        if hasattr(ptr.type, 'pointee') and hasattr(ptr.type.pointee, 'width') and hasattr(value.type, 'width') and value.type != ptr.type.pointee:
+            if value.type.width > ptr.type.pointee.width:
+                value = self.builder.trunc(value, ptr.type.pointee)
+            elif value.type.width < ptr.type.pointee.width:
+                value = self.builder.zext(value, ptr.type.pointee)
         return self.builder.store(value, ptr, align=self.memory_alignment(ptr))
 
     def entry_alloca(self, llvm_type: ir.Type, name: Optional[str] = None) -> ir.AllocaInstr:

@@ -288,6 +288,9 @@ class TypesMapMixin:
         if vt == target_type:
             return value
 
+        if isinstance(target_type, (ir.ArrayType, ir.LiteralStructType)) and isinstance(vt, ir.PointerType):
+            return self.builder.load(self.builder.bitcast(value, target_type.as_pointer()))
+
         def _is_seg(t):
             return (isinstance(t, ir.LiteralStructType) and len(t.elements) == 2 and isinstance(t.elements[0], ir.PointerType) and isinstance(t.elements[1], ir.IntType))
 
@@ -629,7 +632,9 @@ class TypesMapMixin:
                     # a dynamic index must remain a plain GEP even when an
                     # INDEXCK guard happened to be emitted on another path.
                     use_inbounds = inbounds_base and index_is_proven_inbounds
-                    if isinstance(ptr.type.pointee, ir.ArrayType):
+                    is_var_param = symbol.is_parameter and getattr(symbol, 'is_var', False)
+                    is_array_llvm = isinstance(self.llvm_type(cur_type), ir.ArrayType) if cur_type is not None else False
+                    if not is_var_param and (is_array_llvm or isinstance(getattr(ptr.type, 'pointee', None), ir.ArrayType)):
                         ptr = self._emit_designator_gep(ptr, [ir.Constant(ir.IntType(32), 0), index], proven_inbounds=use_inbounds)
                     else:
                         ptr = self._emit_designator_gep(ptr, [index], proven_inbounds=use_inbounds)

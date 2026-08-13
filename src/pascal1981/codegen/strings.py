@@ -40,14 +40,15 @@ class StringsMixin:
             return chars_ptr, length
 
         # val is now a pointer to the inline aggregate [n+1 x i8] or [n x i8]
-        val = self.codegen_expr(expr)
-
-        # Determine string type details
-        t = None
-        if isinstance(expr, (Identifier, Designator)):
+        if isinstance(expr, Identifier):
+            expr = Designator(name=expr.name, selectors=[])
+        if isinstance(expr, Designator):
             symbol = self.scope.lookup(expr.name)
             if symbol:
                 t = symbol.type_expr
+            val = self.resolve_designator_ptr(expr)
+        else:
+            val = self.codegen_expr(expr)
 
         is_str, max_len, is_lstring = self.get_string_type_info(t)
 
@@ -352,3 +353,38 @@ class StringsMixin:
             ir.Constant(ir.IntType(32), 0),
             ir.Constant(ir.IntType(32), 0)
         ])
+
+    def codegen_string_binop(self, op: str, left_expr: Expression, right_expr: Expression) -> ir.Value:
+        """Codegen string comparison (EQ, NEQ, LT, LE, GT, GE)."""
+        l_chars, l_len = self.get_string_chars_and_len(left_expr)
+        r_chars, r_len = self.get_string_chars_and_len(right_expr)
+
+        # Call memcmp(l_chars, r_chars, min_len)
+        min_len = self.builder.select(self.builder.icmp_signed('<', l_len, r_len), l_len, r_len)
+        min_len_64 = self.builder.zext(min_len, ir.IntType(64))
+        cmp_res = self.builder.call(self.memcmp_func(), [l_chars, r_chars, min_len_64])
+
+        cmp_eq_0 = self.builder.icmp_signed('==', cmp_res, ir.Constant(ir.IntType(32), 0))
+        len_eq = self.builder.icmp_signed('==', l_len, r_len)
+        len_lt = self.builder.icmp_signed('<', l_len, r_len)
+        len_gt = self.builder.icmp_signed('>', l_len, r_len)
+
+        cmp_lt_0 = self.builder.icmp_signed('<', cmp_res, ir.Constant(ir.IntType(32), 0))
+        cmp_gt_0 = self.builder.icmp_signed('>', cmp_res, ir.Constant(ir.IntType(32), 0))
+
+        if op == 'EQ':
+            return self.builder.and_(cmp_eq_0, len_eq)
+        elif op == 'NEQ':
+            return self.builder.not_(self.builder.and_(cmp_eq_0, len_eq))
+        elif op == 'LT':
+            return self.builder.or_(cmp_lt_0, self.builder.and_(cmp_eq_0, len_lt))
+        elif op == 'LE':
+            len_le = self.builder.icmp_signed('<=', l_len, r_len)
+            return self.builder.or_(cmp_lt_0, self.builder.and_(cmp_eq_0, len_le))
+        elif op == 'GT':
+            return self.builder.or_(cmp_gt_0, self.builder.and_(cmp_eq_0, len_gt))
+        elif op == 'GE':
+            len_ge = self.builder.icmp_signed('>=', l_len, r_len)
+            return self.builder.or_(cmp_gt_0, self.builder.and_(cmp_eq_0, len_ge))
+        else:
+            raise CodegenError(f"Unsupported string comparison operator: {op}")

@@ -626,6 +626,11 @@ def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optiona
         if op in COMPARE:
             return BOOLEAN_TYPE
 
+    # String / LString comparison
+    if isinstance(left_type, (StringType, LStringType)) and isinstance(right_type, (StringType, LStringType)):
+        if op in COMPARE:
+            return BOOLEAN_TYPE
+
     # Character comparison
     if isinstance(left_type, CharType) and isinstance(right_type, CharType):
         if op in COMPARE:

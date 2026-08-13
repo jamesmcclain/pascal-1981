@@ -509,7 +509,7 @@ class DeclsMixin:
                 alloca = self.entry_alloca(llvm_type, name=name)
                 self.scope.define(name, alloca, decl.type_expr)
                 if initck_const is not None:
-                    self.builder.store(initck_const, alloca)
+                    self.emit_store(initck_const, alloca)
                 if isinstance(decl.type_expr, FileType) or (isinstance(decl.type_expr, NamedType) and decl.type_expr.name.upper() == 'TEXT'):
                     self._init_file_storage(alloca, decl.type_expr)
 
@@ -1059,14 +1059,26 @@ class DeclsMixin:
         for param in effective_decl.params:
             for name in param.names:
                 arg = next(args_iter)
-                arg.name = name
-                self.scope.define(name, arg, param.type_expr, is_parameter=param.mode not in {'VAR', 'VARS', 'CONST', 'CONSTS'})
+                if isinstance(arg.type, (ir.ArrayType, ir.LiteralStructType)):
+                    param_alloca = self.entry_alloca(arg.type, name=name + '_alloca')
+                    self.builder.store(arg, param_alloca)
+                    self.scope.define(name, param_alloca, param.type_expr, is_parameter=param.mode not in {'VAR', 'VARS', 'CONST', 'CONSTS'})
+                else:
+                    self.scope.define(name, arg, param.type_expr, is_parameter=param.mode not in {'VAR', 'VARS', 'CONST', 'CONSTS'})
 
         if is_function:
             # Allocate space for return value
             return_alloca = self.entry_alloca(return_type, name='return_value')
             self.scope.define(decl.name, return_alloca, decl.return_type)
-            self.builder.store(ir.Constant(return_type, 0.0) if isinstance(return_type, (ir.FloatType, ir.DoubleType)) else ir.Constant(return_type, 0), return_alloca)
+            if isinstance(return_type, ir.PointerType):
+                init_val = ir.Constant(return_type, None)
+            elif isinstance(return_type, (ir.FloatType, ir.DoubleType)):
+                init_val = ir.Constant(return_type, 0.0)
+            elif isinstance(return_type, (ir.ArrayType, ir.LiteralStructType)):
+                init_val = ir.Constant(return_type, ir.Undefined)
+            else:
+                init_val = ir.Constant(return_type, 0)
+            self.builder.store(init_val, return_alloca)
 
         # Codegen body
         for inner_decl in decl.body.decls:
