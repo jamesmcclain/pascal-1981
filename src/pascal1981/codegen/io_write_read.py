@@ -12,7 +12,7 @@ import llvmlite.ir as ir
 
 from ..ast_nodes import BuiltinType, Designator
 from ..ast_nodes import EnumType as ASTEnumType
-from ..ast_nodes import Expression, FileType, Identifier
+from ..ast_nodes import Expression, FileType, FuncCall, Identifier
 from ..ast_nodes import LStringType as ASTLStringType
 from ..ast_nodes import NamedType, WriteArg
 from ..type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER8_TYPE, INTEGER_TYPE, REAL_TYPE, WORD8_TYPE, WORD32_TYPE, WORD64_TYPE, WORD_TYPE)
@@ -65,6 +65,16 @@ class IoWriteReadMixin:
                             return NamedType('INTEGER', None)
                     # Fall back to the base type for complex selectors this helper does not model.
             return ty
+        if isinstance(expr, FuncCall):
+            # Function symbols store their return type directly as type_expr
+            # (decls.py: scope.define(decl.name, func, decl.return_type)),
+            # not wrapped in a FunctionType -- an explicit Foo() call needs
+            # its own lookup so a niladic STRING/LSTRING-returning function
+            # formats as a string, not falling through to the generic '%s'
+            # raw-value case (which would pass the returned aggregate by
+            # value to printf instead of a length+pointer pair).
+            sym = self.scope.lookup(expr.name)
+            return getattr(sym, 'type_expr', None) if sym else None
         return self.infer_expression_type(expr) if hasattr(self, 'infer_expression_type') else None
 
     def _file_selector_fcb(self, expr) -> ir.Value:
@@ -116,6 +126,17 @@ class IoWriteReadMixin:
 
             is_str_like, str_len, is_lstring_like = self.get_string_type_info(pas_ty)
             if isinstance(pas_ty, (StringType, LStringType, ASTLStringType)) or is_str_like:
+                # A niladic string/LSTRING-returning function call -- bare
+                # designator or explicit Foo() -- yields the aggregate by
+                # value (codegen_expr calls it and returns the LLVM array
+                # value directly), not a pointer to it. GEP requires a
+                # pointer, so materialize the value into a fresh alloca first;
+                # a plain variable/field read already comes back as a pointer
+                # and is unaffected.
+                if not isinstance(val.type, ir.PointerType):
+                    val_ptr = self.builder.alloca(val.type)
+                    self.builder.store(val, val_ptr)
+                    val = val_ptr
                 zero = ir.Constant(ir.IntType(32), 0)
                 if isinstance(pas_ty, (LStringType, ASTLStringType)) or is_lstring_like:
                     length = self.builder.zext(self.builder.load(self.builder.gep(val, [zero, zero])), ir.IntType(32))

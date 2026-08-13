@@ -226,6 +226,16 @@ class ExprsMixin:
             symbol = self.scope.lookup(expr.name)
             if not symbol:
                 raise CodegenError(f'Undefined variable: {expr.name}')
+            # Vintage Pascal permits a parameterless function to be used in an
+            # expression without an empty actual-parameter list (mirrors the
+            # Identifier branch above -- callers such as
+            # StringsMixin.get_string_chars_and_len normalize a bare
+            # Identifier to a selector-less Designator before reaching here,
+            # so this branch needs the same niladic-function special case or
+            # it falls through to resolve_designator_ptr/emit_load and loads
+            # the function's own address instead of calling it).
+            if not expr.selectors and isinstance(symbol.llvm_value, ir.Function) and len(symbol.llvm_value.function_type.args) == 0:
+                return self.builder.call(symbol.llvm_value, [])
             # Parameters are passed by value; return the value directly when
             # there are no selectors. When selectors ARE present (e.g. p^[i]),
             # fall through to resolve_designator_ptr so the DEREF/INDEX chain
