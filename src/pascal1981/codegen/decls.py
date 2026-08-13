@@ -1059,6 +1059,7 @@ class DeclsMixin:
         for param in effective_decl.params:
             for name in param.names:
                 arg = next(args_iter)
+                arg.name = name
                 if isinstance(arg.type, (ir.ArrayType, ir.LiteralStructType)):
                     param_alloca = self.entry_alloca(arg.type, name=name + '_alloca')
                     self.builder.store(arg, param_alloca)
