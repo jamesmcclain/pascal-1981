@@ -31,13 +31,19 @@
   an INTEGER selector with single-constant and comma-separated labels
   (lowered as a sequential test-block chain, not a jump table) -- a lo..hi
   label range is rejected, matching the Python reference's own
-  not-yet-supported limitation there, not falling short of it. Not yet
-  covered: COPYLST/COPYSTR/other string builtins, files, multi-dimension
-  arrays, CHAR-keyed CASE, CASE label ranges, WRITE width:precision,
-  MATHCK/RANGECK-style runtime traps (including CONCAT's own capacity
-  overflow, which is unchecked -- same simplification as an unchecked
-  array index elsewhere in this file), C-ABI externs, units, and DEVICE
-  MODULE/PTX generation. Anything not yet covered is
+  not-yet-supported limitation there, not falling short of it; and
+  COPYLST(CONST S; VAR D: LSTRING) and COPYSTR(CONST S; VAR D: STRING),
+  both of which overwrite D from scratch (unlike CONCAT's append) --
+  COPYLST sets D's length byte to length(S), COPYSTR blank-pads the bytes
+  beyond length(S) up to D's fixed capacity with 0x20 (STRING has no
+  length byte, so every declared byte must hold a real character). Not yet
+  covered: other string builtins (LOWER/UPPER/etc.), files,
+  multi-dimension arrays, CHAR-keyed CASE, CASE label ranges, WRITE
+  width:precision, MATHCK/RANGECK-style runtime traps (including CONCAT/
+  COPYLST/COPYSTR's own capacity overflow, which is unchecked -- same
+  simplification as an unchecked array index elsewhere in this file),
+  C-ABI externs, units, and DEVICE MODULE/PTX generation. Anything not yet
+  covered is
   rejected loudly via AbortWith rather than silently mishandled
   or miscompiled -- reject unhandled constructs instead of guessing, the
   same discipline the earlier native stages (lexer.pas/parser.pas/
@@ -1854,6 +1860,129 @@ BEGIN
   LLVMPositionBuilderAtEnd(builder, end_bb);
 END;
 
+PROCEDURE EmitByteFillLoop(dest_ptr: ADRMEM; count: ADRMEM; fill_byte: INTEGER);
+{ Fills `count` (an i32 LLVMValueRef) bytes at dest_ptr with the constant
+  byte fill_byte, via the same alloca-counter loop idiom as
+  EmitByteCopyLoop. Used by COPYSTR's blank-padding (manual 11-20: bytes
+  beyond the copied source, up to STRING's fixed capacity, get 0x20). }
+VAR
+  i_slot: ADRMEM;
+  loop_bb, body_bb, end_bb: ADRMEM;
+  cur_i, cmp_val, next_i: ADRMEM;
+  d_ptr: ADRMEM;
+  gep_idx: ADRMEM;
+BEGIN
+  i_slot := LLVMBuildAlloca(builder, i32ty, MakeCStr(''));
+  LLVMBuildStore(builder, LLVMConstInt(i32ty, 0, 0), i_slot);
+
+  loop_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('strfill_loop'));
+  body_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('strfill_body'));
+  end_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('strfill_end'));
+
+  LLVMBuildBr(builder, loop_bb);
+  LLVMPositionBuilderAtEnd(builder, loop_bb);
+  cur_i := LLVMBuildLoad2(builder, i32ty, i_slot, MakeCStr(''));
+  cmp_val := LLVMBuildICmp(builder, LLVMIntSLT, cur_i, count, MakeCStr(''));
+  LLVMBuildCondBr(builder, cmp_val, body_bb, end_bb);
+
+  LLVMPositionBuilderAtEnd(builder, body_bb);
+  cur_i := LLVMBuildLoad2(builder, i32ty, i_slot, MakeCStr(''));
+  gep_idx := AllocPtrArray(1);
+  SetPtrArrayElem(gep_idx, 0, cur_i);
+  d_ptr := LLVMBuildGEP2(builder, i8ty, dest_ptr, gep_idx, 1, MakeCStr(''));
+  LLVMBuildStore(builder, LLVMConstInt(i8ty, fill_byte, 0), d_ptr);
+  next_i := LLVMBuildAdd(builder, cur_i, LLVMConstInt(i32ty, 1, 0), MakeCStr(''));
+  LLVMBuildStore(builder, next_i, i_slot);
+  LLVMBuildBr(builder, loop_bb);
+
+  LLVMPositionBuilderAtEnd(builder, end_bb);
+END;
+
+PROCEDURE CodegenCopylst(args: ADRMEM);
+{ COPYLST(CONST S: STRING-or-LSTRING-or-literal; VAR D: LSTRING): copies S's
+  characters into D from scratch (unlike CONCAT, which appends) and sets D's
+  length byte to length(S). No RANGECK-style capacity guard, same documented
+  simplification as CONCAT. }
+VAR
+  d_arg: ADRMEM;
+  d_symi: INTEGER32;
+  d_tid: INTEGER;
+  d_addr, len_ptr, src_len_byte: ADRMEM;
+  dest_chars: ADRMEM;
+  src_chars, src_len: ADRMEM;
+  gep_idx: ADRMEM;
+BEGIN
+  IF ArrSize(args) <> 2 THEN
+    AbortWith('codegen: COPYLST expects exactly 2 arguments');
+  d_arg := ArrItem(args, 1);
+  IF NodeType(d_arg) <> 'Identifier' THEN
+    AbortWith('codegen: COPYLST''s destination must be a bare LSTRING variable');
+  d_symi := LookupSym(GetStr(d_arg, 'name'));
+  IF d_symi = 0 THEN
+    AbortWith2('codegen: undefined variable: ', GetStr(d_arg, 'name'));
+  d_tid := symbols[d_symi].tk;
+  IF TypeKind(d_tid) <> TK_LSTRING THEN
+    AbortWith('codegen: COPYLST''s destination must be an LSTRING variable');
+  d_addr := symbols[d_symi].llvm_val;
+
+  ResolveStringExprCharsLen(ArrItem(args, 0), src_chars, src_len);
+
+  gep_idx := AllocPtrArray(2);
+  SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+  SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 1, 0));
+  dest_chars := LLVMBuildGEP2(builder, LLVMTypeForTk(d_tid), d_addr, gep_idx, 2, MakeCStr(''));
+  EmitByteCopyLoop(dest_chars, src_chars, src_len);
+
+  gep_idx := AllocPtrArray(2);
+  SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+  SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 0, 0));
+  len_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(d_tid), d_addr, gep_idx, 2, MakeCStr(''));
+  src_len_byte := LLVMBuildTrunc(builder, src_len, i8ty, MakeCStr(''));
+  LLVMBuildStore(builder, src_len_byte, len_ptr);
+END;
+
+PROCEDURE CodegenCopystr(args: ADRMEM);
+{ COPYSTR(CONST S: STRING-or-LSTRING-or-literal; VAR D: STRING): copies S's
+  characters into D from byte[0], then blank-pads the remaining bytes (from
+  length(S) up to D's fixed capacity) with 0x20 -- STRING has no length
+  byte, so every declared byte always holds a real character. }
+VAR
+  d_arg: ADRMEM;
+  d_symi: INTEGER32;
+  d_tid: INTEGER;
+  d_addr: ADRMEM;
+  dest_chars, pad_ptr, pad_len: ADRMEM;
+  src_chars, src_len: ADRMEM;
+  gep_idx: ADRMEM;
+BEGIN
+  IF ArrSize(args) <> 2 THEN
+    AbortWith('codegen: COPYSTR expects exactly 2 arguments');
+  d_arg := ArrItem(args, 1);
+  IF NodeType(d_arg) <> 'Identifier' THEN
+    AbortWith('codegen: COPYSTR''s destination must be a bare STRING variable');
+  d_symi := LookupSym(GetStr(d_arg, 'name'));
+  IF d_symi = 0 THEN
+    AbortWith2('codegen: undefined variable: ', GetStr(d_arg, 'name'));
+  d_tid := symbols[d_symi].tk;
+  IF TypeKind(d_tid) <> TK_STRING THEN
+    AbortWith('codegen: COPYSTR''s destination must be a STRING variable');
+  d_addr := symbols[d_symi].llvm_val;
+
+  ResolveStringExprCharsLen(ArrItem(args, 0), src_chars, src_len);
+
+  gep_idx := AllocPtrArray(2);
+  SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+  SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 0, 0));
+  dest_chars := LLVMBuildGEP2(builder, LLVMTypeForTk(d_tid), d_addr, gep_idx, 2, MakeCStr(''));
+  EmitByteCopyLoop(dest_chars, src_chars, src_len);
+
+  gep_idx := AllocPtrArray(1);
+  SetPtrArrayElem(gep_idx, 0, src_len);
+  pad_ptr := LLVMBuildGEP2(builder, i8ty, dest_chars, gep_idx, 1, MakeCStr(''));
+  pad_len := LLVMBuildSub(builder, LLVMConstInt(i32ty, types[d_tid].hi, 0), src_len, MakeCStr(''));
+  EmitByteFillLoop(pad_ptr, pad_len, 32);
+END;
+
 PROCEDURE CodegenConcat(args: ADRMEM);
 { CONCAT(VAR D: LSTRING; CONST S: STRING): appends S's characters to D and
   grows D's length byte by length(S) -- manual 11-20. No RANGECK-style
@@ -1921,6 +2050,10 @@ BEGIN
     CodegenWriteArgs(GetObj(stmt, 'args'), FALSE)
   ELSE IF name = 'CONCAT' THEN
     CodegenConcat(GetObj(stmt, 'args'))
+  ELSE IF name = 'COPYLST' THEN
+    CodegenCopylst(GetObj(stmt, 'args'))
+  ELSE IF name = 'COPYSTR' THEN
+    CodegenCopystr(GetObj(stmt, 'args'))
   ELSE IF (name = 'NEW') OR (name = 'DISPOSE') THEN
   BEGIN
     args := GetObj(stmt, 'args');
