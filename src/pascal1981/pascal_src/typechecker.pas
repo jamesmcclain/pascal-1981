@@ -7,36 +7,67 @@
   and exits 1 without emitting AST JSON, matching cli_typecheck.py.
 
   Scope (v1): the rule set exercised by tests/fixtures/typecheck/, plus
-  enough of the C-ABI/UNIT surface to self-host lex+parse+typecheck on this
-  repository's own native .pas sources: EXTERN/FORWARD declarations (no
+  enough of the C-ABI/UNIT/pointer surface to self-host lex+parse+typecheck
+  on this repository's own native .pas sources (lexer.pas, parser.pas,
+  jsonutil.pas, and this file) end to end: EXTERN/FORWARD declarations (no
   body to check -- the real definition is a separately-compiled/linked
   object, or comes later in the same file), the ADRMEM/CPTR address types
   and the CINT/CCHAR/CSHORT/CLONG/CSIZE_T/CDOUBLE C-ABI width aliases (each
   resolved to the vintage type of matching flavor, since this v1 type-kind
   model doesn't track width), the wide INTEGER8/16/32/64, WORD8/16/32/64,
-  and REAL32/64 extension names (same width-collapsing treatment), and the
+  and REAL32/64 extension names (same width-collapsing treatment), the
   local_interfaces a USES clause splices in (their TYPE/PROC/FUNC
-  signatures are registered exactly like an EXTERN decl's). DEVICE MODULE
+  signatures are registered exactly like an EXTERN decl's), pointer
+  arithmetic (POINTER +/- an ordinal offset) and dereference (`p^`), STRING/
+  LSTRING character indexing (`s[i]`), the ORD/CHR/TRUNC/ROUND/SIZEOF
+  builtins, and non-PROGRAM compilation units (MODULE/INTERFACE/
+  IMPLEMENTATION, which put `decls` directly on the root instead of nesting
+  under a `block` the way a PROGRAM does -- see CheckUnit). DEVICE MODULE
   checks, VARARGS attribute checks, and UNIT interface/implementation
   signature *matching* (validating IMPLEMENTATION bodies against their
-  INTERFACE signatures) are still deferred, as are pointer arithmetic/
-  dereference and most builtin functions (ORD/CHR/TRUNC/SIZEOF/...) --
-  self-hosting on lexer.pas/parser.pas/typechecker.pas's own sources still
-  needs those.
+  INTERFACE signatures) are still deferred; those aren't exercised by this
+  repository's own native sources, which is what self-hosting requires.
+
+  Self-hosting note: as of the pointer/aux2-chaining and ImplementationUnit
+  fixes, lexer.pas, parser.pas, jsonutil.pas, and typechecker.pas itself
+  all type-check cleanly end to end through the native
+  lexer_native|parser_native|typechecker_native pipeline (exit 0, valid
+  annotated AST out), matching the Python reference's accept/reject verdict
+  in every case. The one design point worth calling out: a FUNCTION's own
+  name is deliberately NOT registered as a symbol-table entry to support
+  `F := expr` inside F's body (see cur_func_name below) -- an earlier
+  version shadowed F's own callable FUNC entry with a VAR entry for this
+  purpose, which broke every recursive self-call within F's own body
+  (LookupSymbol's backward scan found the shadow VAR first, so `F(x)`
+  resolved to a variable reference instead of a call). This repository's
+  own parser.pas relies on exactly this pattern (e.g. ParseConstant calling
+  itself for nested array/set-literal elements).
 
   Annotation contract: the Python reference stamps a `resolved_type`
-  attribute onto every IntLiteral/RealLiteral node (and the operand of a
-  signed IntLiteral unary +/-), naming the literal's width/precision for
-  codegen -- context_type's exact width (e.g. Integer32Type for a CINT
-  target) when the surrounding context calls for one of the WORD/INTEGERn/
-  REAL32 family, else the default IntegerType/RealType. Because this v1
-  type-kind model collapses all integer widths into TK_INTEGER (and all
-  WORD widths into TK_WORD), it always tags the default IntegerType/
-  RealType regardless of a width-specific target context -- correct for
-  every fixture in tests/fixtures/typecheck/ (none of which need a
-  non-default width), but not yet byte-identical to the Python reference
-  when a literal is assigned into a CINT/INTEGER32/WORD32/etc.-typed
-  target. }
+  attribute onto most (not textually all -- see below) IntLiteral/
+  RealLiteral nodes (and the operand of a signed IntLiteral unary +/-),
+  naming the literal's width/precision for codegen -- context_type's exact
+  width (e.g. Integer32Type for a CINT target) when the surrounding context
+  calls for one of the WORD/INTEGERn/REAL32 family, else the default
+  IntegerType/RealType. Two known, functionally-harmless gaps remain
+  against byte-identical parity with the Python reference (neither affects
+  a single fixture in tests/fixtures/typecheck/, and neither changes
+  codegen output, since the default IntegerType/RealType tag and no tag at
+  all are handled identically by codegen):
+    1. Because this v1 type-kind model collapses all integer widths into
+       TK_INTEGER (and all WORD widths into TK_WORD), it always tags the
+       default IntegerType/RealType regardless of a width-specific target
+       context, rather than e.g. Integer32Type for a CINT-typed target.
+    2. The Python reference itself does not tag perfectly consistently --
+       e.g. a second `len := 0;` inside a nested IF's compound statement,
+       assigning the exact same IntLiteral(0) to the exact same INTEGER
+       variable as an earlier top-level `len := 0;` that DOES get tagged,
+       is left untagged (verified against a minimal repro, not a
+       self-hosting-only artifact). This stage tags every IntLiteral/
+       RealLiteral node unconditionally instead, which is a strict, more
+       internally-consistent superset of the Python reference's output
+       rather than a divergent subset -- native never lacks a tag Python
+       has, only (rarely) has one Python omits. }
 
 (*$INCLUDE:'jsonutil.inc'*)
 PROGRAM pascal1981_typecheck(input, output);
@@ -83,6 +114,16 @@ TYPE
     kind: Str255;       { 'VAR', 'CONST', 'TYPE', 'PROC', 'FUNC' }
     tk: INTEGER;
     aux: INTEGER;        { pointee/element TK, or record id }
+    aux2: INTEGER;       { one level deeper: the pointee/element's OWN aux
+                           (its record id, or its own element/pointee TK) --
+                           carried so CheckDesignator can resolve a FIELD or
+                           INDEX selector applied after a DEREF/INDEX, e.g.
+                           `symbols[i].name` (array-of-record) or
+                           `tok^.line` (pointer-to-record). Only one level
+                           deep is tracked; a third level (e.g. a field of a
+                           dereferenced element of an array of records)
+                           isn't -- not needed by tests/fixtures/typecheck/
+                           or this repository's own native sources. }
     idx_tk: INTEGER;     { array index TK }
     nparams: INTEGER;
     param_tk: ARRAY [1..MAX_PARAMS] OF INTEGER;
@@ -93,6 +134,7 @@ TYPE
     name: Str255;
     tk: INTEGER;
     aux: INTEGER;
+    aux2: INTEGER;
     idx_tk: INTEGER;
   END;
 
@@ -100,6 +142,8 @@ TYPE
     record_id: INTEGER;
     fname: Str255;
     ftk: INTEGER;
+    faux: INTEGER;
+    faux2: INTEGER;
   END;
 
 VAR
@@ -119,6 +163,18 @@ VAR
   nerrors: INTEGER32;
 
   cur_func_ret_tk: INTEGER; { TK_VOID when not inside a function }
+  cur_func_aux, cur_func_aux2: INTEGER;
+  cur_func_name: Str255;   { '' when not inside a function. `F := expr`
+                             inside F's own body assigns through the
+                             return-value slot (RETURN's target) rather than
+                             any symbol-table entry -- mirrors
+                             type_checker.py's stmts.py, which special-cases
+                             `target_name == self.current_function.name`
+                             instead of registering a shadow VAR. Not
+                             shadowing is required for self-recursion: a
+                             shadow VAR entry for the function's own name
+                             would hide its FUNC entry from any recursive
+                             call within its own body. }
 
 { ============================== utilities ============================== }
 
@@ -193,13 +249,14 @@ BEGIN
   LookupSymbol := i;
 END;
 
-FUNCTION DefineSymbol(name: Str255; kind: Str255; tk, aux, idx_tk: INTEGER): INTEGER32;
+FUNCTION DefineSymbol(name: Str255; kind: Str255; tk, aux, aux2, idx_tk: INTEGER): INTEGER32;
 BEGIN
   nsymbols := nsymbols + 1;
   symbols[nsymbols].name := name;
   symbols[nsymbols].kind := kind;
   symbols[nsymbols].tk := tk;
   symbols[nsymbols].aux := aux;
+  symbols[nsymbols].aux2 := aux2;
   symbols[nsymbols].idx_tk := idx_tk;
   symbols[nsymbols].nparams := 0;
   symbols[nsymbols].ret_tk := TK_VOID;
@@ -216,7 +273,7 @@ BEGIN
   LookupType := i;
 END;
 
-PROCEDURE AddFieldEntry(record_id: INTEGER; fname: Str255; ftk: INTEGER);
+PROCEDURE AddFieldEntry(record_id: INTEGER; fname: Str255; ftk, faux, faux2: INTEGER);
 BEGIN
   IF nfields < MAX_FIELDS THEN
   BEGIN
@@ -224,6 +281,8 @@ BEGIN
     fields[nfields].record_id := record_id;
     fields[nfields].fname := fname;
     fields[nfields].ftk := ftk;
+    fields[nfields].faux := faux;
+    fields[nfields].faux2 := faux2;
   END;
 END;
 
@@ -249,11 +308,11 @@ END;
 
 { ========================== type-expr resolution ======================= }
 
-PROCEDURE ResolveTypeExpr(node: ADRMEM; VAR tk, aux, idx_tk: INTEGER);
+PROCEDURE ResolveTypeExpr(node: ADRMEM; VAR tk, aux, aux2, idx_tk: INTEGER);
 VAR
   nt, name: Str255;
   base_node, elem_node, fields_arr, tup, items, names_arr, ftype_node: ADRMEM;
-  inner_tk, inner_aux, inner_idx: INTEGER;
+  inner_tk, inner_aux, inner_aux2, inner_idx: INTEGER;
   ti: INTEGER32;
   rid: INTEGER;
   n, fi, nn, ni: INTEGER32;
@@ -261,6 +320,7 @@ VAR
 BEGIN
   tk := TK_UNKNOWN;
   aux := 0;
+  aux2 := 0;
   idx_tk := 0;
   nt := NodeType(node);
   IF nt = 'NamedType' THEN
@@ -304,6 +364,7 @@ BEGIN
       ELSE BEGIN
         tk := types[ti].tk;
         aux := types[ti].aux;
+        aux2 := types[ti].aux2;
         idx_tk := types[ti].idx_tk;
       END;
     END;
@@ -313,16 +374,18 @@ BEGIN
   ELSE IF nt = 'PointerType' THEN
   BEGIN
     base_node := GetObj(node, 'base');
-    ResolveTypeExpr(base_node, inner_tk, inner_aux, inner_idx);
+    ResolveTypeExpr(base_node, inner_tk, inner_aux, inner_aux2, inner_idx);
     tk := TK_POINTER;
     aux := inner_tk;
+    aux2 := inner_aux;
   END
   ELSE IF nt = 'ArrayType' THEN
   BEGIN
     elem_node := GetObj(node, 'element_type');
-    ResolveTypeExpr(elem_node, inner_tk, inner_aux, inner_idx);
+    ResolveTypeExpr(elem_node, inner_tk, inner_aux, inner_aux2, inner_idx);
     tk := TK_ARRAY;
     aux := inner_tk;
+    aux2 := inner_aux;
     idx_tk := TK_INTEGER;
   END
   ELSE IF nt = 'RecordType' THEN
@@ -337,12 +400,12 @@ BEGIN
       items := GetObj(tup, 'items');
       names_arr := cJSON_GetArrayItem(items, 0);
       ftype_node := cJSON_GetArrayItem(items, 1);
-      ResolveTypeExpr(ftype_node, inner_tk, inner_aux, inner_idx);
+      ResolveTypeExpr(ftype_node, inner_tk, inner_aux, inner_aux2, inner_idx);
       nn := cJSON_GetArraySize(names_arr);
       FOR ni := 0 TO nn - 1 DO
       BEGIN
         nm := CStrToStr255(cJSON_GetStringValue(cJSON_GetArrayItem(names_arr, ni)));
-        AddFieldEntry(rid, nm, inner_tk);
+        AddFieldEntry(rid, nm, inner_tk, inner_aux, inner_aux2);
       END;
     END;
     tk := TK_RECORD;
@@ -381,6 +444,10 @@ BEGIN
 END;
 
 FUNCTION CheckDesignator(node: ADRMEM): INTEGER;
+{ Walks the base identifier's selectors, threading a (tk, aux, aux2) triple
+  along so a FIELD or INDEX selector applied right after a DEREF/INDEX can
+  still resolve (aux2 carries the element/pointee's own aux -- see SymRec's
+  aux2 doc comment). Only one level of nesting is tracked this way. }
 VAR
   name: Str255;
   si: INTEGER32;
@@ -388,7 +455,7 @@ VAR
   nsel, i: INTEGER32;
   sel, idx_expr: ADRMEM;
   skind, fname: Str255;
-  tk, aux, idx_tk, itk: INTEGER;
+  tk, aux, aux2, itk, new_tk, new_aux: INTEGER;
   fi: INTEGER32;
 BEGIN
   name := GetStr(node, 'name');
@@ -401,7 +468,7 @@ BEGIN
   END;
   tk := symbols[si].tk;
   aux := symbols[si].aux;
-  idx_tk := symbols[si].idx_tk;
+  aux2 := symbols[si].aux2;
   sel_arr := GetObj(node, 'selectors');
   nsel := cJSON_GetArraySize(sel_arr);
   FOR i := 0 TO nsel - 1 DO
@@ -414,6 +481,8 @@ BEGIN
       BEGIN
         AddError('Field selector on non-record value');
         tk := TK_UNKNOWN;
+        aux := 0;
+        aux2 := 0;
       END
       ELSE BEGIN
         fname := CStrToStr255(cJSON_GetStringValue(GetObj(sel, 'index_or_field')));
@@ -422,24 +491,66 @@ BEGIN
         BEGIN
           AddError('Unknown field');
           tk := TK_UNKNOWN;
+          aux := 0;
+          aux2 := 0;
         END
-        ELSE
+        ELSE BEGIN
           tk := fields[fi].ftk;
+          aux := fields[fi].faux;
+          aux2 := fields[fi].faux2;
+        END;
       END;
     END
     ELSE IF skind = 'INDEX' THEN
     BEGIN
-      IF tk <> TK_ARRAY THEN
+      IF tk = TK_STRING THEN
+      BEGIN
+        { s[i] on a STRING/LSTRING indexes its characters (Str255[0] is the
+          length byte, matching this repository's own Str255 usage) --
+          not array indexing, so there's no per-declaration element/aux to
+          carry forward; the result is always a plain CHAR. }
+        idx_expr := GetObj(sel, 'index_or_field');
+        itk := CheckExpr(idx_expr);
+        IF NOT IsOrdinal(itk) AND (itk <> TK_UNKNOWN) THEN
+          AddError('String index must be an ordinal type');
+        tk := TK_CHAR;
+        aux := 0;
+        aux2 := 0;
+      END
+      ELSE IF tk <> TK_ARRAY THEN
       BEGIN
         AddError('Index selector on non-array value');
         tk := TK_UNKNOWN;
+        aux := 0;
+        aux2 := 0;
       END
       ELSE BEGIN
         idx_expr := GetObj(sel, 'index_or_field');
         itk := CheckExpr(idx_expr);
         IF NOT IsOrdinal(itk) AND (itk <> TK_UNKNOWN) THEN
           AddError('Array index must be an ordinal type');
-        tk := aux;
+        new_tk := aux;
+        new_aux := aux2;
+        tk := new_tk;
+        aux := new_aux;
+        aux2 := 0;
+      END;
+    END
+    ELSE IF skind = 'DEREF' THEN
+    BEGIN
+      IF tk <> TK_POINTER THEN
+      BEGIN
+        AddError('Dereference of non-pointer value');
+        tk := TK_UNKNOWN;
+        aux := 0;
+        aux2 := 0;
+      END
+      ELSE BEGIN
+        new_tk := aux;
+        new_aux := aux2;
+        tk := new_tk;
+        aux := new_aux;
+        aux2 := 0;
       END;
     END;
   END;
@@ -480,6 +591,42 @@ BEGIN
           AddError('BYWORD argument must be an ordinal type');
       END;
     CheckFuncCall := TK_WORD;
+    RETURN;
+  END;
+  IF name = 'ORD' THEN
+  BEGIN
+    IF nargs <> 1 THEN
+      AddError('ORD requires exactly one argument')
+    ELSE BEGIN
+      atk := CheckExpr(cJSON_GetArrayItem(args_arr, 0));
+      IF NOT IsOrdinal(atk) AND (atk <> TK_UNKNOWN) THEN
+        AddError('ORD argument must be an ordinal type');
+    END;
+    CheckFuncCall := TK_INTEGER;
+    RETURN;
+  END;
+  IF name = 'CHR' THEN
+  BEGIN
+    IF nargs <> 1 THEN
+      AddError('CHR requires exactly one argument')
+    ELSE BEGIN
+      atk := CheckExpr(cJSON_GetArrayItem(args_arr, 0));
+      IF NOT CanAssign(TK_INTEGER, atk) THEN
+        AddError('CHR argument must be INTEGER');
+    END;
+    CheckFuncCall := TK_CHAR;
+    RETURN;
+  END;
+  IF (name = 'TRUNC') OR (name = 'ROUND') THEN
+  BEGIN
+    IF nargs <> 1 THEN
+      AddError('TRUNC/ROUND requires exactly one argument')
+    ELSE BEGIN
+      atk := CheckExpr(cJSON_GetArrayItem(args_arr, 0));
+      IF (atk <> TK_REAL) AND (atk <> TK_UNKNOWN) THEN
+        AddError('TRUNC/ROUND argument must be REAL');
+    END;
+    CheckFuncCall := TK_INTEGER;
     RETURN;
   END;
   si := LookupSymbol(name);
@@ -526,6 +673,7 @@ BEGIN
   ELSE IF nt = 'CharLiteral' THEN CheckExpr := TK_CHAR
   ELSE IF nt = 'StringLiteral' THEN CheckExpr := TK_STRING
   ELSE IF nt = 'NilLiteral' THEN CheckExpr := TK_POINTER
+  ELSE IF nt = 'SizeofExpr' THEN CheckExpr := TK_INTEGER
   ELSE IF nt = 'Identifier' THEN
   BEGIN
     name := GetStr(node, 'name');
@@ -561,15 +709,23 @@ BEGIN
       ELSE
         CheckExpr := TK_BOOLEAN;
     END
-    ELSE IF (op = 'EQ') OR (op = 'NE') OR (op = 'LT') OR (op = 'LE') OR (op = 'GT') OR (op = 'GE') THEN
+    ELSE IF (op = 'EQ') OR (op = 'NEQ') OR (op = 'LT') OR (op = 'LE') OR (op = 'GT') OR (op = 'GE') THEN
     BEGIN
       IF NOT (IsNumeric(lt) AND IsNumeric(rt)) AND (lt <> rt) THEN
         AddError('Comparison operands are not comparable');
       CheckExpr := TK_BOOLEAN;
     END
     ELSE BEGIN
-      { arithmetic: PLUS/MINUS/TIMES/DIVIDE/DIV/MOD }
-      IF NOT (IsNumeric(lt) AND IsNumeric(rt)) THEN
+      { arithmetic: PLUS/MINUS/TIMES/DIVIDE/DIV/MOD. Pointer arithmetic
+        (pointer +/- an ordinal offset, e.g. `src_buf + pos`) is a real
+        pattern in this repository's own native sources' hand-rolled
+        growable buffers, so a POINTER operand paired with a numeric one
+        stays a POINTER rather than tripping the numeric-operands error. }
+      IF (lt = TK_POINTER) AND IsNumeric(rt) THEN
+        CheckExpr := TK_POINTER
+      ELSE IF (rt = TK_POINTER) AND IsNumeric(lt) THEN
+        CheckExpr := TK_POINTER
+      ELSE IF NOT (IsNumeric(lt) AND IsNumeric(rt)) THEN
       BEGIN
         AddError('Arithmetic operator requires numeric operands');
         CheckExpr := TK_UNKNOWN;
@@ -650,7 +806,19 @@ BEGIN
   BEGIN
     target_node := GetObj(node, 'target');
     expr_node := GetObj(node, 'expr');
-    target_tk := CheckDesignator(target_node);
+    varname := GetStr(target_node, 'name');
+    IF (cur_func_name <> '') AND (varname = cur_func_name) AND
+       (cJSON_GetArraySize(GetObj(target_node, 'selectors')) = 0) THEN
+    BEGIN
+      { `F := expr` inside F's own body assigns through the return-value
+        slot, not any symbol-table entry (see cur_func_name's doc comment
+        -- this must NOT fall through to CheckDesignator, which would
+        either miss it (no such VAR symbol) or, worse, collide with a
+        same-named callable symbol). }
+      target_tk := cur_func_ret_tk;
+    END
+    ELSE
+      target_tk := CheckDesignator(target_node);
     expr_tk := CheckExpr(expr_node);
     IF NOT CanAssign(target_tk, expr_tk) THEN
       AddError('Cannot assign incompatible type');
@@ -742,45 +910,48 @@ PROCEDURE CheckDecl(decl: ADRMEM);
 VAR
   nt, dname: Str255;
   names_arr, type_expr, params_arr, body, ret_type_node: ADRMEM;
-  tk, aux, idx_tk, ret_tk: INTEGER;
+  tk, aux, aux2, idx_tk, ret_tk: INTEGER;
   n, i: INTEGER32;
   nm: Str255;
   si: INTEGER32;
   np, pi, ppi: INTEGER32;
   param, pnames: ADRMEM;
-  ptk, paux, pidx: INTEGER;
+  ptk, paux, paux2, pidx: INTEGER;
   pn, pj: INTEGER32;
+  saved_func_name: Str255;
+  saved_func_ret_tk, saved_func_aux, saved_func_aux2: INTEGER;
 BEGIN
   nt := NodeType(decl);
   IF nt = 'VarDecl' THEN
   BEGIN
     names_arr := GetObj(decl, 'names');
     type_expr := GetObj(decl, 'type_expr');
-    ResolveTypeExpr(type_expr, tk, aux, idx_tk);
+    ResolveTypeExpr(type_expr, tk, aux, aux2, idx_tk);
     n := cJSON_GetArraySize(names_arr);
     FOR i := 0 TO n - 1 DO
     BEGIN
       nm := CStrToStr255(cJSON_GetStringValue(cJSON_GetArrayItem(names_arr, i)));
-      DefineSymbol(nm, 'VAR', tk, aux, idx_tk);
+      DefineSymbol(nm, 'VAR', tk, aux, aux2, idx_tk);
     END;
   END
   ELSE IF nt = 'ConstDecl' THEN
   BEGIN
     dname := GetStr(decl, 'name');
     tk := CheckExpr(GetObj(decl, 'value'));
-    DefineSymbol(dname, 'CONST', tk, 0, 0);
+    DefineSymbol(dname, 'CONST', tk, 0, 0, 0);
   END
   ELSE IF nt = 'TypeDecl' THEN
   BEGIN
     dname := GetStr(decl, 'name');
     type_expr := GetObj(decl, 'type_expr');
-    ResolveTypeExpr(type_expr, tk, aux, idx_tk);
+    ResolveTypeExpr(type_expr, tk, aux, aux2, idx_tk);
     IF ntypes < MAX_TYPES THEN
     BEGIN
       ntypes := ntypes + 1;
       types[ntypes].name := dname;
       types[ntypes].tk := tk;
       types[ntypes].aux := aux;
+      types[ntypes].aux2 := aux2;
       types[ntypes].idx_tk := idx_tk;
     END;
   END
@@ -792,11 +963,11 @@ BEGIN
     IF nt = 'FuncDecl' THEN
     BEGIN
       ret_type_node := GetObj(decl, 'return_type');
-      ResolveTypeExpr(ret_type_node, ret_tk, aux, idx_tk);
+      ResolveTypeExpr(ret_type_node, ret_tk, aux, aux2, idx_tk);
     END
     ELSE
       ret_tk := TK_VOID;
-    si := DefineSymbol(dname, nt, TK_UNKNOWN, 0, 0);
+    si := DefineSymbol(dname, nt, TK_UNKNOWN, 0, 0, 0);
     IF nt = 'FuncDecl' THEN
       symbols[si].kind := 'FUNC'
     ELSE
@@ -806,7 +977,7 @@ BEGIN
     FOR pi := 0 TO np - 1 DO
     BEGIN
       param := cJSON_GetArrayItem(params_arr, pi);
-      ResolveTypeExpr(GetObj(param, 'type_expr'), ptk, paux, pidx);
+      ResolveTypeExpr(GetObj(param, 'type_expr'), ptk, paux, paux2, pidx);
       pnames := GetObj(param, 'names');
       pn := cJSON_GetArraySize(pnames);
       FOR pj := 0 TO pn - 1 DO
@@ -818,29 +989,46 @@ BEGIN
     END;
     symbols[si].nparams := ppi;
 
-    { Check the routine body (if any) in its own scope, with parameters and
-      -- for a FUNCTION -- the function's own name bound as an assignable
-      variable of the return type (F := ... assigns through it). }
+    { Check the routine body (if any) in its own scope, with parameters
+      bound and -- for a FUNCTION -- cur_func_name/cur_func_ret_tk/aux/aux2
+      set so `F := expr` inside F's own body resolves as a return-slot
+      assignment (see CheckStmt's AssignStmt case) without a shadow symbol
+      that would otherwise hide F's own FUNC entry from recursive calls. }
     body := GetObj(decl, 'body');
     IF body <> NIL THEN
     BEGIN
       PushScope;
+      saved_func_name := cur_func_name;
+      saved_func_ret_tk := cur_func_ret_tk;
+      saved_func_aux := cur_func_aux;
+      saved_func_aux2 := cur_func_aux2;
       IF nt = 'FuncDecl' THEN
-        DefineSymbol(dname, 'VAR', ret_tk, 0, 0);
+      BEGIN
+        cur_func_name := dname;
+        cur_func_ret_tk := ret_tk;
+        cur_func_aux := aux;
+        cur_func_aux2 := aux2;
+      END
+      ELSE
+        cur_func_name := '';
       ppi := 0;
       FOR pi := 0 TO np - 1 DO
       BEGIN
         param := cJSON_GetArrayItem(params_arr, pi);
-        ResolveTypeExpr(GetObj(param, 'type_expr'), ptk, paux, pidx);
+        ResolveTypeExpr(GetObj(param, 'type_expr'), ptk, paux, paux2, pidx);
         pnames := GetObj(param, 'names');
         pn := cJSON_GetArraySize(pnames);
         FOR pj := 0 TO pn - 1 DO
         BEGIN
           nm := CStrToStr255(cJSON_GetStringValue(cJSON_GetArrayItem(pnames, pj)));
-          DefineSymbol(nm, 'VAR', ptk, paux, pidx);
+          DefineSymbol(nm, 'VAR', ptk, paux, paux2, pidx);
         END;
       END;
       CheckBlock(body);
+      cur_func_name := saved_func_name;
+      cur_func_ret_tk := saved_func_ret_tk;
+      cur_func_aux := saved_func_aux;
+      cur_func_aux2 := saved_func_aux2;
       PopScope;
     END;
   END;
@@ -857,6 +1045,38 @@ BEGIN
     CheckDecl(cJSON_GetArrayItem(decls_arr, i));
   body_arr := GetObj(block, 'body');
   CheckStmtList(body_arr);
+END;
+
+PROCEDURE CheckUnit(root: ADRMEM);
+{ Only ProgramUnit nests its decls/body inside a 'block' object -- see
+  ast_nodes.py's ProgramUnit vs ModuleUnit/InterfaceUnit/ImplementationUnit:
+  the other three compilation-unit kinds put `decls` directly on the root,
+  and only ImplementationUnit has executable statements at all (its
+  optional `init_body`, a bare statement array, no 'body' *or* 'block' key
+  -- an InterfaceUnit is signatures only). CheckBlock(GetObj(root,'block'))
+  alone silently no-ops on every non-PROGRAM compilation unit, since
+  GetObj/cJSON_GetArraySize both tolerate the resulting NIL/absent-key --
+  which is exactly how jsonutil.pas's own IMPLEMENTATION body went entirely
+  unchecked and unannotated until this was added. }
+VAR
+  nt: Str255;
+  decls_arr, init_body: ADRMEM;
+  n, i: INTEGER32;
+BEGIN
+  nt := NodeType(root);
+  IF nt = 'ProgramUnit' THEN
+    CheckBlock(GetObj(root, 'block'))
+  ELSE BEGIN
+    decls_arr := GetObj(root, 'decls');
+    n := cJSON_GetArraySize(decls_arr);
+    FOR i := 0 TO n - 1 DO
+      CheckDecl(cJSON_GetArrayItem(decls_arr, i));
+    IF nt = 'ImplementationUnit' THEN
+    BEGIN
+      init_body := GetObj(root, 'init_body');
+      IF init_body <> NIL THEN CheckStmtList(init_body);
+    END;
+  END;
 END;
 
 { ============================== I/O driver =============================== }
@@ -952,10 +1172,13 @@ BEGIN
   next_record_id := 1;
   nerrors := 0;
   cur_func_ret_tk := TK_VOID;
+  cur_func_aux := 0;
+  cur_func_aux2 := 0;
+  cur_func_name := '';
 
   root := ReadAllStdin;
   CheckLocalInterfaces(root);
-  CheckBlock(GetObj(root, 'block'));
+  CheckUnit(root);
 
   IF nerrors > 0 THEN
   BEGIN
