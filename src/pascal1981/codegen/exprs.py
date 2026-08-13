@@ -436,10 +436,19 @@ class ExprsMixin:
         def _is_str_expr(e):
             if isinstance(e, StringLiteral):
                 return True
+            if isinstance(e, Designator) and e.selectors:
+                # A selector (index/field/deref) narrows the designator's
+                # type away from its base symbol's type -- e.g. `ck[i]` on a
+                # Str255 `ck` is a single CHAR, not a string -- so it must
+                # never be treated as a whole-string comparison operand.
+                return False
             if isinstance(e, (Identifier, Designator)):
                 sym = self.scope.lookup(e.name)
                 if sym and sym.type_expr:
-                    return self.get_string_type_info(sym.type_expr)[0]
+                    t = sym.type_expr
+                    if hasattr(t, 'return_type'):
+                        t = t.return_type
+                    return self.get_string_type_info(t)[0]
             return False
 
         if (_is_str_expr(expr.left) or _is_str_expr(expr.right)) and expr.op in {'EQ', 'NEQ', 'LT', 'LE', 'GT', 'GE'}:
@@ -634,12 +643,14 @@ class ExprsMixin:
                 return self.codegen_c_abi_call(fn, c_plan, expr.args, modes)
             param_types = fn.function_type.args
             param_modes = self.proc_param_modes.get(expr.name.lower(), [])
+            param_ast_types = self.proc_param_types.get(expr.name.lower(), [])
             args = []
             for i, arg in enumerate(expr.args):
                 mode = param_modes[i] if i < len(param_modes) else None
                 v = self.codegen_actual_arg(arg, mode)
                 if i < len(param_types):
-                    v = self.coerce_arg(v, param_types[i], src_expr=arg)
+                    target_ast_type = param_ast_types[i] if i < len(param_ast_types) else None
+                    v = self.coerce_arg(v, param_types[i], src_expr=arg, target_ast_type=target_ast_type)
                 args.append(v)
             return self.builder.call(fn, args)
 

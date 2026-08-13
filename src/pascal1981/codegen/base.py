@@ -206,6 +206,12 @@ class CodegenBase:
                 self.type_aliases[_alias] = NamedType(_base, None)
         self.current_interface_decls: Dict[str, Declaration] = {}
         self.proc_param_modes: Dict[str, List[Optional[str]]] = {}
+        # Flattened Pascal param type_exprs per routine, parallel to
+        # proc_param_modes. Lets a call site recover the *declared* Pascal
+        # type of each argument (e.g. to tell LSTRING from STRING from a
+        # plain packed char array) when the LLVM param type alone -- a bare
+        # [N x i8] -- is ambiguous between them.
+        self.proc_param_types: Dict[str, List[Optional[Type]]] = {}
         # Per-routine C-ABI call plan for foreign [C] routines (Phase 2). Keyed
         # lower-case name -> CCallPlan; present only for [C] EXTERN routines, and
         # consulted at the call sites to marshal aggregates per the host C ABI.

@@ -123,14 +123,25 @@ class StmtsMixin:
         if symbol.is_parameter and not stmt.target.selectors:
             raise CodegenError(f'Cannot assign to parameter: {target_name}')
 
+        # Resolve the pointer (handles array indexing, record fields, etc.) and target AST type
+        ptr, target_ast_type = self.resolve_designator_ptr_typed(stmt.target)
+
         # Check if the target is a whole string type assignment
-        is_str, max_len, is_dest_lstring = self.get_string_type_info(symbol.type_expr)
-        if stmt.target.selectors:
+        is_str, max_len, is_dest_lstring = self.get_string_type_info(target_ast_type if target_ast_type is not None else symbol.type_expr)
+        if stmt.target.selectors and not (len(stmt.target.selectors) == 1 and stmt.target.selectors[0].kind == 'DEREF' and is_str):
             is_str = False
 
-        # Resolve the pointer (handles array indexing, etc.) and target AST type
-        ptr, target_ast_type = self.resolve_designator_ptr_typed(stmt.target)
-        value = self.codegen_expr(stmt.expr)
+        # For whole-string assignments the RHS is independently re-evaluated
+        # below by get_string_chars_and_len. That's harmless for a plain
+        # designator/literal RHS, but a FuncCall RHS has side effects (the
+        # call itself), so it must not be evaluated twice: precompute it once
+        # here and hand the value through instead.
+        precomputed_str_value = None
+        if is_str and isinstance(stmt.expr, FuncCall):
+            precomputed_str_value = self.codegen_expr(stmt.expr)
+            value = precomputed_str_value
+        else:
+            value = self.codegen_expr(stmt.expr)
 
         # Handle simple type conversions
         if not is_str and target_ast_type is not None:
@@ -154,7 +165,7 @@ class StmtsMixin:
                     size_64 = self.builder.zext(ir.Constant(ir.IntType(32), max_len), ir.IntType(64))
                     self.builder.call(self.memset_func(), [chars_ptr, ir.Constant(ir.IntType(32), 0x20), size_64])
             else:
-                src_chars, src_len = self.get_string_chars_and_len(stmt.expr)
+                src_chars, src_len = self.get_string_chars_and_len(stmt.expr, precomputed_value=precomputed_str_value)
 
                 end_block = self._guard_string_capacity(src_len, max_len, 'str_assign', enabled=rangeck_enabled)
                 zero = ir.Constant(ir.IntType(32), 0)
@@ -191,13 +202,7 @@ class StmtsMixin:
                     self.builder.position_at_end(end_block)
         else:
             pointee = getattr(ptr.type, 'pointee', None)
-            if pointee is not None and value.type != pointee \
-                    and isinstance(value.type, ir.BaseStructType):
-                # Whole-record copy where the source and destination structs are
-                # the same layout but not the same LLVM type identity -- e.g. two
-                # distinct named records that are structurally equivalent, now
-                # lowered as separate identified structs. Copy by layout via a
-                # destination-pointer bitcast rather than by nominal type.
+            if pointee is not None and value.type != pointee:
                 ptr = self.builder.bitcast(ptr, value.type.as_pointer())
             self.emit_store(value, ptr)
 
@@ -722,12 +727,14 @@ class StmtsMixin:
                 return
             param_types = fn.function_type.args
             param_modes = self.proc_param_modes.get(stmt.name.lower(), [])
+            param_ast_types = self.proc_param_types.get(stmt.name.lower(), [])
             args = []
             for i, arg in enumerate(stmt.args):
                 mode = param_modes[i] if i < len(param_modes) else None
                 v = self.codegen_actual_arg(arg, mode)
                 if i < len(param_types):
-                    v = self.coerce_arg(v, param_types[i], src_expr=arg)
+                    target_ast_type = param_ast_types[i] if i < len(param_ast_types) else None
+                    v = self.coerce_arg(v, param_types[i], src_expr=arg, target_ast_type=target_ast_type)
                 args.append(v)
             self.builder.call(fn, args)
 

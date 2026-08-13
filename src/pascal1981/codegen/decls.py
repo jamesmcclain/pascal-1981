@@ -932,6 +932,7 @@ class DeclsMixin:
         flat_param_types = []
         flat_modes = []
         flat_sign_attrs = []
+        flat_ast_types = []
         for param in decl.params:
             pt = self.param_llvm_type(param)
             sa = self._c_abi_sign_attr(param.type_expr)
@@ -939,6 +940,7 @@ class DeclsMixin:
                 flat_param_types.append(pt)
                 flat_modes.append(param.mode)
                 flat_sign_attrs.append(sa)
+                flat_ast_types.append(param.type_expr)
 
         decl_attrs = {a.name.upper() for a in getattr(decl, 'attributes', [])}
         is_variadic = 'VARARGS' in decl_attrs
@@ -970,6 +972,7 @@ class DeclsMixin:
             func.return_value.attributes.add(plan.ret_sign_attr)
 
         self.proc_param_modes[decl.name.lower()] = flat_modes
+        self.proc_param_types[decl.name.lower()] = flat_ast_types
         self.c_abi_plans[decl.name.lower()] = plan
         self.scope.define(decl.name, func, getattr(decl, 'return_type', None))
 
@@ -1000,11 +1003,13 @@ class DeclsMixin:
         # Flatten parameter types: reference modes are passed as LLVM pointers.
         param_types = []
         flat_modes = []
+        flat_ast_types = []
         for param in effective_decl.params:
             param_type = self.param_llvm_type(param)
             for _ in param.names:
                 param_types.append(param_type)
                 flat_modes.append(param.mode)
+                flat_ast_types.append(param.type_expr)
         if is_function:
             return_type = self.llvm_type(decl.return_type)
             ret_ll = return_type
@@ -1020,11 +1025,11 @@ class DeclsMixin:
         attrs = {attr.name.upper() for attr in getattr(decl, 'attributes', [])}
         existing = self.scope.lookup(decl.name) if not is_function else None
         if existing and isinstance(existing.llvm_value, ir.Function):
-            # Only procedures are eagerly pre-registered as extern declarations,
-            # so only they can encounter (and must reuse) an existing ir.Function.
             func = existing.llvm_value
             if func.function_type != func_type:
                 raise CodegenError(f"Procedure '{decl.name}' already declared with a different signature")
+        elif decl.name in self.module.globals and isinstance(self.module.globals[decl.name], ir.Function):
+            func = self.module.globals[decl.name]
         else:
             # Create function
             func = ir.Function(self.module, func_type, name=decl.name)
@@ -1038,6 +1043,7 @@ class DeclsMixin:
             func.linkage = 'external'
         self._apply_kernel_entry(decl, func)
         self.proc_param_modes[decl.name.lower()] = flat_modes
+        self.proc_param_types[decl.name.lower()] = flat_ast_types
         self.scope.define(decl.name, func, decl.return_type if is_function else None)
 
         # If no body, it's extern/forward

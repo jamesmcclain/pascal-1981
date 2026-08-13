@@ -553,22 +553,22 @@ BEGIN
   BEGIN
     AdvancePos(1);
     lex_str[0] := CHR(1); lex_str[1] := ch;
-    IF ch = '=' THEN AddToken('EQ', 60, lex_str, 3, 0, 0.0, lex_str, start_line, start_col)
-    ELSE IF ch = '<' THEN AddToken('LT', 62, lex_str, 3, 0, 0.0, lex_str, start_line, start_col)
-    ELSE IF ch = '>' THEN AddToken('GT', 64, lex_str, 3, 0, 0.0, lex_str, start_line, start_col)
-    ELSE IF ch = '+' THEN AddToken('PLUS', 66, lex_str, 3, 0, 0.0, lex_str, start_line, start_col)
-    ELSE IF ch = '-' THEN AddToken('MINUS', 67, lex_str, 3, 0, 0.0, lex_str, start_line, start_col)
-    ELSE IF ch = '*' THEN AddToken('MUL', 68, lex_str, 3, 0, 0.0, lex_str, start_line, start_col)
-    ELSE IF ch = '/' THEN AddToken('SLASH', 69, lex_str, 3, 0, 0.0, lex_str, start_line, start_col)
-    ELSE IF ch = '^' THEN AddToken('POINTER', 71, lex_str, 3, 0, 0.0, lex_str, start_line, start_col)
-    ELSE IF ch = '[' THEN AddToken('LBRACKET', 72, lex_str, 3, 0, 0.0, lex_str, start_line, start_col)
-    ELSE IF ch = ']' THEN AddToken('RBRACKET', 73, lex_str, 3, 0, 0.0, lex_str, start_line, start_col)
-    ELSE IF ch = '(' THEN AddToken('LPAREN', 74, lex_str, 3, 0, 0.0, lex_str, start_line, start_col)
-    ELSE IF ch = ')' THEN AddToken('RPAREN', 75, lex_str, 3, 0, 0.0, lex_str, start_line, start_col)
-    ELSE IF ch = ';' THEN AddToken('SEMICOLON', 76, lex_str, 3, 0, 0.0, lex_str, start_line, start_col)
-    ELSE IF ch = ',' THEN AddToken('COMMA', 77, lex_str, 3, 0, 0.0, lex_str, start_line, start_col)
-    ELSE IF ch = ':' THEN AddToken('COLON', 78, lex_str, 3, 0, 0.0, lex_str, start_line, start_col)
-    ELSE IF ch = '.' THEN AddToken('DOT', 79, lex_str, 3, 0, 0.0, lex_str, start_line, start_col);
+    IF ch = '=' THEN BEGIN kind_str := 'EQ'; AddToken(kind_str, 60, lex_str, 3, 0, 0.0, lex_str, start_line, start_col); END
+    ELSE IF ch = '<' THEN BEGIN kind_str := 'LT'; AddToken(kind_str, 62, lex_str, 3, 0, 0.0, lex_str, start_line, start_col); END
+    ELSE IF ch = '>' THEN BEGIN kind_str := 'GT'; AddToken(kind_str, 64, lex_str, 3, 0, 0.0, lex_str, start_line, start_col); END
+    ELSE IF ch = '+' THEN BEGIN kind_str := 'PLUS'; AddToken(kind_str, 66, lex_str, 3, 0, 0.0, lex_str, start_line, start_col); END
+    ELSE IF ch = '-' THEN BEGIN kind_str := 'MINUS'; AddToken(kind_str, 67, lex_str, 3, 0, 0.0, lex_str, start_line, start_col); END
+    ELSE IF ch = '*' THEN BEGIN kind_str := 'MUL'; AddToken(kind_str, 68, lex_str, 3, 0, 0.0, lex_str, start_line, start_col); END
+    ELSE IF ch = '/' THEN BEGIN kind_str := 'SLASH'; AddToken(kind_str, 69, lex_str, 3, 0, 0.0, lex_str, start_line, start_col); END
+    ELSE IF ch = '^' THEN BEGIN kind_str := 'POINTER'; AddToken(kind_str, 71, lex_str, 3, 0, 0.0, lex_str, start_line, start_col); END
+    ELSE IF ch = '[' THEN BEGIN kind_str := 'LBRACKET'; AddToken(kind_str, 72, lex_str, 3, 0, 0.0, lex_str, start_line, start_col); END
+    ELSE IF ch = ']' THEN BEGIN kind_str := 'RBRACKET'; AddToken(kind_str, 73, lex_str, 3, 0, 0.0, lex_str, start_line, start_col); END
+    ELSE IF ch = '(' THEN BEGIN kind_str := 'LPAREN'; AddToken(kind_str, 74, lex_str, 3, 0, 0.0, lex_str, start_line, start_col); END
+    ELSE IF ch = ')' THEN BEGIN kind_str := 'RPAREN'; AddToken(kind_str, 75, lex_str, 3, 0, 0.0, lex_str, start_line, start_col); END
+    ELSE IF ch = ';' THEN BEGIN kind_str := 'SEMICOLON'; AddToken(kind_str, 76, lex_str, 3, 0, 0.0, lex_str, start_line, start_col); END
+    ELSE IF ch = ',' THEN BEGIN kind_str := 'COMMA'; AddToken(kind_str, 77, lex_str, 3, 0, 0.0, lex_str, start_line, start_col); END
+    ELSE IF ch = ':' THEN BEGIN kind_str := 'COLON'; AddToken(kind_str, 78, lex_str, 3, 0, 0.0, lex_str, start_line, start_col); END
+    ELSE IF ch = '.' THEN BEGIN kind_str := 'DOT'; AddToken(kind_str, 79, lex_str, 3, 0, 0.0, lex_str, start_line, start_col); END;
   END;
 END;
 
