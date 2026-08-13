@@ -2,7 +2,10 @@
   Consumes JSON token stream from standard input (produced by pascal1981-lex)
   and outputs JSON AST stream on standard output (consumed by pascal1981-codegen). }
 
+(*$INCLUDE:'jsonutil.inc'*)
 PROGRAM pascal1981_parse(input, output);
+
+USES jsonutil;
 
 { C-FFI bindings to libcjson and standard C library routines }
 FUNCTION cJSON_Parse(val: ADRMEM): ADRMEM [C]; EXTERN;
@@ -35,10 +38,6 @@ PROCEDURE free(ptr: ADRMEM) [C]; EXTERN;
 PROCEDURE exit(code: CINT) [C]; EXTERN;
 
 TYPE
-  Str255     = LSTRING(255);
-  CharBuf256 = ARRAY [0..255] OF CHAR;
-  PCharBuf   = ^CharBuf256;
-
   Token = RECORD
     kind: Str255;
     code: INTEGER32;
@@ -65,89 +64,6 @@ TYPE
 VAR
   tokens_buf: ADRMEM; { heap allocated array of Token }
   num_tokens, pos: INTEGER32;
-
-FUNCTION MakeCStr(s: Str255): ADRMEM;
-VAR
-  raw: ADRMEM;
-  pbuf: PCharBuf;
-  i, len: INTEGER;
-BEGIN
-  len := ORD(s[0]);
-  raw := malloc(256);
-  pbuf := raw;
-  FOR i := 0 TO 255 DO pbuf^[i] := CHR(0);
-  FOR i := 1 TO len DO pbuf^[i - 1] := s[i];
-  pbuf^[len] := CHR(0);
-  MakeCStr := raw;
-END;
-
-FUNCTION CStrToStr255(ptr: ADRMEM): Str255;
-VAR
-  res: Str255;
-  pbuf: PCharBuf;
-  len, i: INTEGER;
-BEGIN
-  res := '';
-  IF ptr <> NIL THEN
-  BEGIN
-    pbuf := ptr;
-    len := 0;
-    WHILE (len < 255) AND (pbuf^[len] <> CHR(0)) DO
-      len := len + 1;
-    res[0] := CHR(len);
-      FOR i := 1 TO len DO
-        res[i] := pbuf^[i - 1];
-  END;
-  CStrToStr255 := res;
-END;
-
-PROCEDURE AddField(obj: ADRMEM; key_str: Str255; val_node: ADRMEM);
-VAR
-  key_ptr: ADRMEM;
-BEGIN
-  key_ptr := MakeCStr(key_str);
-  cJSON_AddItemToObject(obj, key_ptr, val_node);
-END;
-
-PROCEDURE AddStringField(obj: ADRMEM; key_str: Str255; val_str: Str255);
-VAR
-  v_ptr: ADRMEM;
-BEGIN
-  v_ptr := MakeCStr(val_str);
-  AddField(obj, key_str, cJSON_CreateString(v_ptr));
-END;
-
-PROCEDURE AddIntField(obj: ADRMEM; key_str: Str255; val_int: INTEGER);
-BEGIN
-  AddField(obj, key_str, cJSON_CreateNumber(val_int));
-END;
-
-PROCEDURE AddRealField(obj: ADRMEM; key_str: Str255; val_real: REAL);
-BEGIN
-  AddField(obj, key_str, cJSON_CreateNumber(val_real));
-END;
-
-PROCEDURE AddBoolField(obj: ADRMEM; key_str: Str255; val_bool: BOOLEAN);
-BEGIN
-  IF val_bool THEN
-    AddField(obj, key_str, cJSON_CreateBool(1))
-  ELSE
-    AddField(obj, key_str, cJSON_CreateBool(0));
-END;
-
-PROCEDURE AddNullField(obj: ADRMEM; key_str: Str255);
-BEGIN
-  AddField(obj, key_str, cJSON_CreateNull);
-END;
-
-FUNCTION CreateNode(type_name: Str255): ADRMEM;
-VAR
-  obj: ADRMEM;
-BEGIN
-  obj := cJSON_CreateObject;
-  AddStringField(obj, '__node_type__', type_name);
-  CreateNode := obj;
-END;
 
 FUNCTION ReadBoolFlag(flags_json: ADRMEM; key_str: Str255): BOOLEAN;
 VAR

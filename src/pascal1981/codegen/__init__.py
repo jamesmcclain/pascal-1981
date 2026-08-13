@@ -71,6 +71,7 @@ class Codegen(CodegenBase, TypesMapMixin, ConstFoldMixin, RuntimeBuiltinsMixin, 
             self._null_lstring_global = ir.GlobalVariable(self.module, empty.type, name=self.unique_name('nullstr'))
             self._null_lstring_global.initializer = empty
             self._null_lstring_global.global_constant = True
+            self._null_lstring_global.linkage = 'internal'
         zero = ir.Constant(ir.IntType(32), 0)
         return self.builder.gep(self._null_lstring_global, [zero, zero])
 

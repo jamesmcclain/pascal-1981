@@ -1,7 +1,10 @@
 { Pascal-1981 Native Lexer implementation in extended IBM Pascal 2.0 dialect.
   Converts Pascal source code from standard input into JSON token stream on stdout. }
 
+(*$INCLUDE:'jsonutil.inc'*)
 PROGRAM pascal1981_lex(input, output);
+
+USES jsonutil;
 
 { C-FFI bindings to libcjson and stdlib }
 FUNCTION cJSON_CreateArray: ADRMEM [C]; EXTERN;
@@ -22,10 +25,6 @@ PROCEDURE c_exit(code: CINT) [C]; EXTERN;
 PROCEDURE exit(code: CINT) [C]; EXTERN;
 
 TYPE
-  Str255     = LSTRING(255);
-  CharBuf256 = ARRAY [0..255] OF CHAR;
-  PCharBuf   = ^CharBuf256;
-
   MetacmdFlags = RECORD
     Brave: BOOLEAN;
     Debug: BOOLEAN;
@@ -103,21 +102,6 @@ BEGIN
   f.StackCk := TRUE;
   f.Symtab := TRUE;
   f.Warn := TRUE;
-END;
-
-FUNCTION MakeCStr(s: Str255): ADRMEM;
-VAR
-  raw: ADRMEM;
-  pbuf: PCharBuf;
-  i, len: INTEGER;
-BEGIN
-  len := ORD(s[0]);
-  raw := malloc(256);
-  pbuf := raw;
-  FOR i := 0 TO 255 DO pbuf^[i] := CHR(0);
-  FOR i := 1 TO len DO pbuf^[i - 1] := s[i];
-  pbuf^[len] := CHR(0);
-  MakeCStr := raw;
 END;
 
 PROCEDURE AddFlagToObj(obj: ADRMEM; name_str: Str255; val: BOOLEAN);

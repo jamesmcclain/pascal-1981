@@ -60,6 +60,7 @@ class ExprsMixin:
             str_global = ir.GlobalVariable(self.module, str_const.type, name=self.unique_name('str'))
             str_global.initializer = str_const
             str_global.global_constant = True
+            str_global.linkage = 'internal'
 
             # Return pointer to the first character of the string constant
             zero = ir.Constant(ir.IntType(32), 0)
