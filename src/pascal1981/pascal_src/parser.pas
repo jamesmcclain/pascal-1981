@@ -52,6 +52,10 @@ TYPE
     f_brave, f_debug, f_entry, f_goto, f_indexck, f_initck, f_line, f_list,
     f_mathck, f_nilck, f_ocode, f_rangeck, f_runtime, f_stackck, f_symtab,
     f_warn: BOOLEAN;
+    { A one-shot $UNROLL(n) hint stamped by the lexer onto exactly the
+      token following the metacommand comment (see lexer.pas). }
+    has_unroll: BOOLEAN;
+    unroll_val: INTEGER;
   END;
 
   PToken = ^Token;
@@ -169,9 +173,10 @@ VAR
   p_in, p_out, p_in_base, p_out_base: ^CHAR;
   json_root, item, field, val_obj, val_str_ptr, base_ptr, val_ptr: ADRMEM;
   k_kind, k_code, k_lex, k_val, k_line, k_col, k_flags: ADRMEM;
-  k_val_type: ADRMEM;
+  k_val_type, k_unroll: ADRMEM;
   flags_obj: ADRMEM;
-  empty_s, fieldName: Str255;
+  empty_s, fieldName, kind_val: Str255;
+  out_i: INTEGER32;
   p_tok: PToken;
   p_tok_arr: PTokenBufArray;
   tok_elem: ADRMEM;
@@ -231,19 +236,30 @@ BEGIN
   fieldName := 'line'; k_line := MakeCStr(fieldName);
   fieldName := 'column'; k_col := MakeCStr(fieldName);
   fieldName := 'flags'; k_flags := MakeCStr(fieldName);
+  fieldName := 'UNROLL'; k_unroll := MakeCStr(fieldName);
 
   empty_s := '';
+  out_i := 0;
 
   FOR i := 0 TO num_tokens - 1 DO
   BEGIN
     item := cJSON_GetArrayItem(json_root, i);
-    p_tok := tokens_buf + (i * SIZEOF(Token));
 
+    { INCLUDE_DIRECTIVE tokens are a driver-level splicing concern (see
+      lexer.pas's TryIncludeDirective) -- by the time tokens reach the
+      parser they are always a no-op, exactly like Python parser.py's
+      pervasive skip_include_directives() calls throughout the grammar.
+      Dropping them here, once, up front achieves the same effect without
+      needing a matching call at every one of those ~15 call sites. }
     field := cJSON_GetObjectItem(item, k_kind);
     IF field <> NIL THEN
-      p_tok^.kind := CStrToStr255(cJSON_GetStringValue(field))
+      kind_val := CStrToStr255(cJSON_GetStringValue(field))
     ELSE
-      p_tok^.kind := empty_s;
+      kind_val := empty_s;
+    IF kind_val = 'INCLUDE_DIRECTIVE' THEN CYCLE;
+
+    p_tok := tokens_buf + (out_i * SIZEOF(Token));
+    p_tok^.kind := kind_val;
 
     field := cJSON_GetObjectItem(item, k_code);
     IF field <> NIL THEN
@@ -309,7 +325,22 @@ BEGIN
     p_tok^.f_stackck := ReadBoolFlag(flags_obj, 'STACKCK');
     p_tok^.f_symtab := ReadBoolFlag(flags_obj, 'SYMTAB');
     p_tok^.f_warn := ReadBoolFlag(flags_obj, 'WARN');
+
+    field := cJSON_GetObjectItem(flags_obj, k_unroll);
+    IF field <> NIL THEN
+    BEGIN
+      p_tok^.has_unroll := TRUE;
+      p_tok^.unroll_val := TRUNC(cJSON_GetNumberValue(field));
+    END
+    ELSE
+    BEGIN
+      p_tok^.has_unroll := FALSE;
+      p_tok^.unroll_val := 0;
+    END;
+
+    out_i := out_i + 1;
   END;
+  num_tokens := out_i;
 
   cJSON_Delete(json_root);
 END;
@@ -379,6 +410,22 @@ VAR
 BEGIN
   pt := GetTok(0);
   CurRangeCk := pt^.f_rangeck;
+END;
+
+FUNCTION CurHasUnroll: BOOLEAN;
+VAR
+  pt: PToken;
+BEGIN
+  pt := GetTok(0);
+  CurHasUnroll := pt^.has_unroll;
+END;
+
+FUNCTION CurUnrollVal: INTEGER;
+VAR
+  pt: PToken;
+BEGIN
+  pt := GetTok(0);
+  CurUnrollVal := pt^.unroll_val;
 END;
 
 FUNCTION BuildMetaFlagsNode: ADRMEM;
@@ -1271,9 +1318,12 @@ FUNCTION ParseForStmt: ADRMEM;
 VAR
   node: ADRMEM;
   var_name, dir_str: Str255;
-  static_flag: BOOLEAN;
+  static_flag, has_unroll: BOOLEAN;
+  unroll_val: INTEGER;
   res_c: CINT;
 BEGIN
+  has_unroll := CurHasUnroll();
+  unroll_val := CurUnrollVal();
   Expect('FOR');
   node := CreateNode('ForStmt');
   static_flag := Match('STATIC');
@@ -1297,27 +1347,41 @@ BEGIN
   AddStringField(node, 'direction', dir_str);
   AddField(node, 'body', ParseStatement);
   AddBoolField(node, 'static', static_flag);
-  AddNullField(node, 'unroll');
+  IF has_unroll THEN
+    AddIntField(node, 'unroll', unroll_val)
+  ELSE
+    AddNullField(node, 'unroll');
   ParseForStmt := node;
 END;
 
 FUNCTION ParseWhileStmt: ADRMEM;
 VAR
   node: ADRMEM;
+  has_unroll: BOOLEAN;
+  unroll_val: INTEGER;
 BEGIN
+  has_unroll := CurHasUnroll();
+  unroll_val := CurUnrollVal();
   Expect('WHILE');
   node := CreateNode('WhileStmt');
   AddField(node, 'cond', ParseBooleanExpression);
   Expect('DO');
   AddField(node, 'body', ParseStatement);
-  AddNullField(node, 'unroll');
+  IF has_unroll THEN
+    AddIntField(node, 'unroll', unroll_val)
+  ELSE
+    AddNullField(node, 'unroll');
   ParseWhileStmt := node;
 END;
 
 FUNCTION ParseRepeatStmt: ADRMEM;
 VAR
   node, stmts_arr: ADRMEM;
+  has_unroll: BOOLEAN;
+  unroll_val: INTEGER;
 BEGIN
+  has_unroll := CurHasUnroll();
+  unroll_val := CurUnrollVal();
   Expect('REPEAT');
   node := CreateNode('RepeatStmt');
   stmts_arr := cJSON_CreateArray;
@@ -1333,7 +1397,10 @@ BEGIN
   Expect('UNTIL');
   AddField(node, 'body', stmts_arr);
   AddField(node, 'cond', ParseBooleanExpression);
-  AddNullField(node, 'unroll');
+  IF has_unroll THEN
+    AddIntField(node, 'unroll', unroll_val)
+  ELSE
+    AddNullField(node, 'unroll');
   ParseRepeatStmt := node;
 END;
 
@@ -1489,8 +1556,16 @@ FUNCTION ParseStatement: ADRMEM;
 VAR
   node: ADRMEM;
   k: Str255;
+  res_c: CINT;
 BEGIN
   k := CurKind;
+  { A $UNROLL(n) stamp must land on the loop keyword it hints. Catch a
+    misplaced hint here rather than silently dropping it. }
+  IF CurHasUnroll() AND (k <> 'FOR') AND (k <> 'WHILE') AND (k <> 'REPEAT') THEN
+  BEGIN
+    res_c := puts(MakeCStr('Parser Error: {$UNROLL n} must immediately precede a FOR, WHILE, or REPEAT statement'));
+    exit(1);
+  END;
   IF k = 'BEGIN' THEN
     ParseStatement := ParseCompoundStmt
   ELSE IF k = 'IF' THEN
