@@ -5,7 +5,9 @@
 
 INTERFACE;
 UNIT jsonutil (MakeCStr, CStrToStr255, CreateNode, AddField, AddStringField,
-               AddIntField, AddRealField, AddBoolField, AddNullField);
+               AddIntField, AddRealField, AddBoolField, AddNullField,
+               ParseJson, NodeType, GetObj, GetStr, GetInt, GetReal, GetBool,
+               ArrSize, ArrItem, HasKey, ReadAllStdin);
 
 TYPE
   Str255     = LSTRING(255);
@@ -21,5 +23,17 @@ PROCEDURE AddIntField(obj: ADRMEM; key_str: Str255; val_int: INTEGER);
 PROCEDURE AddRealField(obj: ADRMEM; key_str: Str255; val_real: REAL);
 PROCEDURE AddBoolField(obj: ADRMEM; key_str: Str255; val_bool: BOOLEAN);
 PROCEDURE AddNullField(obj: ADRMEM; key_str: Str255);
+
+FUNCTION ParseJson(text: ADRMEM): ADRMEM;
+FUNCTION NodeType(obj: ADRMEM): Str255;
+FUNCTION GetObj(obj: ADRMEM; key: Str255): ADRMEM;
+FUNCTION GetStr(obj: ADRMEM; key: Str255): Str255;
+FUNCTION GetInt(obj: ADRMEM; key: Str255): INTEGER32;
+FUNCTION GetReal(obj: ADRMEM; key: Str255): REAL;
+FUNCTION GetBool(obj: ADRMEM; key: Str255): BOOLEAN;
+FUNCTION ArrSize(arr: ADRMEM): INTEGER32;
+FUNCTION ArrItem(arr: ADRMEM; i: INTEGER32): ADRMEM;
+FUNCTION HasKey(obj: ADRMEM; key: Str255): BOOLEAN;
+FUNCTION ReadAllStdin: ADRMEM;
 
 END;

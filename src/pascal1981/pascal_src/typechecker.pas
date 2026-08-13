@@ -74,19 +74,12 @@ PROGRAM pascal1981_typecheck(input, output);
 
 USES jsonutil;
 
-FUNCTION cJSON_Parse(val: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION cJSON_GetArraySize(arr: ADRMEM): CINT [C]; EXTERN;
 FUNCTION cJSON_GetArrayItem(arr: ADRMEM; index: CINT): ADRMEM [C]; EXTERN;
-FUNCTION cJSON_GetObjectItem(obj: ADRMEM; key: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION cJSON_CreateObject: ADRMEM [C]; EXTERN;
 FUNCTION cJSON_Print(item: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION cJSON_GetStringValue(item: ADRMEM): ADRMEM [C]; EXTERN;
-FUNCTION cJSON_GetNumberValue(item: ADRMEM): REAL [C]; EXTERN;
-FUNCTION cJSON_IsTrue(item: ADRMEM): CINT [C]; EXTERN;
 FUNCTION puts(str: ADRMEM): CINT [C]; EXTERN;
-FUNCTION getchar: CINT [C]; EXTERN;
-FUNCTION malloc(size: CINT): ADRMEM [C]; EXTERN;
-PROCEDURE free(ptr: ADRMEM) [C]; EXTERN;
 PROCEDURE exit(code: CINT) [C]; EXTERN;
 
 CONST
@@ -177,44 +170,7 @@ VAR
                              call within its own body. }
 
 { ============================== utilities ============================== }
-
-FUNCTION NodeType(obj: ADRMEM): Str255;
-BEGIN
-  IF obj = NIL THEN
-    NodeType := ''
-  ELSE
-    NodeType := CStrToStr255(cJSON_GetStringValue(cJSON_GetObjectItem(obj, MakeCStr('__node_type__'))));
-END;
-
-FUNCTION GetObj(obj: ADRMEM; key: Str255): ADRMEM;
-BEGIN
-  IF obj = NIL THEN
-    GetObj := NIL
-  ELSE
-    GetObj := cJSON_GetObjectItem(obj, MakeCStr(key));
-END;
-
-FUNCTION GetStr(obj: ADRMEM; key: Str255): Str255;
-VAR
-  item: ADRMEM;
-BEGIN
-  item := GetObj(obj, key);
-  IF item = NIL THEN
-    GetStr := ''
-  ELSE
-    GetStr := CStrToStr255(cJSON_GetStringValue(item));
-END;
-
-FUNCTION GetInt(obj: ADRMEM; key: Str255): INTEGER;
-VAR
-  item: ADRMEM;
-BEGIN
-  item := GetObj(obj, key);
-  IF item = NIL THEN
-    GetInt := 0
-  ELSE
-    GetInt := TRUNC(cJSON_GetNumberValue(item));
-END;
+{ NodeType/GetObj/GetStr/GetInt/ReadAllStdin now live in jsonutil. }
 
 PROCEDURE AddError(msg: Str255);
 BEGIN
@@ -1080,56 +1036,7 @@ BEGIN
 END;
 
 { ============================== I/O driver =============================== }
-
-FUNCTION ReadAllStdin: ADRMEM;
-VAR
-  raw_input, old_buf: ADRMEM;
-  cap, len, i: INTEGER32;
-  input_ch: CINT;
-  p_in, p_out, p_in_base, p_out_base: ^CHAR;
-  json_root: ADRMEM;
-  res_c: CINT;
-BEGIN
-  cap := 32000;
-  raw_input := malloc(cap);
-  len := 0;
-  input_ch := getchar;
-  WHILE input_ch <> -1 DO
-  BEGIN
-    IF len >= cap THEN
-    BEGIN
-      old_buf := raw_input;
-      cap := cap * 2;
-      raw_input := malloc(cap);
-      FOR i := 0 TO len - 1 DO
-      BEGIN
-        p_in_base := old_buf;
-        p_out_base := raw_input;
-        p_in := p_in_base + i;
-        p_out := p_out_base + i;
-        p_out^ := p_in^;
-      END;
-      free(old_buf);
-    END;
-    p_in_base := raw_input;
-    p_in := p_in_base + len;
-    p_in^ := CHR(input_ch);
-    len := len + 1;
-    input_ch := getchar;
-  END;
-  p_in_base := raw_input;
-  p_in := p_in_base + len;
-  p_in^ := CHR(0);
-
-  json_root := cJSON_Parse(raw_input);
-  free(raw_input);
-  IF json_root = NIL THEN
-  BEGIN
-    res_c := puts(MakeCStr('Error: Failed to parse input AST JSON'));
-    exit(1);
-  END;
-  ReadAllStdin := json_root;
-END;
+{ ReadAllStdin now lives in jsonutil. }
 
 PROCEDURE CheckLocalInterfaces(root: ADRMEM);
 { USES X splices X's INTERFACE into this file's local_interfaces list (see
