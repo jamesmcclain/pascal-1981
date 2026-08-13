@@ -166,6 +166,7 @@ def main() -> int:
                         'self-contained. The CPU device never executes it; the CUDA driver shim '
                         'cuModuleLoadData'
                         's it. Only meaningful for host PROGRAM/MODULE units.')
+    parser.add_argument('--split-processes', action='store_true', help='Run compilation via separate lexer, parser, and codegen processes connected via IPC.')
     # ----------------------------------------------------------------
     # Runtime-check flag overrides
     # Each flag follows the same tri-state convention:
@@ -272,69 +273,97 @@ def main() -> int:
                          '(build it first: make -C runtime)')
 
     try:
-        # Parse
-        if verbose:
-            print(f'Parsing {source_file}...', file=sys.stderr)
-        ast = parse_file(source_file)
+        if args.split_processes:
+            if verbose:
+                print(f'Running multi-process pipeline for {source_file}...', file=sys.stderr)
+            lex_proc = subprocess.Popen([sys.executable, '-m', 'pascal1981.cli_lex', source_file], stdout=subprocess.PIPE)
+            parse_cmd = [sys.executable, '-m', 'pascal1981.cli_parse', '--source-file', source_file, '--dialect', args.dialect]
+            for f in args.feature:
+                parse_cmd.extend(['-f', f])
+            parse_proc = subprocess.Popen(parse_cmd, stdin=lex_proc.stdout, stdout=subprocess.PIPE)
+            if lex_proc.stdout:
+                lex_proc.stdout.close()
+            codegen_cmd = [sys.executable, '-m', 'pascal1981.cli_codegen', '--source-file', source_file, '--dialect', args.dialect, '--device-backend', args.device_backend]
+            if args.host_triple:
+                codegen_cmd.extend(['--host-triple', args.host_triple])
+            if args.device_triple:
+                codegen_cmd.extend(['--device-triple', args.device_triple])
+            for f in args.feature:
+                codegen_cmd.extend(['-f', f])
+            if verbose:
+                codegen_cmd.append('-v')
+            codegen_proc = subprocess.Popen(codegen_cmd, stdin=parse_proc.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if parse_proc.stdout:
+                parse_proc.stdout.close()
+            ir_out, err_out = codegen_proc.communicate()
+            if codegen_proc.returncode != 0:
+                print(f'Error in multi-process pipeline: {err_out.decode("utf-8")}', file=sys.stderr)
+                return 1
+            ir = ir_out.decode('utf-8')
+        else:
+            # Parse
+            if verbose:
+                print(f'Parsing {source_file}...', file=sys.stderr)
+            ast = parse_file(source_file)
 
-        # Type check
-        if verbose:
-            print('Type checking...', file=sys.stderr)
-        type_checker = PascalTypeChecker(source_file=source_file, features=features)
-        check_result = type_checker.check(ast)
+            # Type check
+            if verbose:
+                print('Type checking...', file=sys.stderr)
+            type_checker = PascalTypeChecker(source_file=source_file, features=features)
+            check_result = type_checker.check(ast)
 
-        if not check_result.success:
-            print('Type checking failed:', file=sys.stderr)
-            for error in check_result.errors:
-                print(f'  {error}', file=sys.stderr)
-            return 1
+            if not check_result.success:
+                print('Type checking failed:', file=sys.stderr)
+                for error in check_result.errors:
+                    print(f'  {error}', file=sys.stderr)
+                return 1
 
-        if check_result.warnings:
-            for warning in check_result.warnings:
-                print(f'Warning: {warning}', file=sys.stderr)
+            if check_result.warnings:
+                for warning in check_result.warnings:
+                    print(f'Warning: {warning}', file=sys.stderr)
 
-        # Codegen
-        if verbose:
-            print('Generating LLVM IR...', file=sys.stderr)
-        # Build force_flags dict from CLI args.  Only flags explicitly set
-        # to 'on' or 'off' (not 'source') enter the dict.
-        _DEBUG_SUBS = ('ENTRY', 'INDEXCK', 'INITCK', 'MATHCK', 'NILCK', 'RANGECK', 'STACKCK')
-        force_flags: dict[str, bool] = {}
+            # Codegen
+            if verbose:
+                print('Generating LLVM IR...', file=sys.stderr)
+            # Build force_flags dict from CLI args.  Only flags explicitly set
+            # to 'on' or 'off' (not 'source') enter the dict.
+            _DEBUG_SUBS = ('ENTRY', 'INDEXCK', 'INITCK', 'MATHCK', 'NILCK', 'RANGECK', 'STACKCK')
+            force_flags: dict[str, bool] = {}
 
-        # $DEBUG master: pre-populate sub-flags, then let individual args override.
-        if args.debug != 'source':
-            debug_val = (args.debug == 'on')
-            force_flags['DEBUG'] = debug_val
-            for sub in _DEBUG_SUBS:
-                force_flags[sub] = debug_val
+            # $DEBUG master: pre-populate sub-flags, then let individual args override.
+            if args.debug != 'source':
+                debug_val = (args.debug == 'on')
+                force_flags['DEBUG'] = debug_val
+                for sub in _DEBUG_SUBS:
+                    force_flags[sub] = debug_val
 
-        # Individual flags (each overrides whatever $DEBUG may have set).
-        for flag_name, attr in (
-            ('RANGECK', 'rangeck'),
-            ('INDEXCK', 'indexck'),
-            ('MATHCK', 'mathck'),
-            ('NILCK', 'nilck'),
-            ('STACKCK', 'stackck'),
-            ('INITCK', 'initck'),
-        ):
-            val = getattr(args, attr)
-            if val != 'source':
-                force_flags[flag_name] = (val == 'on')
+            # Individual flags (each overrides whatever $DEBUG may have set).
+            for flag_name, attr in (
+                ('RANGECK', 'rangeck'),
+                ('INDEXCK', 'indexck'),
+                ('MATHCK', 'mathck'),
+                ('NILCK', 'nilck'),
+                ('STACKCK', 'stackck'),
+                ('INITCK', 'initck'),
+            ):
+                val = getattr(args, attr)
+                if val != 'source':
+                    force_flags[flag_name] = (val == 'on')
 
-        embed_device_ptx_text = None
-        if getattr(args, 'embed_device_ptx', None):
-            with open(args.embed_device_ptx, 'r') as ptx_f:
-                embed_device_ptx_text = ptx_f.read()
+            embed_device_ptx_text = None
+            if getattr(args, 'embed_device_ptx', None):
+                with open(args.embed_device_ptx, 'r') as ptx_f:
+                    embed_device_ptx_text = ptx_f.read()
 
-        ir = compile_to_llvm(ast,
-                             verbose=verbose,
-                             source_file=source_file,
-                             force_flags=force_flags or None,
-                             features=features,
-                             host_triple=args.host_triple,
-                             device_triple=args.device_triple,
-                             embed_device_ptx_text=embed_device_ptx_text,
-                             device_backend=args.device_backend)
+            ir = compile_to_llvm(ast,
+                                 verbose=verbose,
+                                 source_file=source_file,
+                                 force_flags=force_flags or None,
+                                 features=features,
+                                 host_triple=args.host_triple,
+                                 device_triple=args.device_triple,
+                                 embed_device_ptx_text=embed_device_ptx_text,
+                                 device_backend=args.device_backend)
 
         # Stage dispatch
         if args.stage_s:

@@ -25,6 +25,9 @@ dependencies = [
 
 [project.scripts]
 pascal1981 = "pascal1981.compile_to_llvm:main"
+pascal1981-lex = "pascal1981.cli_lex:main"
+pascal1981-parse = "pascal1981.cli_parse:main"
+pascal1981-codegen = "pascal1981.cli_codegen:main"
 
 [project.optional-dependencies]
 dev = ["pytest"]
