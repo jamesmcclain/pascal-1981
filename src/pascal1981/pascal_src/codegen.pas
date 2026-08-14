@@ -173,6 +173,15 @@ FUNCTION LLVMConstInt(ty: ADRMEM; n: CLONG; signext: CINT): ADRMEM [C]; EXTERN;
 FUNCTION LLVMConstReal(ty: ADRMEM; n: REAL): ADRMEM [C]; EXTERN;
 FUNCTION LLVMAddGlobal(m: ADRMEM; ty: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 PROCEDURE LLVMSetInitializer(gvar: ADRMEM; val: ADRMEM) [C]; EXTERN;
+{ Constant-expression and global-variable shaping, used by the kernel launch
+  registry: parallel name/entry tables and the i8**/i8**/i64 struct
+  pointing at them. }
+FUNCTION LLVMConstArray(elem_ty: ADRMEM; vals: ADRMEM; count: CINT): ADRMEM [C]; EXTERN;
+FUNCTION LLVMConstStructInContext(ctx: ADRMEM; vals: ADRMEM; count: CINT; is_packed: CINT): ADRMEM [C]; EXTERN;
+FUNCTION LLVMConstBitCast(val: ADRMEM; ty: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMConstPointerNull(ty: ADRMEM): ADRMEM [C]; EXTERN;
+PROCEDURE LLVMSetGlobalConstant(gvar: ADRMEM; is_constant: CINT) [C]; EXTERN;
+PROCEDURE LLVMSetLinkage(v: ADRMEM; linkage: CINT) [C]; EXTERN;
 FUNCTION LLVMBuildLoad2(b: ADRMEM; ty: ADRMEM; ptr: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 PROCEDURE LLVMBuildStore(b: ADRMEM; val: ADRMEM; ptr: ADRMEM) [C]; EXTERN;
 FUNCTION LLVMBuildAdd(b: ADRMEM; lhs: ADRMEM; rhs: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
@@ -453,9 +462,10 @@ VAR
   device_backend_cuda: BOOLEAN; { PASCAL_DEVICE_BACKEND=cuda: the kernel is
     the loaded PTX module, dispatched by name, so no in-process registry or
     dispatch thunk is emitted and the PTX blob is an external symbol. }
-  klaunch_registry_gv: ADRMEM; { this compiland's registry global, created on
-    first LAUNCH and initialized once every LAUNCH has been lowered. }
-  device_ptx_gv: ADRMEM;
+  klaunch_registry_gv, klaunch_registry_ty: ADRMEM; { this compiland's
+    registry global, created on first LAUNCH and initialized once every
+    LAUNCH has been lowered. }
+  device_ptx_gv, device_ptx_ptr_val: ADRMEM;
   nkernels: INTEGER32;
   kernel_name_tab: ARRAY [1..MAX_KERNELS] OF Str255;
   kernel_thunk_tab: ARRAY [1..MAX_KERNELS] OF ADRMEM;
@@ -4438,6 +4448,8 @@ BEGIN
   CONCAT(thunk_name, routines[ridx].name);
   thunk_ty := LLVMFunctionType(voidty, MakeArgs1(LLVMPointerType(i8ptrty, 0)), 1, 0);
   thunk := LLVMAddFunction(modl, MakeCStr(thunk_name), thunk_ty);
+  LLVMSetLinkage(thunk, 8); { LLVMInternalLinkage -- reached only through the
+                              registry, never by name from another object. }
   thunk_bb := LLVMAppendBasicBlockInContext(ctx, thunk, MakeCStr('entry'));
   saved_bb := LLVMGetInsertBlock(builder);
   saved_fn := cur_fn;
@@ -4464,6 +4476,116 @@ BEGIN
   EmitLaunchThunk := thunk;
 END;
 
+FUNCTION LaunchRegistryPtr: ADRMEM;
+{ An i8* to this compiland's kernel registry global -- the CPU stand-in for a
+  loaded CUDA module. The global is a shell here; EmitLaunchRegistry fills it
+  once every LAUNCH has recorded its kernel. Under the CUDA backend there is
+  no in-process registry (the kernel is the loaded PTX module and the shim
+  ignores this argument), so a null pointer is passed rather than referencing
+  a registry global nothing would define. }
+VAR
+  elems: ADRMEM;
+BEGIN
+  IF device_backend_cuda THEN
+    LaunchRegistryPtr := LLVMConstPointerNull(i8ptrty)
+  ELSE
+  BEGIN
+    IF klaunch_registry_gv = NIL THEN
+    BEGIN
+      elems := AllocPtrArray(3);
+      SetPtrArrayElem(elems, 0, LLVMPointerType(i8ptrty, 0));
+      SetPtrArrayElem(elems, 1, LLVMPointerType(i8ptrty, 0));
+      SetPtrArrayElem(elems, 2, i64ty);
+      klaunch_registry_ty := LLVMStructTypeInContext(ctx, elems, 3, 0);
+      klaunch_registry_gv := LLVMAddGlobal(modl, klaunch_registry_ty, MakeCStr('__pas_klaunch_registry'));
+      LLVMSetGlobalConstant(klaunch_registry_gv, 1);
+    END;
+    LaunchRegistryPtr := LLVMConstBitCast(klaunch_registry_gv, i8ptrty);
+  END;
+END;
+
+FUNCTION DevicePtxPtr: ADRMEM;
+{ An i8* to the device-PTX blob the loader consumes. The CPU device never
+  executes it -- its "module" is the registry -- but the mechanism is always
+  present so swapping in the CUDA shim is a pure runtime change. Under the
+  CUDA backend the blob is an external symbol built from the device unit's
+  own .ptx at link time, so the host object neither bakes the kernel text in
+  nor depends on the device artifact. }
+BEGIN
+  IF device_ptx_gv = NIL THEN
+  BEGIN
+    IF device_backend_cuda THEN
+    BEGIN
+      device_ptx_gv := LLVMAddGlobal(modl, LLVMArrayType(i8ty, 0), MakeCStr('__pas_device_ptx'));
+      LLVMSetGlobalConstant(device_ptx_gv, 1);
+      device_ptx_ptr_val := LLVMConstBitCast(device_ptx_gv, i8ptrty);
+    END
+    ELSE
+    BEGIN
+      device_ptx_ptr_val := LLVMBuildGlobalStringPtr(builder, MakeCStr(''), MakeCStr('__pas_device_ptx'));
+      device_ptx_gv := device_ptx_ptr_val;
+    END;
+  END;
+  DevicePtxPtr := device_ptx_ptr_val;
+END;
+
+FUNCTION LaunchThunkFor(ridx: INTEGER32): ADRMEM;
+{ The dispatch thunk for this kernel, emitted once and recorded in the
+  registry. A second LAUNCH of the same kernel reuses it -- emitting it again
+  would silently uniquify the symbol into a second, unregistered thunk. }
+VAR
+  i, found: INTEGER32;
+  thunk: ADRMEM;
+BEGIN
+  found := 0;
+  FOR i := 1 TO nkernels DO
+    IF kernel_name_tab[i] = routines[ridx].name THEN found := i;
+  IF found <> 0 THEN LaunchThunkFor := kernel_thunk_tab[found]
+  ELSE
+  BEGIN
+    IF nkernels >= MAX_KERNELS THEN AbortWith('codegen: too many launched kernels');
+    thunk := EmitLaunchThunk(ridx);
+    nkernels := nkernels + 1;
+    kernel_name_tab[nkernels] := routines[ridx].name;
+    kernel_thunk_tab[nkernels] := thunk;
+    LaunchThunkFor := thunk;
+  END;
+END;
+
+PROCEDURE EmitLaunchRegistry;
+{ Fill the registry global from the launched-kernel list: a names table, an
+  entries (thunk) table, and the i8** names / i8** entries / i64 count
+  struct the shim's by-name lookup walks. A no-op for a compiland that
+  performed no launches, so launch-free output is unchanged. }
+VAR
+  names_vals, ent_vals, fields: ADRMEM;
+  names_gv, ent_gv: ADRMEM;
+  i: INTEGER32;
+BEGIN
+  IF (klaunch_registry_gv <> NIL) AND (nkernels > 0) THEN
+  BEGIN
+    names_vals := AllocPtrArray(nkernels);
+    ent_vals := AllocPtrArray(nkernels);
+    FOR i := 1 TO nkernels DO
+    BEGIN
+      SetPtrArrayElem(names_vals, i - 1,
+        LLVMBuildGlobalStringPtr(builder, MakeCStr(kernel_name_tab[i]), MakeCStr('kregname')));
+      SetPtrArrayElem(ent_vals, i - 1, LLVMConstBitCast(kernel_thunk_tab[i], i8ptrty));
+    END;
+    names_gv := LLVMAddGlobal(modl, LLVMArrayType(i8ptrty, nkernels), MakeCStr('__pas_kregnames'));
+    LLVMSetGlobalConstant(names_gv, 1);
+    LLVMSetInitializer(names_gv, LLVMConstArray(i8ptrty, names_vals, nkernels));
+    ent_gv := LLVMAddGlobal(modl, LLVMArrayType(i8ptrty, nkernels), MakeCStr('__pas_kregentries'));
+    LLVMSetGlobalConstant(ent_gv, 1);
+    LLVMSetInitializer(ent_gv, LLVMConstArray(i8ptrty, ent_vals, nkernels));
+    fields := AllocPtrArray(3);
+    SetPtrArrayElem(fields, 0, LLVMConstBitCast(names_gv, LLVMPointerType(i8ptrty, 0)));
+    SetPtrArrayElem(fields, 1, LLVMConstBitCast(ent_gv, LLVMPointerType(i8ptrty, 0)));
+    SetPtrArrayElem(fields, 2, LLVMConstInt(i64ty, nkernels, 0));
+    LLVMSetInitializer(klaunch_registry_gv, LLVMConstStructInContext(ctx, fields, 3, 0));
+  END;
+END;
+
 PROCEDURE CodegenLaunch(args: ADRMEM);
 { Host launch ABI: LAUNCH(kernel, grid, block, actuals...) or its six-value
   geometry form. It uses the CPU shim's real void** ABI and a dispatch thunk. }
@@ -4472,6 +4594,7 @@ VAR
   kernel_name: Str255;
   ridx, n, expected, i: INTEGER32;
   grid, block, val, cell, argv, argv_ptr, thunk: ADRMEM;
+  dev_module, entry: ADRMEM;
   geom: ARRAY[1..6] OF ADRMEM;
   actual_tk: INTEGER;
   indices, call_args: ADRMEM;
@@ -4523,9 +4646,24 @@ BEGIN
   SetPtrArrayElem(indices, 0, LLVMConstInt(i32ty, 0, 0));
   SetPtrArrayElem(indices, 1, LLVMConstInt(i32ty, 0, 0));
   argv_ptr := LLVMBuildGEP2(builder, LLVMArrayType(i8ptrty, expected), argv, indices, 2, MakeCStr(''));
-  thunk := EmitLaunchThunk(ridx);
+  { Resolve the entry the way the CUDA driver does -- load the module, then
+    look the kernel up in it by name -- so the same call site serves both
+    backends. On the CPU device the module is this compiland's registry and
+    the resolved entry is the dispatch thunk; under the CUDA backend the
+    module is the loaded PTX and the shim dispatches by name, so no thunk or
+    registry is emitted at all (the host object then has no undefined kernel
+    symbol and needs no separate host-ABI device compile). }
+  IF NOT device_backend_cuda THEN thunk := LaunchThunkFor(ridx);
+  call_args := AllocPtrArray(2);
+  SetPtrArrayElem(call_args, 0, LaunchRegistryPtr);
+  SetPtrArrayElem(call_args, 1, DevicePtxPtr);
+  dev_module := LLVMBuildCall2(builder, module_load_fnty, module_load_fn, call_args, 2, MakeCStr(''));
+  call_args := AllocPtrArray(2);
+  SetPtrArrayElem(call_args, 0, dev_module);
+  SetPtrArrayElem(call_args, 1, LLVMBuildGlobalStringPtr(builder, MakeCStr(kernel_name), MakeCStr('kname')));
+  entry := LLVMBuildCall2(builder, module_getfn_fnty, module_getfn_fn, call_args, 2, MakeCStr(''));
   call_args := AllocPtrArray(8);
-  SetPtrArrayElem(call_args, 0, LLVMBuildBitCast(builder, thunk, i8ptrty, MakeCStr('')));
+  SetPtrArrayElem(call_args, 0, entry);
   SetPtrArrayElem(call_args, 1, geom[1]);
   SetPtrArrayElem(call_args, 2, geom[2]);
   SetPtrArrayElem(call_args, 3, geom[3]);
@@ -5710,6 +5848,20 @@ BEGIN
   launch_fnty := LLVMFunctionType(voidty, param_arr, 8, 0);
   launch_fn := LLVMAddFunction(modl, MakeCStr('pas_dev_launch'), launch_fnty);
 
+  { The two module-resolution steps ahead of it: cuModuleLoadData(registry,
+    ptx) and cuModuleGetFunction(module, name), both shaped as i8*(i8*, i8*).
+    The CPU and CUDA shims implement the same three-call path. }
+  param_arr := AllocPtrArray(2);
+  SetPtrArrayElem(param_arr, 0, i8ptrty);
+  SetPtrArrayElem(param_arr, 1, i8ptrty);
+  module_load_fnty := LLVMFunctionType(i8ptrty, param_arr, 2, 0);
+  module_load_fn := LLVMAddFunction(modl, MakeCStr('pas_dev_module_load'), module_load_fnty);
+  param_arr := AllocPtrArray(2);
+  SetPtrArrayElem(param_arr, 0, i8ptrty);
+  SetPtrArrayElem(param_arr, 1, i8ptrty);
+  module_getfn_fnty := LLVMFunctionType(i8ptrty, param_arr, 2, 0);
+  module_getfn_fn := LLVMAddFunction(modl, MakeCStr('pas_dev_module_get_function'), module_getfn_fnty);
+
   byval_kind_id := LLVMGetEnumAttributeKindForName(MakeCStr('byval'), 5);
   align_kind_id := LLVMGetEnumAttributeKindForName(MakeCStr('align'), 5);
   readonly_kind_id := LLVMGetEnumAttributeKindForName(MakeCStr('readonly'), 8);
@@ -5846,6 +5998,7 @@ BEGIN
     body := GetObj(block, 'body');
     CodegenStmtArray(body);
 
+    EmitLaunchRegistry;
     ret_val := LLVMBuildRet(builder, LLVMConstInt(i32ty, 0, 0));
   END
   ELSE
