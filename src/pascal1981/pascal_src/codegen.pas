@@ -218,6 +218,18 @@ FUNCTION LLVMBuildAlloca(b: ADRMEM; ty: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTER
 FUNCTION LLVMGetParam(fn: ADRMEM; idx: CINT): ADRMEM [C]; EXTERN;
 FUNCTION LLVMVoidTypeInContext(ctx: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMPrintModuleToString(m: ADRMEM): ADRMEM [C]; EXTERN;
+PROCEDURE LLVMInitializeNVPTXTargetInfo [C]; EXTERN;
+PROCEDURE LLVMInitializeNVPTXTarget [C]; EXTERN;
+PROCEDURE LLVMInitializeNVPTXTargetMC [C]; EXTERN;
+PROCEDURE LLVMInitializeNVPTXAsmPrinter [C]; EXTERN;
+FUNCTION LLVMGetTargetFromTriple(triple: ADRMEM; target_out: ADRMEM; error_out: ADRMEM): CINT [C]; EXTERN;
+FUNCTION LLVMCreateTargetMachine(target: ADRMEM; triple, cpu, features: ADRMEM; opt_level, reloc, code_model: CINT): ADRMEM [C]; EXTERN;
+FUNCTION LLVMCreateTargetDataLayout(tm: ADRMEM): ADRMEM [C]; EXTERN;
+PROCEDURE LLVMSetModuleDataLayout(m, layout: ADRMEM) [C]; EXTERN;
+FUNCTION LLVMTargetMachineEmitToMemoryBuffer(tm, m: ADRMEM; filetype: CINT; error_out, buffer_out: ADRMEM): CINT [C]; EXTERN;
+FUNCTION LLVMGetBufferStart(buffer: ADRMEM): ADRMEM [C]; EXTERN;
+PROCEDURE LLVMDisposeMemoryBuffer(buffer: ADRMEM) [C]; EXTERN;
+PROCEDURE LLVMDisposeTargetMachine(tm: ADRMEM) [C]; EXTERN;
 FUNCTION LLVMVerifyModule(m: ADRMEM; action: CINT; outmsg: ADRMEM): CINT [C]; EXTERN;
 FUNCTION malloc(size: CINT): ADRMEM [C]; EXTERN;
 PROCEDURE free(p: ADRMEM) [C]; EXTERN;
@@ -5183,7 +5195,11 @@ VAR
   unit_decls, init_body: ADRMEM;
   init_fnty, init_fn, init_bb: ADRMEM;
   init_name, unit_name, device_triple: Str255;
-  device_triple_raw: ADRMEM;
+  device_triple_raw, emit_ptx_raw, ptx_cpu_raw: ADRMEM;
+  target_out_raw, target_err_out_raw, ptx_err_out_raw, ptx_buffer_out_raw: ADRMEM;
+  target_out, target_err_out, ptx_err_out, ptx_buffer_out: PAdr;
+  target_ref, target_machine, target_layout, ptx_buffer, ptx_cpu: ADRMEM;
+  emit_ptx: BOOLEAN;
   unit_name_len, unit_name_i: INTEGER;
 
 BEGIN
@@ -5193,6 +5209,8 @@ BEGIN
   is_device_compiland := is_device_root;
   is_nvptx_device := FALSE;
   device_triple_raw := NIL;
+  emit_ptx_raw := getenv(MakeCStr('PASCAL_EMIT_PTX'));
+  emit_ptx := emit_ptx_raw <> NIL;
   IF is_device_compiland THEN
   BEGIN
     device_triple_raw := getenv(MakeCStr('PASCAL_DEVICE_TRIPLE'));
@@ -5212,6 +5230,8 @@ BEGIN
   ctx := LLVMContextCreate;
   modl := LLVMModuleCreateWithNameInContext(MakeCStr('pascal_program'), ctx);
   IF is_nvptx_device THEN LLVMSetTarget(modl, device_triple_raw);
+  IF emit_ptx AND (NOT is_nvptx_device) THEN
+    AbortWith('codegen: PASCAL_EMIT_PTX requires a DEVICE compiland with PASCAL_DEVICE_TRIPLE=nvptx64-nvidia-cuda');
   i32ty := LLVMInt32TypeInContext(ctx);
   i16ty := LLVMInt16TypeInContext(ctx);
   i8ty := LLVMInt8TypeInContext(ctx);
@@ -5457,6 +5477,58 @@ BEGIN
     exit(1);
   END;
 
-  ir_text := LLVMPrintModuleToString(modl);
-  res_c := puts(ir_text);
+  IF emit_ptx THEN
+  BEGIN
+    { This is deliberately a target-machine emission mode, not a shell-out to
+      llc: the native compiler owns the complete LLVM path just like the
+      Python driver. LLVMAssemblyFile is enum value 0. }
+    LLVMInitializeNVPTXTargetInfo;
+    LLVMInitializeNVPTXTarget;
+    LLVMInitializeNVPTXTargetMC;
+    LLVMInitializeNVPTXAsmPrinter;
+    target_out_raw := malloc(8);
+    target_err_out_raw := malloc(8);
+    target_out := target_out_raw;
+    target_err_out := target_err_out_raw;
+    target_out^ := NIL;
+    target_err_out^ := NIL;
+    ok := LLVMGetTargetFromTriple(device_triple_raw, target_out_raw, target_err_out_raw);
+    IF ok <> 0 THEN
+    BEGIN
+      res_c := puts(MakeCStr('codegen: cannot select NVPTX target:'));
+      res_c := puts(target_err_out^);
+      exit(1);
+    END;
+    target_ref := target_out^;
+    ptx_cpu_raw := getenv(MakeCStr('PASCAL_PTX_CPU'));
+    IF ptx_cpu_raw = NIL THEN ptx_cpu := MakeCStr('sm_70')
+    ELSE ptx_cpu := ptx_cpu_raw;
+    { LLVMCodeGenLevelNone, LLVMRelocDefault, LLVMCodeModelDefault. }
+    target_machine := LLVMCreateTargetMachine(target_ref, device_triple_raw, ptx_cpu, MakeCStr(''), 0, 0, 0);
+    IF target_machine = NIL THEN AbortWith('codegen: failed to create NVPTX target machine');
+    target_layout := LLVMCreateTargetDataLayout(target_machine);
+    LLVMSetModuleDataLayout(modl, target_layout);
+    ptx_err_out_raw := malloc(8);
+    ptx_buffer_out_raw := malloc(8);
+    ptx_err_out := ptx_err_out_raw;
+    ptx_buffer_out := ptx_buffer_out_raw;
+    ptx_err_out^ := NIL;
+    ptx_buffer_out^ := NIL;
+    ok := LLVMTargetMachineEmitToMemoryBuffer(target_machine, modl, 0, ptx_err_out_raw, ptx_buffer_out_raw);
+    IF ok <> 0 THEN
+    BEGIN
+      res_c := puts(MakeCStr('codegen: NVPTX assembly emission failed:'));
+      res_c := puts(ptx_err_out^);
+      exit(1);
+    END;
+    ptx_buffer := ptx_buffer_out^;
+    res_c := puts(LLVMGetBufferStart(ptx_buffer));
+    LLVMDisposeMemoryBuffer(ptx_buffer);
+    LLVMDisposeTargetMachine(target_machine);
+  END
+  ELSE
+  BEGIN
+    ir_text := LLVMPrintModuleToString(modl);
+    res_c := puts(ir_text);
+  END;
 END.
