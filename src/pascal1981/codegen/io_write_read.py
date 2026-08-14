@@ -75,6 +75,18 @@ class IoWriteReadMixin:
             # value to printf instead of a length+pointer pair).
             sym = self.scope.lookup(expr.name)
             return getattr(sym, 'type_expr', None) if sym else None
+        # A computed expression (BinOp, etc.) carries no live symbol to look
+        # up. The typechecker annotates such nodes with `resolved_type`
+        # during infer_expression_type (see BinOp's branch there) -- prefer
+        # that recorded annotation over re-invoking infer_expression_type
+        # here: that method reads from self.symbol_table, the typechecker's
+        # own symbol table, which is not populated on the codegen object (it
+        # uses self.scope instead), so calling it from here silently
+        # resolves nothing for any expression that itself looks up a
+        # variable (e.g. `a + b`) and returns None instead of the real type.
+        resolved = getattr(expr, 'resolved_type', None)
+        if resolved is not None:
+            return resolved
         return self.infer_expression_type(expr) if hasattr(self, 'infer_expression_type') else None
 
     def _file_selector_fcb(self, expr) -> ir.Value:
