@@ -5,8 +5,8 @@ Mixin for PascalTypeChecker, split out of type_checker.py as pure code
 movement: methods are unchanged and still reach each other through self.
 """
 
-from ..ast_nodes import (AssignStmt, CaseStmt, Designator, ForStmt, GotoStmt, Identifier, IfStmt, LabelStmt, ProcCallStmt, RangeExpr, RepeatStmt, ReturnStmt, Statement, WhileStmt,
-                         WithStmt, WriteArg)
+from ..ast_nodes import (AssignStmt, CaseStmt, CompoundStmt, Designator, ForStmt, GotoStmt, Identifier, IfStmt, LabelStmt, ProcCallStmt, RangeExpr, RepeatStmt, ReturnStmt,
+                         Statement, WhileStmt, WithStmt, WriteArg)
 from ..builtins_registry import DEVICE_SYNC_BUILTIN_PROCEDURES
 from ..symbol_table import Symbol
 from ..type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, WORD_TYPE, EnumType, FileType, ProcedureType, RecordType, can_assign)
@@ -16,7 +16,10 @@ class StmtsMixin:
 
     def check_statement(self, stmt: Statement) -> None:
         """Type check a statement."""
-        if isinstance(stmt, IfStmt):
+        if isinstance(stmt, CompoundStmt):
+            for s in stmt.stmts:
+                self.check_statement(s)
+        elif isinstance(stmt, IfStmt):
             self.check_if_stmt(stmt)
         elif isinstance(stmt, ForStmt):
             self.check_for_stmt(stmt)

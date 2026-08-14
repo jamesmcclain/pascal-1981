@@ -602,10 +602,13 @@ def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optiona
         if op in COMPARE:
             return BOOLEAN_TYPE
 
-    # INTEGER op REAL (mixed arithmetic widens to REAL).  INTEGER8 joins the
-    # signed side of this rule, mirroring its INTEGER8 -> REAL assignability.
-    if (isinstance(left_type, (IntegerType, Integer8Type)) and isinstance(right_type, RealType)) or \
-       (isinstance(left_type, RealType) and isinstance(right_type, (IntegerType, Integer8Type))):
+    # INTEGER op REAL (mixed arithmetic widens to REAL).  INTEGER8 and
+    # INTEGER32 join the signed side of this rule, mirroring their INTEGER8/
+    # INTEGER32 -> REAL assignability (can_assign above). INTEGER64 and the
+    # WORD family are deliberately excluded: INTEGER64 -> REAL is lossy above
+    # 2**53 and stays explicit-only, and WORD has no implicit REAL widening.
+    if (isinstance(left_type, (IntegerType, Integer8Type, Integer32Type)) and isinstance(right_type, RealType)) or \
+       (isinstance(left_type, RealType) and isinstance(right_type, (IntegerType, Integer8Type, Integer32Type))):
         if op in ('PLUS', 'MINUS', 'MUL', 'SLASH'):
             return REAL_TYPE
         if op in COMPARE:
