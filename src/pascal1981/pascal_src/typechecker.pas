@@ -688,7 +688,7 @@ BEGIN
   BEGIN
     AddError('Undefined function');
     FOR i := 0 TO nargs - 1 DO
-      CheckExpr(cJSON_GetArrayItem(args_arr, i));
+      atk := CheckExpr(cJSON_GetArrayItem(args_arr, i));
     CheckFuncCall := TK_UNKNOWN;
     RETURN;
   END;
@@ -910,8 +910,8 @@ BEGIN
       IF NOT IsOrdinal(vi) THEN
         AddError('FOR loop variable must be an ordinal type');
     END;
-    CheckExpr(GetObj(node, 'start'));
-    CheckExpr(GetObj(node, 'end'));
+    cond_tk := CheckExpr(GetObj(node, 'start'));
+    cond_tk := CheckExpr(GetObj(node, 'end'));
     CheckCompoundOrStmt(GetObj(node, 'body'));
   END
   ELSE IF nt = 'ProcCallStmt' THEN
@@ -927,7 +927,7 @@ BEGIN
         IF NodeType(warg) = 'WriteArg' THEN
         BEGIN
           wexpr := GetObj(warg, 'expr');
-          IF wexpr <> NIL THEN CheckExpr(wexpr);
+          IF wexpr <> NIL THEN cond_tk := CheckExpr(wexpr);
         END;
       END;
     END
@@ -947,7 +947,7 @@ BEGIN
         AddError('CONCAT requires exactly two arguments')
       ELSE
         FOR i := 0 TO nargs - 1 DO
-          CheckExpr(cJSON_GetArrayItem(args_arr, i));
+          cond_tk := CheckExpr(cJSON_GetArrayItem(args_arr, i));
     END
     ELSE BEGIN
       si := LookupSymbol(pname);
@@ -955,7 +955,7 @@ BEGIN
       BEGIN
         AddError('Undefined procedure');
         FOR i := 0 TO nargs - 1 DO
-          CheckExpr(cJSON_GetArrayItem(args_arr, i));
+          cond_tk := CheckExpr(cJSON_GetArrayItem(args_arr, i));
       END
       ELSE BEGIN
         IF nargs <> symbols[si].nparams THEN
@@ -1003,14 +1003,14 @@ BEGIN
     FOR i := 0 TO n - 1 DO
     BEGIN
       nm := CStrToStr255(cJSON_GetStringValue(cJSON_GetArrayItem(names_arr, i)));
-      DefineSymbol(nm, 'VAR', tk, aux, aux2, idx_tk);
+      si := DefineSymbol(nm, 'VAR', tk, aux, aux2, idx_tk);
     END;
   END
   ELSE IF nt = 'ConstDecl' THEN
   BEGIN
     dname := GetStr(decl, 'name');
     tk := CheckExpr(GetObj(decl, 'value'));
-    DefineSymbol(dname, 'CONST', tk, 0, 0, 0);
+    si := DefineSymbol(dname, 'CONST', tk, 0, 0, 0);
   END
   ELSE IF nt = 'TypeDecl' THEN
   BEGIN
@@ -1059,7 +1059,10 @@ BEGIN
           symbols[si].param_tk[ppi] := ptk;
       END;
     END;
-    symbols[si].nparams := ppi;
+    { ppi (a parameter count, always small) is INTEGER32; nparams is
+      INTEGER, and the language has no implicit INTEGER32 -> INTEGER
+      narrowing -- RETYPE makes the deliberate truncation explicit. }
+    symbols[si].nparams := RETYPE(INTEGER, ppi);
 
     { Check the routine body (if any) in its own scope, with parameters
       bound and -- for a FUNCTION -- cur_func_name/cur_func_ret_tk/aux/aux2
@@ -1093,7 +1096,7 @@ BEGIN
         FOR pj := 0 TO pn - 1 DO
         BEGIN
           nm := CStrToStr255(cJSON_GetStringValue(cJSON_GetArrayItem(pnames, pj)));
-          DefineSymbol(nm, 'VAR', ptk, paux, paux2, pidx);
+          si := DefineSymbol(nm, 'VAR', ptk, paux, paux2, pidx);
         END;
       END;
       CheckBlock(body);
