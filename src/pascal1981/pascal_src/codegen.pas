@@ -197,6 +197,7 @@ PROCEDURE LLVMBuildCondBr(b: ADRMEM; cond: ADRMEM; then_bb: ADRMEM; else_bb: ADR
 FUNCTION LLVMBuildPhi(b: ADRMEM; ty: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 PROCEDURE LLVMAddIncoming(phi: ADRMEM; vals: ADRMEM; blocks: ADRMEM; count: CINT) [C]; EXTERN;
 FUNCTION LLVMGetInsertBlock(b: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMGetBasicBlockTerminator(bb: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildCall2(b: ADRMEM; fty: ADRMEM; fn: ADRMEM; args: ADRMEM; nargs: CINT; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildRet(b: ADRMEM; v: ADRMEM): ADRMEM [C]; EXTERN;
 PROCEDURE LLVMBuildRetVoid(b: ADRMEM) [C]; EXTERN;
@@ -435,6 +436,14 @@ VAR
                            routine table instead of being shadowed. }
   cur_func_ret_tk: INTEGER;
   cur_func_ret_slot: ADRMEM;
+
+  loop_break_blocks: ARRAY [1..32] OF ADRMEM; { one entry per lexically
+                                                enclosing WHILE/REPEAT/FOR,
+                                                pushed/popped around each
+                                                loop's body so BREAK/CYCLE can
+                                                branch to the right block. }
+  loop_cycle_blocks: ARRAY [1..32] OF ADRMEM;
+  loop_depth: INTEGER32;
 
   last_val_tk: INTEGER; { side-channel result of CodegenExpr, mirroring the
                           typechecker's own aux-field convention: the dialect
@@ -758,6 +767,10 @@ BEGIN
     (tk = TK_INTEGER32) OR (tk = TK_WORD32) OR (tk = TK_INTEGER64) OR (tk = TK_WORD64);
 END;
 
+FUNCTION IsIntegerFamilyTk(tk: INTEGER): BOOLEAN; FORWARD;
+FUNCTION IsUnsignedWordTk(tk: INTEGER): BOOLEAN; FORWARD;
+FUNCTION IntFamilyWidth(tk: INTEGER): INTEGER; FORWARD;
+
 FUNCTION CoerceForAssign(v: ADRMEM; from_tid, to_tid: INTEGER; expr_node: ADRMEM; ctx_name: Str255): ADRMEM;
 { Resolve an assignment's RHS value against its target type, mirroring the
   Python reference's can_assign plus its _const_adapts_to_int_target
@@ -795,6 +808,20 @@ BEGIN
       matching the reference's general C-ABI argument coercion (not just a
       literal exemption -- any integer-typed expression, e.g. cJSON_CreateNumber(int_var)). }
     CoerceForAssign := LLVMBuildSIToFP(builder, v, LLVMTypeForTk(to_tid), MakeCStr(''))
+  ELSE IF IsIntegerFamilyTk(from_tid) AND IsIntegerFamilyTk(to_tid) THEN
+  BEGIN
+    { General integer-family narrow/widen, matching the reference's
+      _coerce_assign_value: any two integer-family scalars coerce purely by
+      LLVM width regardless of TypesCompatibleForAssign's stricter
+      same-tid/WORD-widening rule -- e.g. INTEGER32 -> INTEGER (a plain
+      truncation, used by lexer.pas's radix-literal scan accumulator). }
+    IF IntFamilyWidth(from_tid) > IntFamilyWidth(to_tid) THEN
+      CoerceForAssign := LLVMBuildTrunc(builder, v, LLVMTypeForTk(to_tid), MakeCStr(''))
+    ELSE IF IsUnsignedWordTk(from_tid) THEN
+      CoerceForAssign := LLVMBuildZExt(builder, v, LLVMTypeForTk(to_tid), MakeCStr(''))
+    ELSE
+      CoerceForAssign := LLVMBuildSExt(builder, v, LLVMTypeForTk(to_tid), MakeCStr(''));
+  END
   ELSE
   BEGIN
     AbortWith2('codegen: assignment type mismatch for: ', ctx_name);
@@ -1073,7 +1100,7 @@ BEGIN
     gvar := LLVMAddGlobal(modl, LLVMTypeForTk(tk), MakeCStr(name));
     IF (TypeKind(tk) = TK_ARRAY) OR (TypeKind(tk) = TK_RECORD) OR
        (TypeKind(tk) = TK_LSTRING) OR (TypeKind(tk) = TK_POINTER) OR
-       (TypeKind(tk) = TK_STRING) OR (TypeKind(tk) = TK_SET) THEN
+       (TypeKind(tk) = TK_STRING) OR (TypeKind(tk) = TK_SET) OR (tk = TK_ADRMEM) THEN
       zero := LLVMConstNull(LLVMTypeForTk(tk))
     ELSE IF (tk = TK_REAL) OR (tk = TK_REAL32) THEN zero := LLVMConstReal(LLVMTypeForTk(tk), 0.0)
     ELSE zero := LLVMConstInt(LLVMTypeForTk(tk), 0, 0);
@@ -1096,6 +1123,18 @@ BEGIN
   FOR i := 1 TO nroutines DO
     IF routines[i].name = name THEN found := i;
   LookupRoutine := found;
+END;
+
+FUNCTION RoutineIsFunc(routi: INTEGER32): BOOLEAN;
+{ Guards the routines[routi] index itself (routi = 0 means "not found"),
+  since plain AND is not short-circuit in this dialect -- a single
+  `(routi <> 0) AND routines[routi].is_func` expression would still
+  evaluate routines[0], reading out of bounds on this 1-based array. }
+BEGIN
+  IF routi = 0 THEN
+    RoutineIsFunc := FALSE
+  ELSE
+    RoutineIsFunc := routines[routi].is_func;
 END;
 
 { ============================== expressions =============================== }
@@ -1543,13 +1582,12 @@ BEGIN
   ELSE IF (ltk = TK_INTEGER) AND (rtk = TK_WORD) THEN
     rtk := TK_INTEGER;
 
-  { A single flat ELSE IF chain, deliberately avoiding the bare EXIT
-    statement: EXIT from deep inside nested IFs inside a FUNCTION triggers a
-    pre-existing crash in the Python reference compiler's C-ABI call
-    codegen (c_abi.py's codegen_c_abi_call indexes past the end of an empty
-    arg list) that this repository's own native sources never happened to
-    exercise before. Restructuring to a single terminal assignment sidesteps
-    it without touching the compiler that builds this very file. }
+  { A single flat ELSE IF chain, deliberately avoiding a bare EXIT
+    statement: this dialect has no EXIT statement/procedure at all (verified
+    against the Python reference -- any EXIT reference fails to parse as a
+    procedure call with "Undefined procedure: EXIT"), so early-return from
+    deep inside nested IFs isn't expressible here regardless. A single
+    terminal assignment is the only option. }
   IF (op = 'AND') OR (op = 'OR') THEN
   BEGIN
     IF (ltk <> TK_BOOLEAN) OR (rtk <> TK_BOOLEAN) THEN
@@ -1588,6 +1626,42 @@ BEGIN
     SetPtrArrayElem(gep_idx, 0, lval);
     res := LLVMBuildGEP2(builder, i8ty, rval, gep_idx, 1, MakeCStr(''));
     last_val_tk := rtk;
+  END
+  ELSE IF (op = 'SLASH') AND IsIntegerFamilyTk(ltk) AND IsIntegerFamilyTk(rtk) THEN
+  BEGIN
+    { SLASH is always real division in Pascal (7/2 = 3.5), forcing a
+      floating result even for two INTEGER operands -- matches the
+      reference's is_real rule, which treats a bare SLASH as an implicit
+      REAL/REAL context even with no floating operand in sight. Promote
+      both operands to REAL here and let the REAL-arithmetic branch below
+      do the actual FDiv, rather than duplicating that dispatch. }
+    lval := LLVMBuildSIToFP(builder, lval, dblty, MakeCStr(''));
+    rval := LLVMBuildSIToFP(builder, rval, dblty, MakeCStr(''));
+    ltk := TK_REAL;
+    rtk := TK_REAL;
+  END
+  ELSE IF IsIntegerFamilyTk(ltk) AND ((rtk = TK_REAL) OR (rtk = TK_REAL32)) THEN
+  BEGIN
+    { Mixed INTEGER-family/REAL operand: the integer side implicitly
+      promotes to the other side's floating width, matching the
+      reference's is_real widening (codegen_binop). }
+    lval := LLVMBuildSIToFP(builder, lval, LLVMTypeForTk(rtk), MakeCStr(''));
+    ltk := rtk;
+  END
+  ELSE IF ((ltk = TK_REAL) OR (ltk = TK_REAL32)) AND IsIntegerFamilyTk(rtk) THEN
+  BEGIN
+    rval := LLVMBuildSIToFP(builder, rval, LLVMTypeForTk(ltk), MakeCStr(''));
+    rtk := ltk;
+  END
+  ELSE IF (ltk = TK_REAL32) AND (rtk = TK_REAL) THEN
+  BEGIN
+    lval := LLVMBuildFPExt(builder, lval, dblty, MakeCStr(''));
+    ltk := TK_REAL;
+  END
+  ELSE IF (ltk = TK_REAL) AND (rtk = TK_REAL32) THEN
+  BEGIN
+    rval := LLVMBuildFPExt(builder, rval, dblty, MakeCStr(''));
+    rtk := TK_REAL;
   END
   ELSE IF ltk <> rtk THEN
   BEGIN
@@ -1840,13 +1914,28 @@ VAR
 BEGIN
   nm := GetStr(node, 'name');
   symi := LookupSym(nm);
-  IF symi = 0 THEN
-    AbortWith2('codegen: undefined variable: ', nm);
-  base_ptr := symbols[symi].llvm_val;
-  cur_tid := symbols[symi].tk;
-
   selectors := GetObj(node, 'selectors');
   nsel := ArrSize(selectors);
+  IF (symi = 0) AND (nsel = 0) AND RoutineIsFunc(LookupRoutine(nm)) THEN
+  BEGIN
+    { A bare niladic-call Designator (e.g. `CurKind = 'X'`, an aggregate
+      Str255-returning FUNCTION called without parens) has no symbol-table
+      entry of its own -- materialize the call's result into a fresh
+      temporary and hand back that temporary's address, mirroring the
+      reference's get_string_chars_and_len is_bare_func_ref handling. The
+      selector loop below is a no-op since nsel = 0 here. }
+    cur_tid := routines[LookupRoutine(nm)].ret_tk;
+    base_ptr := LLVMBuildAlloca(builder, LLVMTypeForTk(cur_tid), MakeCStr(''));
+    LLVMBuildStore(builder, CodegenCallCommon(nm, NIL), base_ptr);
+  END
+  ELSE
+  BEGIN
+    IF symi = 0 THEN
+      AbortWith2('codegen: undefined variable: ', nm);
+    base_ptr := symbols[symi].llvm_val;
+    cur_tid := symbols[symi].tk;
+  END;
+
   FOR si := 0 TO nsel - 1 DO
   BEGIN
     sel := ArrItem(selectors, si);
@@ -2134,6 +2223,8 @@ VAR
   ch: Str255;
   res, addr: ADRMEM;
   result_tid: INTEGER;
+  target_item, target_str, sizeof_synth: ADRMEM;
+  sizeof_bytes: INTEGER32;
 BEGIN
   nt := NodeType(node);
   IF nt = 'IntLiteral' THEN
@@ -2186,7 +2277,7 @@ BEGIN
         res := LLVMConstInt(i16ty, const_tbl[consti].ival, 1);
         last_val_tk := TK_INTEGER;
       END
-      ELSE IF (routi <> 0) AND routines[routi].is_func THEN
+      ELSE IF RoutineIsFunc(routi) THEN
         { A zero-arg FUNCTION called without parens (e.g. `getchar`,
           `cJSON_CreateObject` -- common for [C] EXTERN declarations):
           Identifier and a bare FuncCall are the same AST shape here, so
@@ -2206,6 +2297,34 @@ BEGIN
     result_tid := last_val_tk;
     res := LLVMBuildLoad2(builder, LLVMTypeForTk(result_tid), addr, MakeCStr(''));
     last_val_tk := result_tid;
+  END
+  ELSE IF nt = 'StringLiteral' THEN
+  BEGIN
+    res := LLVMBuildGlobalStringPtr(builder, MakeCStr(DecodeStringLiteral(GetStr(node, 'value'))), MakeCStr('str'));
+    last_val_tk := TK_ADRMEM;
+  END
+  ELSE IF nt = 'SizeofExpr' THEN
+  BEGIN
+    target_item := GetObj(node, 'target');
+    target_str := cJSON_GetStringValue(target_item);
+    IF target_str <> NIL THEN
+    BEGIN
+      nm := GetStr(node, 'target');
+      symi := LookupSym(nm);
+      IF symi <> 0 THEN
+        sizeof_bytes := TypeSizeBytes(symbols[symi].tk)
+      ELSE
+      BEGIN
+        sizeof_synth := CreateNode('NamedType');
+        AddStringField(sizeof_synth, 'name', nm);
+        AddNullField(sizeof_synth, 'param');
+        sizeof_bytes := TypeSizeBytes(ResolveTypeExpr(sizeof_synth));
+      END;
+    END
+    ELSE
+      sizeof_bytes := TypeSizeBytes(ResolveTypeExpr(target_item));
+    res := LLVMConstInt(i16ty, sizeof_bytes, 0);
+    last_val_tk := TK_WORD;
   END
   ELSE IF nt = 'BinOp' THEN
     res := CodegenBinOp(GetStr(node, 'op'), GetObj(node, 'left'), GetObj(node, 'right'))
@@ -2389,17 +2508,20 @@ BEGIN
     ELSE IF NodeType(expr) = 'Identifier' THEN
     BEGIN
       symi := LookupSym(GetStr(expr, 'name'));
-      IF (symi <> 0) AND (TypeKind(symbols[symi].tk) = TK_LSTRING) THEN
+      IF symi <> 0 THEN
       BEGIN
-        is_lstring := TRUE;
-        addr := symbols[symi].llvm_val;
-        lstr_tid := symbols[symi].tk;
-      END
-      ELSE IF (symi <> 0) AND (TypeKind(symbols[symi].tk) = TK_STRING) THEN
-      BEGIN
-        is_string := TRUE;
-        addr := symbols[symi].llvm_val;
-        lstr_tid := symbols[symi].tk;
+        IF TypeKind(symbols[symi].tk) = TK_LSTRING THEN
+        BEGIN
+          is_lstring := TRUE;
+          addr := symbols[symi].llvm_val;
+          lstr_tid := symbols[symi].tk;
+        END
+        ELSE IF TypeKind(symbols[symi].tk) = TK_STRING THEN
+        BEGIN
+          is_string := TRUE;
+          addr := symbols[symi].llvm_val;
+          lstr_tid := symbols[symi].tk;
+        END;
       END;
       IF is_lstring THEN
       BEGIN
@@ -2652,10 +2774,21 @@ PROCEDURE CodegenStmt(stmt: ADRMEM); FORWARD;
 PROCEDURE CodegenStmtArray(arr: ADRMEM);
 VAR
   n, i: INTEGER32;
+  live: BOOLEAN;
 BEGIN
   n := ArrSize(arr);
+  live := TRUE;
   FOR i := 0 TO n - 1 DO
-    CodegenStmt(ArrItem(arr, i));
+  BEGIN
+    { A RETURN/BREAK/CYCLE terminates its block; nothing downstream in a
+      straight-line statement list can still be reached (no label/GOTO
+      support in this native codegen yet), so stop emitting once the
+      current block already has a terminator. }
+    IF live AND (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) <> NIL) THEN
+      live := FALSE;
+    IF live THEN
+      CodegenStmt(ArrItem(arr, i));
+  END;
 END;
 
 PROCEDURE CodegenAssignStmt(stmt: ADRMEM);
@@ -2676,9 +2809,18 @@ BEGIN
   BEGIN
     { `FuncName := expr` inside FuncName's own body assigns through the
       return-value slot, not a symbol -- see cur_func_name's declaration. }
-    v := CodegenExpr(GetObj(stmt, 'expr'));
-    v := CoerceForAssign(v, last_val_tk, cur_func_ret_tk, GetObj(stmt, 'expr'), nm);
-    LLVMBuildStore(builder, v, cur_func_ret_slot);
+    IF (TypeKind(cur_func_ret_tk) = TK_LSTRING) AND (NodeType(GetObj(stmt, 'expr')) = 'StringLiteral') THEN
+      CodegenLStringLiteralAssign(cur_func_ret_slot, cur_func_ret_tk,
+        DecodeStringLiteral(GetStr(GetObj(stmt, 'expr'), 'value')))
+    ELSE IF (TypeKind(cur_func_ret_tk) = TK_STRING) AND (NodeType(GetObj(stmt, 'expr')) = 'StringLiteral') THEN
+      CodegenStringLiteralAssign(cur_func_ret_slot, cur_func_ret_tk,
+        DecodeStringLiteral(GetStr(GetObj(stmt, 'expr'), 'value')))
+    ELSE
+    BEGIN
+      v := CodegenExpr(GetObj(stmt, 'expr'));
+      v := CoerceForAssign(v, last_val_tk, cur_func_ret_tk, GetObj(stmt, 'expr'), nm);
+      LLVMBuildStore(builder, v, cur_func_ret_slot);
+    END;
   END
   ELSE IF ArrSize(sel) = 0 THEN
   BEGIN
@@ -2730,13 +2872,15 @@ BEGIN
 
   LLVMPositionBuilderAtEnd(builder, then_bb);
   CodegenStmt(GetObj(stmt, 'then_branch'));
-  LLVMBuildBr(builder, end_bb);
+  IF LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) = NIL THEN
+    LLVMBuildBr(builder, end_bb);
 
   IF else_branch <> NIL THEN
   BEGIN
     LLVMPositionBuilderAtEnd(builder, else_bb);
     CodegenStmt(else_branch);
-    LLVMBuildBr(builder, end_bb);
+    IF LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) = NIL THEN
+      LLVMBuildBr(builder, end_bb);
   END;
 
   LLVMPositionBuilderAtEnd(builder, end_bb);
@@ -2817,7 +2961,8 @@ BEGIN
 
     LLVMPositionBuilderAtEnd(builder, body_bb);
     CodegenStmt(GetObj(el, 'stmt'));
-    LLVMBuildBr(builder, end_bb);
+    IF LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) = NIL THEN
+      LLVMBuildBr(builder, end_bb);
 
     cur_test_bb := next_test_bb;
   END;
@@ -2831,7 +2976,8 @@ BEGIN
       end_bb, or it is left as an unterminated block. }
     LLVMPositionBuilderAtEnd(builder, cur_test_bb);
     IF otherwise_stmt <> NIL THEN CodegenStmt(otherwise_stmt);
-    LLVMBuildBr(builder, end_bb);
+    IF LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) = NIL THEN
+      LLVMBuildBr(builder, end_bb);
   END;
 
   LLVMPositionBuilderAtEnd(builder, end_bb);
@@ -2853,8 +2999,13 @@ BEGIN
   LLVMBuildCondBr(builder, cond_val, body_bb, end_bb);
 
   LLVMPositionBuilderAtEnd(builder, body_bb);
+  loop_depth := loop_depth + 1;
+  loop_break_blocks[loop_depth] := end_bb;
+  loop_cycle_blocks[loop_depth] := loop_bb;
   CodegenStmt(GetObj(stmt, 'body'));
-  LLVMBuildBr(builder, loop_bb);
+  loop_depth := loop_depth - 1;
+  IF LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) = NIL THEN
+    LLVMBuildBr(builder, loop_bb);
 
   LLVMPositionBuilderAtEnd(builder, end_bb);
 END;
@@ -2868,11 +3019,18 @@ BEGIN
 
   LLVMBuildBr(builder, loop_bb);
   LLVMPositionBuilderAtEnd(builder, loop_bb);
+  loop_depth := loop_depth + 1;
+  loop_break_blocks[loop_depth] := end_bb;
+  loop_cycle_blocks[loop_depth] := loop_bb;
   CodegenStmtArray(GetObj(stmt, 'body'));
-  cond_val := CodegenExpr(GetObj(stmt, 'cond'));
-  IF last_val_tk <> TK_BOOLEAN THEN
-    AbortWith('codegen: REPEAT..UNTIL condition must be BOOLEAN');
-  LLVMBuildCondBr(builder, cond_val, end_bb, loop_bb);
+  loop_depth := loop_depth - 1;
+  IF LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) = NIL THEN
+  BEGIN
+    cond_val := CodegenExpr(GetObj(stmt, 'cond'));
+    IF last_val_tk <> TK_BOOLEAN THEN
+      AbortWith('codegen: REPEAT..UNTIL condition must be BOOLEAN');
+    LLVMBuildCondBr(builder, cond_val, end_bb, loop_bb);
+  END;
 
   LLVMPositionBuilderAtEnd(builder, end_bb);
 END;
@@ -2923,8 +3081,13 @@ BEGIN
   LLVMBuildCondBr(builder, cmp_val, body_bb, end_bb);
 
   LLVMPositionBuilderAtEnd(builder, body_bb);
+  loop_depth := loop_depth + 1;
+  loop_break_blocks[loop_depth] := end_bb;
+  loop_cycle_blocks[loop_depth] := step_bb;
   CodegenStmt(GetObj(stmt, 'body'));
-  LLVMBuildBr(builder, step_bb);
+  loop_depth := loop_depth - 1;
+  IF LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) = NIL THEN
+    LLVMBuildBr(builder, step_bb);
 
   LLVMPositionBuilderAtEnd(builder, step_bb);
   cur_val := LLVMBuildLoad2(builder, var_llty, symbols[symi].llvm_val, MakeCStr(''));
@@ -2989,6 +3152,38 @@ BEGIN
     ELSE
     BEGIN
       AbortWith2('codegen: not a string-typed variable: ', GetStr(expr, 'name'));
+      chars_ptr := NIL;
+      len_val := NIL;
+    END;
+  END
+  ELSE IF NodeType(expr) = 'Designator' THEN
+  BEGIN
+    addr := ComputeDesignatorAddress(expr);
+    tid := last_val_tk;
+    IF TypeKind(tid) = TK_LSTRING THEN
+    BEGIN
+      gep_idx := AllocPtrArray(2);
+      SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+      SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 0, 0));
+      len_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(tid), addr, gep_idx, 2, MakeCStr(''));
+      len_val := LLVMBuildLoad2(builder, i8ty, len_ptr, MakeCStr(''));
+      len_val := LLVMBuildZExt(builder, len_val, i32ty, MakeCStr(''));
+      gep_idx := AllocPtrArray(2);
+      SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+      SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 1, 0));
+      chars_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(tid), addr, gep_idx, 2, MakeCStr(''));
+    END
+    ELSE IF TypeKind(tid) = TK_STRING THEN
+    BEGIN
+      len_val := LLVMConstInt(i32ty, types[tid].hi, 0);
+      gep_idx := AllocPtrArray(2);
+      SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+      SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 0, 0));
+      chars_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(tid), addr, gep_idx, 2, MakeCStr(''));
+    END
+    ELSE
+    BEGIN
+      AbortWith('codegen: not a string-typed designator expression');
       chars_ptr := NIL;
       len_val := NIL;
     END;
@@ -3624,6 +3819,37 @@ BEGIN
     discard := CodegenCallCommon(name, GetObj(stmt, 'args'));
 END;
 
+PROCEDURE CodegenReturnStmt(stmt: ADRMEM);
+{ RETURN exits the current routine immediately with whatever value is
+  currently held in the function's return-value alloca (the same slot
+  `FuncName := ...` assigns and which the implicit end-of-body return also
+  loads) -- it does not reset the result to a fixed constant. }
+VAR
+  ret_load: ADRMEM;
+BEGIN
+  IF cur_func_name = '' THEN
+    LLVMBuildRetVoid(builder)
+  ELSE
+  BEGIN
+    ret_load := LLVMBuildLoad2(builder, LLVMTypeForTk(cur_func_ret_tk), cur_func_ret_slot, MakeCStr(''));
+    ret_load := LLVMBuildRet(builder, ret_load);
+  END;
+END;
+
+PROCEDURE CodegenBreakStmt(stmt: ADRMEM);
+BEGIN
+  IF loop_depth = 0 THEN
+    AbortWith('codegen: BREAK outside of a loop');
+  LLVMBuildBr(builder, loop_break_blocks[loop_depth]);
+END;
+
+PROCEDURE CodegenCycleStmt(stmt: ADRMEM);
+BEGIN
+  IF loop_depth = 0 THEN
+    AbortWith('codegen: CYCLE outside of a loop');
+  LLVMBuildBr(builder, loop_cycle_blocks[loop_depth]);
+END;
+
 PROCEDURE CodegenStmt(stmt: ADRMEM);
 VAR
   nt, msg: Str255;
@@ -3637,6 +3863,10 @@ BEGIN
   ELSE IF nt = 'ForStmt' THEN CodegenForStmt(stmt)
   ELSE IF nt = 'CaseStmt' THEN CodegenCaseStmt(stmt)
   ELSE IF nt = 'ProcCallStmt' THEN CodegenProcCallStmt(stmt)
+  ELSE IF nt = 'ReturnStmt' THEN CodegenReturnStmt(stmt)
+  ELSE IF nt = 'BreakStmt' THEN CodegenBreakStmt(stmt)
+  ELSE IF nt = 'CycleStmt' THEN CodegenCycleStmt(stmt)
+  ELSE IF nt = 'EmptyStmt' THEN BEGIN END
   ELSE
   BEGIN
     msg := 'codegen: unhandled statement kind: ';
@@ -3821,8 +4051,8 @@ BEGIN
     on a prior FORWARD pass) and registered, but there is no Block body to
     codegen yet -- nothing further to do until (if ever) a real definition
     for this same name arrives. Wrapped in an IF rather than a bare EXIT,
-    matching CodegenBinOp's established workaround for the host compiler's
-    EXIT-inside-nested-IFs C-ABI codegen crash (see its comment). }
+    matching CodegenBinOp's own note: this dialect has no EXIT
+    statement/procedure at all, so an early return has to be an IF guard. }
   IF has_block_body THEN
   BEGIN
     entry_bb2 := LLVMAppendBasicBlockInContext(ctx, fn, MakeCStr('entry'));
@@ -4092,6 +4322,7 @@ BEGIN
   nroutines := 0;
   nconsts := 0;
   cur_func_name := '';
+  loop_depth := 0;
   ntypes := 13; { ids 1..13 are the bare TK_INTEGER..TK_ADRMEM scalars, not
                  `types` table entries -- the first RegisterType call must
                  hand out id 14, not 1. }
