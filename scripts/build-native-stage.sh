@@ -59,7 +59,12 @@ native_jsonutil="${NATIVE_JSONUTIL:-$native_codegen}"
 run_frontend() {
   local src_file="$1"
   if [ -n "${NATIVE_LEXER:-}" ] && [ -n "${NATIVE_PARSER:-}" ] && [ -n "${NATIVE_TYPECHECKER:-}" ]; then
-    "$NATIVE_LEXER" < "$src_file" | "$NATIVE_PARSER" | "$NATIVE_TYPECHECKER"
+    # The native parser's recursive-descent walk is no more stack-bounded than
+    # native codegen's lowering (see the note below): on a real source file it
+    # segfaults partway through under the default 8MB limit. Raise it for the
+    # whole native front end, not just codegen.
+    ( ulimit -s unlimited
+      "$NATIVE_LEXER" < "$src_file" | "$NATIVE_PARSER" | "$NATIVE_TYPECHECKER" )
   else
     python3 -m pascal1981.cli_lex "$src_file" | \
       python3 -m pascal1981.cli_parse --source-file "$src_file" --dialect extended | \
