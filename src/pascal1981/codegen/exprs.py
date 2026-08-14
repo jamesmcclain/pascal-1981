@@ -470,18 +470,15 @@ class ExprsMixin:
         def _is_str_expr(e):
             if isinstance(e, StringLiteral):
                 return True
-            if isinstance(e, Designator) and e.selectors:
-                # A selector (index/field/deref) narrows the designator's
-                # type away from its base symbol's type -- e.g. `ck[i]` on a
-                # Str255 `ck` is a single CHAR, not a string -- so it must
-                # never be treated as a whole-string comparison operand.
-                return False
             if isinstance(e, (Identifier, Designator)):
-                sym = self.scope.lookup(e.name)
-                if sym and sym.type_expr:
-                    t = sym.type_expr
-                    if hasattr(t, 'return_type'):
-                        t = t.return_type
+                # A selector chain can narrow the designator's type away from
+                # its base symbol's type (`ck[i]` on a Str255 `ck` is a single
+                # CHAR) or keep it a string (`rec.name`, `tab[i]` on an array
+                # of Str255), so the chain has to be walked rather than assumed
+                # either way -- assuming it always narrows made two whole-string
+                # operands compare as raw aggregates instead of as strings.
+                t = self.designator_static_type(e)
+                if t is not None:
                     return self.get_string_type_info(t)[0]
             return False
 
@@ -989,6 +986,47 @@ class ExprsMixin:
         if hasattr(t, 'lower_bound') and hasattr(t, 'element_type') and not hasattr(t, 'max_len'):
             return t.lower_bound, t.element_type
         return None, None
+
+    def designator_static_type(self, expr):
+        """The AST type an Identifier/Designator ultimately designates.
+
+        A pure counterpart to :meth:`resolve_designator_ptr_typed`: it walks
+        the same selector chain over AST types alone, emitting no IR, so it is
+        safe to call from a predicate that may decide not to lower the
+        expression at all. Returns ``None`` when the chain cannot be resolved
+        statically, which callers must treat as "unknown", never as a
+        particular type.
+        """
+        name = getattr(expr, 'name', None)
+        if name is None:
+            return None
+        symbol = self.scope.lookup(name) or self.scope.lookup(name.upper())
+        if not symbol or not symbol.type_expr:
+            return None
+        t = symbol.type_expr
+        if hasattr(t, 'return_type'):
+            t = t.return_type
+        for selector in getattr(expr, 'selectors', None) or []:
+            if t is None:
+                return None
+            base = self.resolve_type_alias(t)
+            if selector.kind == 'INDEX':
+                if isinstance(base, ArrayType):
+                    t = base.element_type
+                elif self.get_string_type_info(base)[0]:
+                    t = NamedType('CHAR', None)  # indexing into a string yields one character
+                else:
+                    return None
+            elif selector.kind == 'FIELD':
+                _, ftype = self.record_field_index(base, selector.index_or_field)
+                if ftype is None:
+                    return None
+                t = ftype
+            elif selector.kind == 'DEREF':
+                t = getattr(base, 'base', None) or getattr(base, 'target_type', None)
+            else:
+                return None
+        return t
 
     def record_field_index(self, type_expr, field_name: str) -> tuple[Optional[int], Any]:
         """For a (possibly aliased) record type, return ``(llvm_struct_index,
