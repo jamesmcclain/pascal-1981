@@ -931,6 +931,24 @@ BEGIN
         END;
       END;
     END
+    ELSE IF pname = 'CONCAT' THEN
+    BEGIN
+      { CONCAT(VAR d: LSTRING-or-STRING-or-Str255; CONST s: STRING-or-
+        LSTRING-or-literal): the language's own built-in string-append
+        procedure (distinct from codegen.pas's own target-language CONCAT
+        support, which reads this same AST node shape but for a *user*
+        program's CONCAT call) -- not otherwise special-cased anywhere in
+        this file, so every native .pas source that calls it as a bare
+        statement (codegen.pas does, heavily, to build up format strings)
+        previously hit "Undefined procedure" here. Checked leniently, same
+        as WRITE/WRITELN above: this file's coarse tk model has no
+        separate Str255/STRING/LSTRING distinction worth enforcing here. }
+      IF nargs <> 2 THEN
+        AddError('CONCAT requires exactly two arguments')
+      ELSE
+        FOR i := 0 TO nargs - 1 DO
+          CheckExpr(cJSON_GetArrayItem(args_arr, i));
+    END
     ELSE BEGIN
       si := LookupSymbol(pname);
       IF si = 0 THEN
