@@ -216,6 +216,16 @@ PROCEDURE exit(code: CINT) [C]; EXTERN;
 FUNCTION cJSON_GetStringValue(item: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION cJSON_IsNull(item: ADRMEM): CINT [C]; EXTERN;
 
+{ SysV MEMORY-class byval/align attribute emission for [C] FOREIGN aggregate
+  parameters (see EmitByvalAttrsForParam / SysVAggClass below). Modern LLVM
+  requires a *typed* byval attribute, hence LLVMCreateTypeAttribute rather
+  than the older untyped enum-only form. }
+FUNCTION LLVMGetEnumAttributeKindForName(name: ADRMEM; slen: CLONG): CINT [C]; EXTERN;
+FUNCTION LLVMCreateEnumAttribute(ctx: ADRMEM; kind_id: CINT; val: CLONG): ADRMEM [C]; EXTERN;
+FUNCTION LLVMCreateTypeAttribute(ctx: ADRMEM; kind_id: CINT; ty: ADRMEM): ADRMEM [C]; EXTERN;
+PROCEDURE LLVMAddCallSiteAttribute(call: ADRMEM; idx: CINT; attr: ADRMEM) [C]; EXTERN;
+PROCEDURE LLVMAddAttributeAtIndex(fn: ADRMEM; idx: CINT; attr: ADRMEM) [C]; EXTERN;
+
 CONST
   LLVMAbortProcessAction = 0;
 
@@ -358,6 +368,11 @@ TYPE
     has_body: BOOLEAN; { FALSE for a FORWARD/EXTERN placeholder that hasn't
                           yet been (or, for EXTERN, never will be) followed
                           by its real Block-bodied definition. }
+    is_c: BOOLEAN; { TRUE for an EXTERN/EXTERNAL routine carrying the [C]
+                      attribute -- see IsCForeignDecl. A needs_copy param of
+                      such a routine crosses the C ABI as SysV MEMORY-class
+                      byval, not as the plain-Pascal first-class-aggregate
+                      convention the rest of param_needs_copy documents. }
   END;
 
 VAR
@@ -385,6 +400,10 @@ VAR
     and friends. NEW/DISPOSE must emit a runtime call instruction, not
     allocate on the compiler's own process heap. }
   memmove_fnty, memmove_fn: ADRMEM;
+  byval_kind_id, align_kind_id: CINT; { LLVM enum attribute kind ids for the
+    [C] FOREIGN MEMORY-class byval call marshalling below, resolved once at
+    init time (see byval_align_kinds_init) rather than re-resolving by name
+    on every call site/declaration. }
   memcmp_fnty, memcmp_fn: ADRMEM; { for whole-string EQ/NEQ/LT/LE/GT/GE comparisons. }
   positn_fnty, positn_fn: ADRMEM;
   scaneq_fnty, scaneq_fn: ADRMEM;
@@ -590,6 +609,26 @@ BEGIN
   base := arr;
   cell := base + idx;
   cell^ := v;
+END;
+
+PROCEDURE EmitBlockCopy(dst: ADRMEM; src: ADRMEM; nbytes: INTEGER32);
+{ memmove(dst, src, nbytes) via the target program's own memmove extern --
+  the same block-copy shape formerly inlined at the needs_copy prologue
+  site (before that path moved to a first-class LLVM aggregate value) and
+  now shared by the [C] FOREIGN byval caller-side temp-copy path in
+  CodegenCallCommon. Bitcasts both pointers to i8* first since memmove's
+  declared signature is untyped. }
+VAR
+  copy_dst, copy_src, copy_result: ADRMEM;
+  copy_call_args: ADRMEM;
+BEGIN
+  copy_dst := LLVMBuildBitCast(builder, dst, i8ptrty, MakeCStr(''));
+  copy_src := LLVMBuildBitCast(builder, src, i8ptrty, MakeCStr(''));
+  copy_call_args := AllocPtrArray(3);
+  SetPtrArrayElem(copy_call_args, 0, copy_dst);
+  SetPtrArrayElem(copy_call_args, 1, copy_src);
+  SetPtrArrayElem(copy_call_args, 2, LLVMConstInt(i64ty, nbytes, 0));
+  copy_result := LLVMBuildCall2(builder, memmove_fnty, memmove_fn, copy_call_args, 3, MakeCStr(''));
 END;
 
 { ============================== type model =============================== }
@@ -1017,7 +1056,13 @@ BEGIN
       ResolveIntLiteral := 0;
     END
     ELSE
-      ResolveIntLiteral := const_tbl[ci].ival;
+      { const_tbl[].ival is INTEGER64 (it stores any integer literal's full
+        folded value); an array index bound is always a small value that
+        fits in INTEGER, but the language has no implicit INTEGER64 ->
+        INTEGER narrowing (matching its no-implicit-narrowing rule for
+        INTEGER32 -> INTEGER) -- RETYPE makes the deliberate truncation
+        explicit. }
+      ResolveIntLiteral := RETYPE(INTEGER, const_tbl[ci].ival);
   END
   ELSE
   BEGIN
@@ -1947,6 +1992,7 @@ VAR
   arg_routi: INTEGER32;
   is_bare_niladic_call: BOOLEAN;
   res: ADRMEM;
+  bv_temp, byval_attr, align_attr: ADRMEM;
 BEGIN
   ri := LookupRoutine(name);
   IF ri = 0 THEN
@@ -1969,11 +2015,27 @@ BEGIN
         BEGIN
           arg_nm := GetStr(arg_node, 'name');
           symi := LookupSym(arg_nm);
-          IF symi = 0 THEN
-            AbortWith2('codegen: undefined variable: ', arg_nm);
-          IF symbols[symi].tk <> routines[ri].param_tk[i + 1] THEN
-            AbortWith2('codegen: VAR argument type mismatch calling: ', name);
-          v := symbols[symi].llvm_val;
+          arg_routi := LookupRoutine(arg_nm);
+          is_bare_niladic_call := (symi = 0) AND RoutineIsFunc(arg_routi);
+          IF is_bare_niladic_call THEN
+          BEGIN
+            { A bare niladic-call Identifier (e.g. `StringEqual(CurKind,
+              target_k)`, an aggregate Str255-returning FUNCTION called
+              without parens) has no symbol-table entry of its own --
+              materialize the call's result into a fresh temporary and
+              pass that temporary's address, same as ComputeDesignatorAddress
+              does for the same shape reached via a Designator. }
+            v := EntryAlloca(LLVMTypeForTk(routines[arg_routi].ret_tk), '');
+            LLVMBuildStore(builder, CodegenCallCommon(arg_nm, NIL), v);
+          END
+          ELSE
+          BEGIN
+            IF symi = 0 THEN
+              AbortWith2('codegen: undefined variable: ', arg_nm);
+            IF symbols[symi].tk <> routines[ri].param_tk[i + 1] THEN
+              AbortWith2('codegen: VAR argument type mismatch calling: ', name);
+            v := symbols[symi].llvm_val;
+          END;
         END
         ELSE IF NodeType(arg_node) = 'Designator' THEN
         BEGIN
@@ -1987,13 +2049,77 @@ BEGIN
           v := NIL;
         END;
       END
+      ELSE IF routines[ri].param_needs_copy[i + 1] AND routines[ri].is_c THEN
+      BEGIN
+        { [C] FOREIGN routine, value-mode aggregate param: SysV MEMORY-class
+          byval -- compute the source's address (same sub-cases as the
+          plain-aggregate branch below, but stopping at the address rather
+          than loading), then ALWAYS copy it into a fresh per-call temp via
+          EmitBlockCopy and pass that temp's address. Never pass caller
+          storage raw: even though nothing else could presently alias e.g. a
+          StringLiteral's own already-fresh temp, doing this unconditionally
+          keeps one predictable shape matching c_abi.py's caller-side
+          marshalling, and is what makes byval's callee-private-copy
+          guarantee actually hold for the Identifier/Designator cases that
+          DO name caller-owned storage. The byval(ty)/align call-site
+          attributes are attached after LLVMBuildCall2 below. }
+        IF NodeType(arg_node) = 'Identifier' THEN
+        BEGIN
+          arg_nm := GetStr(arg_node, 'name');
+          symi := LookupSym(arg_nm);
+          arg_routi := LookupRoutine(arg_nm);
+          is_bare_niladic_call := (symi = 0) AND RoutineIsFunc(arg_routi);
+          IF is_bare_niladic_call THEN
+          BEGIN
+            v := EntryAlloca(LLVMTypeForTk(routines[arg_routi].ret_tk), '');
+            LLVMBuildStore(builder, CodegenCallCommon(arg_nm, NIL), v);
+          END
+          ELSE
+          BEGIN
+            IF symi = 0 THEN
+              AbortWith2('codegen: undefined variable: ', arg_nm);
+            IF symbols[symi].tk <> routines[ri].param_tk[i + 1] THEN
+              AbortWith2('codegen: value-aggregate argument type mismatch calling: ', name);
+            v := symbols[symi].llvm_val;
+          END;
+        END
+        ELSE IF NodeType(arg_node) = 'Designator' THEN
+        BEGIN
+          v := ComputeDesignatorAddress(arg_node);
+          IF last_val_tk <> routines[ri].param_tk[i + 1] THEN
+            AbortWith2('codegen: value-aggregate argument type mismatch calling: ', name);
+        END
+        ELSE IF (NodeType(arg_node) = 'StringLiteral')
+            AND ((TypeKind(routines[ri].param_tk[i + 1]) = TK_LSTRING) OR (TypeKind(routines[ri].param_tk[i + 1]) = TK_STRING)) THEN
+        BEGIN
+          v := EntryAlloca(LLVMTypeForTk(routines[ri].param_tk[i + 1]), '');
+          IF TypeKind(routines[ri].param_tk[i + 1]) = TK_LSTRING THEN
+            CodegenLStringLiteralAssign(v, routines[ri].param_tk[i + 1], DecodeStringLiteral(GetStr(arg_node, 'value')))
+          ELSE
+            CodegenStringLiteralAssign(v, routines[ri].param_tk[i + 1], DecodeStringLiteral(GetStr(arg_node, 'value')));
+        END
+        ELSE IF NodeType(arg_node) = 'FuncCall' THEN
+        BEGIN
+          v := EntryAlloca(LLVMTypeForTk(routines[ri].param_tk[i + 1]), '');
+          LLVMBuildStore(builder, CodegenExpr(arg_node), v);
+        END
+        ELSE
+        BEGIN
+          AbortWith2('codegen: a value-aggregate argument must be an lvalue or call, calling: ', name);
+          v := NIL;
+        END;
+        bv_temp := EntryAlloca(LLVMTypeForTk(routines[ri].param_tk[i + 1]), '');
+        EmitBlockCopy(bv_temp, v, TypeSizeBytes(routines[ri].param_tk[i + 1]));
+        v := bv_temp;
+      END
       ELSE IF routines[ri].param_needs_copy[i + 1] THEN
       BEGIN
-        { Value-mode ARRAY/RECORD/LSTRING/STRING aggregate parameter: the
-          callee now expects a first-class LLVM aggregate value (matching
-          the Python reference), not an address -- see CodegenRoutineDecl's
-          signature/prologue above. Every sub-case below produces that SSA
-          aggregate value instead of a pointer to one. }
+        { Value-mode ARRAY/RECORD/LSTRING/STRING aggregate parameter on a
+          plain (non-[C]) routine: the callee now expects a first-class
+          LLVM aggregate value (matching the Python reference), not an
+          address -- see CodegenRoutineDecl's signature/prologue above.
+          Every sub-case below produces that SSA aggregate value instead of
+          a pointer to one. }
         IF NodeType(arg_node) = 'Identifier' THEN
         BEGIN
           arg_nm := GetStr(arg_node, 'name');
@@ -2038,8 +2164,8 @@ BEGIN
           v := LLVMBuildLoad2(builder, LLVMTypeForTk(routines[ri].param_tk[i + 1]), v, MakeCStr(''));
         END
         ELSE
-          { Any other value-mode aggregate-shaped expression (a FuncCall, or
-            anything else CodegenExpr can produce) is already an SSA
+          { Any other value-mode aggregate-shaped expression (a FuncCall,
+            or anything else CodegenExpr can produce) is already an SSA
             aggregate value -- no address needed at all, unlike the old
             pointer-passing convention. }
           v := CodegenExpr(arg_node);
@@ -2056,6 +2182,22 @@ BEGIN
       SetPtrArrayElem(call_args, i, v);
     END;
     res := LLVMBuildCall2(builder, routines[ri].fnty, routines[ri].fn, call_args, nargs, MakeCStr(''));
+    IF routines[ri].is_c THEN
+    BEGIN
+      { Attach byval(ty)/align at the CALL SITE too, matching clang's own
+        lowering (verification step 7) -- the declaration side alone
+        (CodegenRoutineDecl) isn't enough; LLVM expects both. }
+      FOR i := 0 TO nargs - 1 DO
+      BEGIN
+        IF routines[ri].param_needs_copy[i + 1] THEN
+        BEGIN
+          byval_attr := LLVMCreateTypeAttribute(ctx, byval_kind_id, LLVMTypeForTk(routines[ri].param_tk[i + 1]));
+          align_attr := LLVMCreateEnumAttribute(ctx, align_kind_id, TypeAlignBytes(routines[ri].param_tk[i + 1]));
+          LLVMAddCallSiteAttribute(res, i + 1, byval_attr);
+          LLVMAddCallSiteAttribute(res, i + 1, align_attr);
+        END;
+      END;
+    END;
     last_val_tk := routines[ri].ret_tk;
   END;
   CodegenCallCommon := res;
@@ -4136,6 +4278,72 @@ BEGIN
     DeclareVar(CStrToStr255(cJSON_GetStringValue(ArrItem(names, i))), tk);
 END;
 
+FUNCTION IsCForeignDecl(decl: ADRMEM): BOOLEAN;
+{ True for an EXTERN/EXTERNAL routine carrying the [C] attribute -- mirrors
+  the Python reference's CAbiMixin.is_c_abi_foreign (c_abi.py). Only routines
+  answering TRUE here get the SysV MEMORY-class byval treatment for their
+  needs_copy params (SysVAggClass below); every other routine keeps the
+  plain-Pascal first-class-aggregate convention. }
+VAR
+  attrs_arr, item: ADRMEM;
+  i, nattrs: INTEGER32;
+  attr_nm, directive: Str255;
+  has_c, has_extern_attr: BOOLEAN;
+BEGIN
+  attrs_arr := GetObj(decl, 'attributes');
+  nattrs := ArrSize(attrs_arr);
+  has_c := FALSE;
+  has_extern_attr := FALSE;
+  FOR i := 0 TO nattrs - 1 DO
+  BEGIN
+    item := ArrItem(attrs_arr, i);
+    { Attribute/directive names are already canonical uppercase in the AST
+      (lexer keyword kinds, or the parser's own literal 'C' for [C]/[CDECL]
+      -- see parser.pas ParseAttributeItem), so no case-folding is needed
+      here, unlike c_abi.py's .upper() (which folds a Python-side string
+      that isn't guaranteed pre-uppercased). }
+    attr_nm := GetStr(item, 'name');
+    { A bare `attr_nm = 'C'` comparison doesn't typecheck: single-quoted
+      single-character literals lex as CHAR, not a length-1 LSTRING, so
+      LSTRING = CHAR has no defined comparison. Compare the length byte
+      (index 0, per the LSTRING index-0-is-length-as-CHAR convention) and
+      the first character (index 1) instead -- mirrors the identical idiom
+      at parser.pas:1882 for the same [C] attribute-name check. }
+    IF (ORD(attr_nm[0]) = 1) AND (attr_nm[1] = 'C') THEN has_c := TRUE;
+    IF (attr_nm = 'EXTERN') OR (attr_nm = 'EXTERNAL') THEN has_extern_attr := TRUE;
+  END;
+  directive := GetStr(decl, 'directive');
+  IsCForeignDecl := has_c AND (has_extern_attr OR (directive = 'EXTERN') OR (directive = 'EXTERNAL'));
+END;
+
+CONST
+  SYSV_CLASS_MEMORY = 1;
+  SYSV_CLASS_UNIMPLEMENTED = 2; { <=16-byte register-class aggregates: the
+    full eightbyte INTEGER/SSE classifier is future SysV work, not this
+    self-hosting subset -- see the checklist. None of the five self-hosting
+    sources hit this today, so it aborts loudly rather than emitting
+    something silently wrong. }
+
+FUNCTION SysVAggClass(tk: INTEGER): INTEGER;
+{ Single landing point for the (currently MEMORY-only) SysV AMD64 aggregate
+  classifier, mirroring where c_abi.py's classify_aggregate sits -- a later
+  full eightbyte INTEGER/SSE/MEMORY classifier replaces just this function's
+  body, not any of its callers. Returns plain INTEGER (not INTEGER32),
+  matching TypeKind's own return type -- the native typechecker's
+  CheckExpr/IsNumeric treats INTEGER and INTEGER32 as distinct,
+  non-interchangeable comparison operand kinds, and every caller here
+  compares the result against an INTEGER-typed CONST (SYSV_CLASS_MEMORY /
+  SYSV_CLASS_UNIMPLEMENTED). }
+VAR
+  sz: INTEGER32;
+BEGIN
+  sz := TypeSizeBytes(tk);
+  IF (sz = 0) OR (sz > 16) THEN
+    SysVAggClass := SYSV_CLASS_MEMORY
+  ELSE
+    SysVAggClass := SYSV_CLASS_UNIMPLEMENTED;
+END;
+
 PROCEDURE FlattenParams(params_arr: ADRMEM; VAR n: INTEGER32; VAR names: ParamNameArr;
                          VAR tks: ParamTkArr; VAR isvar: ParamVarArr; VAR needs_copy: ParamVarArr);
 { A Pascal formal-parameter section groups several names under one type
@@ -4199,10 +4407,18 @@ VAR
   existing: INTEGER32;
   ridx: INTEGER32;
   has_block_body: BOOLEAN;
+  is_c: BOOLEAN;
+  agg_llvm_ty, byval_attr, align_attr: ADRMEM;
 BEGIN
   name := GetStr(decl, 'name');
   body_blk := GetObj(decl, 'body');
   has_block_body := NodeType(body_blk) = 'Block';
+  { IsCForeignDecl(decl) reflects only THIS decl node's own attributes/
+    directive -- a FORWARD-declared [C] EXTERN's later real definition (the
+    existing<>0 branch below) may not repeat EXTERN/[C] on the body-bearing
+    decl, so the routine table's own is_c (set once, at first declaration)
+    is the source of truth once ridx is known; see below. }
+  is_c := IsCForeignDecl(decl);
 
   existing := LookupRoutine(name);
   IF existing <> 0 THEN
@@ -4233,6 +4449,7 @@ BEGIN
     params_arr := GetObj(decl, 'params');
     FlattenParams(params_arr, n, names, tks, isvar, needs_copy);
     routines[ridx].has_body := TRUE;
+    is_c := routines[ridx].is_c; { source of truth once ridx is known -- see note above }
   END
   ELSE
   BEGIN
@@ -4244,13 +4461,26 @@ BEGIN
     BEGIN
       IF isvar[i] THEN
         SetPtrArrayElem(param_llvm_types, i - 1, LLVMPointerType(LLVMTypeForTk(tks[i]), 0))
+      ELSE IF needs_copy[i] AND is_c THEN
+      BEGIN
+        { [C] FOREIGN routine, value-mode aggregate param: SysV MEMORY-class
+          byval, matching c_abi.py -- a pointer to a private per-call copy,
+          with the byval(ty)/align attributes attached below once `fn`
+          exists. Only MEMORY class (>16 bytes, or 0) is implemented; a
+          <=16-byte aggregate would need the eightbyte register-class
+          coercion this self-hosting subset doesn't implement (SysVAggClass). }
+        IF SysVAggClass(tks[i]) <> SYSV_CLASS_MEMORY THEN
+          AbortWith2('codegen: [C] FOREIGN aggregate parameter <=16 bytes needs SysV register-class coercion, not yet implemented, for: ', name);
+        SetPtrArrayElem(param_llvm_types, i - 1, LLVMPointerType(LLVMTypeForTk(tks[i]), 0));
+      END
       ELSE
         { needs_copy[i] (value-mode ARRAY/RECORD/LSTRING/STRING aggregate)
-          is passed as a first-class LLVM aggregate value, matching the
-          Python reference (codegen/types_map.py) -- not a pointer. The
-          incoming value itself becomes the callee's private copy in the
-          prologue below, so Pascal by-value semantics still hold without
-          any caller-visible aliasing. }
+          on a plain (non-[C]) routine is passed as a first-class LLVM
+          aggregate value, matching the Python reference
+          (codegen/types_map.py) -- not a pointer. The incoming value
+          itself becomes the callee's private copy in the prologue below,
+          so Pascal by-value semantics still hold without any
+          caller-visible aliasing. }
         SetPtrArrayElem(param_llvm_types, i - 1, LLVMTypeForTk(tks[i]));
     END;
 
@@ -4319,6 +4549,28 @@ BEGIN
       routines[ridx].param_needs_copy[i] := needs_copy[i];
     END;
     routines[ridx].has_body := has_block_body;
+    routines[ridx].is_c := is_c;
+
+    IF is_c THEN
+    BEGIN
+      { Attach byval(ty)/align at the DECLARATION side too (not just the
+        call site below) -- LLVM attaches parameter attributes to both the
+        function definition/declaration and each call site; clang emits
+        both, and only doing one leaves the IR inconsistent with what a
+        real C compiler produces for the same signature (verification step
+        7). Attribute index is 1-based over parameters (0 is the return). }
+      FOR i := 1 TO n DO
+      BEGIN
+        IF needs_copy[i] THEN
+        BEGIN
+          agg_llvm_ty := LLVMTypeForTk(tks[i]);
+          byval_attr := LLVMCreateTypeAttribute(ctx, byval_kind_id, agg_llvm_ty);
+          align_attr := LLVMCreateEnumAttribute(ctx, align_kind_id, TypeAlignBytes(tks[i]));
+          LLVMAddAttributeAtIndex(fn, i, byval_attr);
+          LLVMAddAttributeAtIndex(fn, i, align_attr);
+        END;
+      END;
+    END;
   END;
 
   { EXTERN/FORWARD placeholder: the function is declared (or was already,
@@ -4358,13 +4610,20 @@ BEGIN
       param_val := LLVMGetParam(fn, i - 1);
       IF isvar[i] THEN
         palloca := param_val { the incoming pointer already IS the storage }
+      ELSE IF needs_copy[i] AND is_c THEN
+        { SysV byval: the incoming pointer already refers to a private
+          per-call copy the caller made (see the byval caller-side temp in
+          CodegenCallCommon) -- use it directly as storage, exactly like
+          isvar above, no further copy needed. }
+        palloca := param_val
       ELSE IF needs_copy[i] THEN
       BEGIN
-        { Value-mode aggregate: param_val is the first-class LLVM aggregate
-          value itself (see the signature construction above), not a
-          pointer -- matching the Python reference. Storing it into a fresh
-          local alloca IS the callee's private copy; identical shape to the
-          plain scalar ELSE branch below. }
+        { Value-mode aggregate on a plain (non-[C]) routine: param_val is
+          the first-class LLVM aggregate value itself (see the signature
+          construction above), not a pointer -- matching the Python
+          reference. Storing it into a fresh local alloca IS the callee's
+          private copy; identical shape to the plain scalar ELSE branch
+          below. }
         palloca := EntryAlloca(LLVMTypeForTk(tks[i]), names[i]);
         LLVMBuildStore(builder, param_val, palloca);
       END
@@ -4548,6 +4807,9 @@ BEGIN
   SetPtrArrayElem(param_arr, 2, i64ty);
   memmove_fnty := LLVMFunctionType(i8ptrty, param_arr, 3, 0);
   memmove_fn := LLVMAddFunction(modl, MakeCStr('memmove'), memmove_fnty);
+
+  byval_kind_id := LLVMGetEnumAttributeKindForName(MakeCStr('byval'), 5);
+  align_kind_id := LLVMGetEnumAttributeKindForName(MakeCStr('align'), 5);
 
   param_arr := AllocPtrArray(3);
   SetPtrArrayElem(param_arr, 0, i8ptrty);
