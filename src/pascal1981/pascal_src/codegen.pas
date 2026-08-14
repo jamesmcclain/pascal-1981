@@ -403,6 +403,8 @@ VAR
     and friends. NEW/DISPOSE must emit a runtime call instruction, not
     allocate on the compiler's own process heap. }
   memmove_fnty, memmove_fn: ADRMEM;
+  launch_fnty, launch_fn: ADRMEM; { CPU-device launch shim: entry, six
+                                  i64 geometry values, and void** argv. }
   byval_kind_id, align_kind_id: CINT; { LLVM enum attribute kind ids for the
     [C] FOREIGN MEMORY-class byval call marshalling below, resolved once at
     init time (see byval_align_kinds_init) rather than re-resolving by name
@@ -4254,6 +4256,112 @@ BEGIN
   LLVMBuildStore(builder, new_len_byte, len_ptr);
 END;
 
+FUNCTION LaunchI64(v: ADRMEM; tk: INTEGER): ADRMEM;
+BEGIN
+  IF (tk = TK_INTEGER64) OR (tk = TK_WORD64) THEN LaunchI64 := v
+  ELSE IF IsUnsignedWordTk(tk) THEN LaunchI64 := LLVMBuildZExt(builder, v, i64ty, MakeCStr(''))
+  ELSE LaunchI64 := LLVMBuildSExt(builder, v, i64ty, MakeCStr(''));
+END;
+
+FUNCTION EmitLaunchThunk(ridx: INTEGER32): ADRMEM;
+{ Emit the CPU-device entry adapter: void(i8** argv). Each argv slot points
+  to a typed argument cell, exactly as pas_dev_launch expects. }
+VAR
+  thunk_name: Str255;
+  thunk_ty, thunk, thunk_bb, saved_bb, saved_fn: ADRMEM;
+  argv, slot_addr, slot, typed, val: ADRMEM;
+  indices, call_args: ADRMEM;
+  i: INTEGER32;
+BEGIN
+  thunk_name := '__pas_klaunch_';
+  CONCAT(thunk_name, routines[ridx].name);
+  thunk_ty := LLVMFunctionType(voidty, MakeArgs1(LLVMPointerType(i8ptrty, 0)), 1, 0);
+  thunk := LLVMAddFunction(modl, MakeCStr(thunk_name), thunk_ty);
+  thunk_bb := LLVMAppendBasicBlockInContext(ctx, thunk, MakeCStr('entry'));
+  saved_bb := LLVMGetInsertBlock(builder);
+  saved_fn := cur_fn;
+  LLVMPositionBuilderAtEnd(builder, thunk_bb);
+  cur_fn := thunk;
+  argv := LLVMGetParam(thunk, 0);
+  call_args := AllocPtrArray(routines[ridx].nparams);
+  FOR i := 0 TO routines[ridx].nparams - 1 DO
+  BEGIN
+    indices := AllocPtrArray(1);
+    SetPtrArrayElem(indices, 0, LLVMConstInt(i32ty, i, 0));
+    slot_addr := LLVMBuildGEP2(builder, i8ptrty, argv, indices, 1, MakeCStr(''));
+    slot := LLVMBuildLoad2(builder, i8ptrty, slot_addr, MakeCStr(''));
+    typed := LLVMBuildBitCast(builder, slot,
+      LLVMPointerType(LLVMTypeForTk(routines[ridx].param_tk[i + 1]), 0), MakeCStr(''));
+    val := LLVMBuildLoad2(builder, LLVMTypeForTk(routines[ridx].param_tk[i + 1]), typed, MakeCStr(''));
+    SetPtrArrayElem(call_args, i, val);
+  END;
+  val := LLVMBuildCall2(builder, routines[ridx].fnty, routines[ridx].fn,
+    call_args, routines[ridx].nparams, MakeCStr(''));
+  LLVMBuildRetVoid(builder);
+  cur_fn := saved_fn;
+  LLVMPositionBuilderAtEnd(builder, saved_bb);
+  EmitLaunchThunk := thunk;
+END;
+
+PROCEDURE CodegenLaunch(args: ADRMEM);
+{ First host-launch slice: LAUNCH(kernel, grid, block, actuals...). It uses
+  the CPU shim's real void** ABI and a generated dispatch thunk. }
+VAR
+  kernel, actual: ADRMEM;
+  kernel_name: Str255;
+  ridx, n, expected, i: INTEGER32;
+  grid, block, val, cell, argv, argv_ptr, thunk: ADRMEM;
+  actual_tk: INTEGER;
+  indices, call_args: ADRMEM;
+BEGIN
+  n := ArrSize(args);
+  IF n < 3 THEN AbortWith('codegen: LAUNCH needs kernel, grid, and block');
+  kernel := ArrItem(args, 0);
+  IF NodeType(kernel) <> 'Identifier' THEN
+    AbortWith('codegen: LAUNCH kernel must be an identifier');
+  kernel_name := GetStr(kernel, 'name');
+  ridx := LookupRoutine(kernel_name);
+  IF ridx = 0 THEN AbortWith2('codegen: unknown LAUNCH kernel: ', kernel_name);
+  expected := routines[ridx].nparams;
+  IF n <> expected + 3 THEN
+    AbortWith('codegen: LAUNCH currently supports only 1-D grid/block geometry');
+  grid := CodegenExpr(ArrItem(args, 1));
+  grid := LaunchI64(grid, last_val_tk);
+  block := CodegenExpr(ArrItem(args, 2));
+  block := LaunchI64(block, last_val_tk);
+  argv := EntryAlloca(LLVMArrayType(i8ptrty, expected), 'launch_argv');
+  FOR i := 0 TO expected - 1 DO
+  BEGIN
+    actual := ArrItem(args, i + 3);
+    val := CodegenExpr(actual);
+    actual_tk := last_val_tk;
+    val := CoerceForAssign(val, actual_tk, routines[ridx].param_tk[i + 1], actual, kernel_name);
+    cell := EntryAlloca(LLVMTypeForTk(routines[ridx].param_tk[i + 1]), 'launch_arg');
+    LLVMBuildStore(builder, val, cell);
+    indices := AllocPtrArray(2);
+    SetPtrArrayElem(indices, 0, LLVMConstInt(i32ty, 0, 0));
+    SetPtrArrayElem(indices, 1, LLVMConstInt(i32ty, i, 0));
+    indices := LLVMBuildGEP2(builder, LLVMArrayType(i8ptrty, expected), argv, indices, 2, MakeCStr(''));
+    val := LLVMBuildBitCast(builder, cell, i8ptrty, MakeCStr(''));
+    LLVMBuildStore(builder, val, indices);
+  END;
+  indices := AllocPtrArray(2);
+  SetPtrArrayElem(indices, 0, LLVMConstInt(i32ty, 0, 0));
+  SetPtrArrayElem(indices, 1, LLVMConstInt(i32ty, 0, 0));
+  argv_ptr := LLVMBuildGEP2(builder, LLVMArrayType(i8ptrty, expected), argv, indices, 2, MakeCStr(''));
+  thunk := EmitLaunchThunk(ridx);
+  call_args := AllocPtrArray(8);
+  SetPtrArrayElem(call_args, 0, LLVMBuildBitCast(builder, thunk, i8ptrty, MakeCStr('')));
+  SetPtrArrayElem(call_args, 1, grid);
+  SetPtrArrayElem(call_args, 2, LLVMConstInt(i64ty, 1, 0));
+  SetPtrArrayElem(call_args, 3, LLVMConstInt(i64ty, 1, 0));
+  SetPtrArrayElem(call_args, 4, block);
+  SetPtrArrayElem(call_args, 5, LLVMConstInt(i64ty, 1, 0));
+  SetPtrArrayElem(call_args, 6, LLVMConstInt(i64ty, 1, 0));
+  SetPtrArrayElem(call_args, 7, argv_ptr);
+  val := LLVMBuildCall2(builder, launch_fnty, launch_fn, call_args, 8, MakeCStr(''));
+END;
+
 PROCEDURE CodegenDeviceSync(name: Str255);
 { DEVICE synchronization. CPU-device execution is serial, so SYNCTHREADS is
   a no-op there; NVPTX lowers it to the hardware block barrier. }
@@ -4281,7 +4389,9 @@ VAR
   raw, casted, call_args: ADRMEM;
 BEGIN
   name := GetStr(stmt, 'name');
-  IF is_device_compiland AND (name = 'SYNCTHREADS') THEN
+  IF name = 'LAUNCH' THEN
+    CodegenLaunch(GetObj(stmt, 'args'))
+  ELSE IF is_device_compiland AND (name = 'SYNCTHREADS') THEN
     CodegenDeviceSync(name)
   ELSE IF name = 'WRITELN' THEN
     CodegenWriteArgs(GetObj(stmt, 'args'), TRUE)
@@ -4971,6 +5081,20 @@ BEGIN
   SetPtrArrayElem(param_arr, 2, i64ty);
   memmove_fnty := LLVMFunctionType(i8ptrty, param_arr, 3, 0);
   memmove_fn := LLVMAddFunction(modl, MakeCStr('memmove'), memmove_fnty);
+
+  param_arr := AllocPtrArray(8);
+  SetPtrArrayElem(param_arr, 0, i8ptrty);
+  SetPtrArrayElem(param_arr, 1, i64ty);
+  SetPtrArrayElem(param_arr, 2, i64ty);
+  SetPtrArrayElem(param_arr, 3, i64ty);
+  SetPtrArrayElem(param_arr, 4, i64ty);
+  SetPtrArrayElem(param_arr, 5, i64ty);
+  SetPtrArrayElem(param_arr, 6, i64ty);
+  SetPtrArrayElem(param_arr, 7, LLVMPointerType(i8ptrty, 0));
+  { entry plus six geometry values plus argv: the CPU and CUDA shims share
+    this eight-parameter launch ABI. }
+  launch_fnty := LLVMFunctionType(voidty, param_arr, 8, 0);
+  launch_fn := LLVMAddFunction(modl, MakeCStr('pas_dev_launch'), launch_fnty);
 
   byval_kind_id := LLVMGetEnumAttributeKindForName(MakeCStr('byval'), 5);
   align_kind_id := LLVMGetEnumAttributeKindForName(MakeCStr('align'), 5);
