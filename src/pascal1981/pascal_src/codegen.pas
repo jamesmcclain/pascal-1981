@@ -2885,9 +2885,18 @@ BEGIN
   BEGIN
     addr := ComputeDesignatorAddress(target);
     target_tid := last_val_tk;
-    v := CodegenExpr(GetObj(stmt, 'expr'));
-    v := CoerceForAssign(v, last_val_tk, target_tid, GetObj(stmt, 'expr'), nm);
-    LLVMBuildStore(builder, v, addr);
+    IF (TypeKind(target_tid) = TK_LSTRING) AND (NodeType(GetObj(stmt, 'expr')) = 'StringLiteral') THEN
+      CodegenLStringLiteralAssign(addr, target_tid,
+        DecodeStringLiteral(GetStr(GetObj(stmt, 'expr'), 'value')))
+    ELSE IF (TypeKind(target_tid) = TK_STRING) AND (NodeType(GetObj(stmt, 'expr')) = 'StringLiteral') THEN
+      CodegenStringLiteralAssign(addr, target_tid,
+        DecodeStringLiteral(GetStr(GetObj(stmt, 'expr'), 'value')))
+    ELSE
+    BEGIN
+      v := CodegenExpr(GetObj(stmt, 'expr'));
+      v := CoerceForAssign(v, last_val_tk, target_tid, GetObj(stmt, 'expr'), nm);
+      LLVMBuildStore(builder, v, addr);
+    END;
   END;
 END;
 
@@ -3207,6 +3216,43 @@ BEGIN
     ELSE
     BEGIN
       AbortWith2('codegen: not a string-typed variable: ', GetStr(expr, 'name'));
+      chars_ptr := NIL;
+      len_val := NIL;
+    END;
+  END
+  ELSE IF NodeType(expr) = 'FuncCall' THEN
+  BEGIN
+    { An aggregate Str255-returning FUNCTION called with explicit args (e.g.
+      `NodeType(expr) = 'Identifier'`, pervasive throughout this file and
+      typechecker.pas) -- materialize the call's result into a fresh
+      temporary, same idiom as the bare-niladic-Identifier branch above. }
+    tid := routines[LookupRoutine(GetStr(expr, 'name'))].ret_tk;
+    addr := LLVMBuildAlloca(builder, LLVMTypeForTk(tid), MakeCStr(''));
+    LLVMBuildStore(builder, CodegenCallCommon(GetStr(expr, 'name'), GetObj(expr, 'args')), addr);
+    IF TypeKind(tid) = TK_LSTRING THEN
+    BEGIN
+      gep_idx := AllocPtrArray(2);
+      SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+      SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 0, 0));
+      len_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(tid), addr, gep_idx, 2, MakeCStr(''));
+      len_val := LLVMBuildLoad2(builder, i8ty, len_ptr, MakeCStr(''));
+      len_val := LLVMBuildZExt(builder, len_val, i32ty, MakeCStr(''));
+      gep_idx := AllocPtrArray(2);
+      SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+      SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 1, 0));
+      chars_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(tid), addr, gep_idx, 2, MakeCStr(''));
+    END
+    ELSE IF TypeKind(tid) = TK_STRING THEN
+    BEGIN
+      len_val := LLVMConstInt(i32ty, types[tid].hi, 0);
+      gep_idx := AllocPtrArray(2);
+      SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+      SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 0, 0));
+      chars_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(tid), addr, gep_idx, 2, MakeCStr(''));
+    END
+    ELSE
+    BEGIN
+      AbortWith2('codegen: not a string-returning function call: ', GetStr(expr, 'name'));
       chars_ptr := NIL;
       len_val := NIL;
     END;
