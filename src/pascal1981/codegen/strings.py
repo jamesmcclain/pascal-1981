@@ -11,17 +11,23 @@ from typing import List
 
 import llvmlite.ir as ir
 
-from ..ast_nodes import (Designator, Expression, Identifier, NilLiteral, StringLiteral, WriteArg)
+from ..ast_nodes import (Designator, Expression, FuncCall, Identifier, NilLiteral, StringLiteral, WriteArg)
+from ..type_system import FunctionType
+from .base import CodegenError
 
 
 class StringsMixin:
     """Mixin for strings functionality."""
 
-    def get_string_chars_and_len(self, expr: Expression) -> tuple[ir.Value, ir.Value]:
+    def get_string_chars_and_len(self, expr: Expression, precomputed_value: ir.Value = None) -> tuple[ir.Value, ir.Value]:
         """Returns (chars_ptr: ir.Value, length: ir.Value) for any string expression.
-        
+
         The chars_ptr points directly to the first character.
         The length is an i32 representing the dynamic or static length.
+
+        `precomputed_value` lets a caller that already evaluated `expr` (e.g. a
+        FuncCall, whose call has side effects) pass that result in instead of
+        having it evaluated a second time here.
         """
         if isinstance(expr, StringLiteral):
             val_str = expr.value
@@ -39,17 +45,69 @@ class StringsMixin:
             length = ir.Constant(ir.IntType(32), 0)
             return chars_ptr, length
 
-        # val is now a pointer to the inline aggregate [n+1 x i8] or [n x i8]
-        val = self.codegen_expr(expr)
-
-        # Determine string type details
         t = None
-        if isinstance(expr, (Identifier, Designator)):
+        if isinstance(expr, Identifier):
+            expr = Designator(name=expr.name, selectors=[])
+        if isinstance(expr, Designator):
             symbol = self.scope.lookup(expr.name)
+            is_bare_func_ref = False
             if symbol:
                 t = symbol.type_expr
+                if isinstance(t, FunctionType):
+                    t = t.return_type
+                is_bare_func_ref = isinstance(symbol.llvm_value, ir.Function)
+            if is_bare_func_ref:
+                # A bare niladic-call Designator/Identifier has side effects
+                # (the call), same as a FuncCall -- honor a caller-supplied
+                # precomputed_value instead of invoking the function again.
+                val_res = precomputed_value if precomputed_value is not None else self.codegen_expr(expr)
+                if isinstance(val_res.type, ir.ArrayType):
+                    val_ptr = self.builder.alloca(val_res.type)
+                    self.builder.store(val_res, val_ptr)
+                    val = val_ptr
+                else:
+                    val = val_res
+            else:
+                val, target_ast_type = self.resolve_designator_ptr_typed(expr)
+                if target_ast_type is not None:
+                    t = target_ast_type
+        elif isinstance(expr, FuncCall):
+            # FuncCall: look up the function symbol to determine its return type.
+            # Function symbols store their return type directly as type_expr
+            # (see decls.py's scope.define(decl.name, func, decl.return_type)),
+            # not wrapped in a FunctionType, so use it as-is.
+            symbol = self.scope.lookup(expr.name)
+            if symbol:
+                sym_type = symbol.type_expr
+                t = sym_type.return_type if isinstance(sym_type, FunctionType) else sym_type
+            if t is None:
+                # Not a user-declared string-returning function (e.g. an
+                # inline builtin like CHR, which has no scope entry at all).
+                # Callers such as builtin_assign's ASSIGN(F, CHR(0)) rely on
+                # this raising for a non-string argument so they can fall
+                # back to their own handling, so don't silently treat an
+                # unresolvable return type as some default string shape.
+                raise CodegenError(f"'{expr.name}' does not return a string type")
+            val_res = precomputed_value if precomputed_value is not None else self.codegen_expr(expr)
+            if isinstance(val_res.type, ir.ArrayType):
+                val_ptr = self.builder.alloca(val_res.type)
+                self.builder.store(val_res, val_ptr)
+                val = val_ptr
+            else:
+                val = val_res
+        else:
+            val = self.codegen_expr(expr)
+
+        if not isinstance(val.type, ir.PointerType):
+            val_ptr = self.builder.alloca(val.type)
+            self.builder.store(val, val_ptr)
+            val = val_ptr
 
         is_str, max_len, is_lstring = self.get_string_type_info(t)
+
+        target_arr_type = ir.ArrayType(ir.IntType(8), max_len + 1 if is_lstring else max_len)
+        if not isinstance(val.type.pointee, ir.ArrayType):
+            val = self.builder.bitcast(val, target_arr_type.as_pointer())
 
         zero = ir.Constant(ir.IntType(32), 0)
         one = ir.Constant(ir.IntType(32), 1)
@@ -352,3 +410,38 @@ class StringsMixin:
             ir.Constant(ir.IntType(32), 0),
             ir.Constant(ir.IntType(32), 0)
         ])
+
+    def codegen_string_binop(self, op: str, left_expr: Expression, right_expr: Expression) -> ir.Value:
+        """Codegen string comparison (EQ, NEQ, LT, LE, GT, GE)."""
+        l_chars, l_len = self.get_string_chars_and_len(left_expr)
+        r_chars, r_len = self.get_string_chars_and_len(right_expr)
+
+        # Call memcmp(l_chars, r_chars, min_len)
+        min_len = self.builder.select(self.builder.icmp_signed('<', l_len, r_len), l_len, r_len)
+        min_len_64 = self.builder.zext(min_len, ir.IntType(64))
+        cmp_res = self.builder.call(self.memcmp_func(), [l_chars, r_chars, min_len_64])
+
+        cmp_eq_0 = self.builder.icmp_signed('==', cmp_res, ir.Constant(ir.IntType(32), 0))
+        len_eq = self.builder.icmp_signed('==', l_len, r_len)
+        len_lt = self.builder.icmp_signed('<', l_len, r_len)
+        len_gt = self.builder.icmp_signed('>', l_len, r_len)
+
+        cmp_lt_0 = self.builder.icmp_signed('<', cmp_res, ir.Constant(ir.IntType(32), 0))
+        cmp_gt_0 = self.builder.icmp_signed('>', cmp_res, ir.Constant(ir.IntType(32), 0))
+
+        if op == 'EQ':
+            return self.builder.and_(cmp_eq_0, len_eq)
+        elif op == 'NEQ':
+            return self.builder.not_(self.builder.and_(cmp_eq_0, len_eq))
+        elif op == 'LT':
+            return self.builder.or_(cmp_lt_0, self.builder.and_(cmp_eq_0, len_lt))
+        elif op == 'LE':
+            len_le = self.builder.icmp_signed('<=', l_len, r_len)
+            return self.builder.or_(cmp_lt_0, self.builder.and_(cmp_eq_0, len_le))
+        elif op == 'GT':
+            return self.builder.or_(cmp_gt_0, self.builder.and_(cmp_eq_0, len_gt))
+        elif op == 'GE':
+            len_ge = self.builder.icmp_signed('>=', l_len, r_len)
+            return self.builder.or_(cmp_gt_0, self.builder.and_(cmp_eq_0, len_ge))
+        else:
+            raise CodegenError(f"Unsupported string comparison operator: {op}")

@@ -279,6 +279,19 @@ class ExprInferMixin:
                     self.error(f"Operator '{expr.op}' cannot be applied to operands of type {left_type} and {right_type}", expr)
                 else:
                     self._check_word_int_mix(left_type, right_type, expr.left, expr.right, expr.op, expr)
+                    # Unlike IntLiteral/RealLiteral/UnaryOp above, a BinOp's
+                    # result type was never recorded on the node itself. That
+                    # left codegen's WRITE formatting (io_write_read.py's
+                    # _pas_type) with no reliable way to recover a computed
+                    # expression's Pascal type -- its own fallback re-invokes
+                    # infer_expression_type from the codegen object, whose
+                    # self.symbol_table is not the typechecker's populated
+                    # table, so a bare `a + b` of two INTEGER8 operands
+                    # silently lost its type tag and printed as a raw CHAR
+                    # glyph instead of a signed decimal. Recording it here,
+                    # the same way every other resolved_type-bearing node
+                    # does, lets WRITE recover it directly.
+                    setattr(expr, 'resolved_type', result)
                 return result
             return None
         elif isinstance(expr, UnaryOp):

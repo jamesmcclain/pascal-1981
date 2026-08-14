@@ -509,7 +509,7 @@ class DeclsMixin:
                 alloca = self.entry_alloca(llvm_type, name=name)
                 self.scope.define(name, alloca, decl.type_expr)
                 if initck_const is not None:
-                    self.builder.store(initck_const, alloca)
+                    self.emit_store(initck_const, alloca)
                 if isinstance(decl.type_expr, FileType) or (isinstance(decl.type_expr, NamedType) and decl.type_expr.name.upper() == 'TEXT'):
                     self._init_file_storage(alloca, decl.type_expr)
 
@@ -932,6 +932,7 @@ class DeclsMixin:
         flat_param_types = []
         flat_modes = []
         flat_sign_attrs = []
+        flat_ast_types = []
         for param in decl.params:
             pt = self.param_llvm_type(param)
             sa = self._c_abi_sign_attr(param.type_expr)
@@ -939,6 +940,7 @@ class DeclsMixin:
                 flat_param_types.append(pt)
                 flat_modes.append(param.mode)
                 flat_sign_attrs.append(sa)
+                flat_ast_types.append(param.type_expr)
 
         decl_attrs = {a.name.upper() for a in getattr(decl, 'attributes', [])}
         is_variadic = 'VARARGS' in decl_attrs
@@ -970,6 +972,7 @@ class DeclsMixin:
             func.return_value.attributes.add(plan.ret_sign_attr)
 
         self.proc_param_modes[decl.name.lower()] = flat_modes
+        self.proc_param_types[decl.name.lower()] = flat_ast_types
         self.c_abi_plans[decl.name.lower()] = plan
         self.scope.define(decl.name, func, getattr(decl, 'return_type', None))
 
@@ -1000,11 +1003,13 @@ class DeclsMixin:
         # Flatten parameter types: reference modes are passed as LLVM pointers.
         param_types = []
         flat_modes = []
+        flat_ast_types = []
         for param in effective_decl.params:
             param_type = self.param_llvm_type(param)
             for _ in param.names:
                 param_types.append(param_type)
                 flat_modes.append(param.mode)
+                flat_ast_types.append(param.type_expr)
         if is_function:
             return_type = self.llvm_type(decl.return_type)
             ret_ll = return_type
@@ -1020,11 +1025,11 @@ class DeclsMixin:
         attrs = {attr.name.upper() for attr in getattr(decl, 'attributes', [])}
         existing = self.scope.lookup(decl.name) if not is_function else None
         if existing and isinstance(existing.llvm_value, ir.Function):
-            # Only procedures are eagerly pre-registered as extern declarations,
-            # so only they can encounter (and must reuse) an existing ir.Function.
             func = existing.llvm_value
             if func.function_type != func_type:
                 raise CodegenError(f"Procedure '{decl.name}' already declared with a different signature")
+        elif decl.name in self.module.globals and isinstance(self.module.globals[decl.name], ir.Function):
+            func = self.module.globals[decl.name]
         else:
             # Create function
             func = ir.Function(self.module, func_type, name=decl.name)
@@ -1038,6 +1043,7 @@ class DeclsMixin:
             func.linkage = 'external'
         self._apply_kernel_entry(decl, func)
         self.proc_param_modes[decl.name.lower()] = flat_modes
+        self.proc_param_types[decl.name.lower()] = flat_ast_types
         self.scope.define(decl.name, func, decl.return_type if is_function else None)
 
         # If no body, it's extern/forward
@@ -1048,10 +1054,12 @@ class DeclsMixin:
         entry_block = func.append_basic_block(name='entry')
         prev_builder = self.builder
         prev_func = self.current_function
+        prev_pascal_name = self.current_function_pascal_name
         prev_scope = self.scope
 
         self.builder = IRBuilder(entry_block)
         self.current_function = func
+        self.current_function_pascal_name = decl.name if is_function else None
         self.scope = Scope(parent=prev_scope)
 
         # Bind parameters to the scope
@@ -1060,13 +1068,26 @@ class DeclsMixin:
             for name in param.names:
                 arg = next(args_iter)
                 arg.name = name
-                self.scope.define(name, arg, param.type_expr, is_parameter=param.mode not in {'VAR', 'VARS', 'CONST', 'CONSTS'})
+                if isinstance(arg.type, (ir.ArrayType, ir.LiteralStructType)):
+                    param_alloca = self.entry_alloca(arg.type, name=name + '_alloca')
+                    self.builder.store(arg, param_alloca)
+                    self.scope.define(name, param_alloca, param.type_expr, is_parameter=param.mode not in {'VAR', 'VARS', 'CONST', 'CONSTS'})
+                else:
+                    self.scope.define(name, arg, param.type_expr, is_parameter=param.mode not in {'VAR', 'VARS', 'CONST', 'CONSTS'})
 
         if is_function:
             # Allocate space for return value
             return_alloca = self.entry_alloca(return_type, name='return_value')
             self.scope.define(decl.name, return_alloca, decl.return_type)
-            self.builder.store(ir.Constant(return_type, 0.0) if isinstance(return_type, (ir.FloatType, ir.DoubleType)) else ir.Constant(return_type, 0), return_alloca)
+            if isinstance(return_type, ir.PointerType):
+                init_val = ir.Constant(return_type, None)
+            elif isinstance(return_type, (ir.FloatType, ir.DoubleType)):
+                init_val = ir.Constant(return_type, 0.0)
+            elif isinstance(return_type, (ir.ArrayType, ir.LiteralStructType)):
+                init_val = ir.Constant(return_type, ir.Undefined)
+            else:
+                init_val = ir.Constant(return_type, 0)
+            self.builder.store(init_val, return_alloca)
 
         # Codegen body
         for inner_decl in decl.body.decls:
@@ -1089,6 +1110,7 @@ class DeclsMixin:
         # Restore context
         self.builder = prev_builder
         self.current_function = prev_func
+        self.current_function_pascal_name = prev_pascal_name
         self.scope = prev_scope
 
     def codegen_func_decl(self, decl: FuncDecl) -> None:

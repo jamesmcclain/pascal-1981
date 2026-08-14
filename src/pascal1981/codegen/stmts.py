@@ -110,6 +110,25 @@ class StmtsMixin:
         else:
             raise CodegenError(f'Unknown statement: {type(stmt).__name__}')
 
+    def _is_call_expr(self, expr: Expression) -> bool:
+        """True if evaluating `expr` invokes a routine (has side effects),
+        matching the same niladic-call recognition codegen_expr's
+        Identifier/Designator branches use: an explicit FuncCall, a bare
+        Identifier/Designator naming the enclosing function itself
+        (self-recursion), or a bare Identifier/Designator naming a
+        zero-argument function symbol (vintage Pascal permits omitting the
+        empty argument list)."""
+        if isinstance(expr, FuncCall):
+            return True
+        if isinstance(expr, (Identifier, Designator)):
+            if isinstance(expr, Designator) and expr.selectors:
+                return False
+            if (self.current_function_pascal_name and expr.name.lower() == self.current_function_pascal_name.lower() and not self.proc_param_types.get(expr.name.lower())):
+                return True
+            symbol = self.scope.lookup(expr.name)
+            return bool(symbol and isinstance(symbol.llvm_value, ir.Function) and len(symbol.llvm_value.function_type.args) == 0)
+        return False
+
     def codegen_assign_stmt(self, stmt: AssignStmt) -> None:
         """Codegen for assignment statement."""
         target_name = stmt.target.name
@@ -123,16 +142,35 @@ class StmtsMixin:
         if symbol.is_parameter and not stmt.target.selectors:
             raise CodegenError(f'Cannot assign to parameter: {target_name}')
 
-        # Check if the target is a string type
-        is_str, max_len, is_dest_lstring = self.get_string_type_info(symbol.type_expr)
+        # Resolve the pointer (handles array indexing, record fields, etc.) and target AST type
+        ptr, target_ast_type = self.resolve_designator_ptr_typed(stmt.target)
 
-        # Resolve the pointer (handles array indexing, etc.)
-        ptr = self.resolve_designator_ptr(stmt.target)
-        value = self.codegen_expr(stmt.expr)
+        # Check if the target is a whole string type assignment
+        is_str, max_len, is_dest_lstring = self.get_string_type_info(target_ast_type if target_ast_type is not None else symbol.type_expr)
+        if stmt.target.selectors and not (len(stmt.target.selectors) == 1 and stmt.target.selectors[0].kind == 'DEREF' and is_str):
+            is_str = False
+
+        # For whole-string assignments the RHS is independently re-evaluated
+        # below by get_string_chars_and_len. That's harmless for a plain
+        # variable designator or literal RHS, but a call has side effects,
+        # so it must not be evaluated twice: precompute it once here and
+        # hand the value through instead. A niladic function call written
+        # without parens (vintage Pascal permits omitting the empty
+        # argument list) parses as a bare Identifier/Designator rather than
+        # a FuncCall, so it needs the same treatment or get_string_chars_and_len
+        # re-invokes the function a second time (e.g. re-running any loop
+        # inside it against state the first call already advanced).
+        precomputed_str_value = None
+        if is_str and self._is_call_expr(stmt.expr):
+            precomputed_str_value = self.codegen_expr(stmt.expr)
+            value = precomputed_str_value
+        else:
+            value = self.codegen_expr(stmt.expr)
 
         # Handle simple type conversions
-        if not is_str and hasattr(ptr.type, 'pointee'):
-            value = self._coerce_assign_value(value, ptr.type.pointee, stmt.expr)
+        if not is_str and target_ast_type is not None:
+            target_llvm_type = self.llvm_type(target_ast_type)
+            value = self._coerce_assign_value(value, target_llvm_type, stmt.expr)
 
         rangeck_enabled = self.effective_rangeck(stmt)
 
@@ -151,7 +189,7 @@ class StmtsMixin:
                     size_64 = self.builder.zext(ir.Constant(ir.IntType(32), max_len), ir.IntType(64))
                     self.builder.call(self.memset_func(), [chars_ptr, ir.Constant(ir.IntType(32), 0x20), size_64])
             else:
-                src_chars, src_len = self.get_string_chars_and_len(stmt.expr)
+                src_chars, src_len = self.get_string_chars_and_len(stmt.expr, precomputed_value=precomputed_str_value)
 
                 end_block = self._guard_string_capacity(src_len, max_len, 'str_assign', enabled=rangeck_enabled)
                 zero = ir.Constant(ir.IntType(32), 0)
@@ -188,13 +226,16 @@ class StmtsMixin:
                     self.builder.position_at_end(end_block)
         else:
             pointee = getattr(ptr.type, 'pointee', None)
-            if pointee is not None and value.type != pointee \
-                    and isinstance(value.type, ir.BaseStructType):
-                # Whole-record copy where the source and destination structs are
-                # the same layout but not the same LLVM type identity -- e.g. two
-                # distinct named records that are structurally equivalent, now
-                # lowered as separate identified structs. Copy by layout via a
-                # destination-pointer bitcast rather than by nominal type.
+            if pointee is not None and isinstance(value.type, ir.PointerType) and value.type.pointee == pointee:
+                # `value` is a pointer to an aggregate (record/array) rvalue:
+                # codegen_expr returns aggregate designators/parameters by
+                # pointer rather than loading them, for the inline-aggregate
+                # callers (memcpy-style string/array helpers) that want the
+                # address. A plain assignment needs the actual value copied
+                # into the destination, not this source pointer stored
+                # in place of it -- load through it here instead.
+                value = self.builder.load(value)
+            elif pointee is not None and value.type != pointee:
                 ptr = self.builder.bitcast(ptr, value.type.as_pointer())
             self.emit_store(value, ptr)
 
@@ -719,12 +760,14 @@ class StmtsMixin:
                 return
             param_types = fn.function_type.args
             param_modes = self.proc_param_modes.get(stmt.name.lower(), [])
+            param_ast_types = self.proc_param_types.get(stmt.name.lower(), [])
             args = []
             for i, arg in enumerate(stmt.args):
                 mode = param_modes[i] if i < len(param_modes) else None
                 v = self.codegen_actual_arg(arg, mode)
                 if i < len(param_types):
-                    v = self.coerce_arg(v, param_types[i], src_expr=arg)
+                    target_ast_type = param_ast_types[i] if i < len(param_ast_types) else None
+                    v = self.coerce_arg(v, param_types[i], src_expr=arg, target_ast_type=target_ast_type)
                 args.append(v)
             self.builder.call(fn, args)
 
@@ -827,11 +870,10 @@ class StmtsMixin:
             loop_var = symbol.llvm_value
 
         # Initialize loop variable
+        loop_var_ty = self.llvm_type(symbol.type_expr) if symbol and symbol.type_expr else ir.IntType(16)
         start_val = self.codegen_expr(stmt.start)
-        if isinstance(start_val.type, ir.IntType) and start_val.type != loop_var.type.pointee:
-            start_val = self.builder.trunc(start_val, loop_var.type.pointee) if start_val.type.width > loop_var.type.pointee.width else self._extend_int_for_pascal_expr(
-                start_val, loop_var.type.pointee, stmt.start)
-        self.builder.store(start_val, loop_var)
+        start_val = self._coerce_assign_value(start_val, loop_var_ty, stmt.start)
+        self.emit_store(start_val, loop_var)
 
         # Create loop blocks
         loop_block = self.current_function.append_basic_block(name='for_loop')
@@ -859,7 +901,7 @@ class StmtsMixin:
         current_val = self.builder.load(loop_var)
         one = ir.Constant(current_val.type, 1)
         next_val = self.builder.add(current_val, one) if stmt.direction == 'TO' else self.builder.sub(current_val, one)
-        self.builder.store(next_val, loop_var)
+        self.emit_store(next_val, loop_var)
         back_edge = self.builder.branch(loop_block)
         if getattr(stmt, 'unroll', None):
             self._attach_unroll_metadata(back_edge, stmt.unroll)
@@ -956,10 +998,20 @@ class StmtsMixin:
         self.builder.position_at_end(end_block)
 
     def codegen_return_stmt(self, stmt: ReturnStmt) -> None:
-        """Codegen for RETURN statement."""
+        """Codegen for RETURN statement.
+
+        RETURN exits the current routine immediately with whatever value is
+        currently held in the function's return-value alloca (the same slot
+        `FuncName := ...` assigns and which the implicit end-of-body return
+        loads) -- it does not reset the result to a fixed constant.
+        """
         ret_t = self.current_function.function_type.return_type
         if isinstance(ret_t, ir.VoidType):
             self.builder.ret_void()
+        elif self.current_function_pascal_name is not None:
+            symbol = self.scope.lookup(self.current_function_pascal_name)
+            result = self.builder.load(symbol.llvm_value)
+            self.builder.ret(result)
         else:
             self.builder.ret(ir.Constant(ir.IntType(32), 0))
 

@@ -152,6 +152,12 @@ class CodegenBase:
         # infinite recursion: the handle is cached before its body is set.
         self._identified_records: Dict[str, ir.Type] = {}
         self.current_function: Optional[ir.Function] = None
+        # Pascal-source name of the routine self.current_function was lowered
+        # from, or None inside main/unit-init bodies that have no Pascal name.
+        # Lets a bare occurrence of this name in an expression be recognized
+        # as self-recursion (manual: referencing a function's own identifier
+        # in an expression invokes it recursively).
+        self.current_function_pascal_name: Optional[str] = None
         self.current_return_block: Optional[ir.BasicBlock] = None
         self.features: Dict[str, bool] = features if features is not None else {}
         # Compile-time constants keyed UPPER.  Values are int for INTEGER/BOOL/CHAR
@@ -206,6 +212,12 @@ class CodegenBase:
                 self.type_aliases[_alias] = NamedType(_base, None)
         self.current_interface_decls: Dict[str, Declaration] = {}
         self.proc_param_modes: Dict[str, List[Optional[str]]] = {}
+        # Flattened Pascal param type_exprs per routine, parallel to
+        # proc_param_modes. Lets a call site recover the *declared* Pascal
+        # type of each argument (e.g. to tell LSTRING from STRING from a
+        # plain packed char array) when the LLVM param type alone -- a bare
+        # [N x i8] -- is ambiguous between them.
+        self.proc_param_types: Dict[str, List[Optional[Type]]] = {}
         # Per-routine C-ABI call plan for foreign [C] routines (Phase 2). Keyed
         # lower-case name -> CCallPlan; present only for [C] EXTERN routines, and
         # consulted at the call sites to marshal aggregates per the host C ABI.
@@ -528,6 +540,13 @@ class CodegenBase:
             self._fcb_ty = ir.LiteralStructType([i32, i32, i32, i32, ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer(), i32, ir.IntType(8), i32])
         return self._fcb_ty
 
+    def memcmp_func(self) -> ir.Function:
+        name = 'memcmp'
+        if name in self.module.globals:
+            return self.module.globals[name]
+        fn_ty = ir.FunctionType(ir.IntType(32), [ir.IntType(8).as_pointer(), ir.IntType(8).as_pointer(), ir.IntType(64)])
+        return ir.Function(self.module, fn_ty, name=name)
+
     def _scalar_size(self, name: str) -> int:
         """Size in bytes of a scalar/built-in type, by name."""
         return _SCALAR_SIZES.get(name.upper(), 4)
@@ -552,6 +571,11 @@ class CodegenBase:
 
     def emit_store(self, value: ir.Value, ptr: ir.Value) -> ir.StoreInstr:
         """Store to ``ptr``, preserving known device-address-space alignment."""
+        if hasattr(ptr.type, 'pointee') and hasattr(ptr.type.pointee, 'width') and hasattr(value.type, 'width') and value.type != ptr.type.pointee:
+            if value.type.width > ptr.type.pointee.width:
+                value = self.builder.trunc(value, ptr.type.pointee)
+            elif value.type.width < ptr.type.pointee.width:
+                value = self.builder.zext(value, ptr.type.pointee)
         return self.builder.store(value, ptr, align=self.memory_alignment(ptr))
 
     def entry_alloca(self, llvm_type: ir.Type, name: Optional[str] = None) -> ir.AllocaInstr:

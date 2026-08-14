@@ -602,10 +602,13 @@ def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optiona
         if op in COMPARE:
             return BOOLEAN_TYPE
 
-    # INTEGER op REAL (mixed arithmetic widens to REAL).  INTEGER8 joins the
-    # signed side of this rule, mirroring its INTEGER8 -> REAL assignability.
-    if (isinstance(left_type, (IntegerType, Integer8Type)) and isinstance(right_type, RealType)) or \
-       (isinstance(left_type, RealType) and isinstance(right_type, (IntegerType, Integer8Type))):
+    # INTEGER op REAL (mixed arithmetic widens to REAL).  INTEGER8 and
+    # INTEGER32 join the signed side of this rule, mirroring their INTEGER8/
+    # INTEGER32 -> REAL assignability (can_assign above). INTEGER64 and the
+    # WORD family are deliberately excluded: INTEGER64 -> REAL is lossy above
+    # 2**53 and stays explicit-only, and WORD has no implicit REAL widening.
+    if (isinstance(left_type, (IntegerType, Integer8Type, Integer32Type)) and isinstance(right_type, RealType)) or \
+       (isinstance(left_type, RealType) and isinstance(right_type, (IntegerType, Integer8Type, Integer32Type))):
         if op in ('PLUS', 'MINUS', 'MUL', 'SLASH'):
             return REAL_TYPE
         if op in COMPARE:
@@ -623,6 +626,11 @@ def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optiona
        (isinstance(left_type, IntegerType) and isinstance(right_type, WordType)):
         if op in ARITH or op in BITWISE:
             return INTEGER_TYPE
+        if op in COMPARE:
+            return BOOLEAN_TYPE
+
+    # String / LString comparison
+    if isinstance(left_type, (StringType, LStringType)) and isinstance(right_type, (StringType, LStringType)):
         if op in COMPARE:
             return BOOLEAN_TYPE
 
@@ -648,6 +656,15 @@ def binary_op_result_type(left_type: Type, op: str, right_type: Type) -> Optiona
     if op == 'IN' and isinstance(right_type, SetType):
         if can_assign(left_type, right_type.element_type) or can_assign(right_type.element_type, left_type):
             return BOOLEAN_TYPE
+
+    # Pointer arithmetic (pointer + int, int + pointer, pointer - int)
+    int_types = (IntegerType, Integer8Type, Integer32Type, Integer64Type, WordType, Word8Type, Word32Type, Word64Type)
+    if isinstance(left_type, PointerType) and isinstance(right_type, int_types):
+        if op in ('PLUS', 'MINUS'):
+            return left_type
+    if isinstance(right_type, PointerType) and isinstance(left_type, int_types):
+        if op == 'PLUS':
+            return right_type
 
     # Pointer identity: two pointers (including NIL, which carries a pointer
     # type) may be compared for equality. PointerType.equivalent_to already

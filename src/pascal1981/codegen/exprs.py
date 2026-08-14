@@ -60,6 +60,7 @@ class ExprsMixin:
             str_global = ir.GlobalVariable(self.module, str_const.type, name=self.unique_name('str'))
             str_global.initializer = str_const
             str_global.global_constant = True
+            str_global.linkage = 'internal'
 
             # Return pointer to the first character of the string constant
             zero = ir.Constant(ir.IntType(32), 0)
@@ -169,6 +170,19 @@ class ExprsMixin:
                 self.builder.call(self.runtime_extern('pas_file_attach_std'), [fcb_ptr, out_fcb])
                 fn = self.runtime_extern('pas_file_eof' if key == 'EOF' else 'pas_file_eoln')
                 return self.builder.icmp_unsigned('!=', self.builder.call(fn, [fcb_ptr]), ir.Constant(ir.IntType(32), 0))
+            # A bare occurrence of the enclosing function's own name in an
+            # expression invokes it recursively (manual: the function
+            # identifier read in an expression, other than as a call
+            # argument, is a recursive self-call, not the current
+            # return value -- that requires RESULT(name), which this
+            # dialect does not implement). The routine's local scope
+            # shadows its own name with the return-value alloca (so
+            # RETURN-by-assignment `Foo := ...` works), which would
+            # otherwise make the plain lookup below resolve to that alloca
+            # instead of the function.
+            if (self.current_function_pascal_name and expr.name.lower() == self.current_function_pascal_name.lower() and not self.proc_param_types.get(expr.name.lower())):
+                return self.codegen_func_call(FuncCall(expr.name, []))
+
             symbol = self.scope.lookup(expr.name)
             if not symbol:
                 raise CodegenError(f'Undefined variable: {expr.name}')
@@ -200,9 +214,29 @@ class ExprsMixin:
                 if isinstance(self.resolve_type_alias(alias), SetType):
                     return self.codegen_set_constructor(SetConstructor([sel.index_or_field for sel in expr.selectors], expr.name))
 
+            # A bare occurrence of the enclosing function's own name in an
+            # expression invokes it recursively (manual: the function
+            # identifier read in an expression, other than as a call
+            # argument, is a recursive self-call, not the current
+            # return value -- that requires RESULT(name), which this
+            # dialect does not implement).
+            if (not expr.selectors and self.current_function_pascal_name and expr.name.lower() == self.current_function_pascal_name.lower()
+                    and not self.proc_param_types.get(expr.name.lower())):
+                return self.codegen_func_call(FuncCall(expr.name, []))
+
             symbol = self.scope.lookup(expr.name)
             if not symbol:
                 raise CodegenError(f'Undefined variable: {expr.name}')
+            # Vintage Pascal permits a parameterless function to be used in an
+            # expression without an empty actual-parameter list (mirrors the
+            # Identifier branch above -- callers such as
+            # StringsMixin.get_string_chars_and_len normalize a bare
+            # Identifier to a selector-less Designator before reaching here,
+            # so this branch needs the same niladic-function special case or
+            # it falls through to resolve_designator_ptr/emit_load and loads
+            # the function's own address instead of calling it).
+            if not expr.selectors and isinstance(symbol.llvm_value, ir.Function) and len(symbol.llvm_value.function_type.args) == 0:
+                return self.builder.call(symbol.llvm_value, [])
             # Parameters are passed by value; return the value directly when
             # there are no selectors. When selectors ARE present (e.g. p^[i]),
             # fall through to resolve_designator_ptr so the DEREF/INDEX chain
@@ -433,6 +467,27 @@ class ExprsMixin:
         if expr.op in {'AND_THEN', 'OR_ELSE'}:
             return self.codegen_short_circuit_binop(expr)
 
+        def _is_str_expr(e):
+            if isinstance(e, StringLiteral):
+                return True
+            if isinstance(e, Designator) and e.selectors:
+                # A selector (index/field/deref) narrows the designator's
+                # type away from its base symbol's type -- e.g. `ck[i]` on a
+                # Str255 `ck` is a single CHAR, not a string -- so it must
+                # never be treated as a whole-string comparison operand.
+                return False
+            if isinstance(e, (Identifier, Designator)):
+                sym = self.scope.lookup(e.name)
+                if sym and sym.type_expr:
+                    t = sym.type_expr
+                    if hasattr(t, 'return_type'):
+                        t = t.return_type
+                    return self.get_string_type_info(t)[0]
+            return False
+
+        if (_is_str_expr(expr.left) or _is_str_expr(expr.right)) and expr.op in {'EQ', 'NEQ', 'LT', 'LE', 'GT', 'GE'}:
+            return self.codegen_string_binop(expr.op, expr.left, expr.right)
+
         left = self.codegen_expr(expr.left)
         right = self.codegen_expr(expr.right)
 
@@ -478,6 +533,16 @@ class ExprsMixin:
             right = _to_common(right)
 
         if expr.op == 'PLUS':
+            if isinstance(left.type, ir.PointerType) and isinstance(right.type, ir.IntType):
+                idx = right
+                if idx.type.width < 32:
+                    idx = self.builder.sext(idx, ir.IntType(32))
+                return self.builder.gep(left, [idx])
+            if isinstance(right.type, ir.PointerType) and isinstance(left.type, ir.IntType):
+                idx = left
+                if idx.type.width < 32:
+                    idx = self.builder.sext(idx, ir.IntType(32))
+                return self.builder.gep(right, [idx])
             return self._fp_binop('fadd', left, right) if is_real else self._mathck_arith('add', left, right, signed=not self._expr_is_unsigned_word(expr))
         elif expr.op == 'MINUS':
             return self._fp_binop('fsub', left, right) if is_real else self._mathck_arith('sub', left, right, signed=not self._expr_is_unsigned_word(expr))
@@ -602,22 +667,31 @@ class ExprsMixin:
             nbytes = self._to_i64(self.codegen_expr(expr.args[0]))
             return self.builder.call(self.runtime_extern('pas_dev_alloc'), [nbytes])
 
-        symbol = self.scope.lookup(lookup_name)
+        # A call to the enclosing function's own name is self-recursion. The
+        # routine's local scope shadows that name with the return-value
+        # alloca (so RETURN-by-assignment `Foo := ...` works), which means a
+        # plain scope lookup here would resolve to that alloca instead of the
+        # function -- go straight to the ir.Function this body is being
+        # lowered into instead.
+        is_self_recursive_call = (self.current_function_pascal_name is not None and lookup_name == self.current_function_pascal_name.upper())
+        symbol = None if is_self_recursive_call else self.scope.lookup(lookup_name)
 
-        if symbol:
-            fn = symbol.llvm_value
+        if symbol or is_self_recursive_call:
+            fn = self.current_function if is_self_recursive_call else symbol.llvm_value
             c_plan = self.c_abi_plans.get(expr.name.lower())
             if c_plan is not None:
                 modes = self.proc_param_modes.get(expr.name.lower(), [])
                 return self.codegen_c_abi_call(fn, c_plan, expr.args, modes)
             param_types = fn.function_type.args
             param_modes = self.proc_param_modes.get(expr.name.lower(), [])
+            param_ast_types = self.proc_param_types.get(expr.name.lower(), [])
             args = []
             for i, arg in enumerate(expr.args):
                 mode = param_modes[i] if i < len(param_modes) else None
                 v = self.codegen_actual_arg(arg, mode)
                 if i < len(param_types):
-                    v = self.coerce_arg(v, param_types[i], src_expr=arg)
+                    target_ast_type = param_ast_types[i] if i < len(param_ast_types) else None
+                    v = self.coerce_arg(v, param_types[i], src_expr=arg, target_ast_type=target_ast_type)
                 args.append(v)
             return self.builder.call(fn, args)
 

@@ -5,8 +5,8 @@ Mixin for PascalTypeChecker, split out of type_checker.py as pure code
 movement: methods are unchanged and still reach each other through self.
 """
 
-from ..ast_nodes import (AssignStmt, CaseStmt, Designator, ForStmt, GotoStmt, Identifier, IfStmt, LabelStmt, ProcCallStmt, RangeExpr, RepeatStmt, ReturnStmt, Statement, WhileStmt,
-                         WithStmt, WriteArg)
+from ..ast_nodes import (AssignStmt, CaseStmt, CompoundStmt, Designator, ForStmt, GotoStmt, Identifier, IfStmt, LabelStmt, ProcCallStmt, RangeExpr, RepeatStmt, ReturnStmt,
+                         Statement, WhileStmt, WithStmt, WriteArg)
 from ..builtins_registry import DEVICE_SYNC_BUILTIN_PROCEDURES
 from ..symbol_table import Symbol
 from ..type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, WORD_TYPE, EnumType, FileType, ProcedureType, RecordType, can_assign)
@@ -16,7 +16,10 @@ class StmtsMixin:
 
     def check_statement(self, stmt: Statement) -> None:
         """Type check a statement."""
-        if isinstance(stmt, IfStmt):
+        if isinstance(stmt, CompoundStmt):
+            for s in stmt.stmts:
+                self.check_statement(s)
+        elif isinstance(stmt, IfStmt):
             self.check_if_stmt(stmt)
         elif isinstance(stmt, ForStmt):
             self.check_for_stmt(stmt)
@@ -223,9 +226,11 @@ class StmtsMixin:
 
     def check_return_stmt(self, stmt: ReturnStmt) -> None:
         """Type check a RETURN statement."""
-        # RETURN is only valid inside a function
-        if not self.current_function:
-            self.error("RETURN statement outside of function", stmt)
+        # RETURN is valid inside either a function or a procedure (codegen
+        # lowers it to a void ret when there's no current function -- see
+        # codegen_return_stmt in codegen/stmts.py).
+        if not self.current_function and not self.current_procedure:
+            self.error("RETURN statement outside of function or procedure", stmt)
             return
 
         # If function has return type, RETURN value must match
@@ -376,6 +381,21 @@ class StmtsMixin:
         if not isinstance(sym.type, ProcedureType):
             self.error(f"'{stmt.name}' is not a procedure", stmt)
             return
+
+        # Check argument count up front, even for a zero-arg call: a call
+        # with no arguments at all (e.g. a bare `EXIT;`-style call to a
+        # foreign [C] procedure declared with parameters) previously skipped
+        # this whole block because it's gated on `if stmt.args:`, which is
+        # falsy for an empty/absent arg list -- letting an arity mismatch
+        # through to codegen, where the C-ABI call builder indexes past the
+        # end of the empty arg_exprs list and crashes instead of reporting a
+        # clean type error.
+        if not stmt.args and not is_builtin:
+            expected_args = len(sym.type.params)
+            _is_variadic_proc = getattr(sym.type, 'is_variadic', False)
+            if expected_args > 0 and not _is_variadic_proc:
+                self.error(f"Procedure '{stmt.name}' expects {expected_args} arguments, got 0", stmt)
+                return
 
         # Check argument types (including built-in procedures)
         if stmt.args:

@@ -14,7 +14,7 @@ from typing import List, Optional
 import llvmlite.ir as ir
 
 from ..ast_nodes import (AdrExpr, AdsExpr, ArrayType, BuiltinType, Designator, EnumType, FileType, Identifier, LStringType, NamedType, NilLiteral, Param, PointerType, RecordType,
-                         RetypeExpr, SetType, SubrangeType, Type)
+                         RetypeExpr, SetType, StringLiteral, SubrangeType, Type)
 from ..type_system import CHAR_TYPE
 from ..type_system import ArrayType as ResolvedArrayType
 from ..type_system import LStringType as ResolvedLStringType
@@ -269,7 +269,7 @@ class TypesMapMixin:
             return ir.Constant(llvm_type, 0)
         return ir.Constant(llvm_type, None)
 
-    def coerce_arg(self, value: ir.Value, target_type: ir.Type, src_expr=None) -> ir.Value:
+    def coerce_arg(self, value: ir.Value, target_type: ir.Type, src_expr=None, target_ast_type=None) -> ir.Value:
         """Coerce a call argument to the callee's declared parameter type.
 
         Handles the two cases the vintage benchmark needs: any-pointer-to-any
@@ -287,6 +287,47 @@ class TypesMapMixin:
         vt = value.type
         if vt == target_type:
             return value
+
+        if isinstance(target_type, (ir.ArrayType, ir.LiteralStructType)) and isinstance(vt, ir.PointerType):
+            # A raw bitcast+load is only correct when `value` already carries
+            # the target's wire format in memory (e.g. an existing STRING/
+            # LSTRING variable passed by value). A StringLiteral is a plain
+            # null-terminated char global with no length prefix, so
+            # bitcast-loading it into an LSTRING(n) parameter would
+            # misinterpret the literal's first byte as the length byte.
+            # Detect a genuine string-shaped target from the declared Pascal
+            # param type and, for a literal source, build the wire format
+            # (length byte + chars, or blank-padded chars) properly instead.
+            if target_ast_type is not None and isinstance(src_expr, StringLiteral):
+                is_str, max_len, is_lstring = self.get_string_type_info(target_ast_type)
+                if is_str:
+                    chars_ptr, length = self.get_string_chars_and_len(src_expr)
+                    # entry_alloca, not a raw self.builder.alloca: this runs
+                    # at whatever call site is coercing the literal (often
+                    # inside a loop), and a plain alloca there is a genuine
+                    # runtime stack-pointer decrement on every execution --
+                    # LLVM only reclaims it at function return, so a call
+                    # site executed thousands of times (e.g. once per token
+                    # while reading a token stream) exhausts the stack. An
+                    # entry-block alloca is the same slot reused every time.
+                    buf = self.entry_alloca(target_type, name='str_lit_coerce_buf')
+                    zero = ir.Constant(ir.IntType(32), 0)
+                    one = ir.Constant(ir.IntType(32), 1)
+                    length_64 = self.builder.zext(length, ir.IntType(64))
+                    if is_lstring:
+                        dest_chars = self.builder.gep(buf, [zero, one])
+                        self.builder.call(self.memcpy_func(), [dest_chars, chars_ptr, length_64])
+                        len_ptr = self.builder.gep(buf, [zero, zero])
+                        self.builder.store(self.builder.trunc(length, ir.IntType(8)), len_ptr)
+                    else:
+                        dest_chars = self.builder.gep(buf, [zero, zero])
+                        self.builder.call(self.memcpy_func(), [dest_chars, chars_ptr, length_64])
+                        pad_start = self.builder.gep(buf, [zero, length])
+                        pad_len = self.builder.sub(ir.Constant(ir.IntType(32), max_len), length)
+                        pad_len_64 = self.builder.zext(pad_len, ir.IntType(64))
+                        self.builder.call(self.memset_func(), [pad_start, ir.Constant(ir.IntType(32), 0x20), pad_len_64])
+                    return self.builder.load(buf)
+            return self.builder.load(self.builder.bitcast(value, target_type.as_pointer()))
 
         def _is_seg(t):
             return (isinstance(t, ir.LiteralStructType) and len(t.elements) == 2 and isinstance(t.elements[0], ir.PointerType) and isinstance(t.elements[1], ir.IntType))
@@ -629,7 +670,9 @@ class TypesMapMixin:
                     # a dynamic index must remain a plain GEP even when an
                     # INDEXCK guard happened to be emitted on another path.
                     use_inbounds = inbounds_base and index_is_proven_inbounds
-                    if isinstance(ptr.type.pointee, ir.ArrayType):
+                    is_var_param = symbol.is_parameter and getattr(symbol, 'is_var', False)
+                    is_array_llvm = isinstance(self.llvm_type(cur_type), ir.ArrayType) if cur_type is not None else False
+                    if not is_var_param and (is_array_llvm or isinstance(getattr(ptr.type, 'pointee', None), ir.ArrayType)):
                         ptr = self._emit_designator_gep(ptr, [ir.Constant(ir.IntType(32), 0), index], proven_inbounds=use_inbounds)
                     else:
                         ptr = self._emit_designator_gep(ptr, [index], proven_inbounds=use_inbounds)

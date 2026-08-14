@@ -12,7 +12,7 @@ import llvmlite.ir as ir
 
 from ..ast_nodes import BuiltinType, Designator
 from ..ast_nodes import EnumType as ASTEnumType
-from ..ast_nodes import Expression, FileType, Identifier
+from ..ast_nodes import Expression, FileType, FuncCall, Identifier
 from ..ast_nodes import LStringType as ASTLStringType
 from ..ast_nodes import NamedType, WriteArg
 from ..type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER8_TYPE, INTEGER_TYPE, REAL_TYPE, WORD8_TYPE, WORD32_TYPE, WORD64_TYPE, WORD_TYPE)
@@ -65,6 +65,28 @@ class IoWriteReadMixin:
                             return NamedType('INTEGER', None)
                     # Fall back to the base type for complex selectors this helper does not model.
             return ty
+        if isinstance(expr, FuncCall):
+            # Function symbols store their return type directly as type_expr
+            # (decls.py: scope.define(decl.name, func, decl.return_type)),
+            # not wrapped in a FunctionType -- an explicit Foo() call needs
+            # its own lookup so a niladic STRING/LSTRING-returning function
+            # formats as a string, not falling through to the generic '%s'
+            # raw-value case (which would pass the returned aggregate by
+            # value to printf instead of a length+pointer pair).
+            sym = self.scope.lookup(expr.name)
+            return getattr(sym, 'type_expr', None) if sym else None
+        # A computed expression (BinOp, etc.) carries no live symbol to look
+        # up. The typechecker annotates such nodes with `resolved_type`
+        # during infer_expression_type (see BinOp's branch there) -- prefer
+        # that recorded annotation over re-invoking infer_expression_type
+        # here: that method reads from self.symbol_table, the typechecker's
+        # own symbol table, which is not populated on the codegen object (it
+        # uses self.scope instead), so calling it from here silently
+        # resolves nothing for any expression that itself looks up a
+        # variable (e.g. `a + b`) and returns None instead of the real type.
+        resolved = getattr(expr, 'resolved_type', None)
+        if resolved is not None:
+            return resolved
         return self.infer_expression_type(expr) if hasattr(self, 'infer_expression_type') else None
 
     def _file_selector_fcb(self, expr) -> ir.Value:
@@ -116,6 +138,17 @@ class IoWriteReadMixin:
 
             is_str_like, str_len, is_lstring_like = self.get_string_type_info(pas_ty)
             if isinstance(pas_ty, (StringType, LStringType, ASTLStringType)) or is_str_like:
+                # A niladic string/LSTRING-returning function call -- bare
+                # designator or explicit Foo() -- yields the aggregate by
+                # value (codegen_expr calls it and returns the LLVM array
+                # value directly), not a pointer to it. GEP requires a
+                # pointer, so materialize the value into a fresh alloca first;
+                # a plain variable/field read already comes back as a pointer
+                # and is unaffected.
+                if not isinstance(val.type, ir.PointerType):
+                    val_ptr = self.builder.alloca(val.type)
+                    self.builder.store(val, val_ptr)
+                    val = val_ptr
                 zero = ir.Constant(ir.IntType(32), 0)
                 if isinstance(pas_ty, (LStringType, ASTLStringType)) or is_lstring_like:
                     length = self.builder.zext(self.builder.load(self.builder.gep(val, [zero, zero])), ir.IntType(32))
@@ -277,8 +310,8 @@ class IoWriteReadMixin:
             fn = self.runtime_extern('pas_fread_int' if file_fcb is not None else 'pas_read_int')
             call_args = ([file_fcb, tmp] if file_fcb is not None else [tmp])
             self.builder.call(fn, call_args)
-            val = self.builder.trunc(self.builder.load(tmp), ptr.type.pointee)
-            self.builder.store(val, ptr)
+            val = self.builder.trunc(self.builder.load(tmp), ptr.type.pointee) if hasattr(ptr.type, 'pointee') and ptr.type.pointee.width < 32 else self.builder.load(tmp)
+            self.emit_store(val, ptr)
             return
         elif ty is WORD_TYPE or ty_name == 'WORD':
             fn = self.runtime_extern('pas_fread_word' if file_fcb is not None else 'pas_read_word')
@@ -304,16 +337,16 @@ class IoWriteReadMixin:
                     call_args = [tmp, names_ptr, ir.Constant(ir.IntType(32), len(names or []))]
                 self.builder.call(fn, call_args)
                 loaded = self.builder.load(tmp)
-                val = loaded if loaded.type == ptr.type.pointee else self.builder.trunc(loaded, ptr.type.pointee)
-                self.builder.store(val, ptr)
+                val = loaded if not hasattr(ptr.type, 'pointee') or loaded.type == ptr.type.pointee else self.builder.trunc(loaded, ptr.type.pointee)
+                self.emit_store(val, ptr)
                 return
             tmp = self.builder.alloca(ir.IntType(32), name='read_enum_tmp')
             fn = self.runtime_extern('pas_fread_int' if file_fcb is not None else 'pas_read_int')
             call_args = ([file_fcb, tmp] if file_fcb is not None else [tmp])
             self.builder.call(fn, call_args)
             loaded = self.builder.load(tmp)
-            val = loaded if loaded.type == ptr.type.pointee else self.builder.trunc(loaded, ptr.type.pointee)
-            self.builder.store(val, ptr)
+            val = loaded if not hasattr(ptr.type, 'pointee') or loaded.type == ptr.type.pointee else self.builder.trunc(loaded, ptr.type.pointee)
+            self.emit_store(val, ptr)
             return
         else:
             is_str, max_len, is_lstring = self.get_string_type_info(ty)
