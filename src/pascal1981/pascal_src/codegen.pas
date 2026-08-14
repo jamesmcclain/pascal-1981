@@ -248,17 +248,23 @@ CONST
     literal-only looseness INTEGER8 already gets relative to the reference
     (see CoerceForAssign) since this file's literal codegen has no
     context-type threading to make RealLiteral itself REAL32-typed. }
-  { ids 1..12 are the bare scalar kinds (INTEGER/REAL/BOOLEAN/CHAR/WORD/
-    INTEGER8/WORD8/INTEGER32/WORD32/INTEGER64/WORD64/REAL32); ids 13+ are
-    markers whose real tid is an index into `types` (see TypeKind/
+  TK_ADRMEM  = 13; { opaque FFI pointer type, LLVM i8*, printed nowhere --
+    the same tag used pervasively by the native compiler stages themselves
+    (lexer.pas/parser.pas/typechecker.pas) as the cJSON/[C]EXTERN handle
+    type; maps to the same i8ptrty global already used for TK_POINTER's
+    underlying LLVM representation, but kept as its own bare-scalar tid
+    (not a `types[]` entry) since it has no element/field structure. }
+  { ids 1..13 are the bare scalar kinds (INTEGER/REAL/BOOLEAN/CHAR/WORD/
+    INTEGER8/WORD8/INTEGER32/WORD32/INTEGER64/WORD64/REAL32/ADRMEM); ids 14+
+    are markers whose real tid is an index into `types` (see TypeKind/
     LLVMTypeForTk) -- bumped up from the original 7 to make room for the
-    rest of the wide-integer/REAL32 extension family. }
-  TK_ARRAY   = 13;
-  TK_RECORD  = 14;
-  TK_LSTRING = 15;
-  TK_POINTER = 16;
-  TK_STRING  = 17;
-  TK_SET     = 18;
+    rest of the wide-integer/REAL32/ADRMEM extension family. }
+  TK_ARRAY   = 14;
+  TK_RECORD  = 15;
+  TK_LSTRING = 16;
+  TK_POINTER = 17;
+  TK_STRING  = 18;
+  TK_SET     = 19;
 
   MAX_SYMBOLS = 500;
   MAX_SCOPES = 64;
@@ -518,7 +524,8 @@ BEGIN
   ELSE IF tk = TK_INTEGER64 THEN LLVMTypeForTk := i64ty
   ELSE IF tk = TK_WORD64 THEN LLVMTypeForTk := i64ty
   ELSE IF tk = TK_REAL32 THEN LLVMTypeForTk := f32ty
-  ELSE IF tk >= 13 THEN LLVMTypeForTk := types[tk].llvm_ty
+  ELSE IF tk = TK_ADRMEM THEN LLVMTypeForTk := i8ptrty
+  ELSE IF tk >= 14 THEN LLVMTypeForTk := types[tk].llvm_ty
   ELSE
   BEGIN
     AbortWith('codegen: LLVMTypeForTk: unknown type kind');
@@ -527,10 +534,10 @@ BEGIN
 END;
 
 FUNCTION TypeKind(tid: INTEGER): INTEGER;
-{ tid <= 12 IS its own kind (a bare scalar TK_* constant); tid >= 13 is an
+{ tid <= 13 IS its own kind (a bare scalar TK_* constant); tid >= 14 is an
   index into `types`, whose own .tk says ARRAY or RECORD. }
 BEGIN
-  IF tid <= 12 THEN TypeKind := tid
+  IF tid <= 13 THEN TypeKind := tid
   ELSE TypeKind := types[tid].tk;
 END;
 
@@ -539,7 +546,7 @@ VAR
   i, found: INTEGER;
 BEGIN
   found := 0;
-  FOR i := 13 TO ntypes DO
+  FOR i := 14 TO ntypes DO
     IF types[i].name = name THEN found := i;
   LookupNamedType := found;
 END;
@@ -752,6 +759,7 @@ BEGIN
   ELSE IF tid = TK_INTEGER64 THEN TypeSizeBytes := 8
   ELSE IF tid = TK_WORD64 THEN TypeSizeBytes := 8
   ELSE IF tid = TK_REAL32 THEN TypeSizeBytes := 4
+  ELSE IF tid = TK_ADRMEM THEN TypeSizeBytes := 8
   ELSE IF TypeKind(tid) = TK_ARRAY THEN
     TypeSizeBytes := TypeSizeBytes(types[tid].elem_tid) * (types[tid].hi - types[tid].lo + 1)
   ELSE IF TypeKind(tid) = TK_RECORD THEN
@@ -817,6 +825,7 @@ BEGIN
     ELSE IF nm = 'WORD64' THEN tid := TK_WORD64
     ELSE IF (nm = 'REAL32') THEN tid := TK_REAL32
     ELSE IF nm = 'REAL64' THEN tid := TK_REAL
+    ELSE IF nm = 'ADRMEM' THEN tid := TK_ADRMEM
     ELSE IF nm = 'STRING' THEN
     BEGIN
       IF GetObjOrNil(te, 'param') = NIL THEN hi := 256
@@ -1786,6 +1795,16 @@ BEGIN
     ch := GetStr(node, 'value');
     res := LLVMConstInt(i8ty, ORD(ch[1]), 0);
     last_val_tk := TK_CHAR;
+  END
+  ELSE IF nt = 'NilLiteral' THEN
+  BEGIN
+    { the reference codegen types this as a bare i8* null constant; ADRMEM
+      is this file's own tag for that same i8ptrty representation, matching
+      how the native compiler stages themselves (lexer.pas/parser.pas/
+      typechecker.pas) declare their own opaque handles as ADRMEM and
+      compare them against NIL. }
+    res := LLVMConstNull(i8ptrty);
+    last_val_tk := TK_ADRMEM;
   END
   ELSE IF nt = 'Identifier' THEN
   BEGIN
@@ -3592,9 +3611,9 @@ BEGIN
   in_local_scope := FALSE;
   nroutines := 0;
   cur_func_name := '';
-  ntypes := 12; { ids 1..12 are the bare TK_INTEGER..TK_REAL32 scalars, not
+  ntypes := 13; { ids 1..13 are the bare TK_INTEGER..TK_ADRMEM scalars, not
                  `types` table entries -- the first RegisterType call must
-                 hand out id 13, not 1. }
+                 hand out id 14, not 1. }
   nfields := 0;
 
   block := GetObj(root, 'block');
