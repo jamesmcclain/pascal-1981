@@ -54,10 +54,11 @@
   `:width` field honored via printf's own `%*` dynamic-width specifier
   (width is an arbitrary expression, evaluated and sign-extended to i32,
   exactly like the Python reference's coerce_printf_int) -- `:precision`
-  parses but is ignored on this path, matching the reference's own
-  faithful-1981 default (it only ever consults precision for REAL's
-  width+precision -> %*.*f case, which this file does not yet implement);
-  and WRITE/WRITELN of a BOOLEAN argument, printed as the literal string
+  parses but is ignored everywhere except REAL/REAL32, matching the
+  reference's own faithful-1981 default (its width+precision -> %*.*f
+  case, width defaulting to 14 and precision to 0 when only one of the
+  pair is given; width alone -> %*E; neither -> %14.7E); and WRITE/WRITELN
+  of a BOOLEAN argument, printed as the literal string
   "TRUE"/"FALSE" via a runtime icmp+select between two global string
   constants, same as the reference; and the ordinal/math builtins CHR, ORD,
   ODD, SUCC, PRED, ABS, SQR (pure inline IR, no runtime call) and SQRT,
@@ -113,9 +114,9 @@
   genuinely different wide-integer/REAL32 widths together (no literal
   involved) are still rejected, same as the file's existing no-implicit-
   promotion rule for plain INTEGER/REAL. Not yet covered: files,
-  multi-dimension arrays, CHAR-keyed CASE, CASE label ranges, REAL's
-  width+precision WRITE formatting (%*.*f), MATHCK/RANGECK-style runtime
-  traps (including CONCAT/COPYLST/COPYSTR/INSERT's own capacity overflow,
+  multi-dimension arrays, CHAR-keyed CASE, CASE label ranges,
+  MATHCK/RANGECK-style runtime traps (including CONCAT/COPYLST/COPYSTR/
+  INSERT's own capacity overflow,
   which is unchecked -- same simplification as an unchecked array index
   elsewhere in this file), C-ABI externs, units, and DEVICE MODULE/PTX
   generation. Anything not yet covered is
@@ -1941,14 +1942,14 @@ VAR
   fmt: Str255;
   arg_node, expr, width_node, prec_node: ADRMEM;
   vals: ADRMEM;
-  v, width_val, is_true, bool_str: ADRMEM;
+  v, width_val, prec_val, is_true, bool_str: ADRMEM;
   strval: Str255;
   call_ret: ADRMEM;
   vi: INTEGER32;
   addr, len_ptr, chars_ptr, gep_idx, len_val: ADRMEM;
   lstr_tid: INTEGER;
   symi: INTEGER32;
-  is_lstring, is_string, have_width: BOOLEAN;
+  is_lstring, is_string, have_width, have_prec, handled_own_args: BOOLEAN;
 BEGIN
   nargs := ArrSize(args);
   fmt := '';
@@ -1962,13 +1963,14 @@ BEGIN
     expr := GetObj(arg_node, 'expr');
     width_node := GetObjOrNil(arg_node, 'width');
     prec_node := GetObjOrNil(arg_node, 'precision');
-    { Precision is not honored on the native WRITE path (matching the
-      Python reference's faithful-1981 default, which ignores string
-      precision and never consults precision at all for the generic
-      int/char/boolean case -- only REAL's width+precision -> %*.*f path
-      does, which native WRITE does not yet implement). }
+    { Precision is only ever consulted for REAL/REAL32's width+precision ->
+      %*.*f path below, matching the Python reference's faithful-1981
+      default (it ignores string precision and never consults precision
+      at all for the generic int/char/boolean case). }
     have_width := width_node <> NIL;
     IF have_width THEN width_val := EvalPrintfIntArg(width_node);
+    have_prec := prec_node <> NIL;
+    IF have_prec THEN prec_val := EvalPrintfIntArg(prec_node);
     is_lstring := FALSE;
     is_string := FALSE;
     IF NodeType(expr) = 'StringLiteral' THEN
@@ -2049,6 +2051,7 @@ BEGIN
       ELSE
       BEGIN
         v := CodegenExpr(expr);
+        handled_own_args := FALSE;
         IF last_val_tk = TK_INTEGER THEN
         BEGIN
           v := LLVMBuildSExt(builder, v, i32ty, MakeCStr(''));
@@ -2088,14 +2091,36 @@ BEGIN
         BEGIN
           IF have_width THEN CONCAT(fmt, '%*llu') ELSE CONCAT(fmt, '%llu');
         END
-        ELSE IF last_val_tk = TK_REAL32 THEN
+        ELSE IF (last_val_tk = TK_REAL) OR (last_val_tk = TK_REAL32) THEN
         BEGIN
-          v := LLVMBuildFPExt(builder, v, dblty, MakeCStr(''));
-          IF have_width THEN CONCAT(fmt, '%*E') ELSE CONCAT(fmt, '%14.7E');
-        END
-        ELSE IF last_val_tk = TK_REAL THEN
-        BEGIN
-          IF have_width THEN CONCAT(fmt, '%*E') ELSE CONCAT(fmt, '%14.7E');
+          { REAL/REAL32 is the only WRITE argument kind that ever consults
+            precision, matching the reference: width:precision together ->
+            %*.*f (width defaults to 14, precision to 0, when either is
+            omitted); width alone -> %*E; neither -> the faithful-1981
+            default %14.7E. Builds its own vals entries directly (up to two
+            leading ints, not the shared tail's at-most-one) and sets
+            handled_own_args so the shared tail below skips it. }
+          IF last_val_tk = TK_REAL32 THEN v := LLVMBuildFPExt(builder, v, dblty, MakeCStr(''));
+          IF have_prec THEN
+          BEGIN
+            CONCAT(fmt, '%*.*f');
+            IF have_width THEN SetPtrArrayElem(vals, vi, width_val)
+            ELSE SetPtrArrayElem(vals, vi, LLVMConstInt(i32ty, 14, 0));
+            vi := vi + 1;
+            SetPtrArrayElem(vals, vi, prec_val);
+            vi := vi + 1;
+          END
+          ELSE IF have_width THEN
+          BEGIN
+            CONCAT(fmt, '%*E');
+            SetPtrArrayElem(vals, vi, width_val);
+            vi := vi + 1;
+          END
+          ELSE
+            CONCAT(fmt, '%14.7E');
+          SetPtrArrayElem(vals, vi, v);
+          vi := vi + 1;
+          handled_own_args := TRUE;
         END
         ELSE IF last_val_tk = TK_CHAR THEN
         BEGIN
@@ -2113,18 +2138,22 @@ BEGIN
         END
         ELSE
           AbortWith('codegen: unsupported WRITE argument type');
-        IF have_width THEN
+        IF NOT handled_own_args THEN
         BEGIN
-          SetPtrArrayElem(vals, vi, width_val);
+          IF have_width THEN
+          BEGIN
+            SetPtrArrayElem(vals, vi, width_val);
+            vi := vi + 1;
+          END;
+          SetPtrArrayElem(vals, vi, v);
           vi := vi + 1;
         END;
-        SetPtrArrayElem(vals, vi, v);
-        vi := vi + 1;
       END;
     END
     ELSE
     BEGIN
       v := CodegenExpr(expr);
+      handled_own_args := FALSE;
       IF last_val_tk = TK_INTEGER THEN
       BEGIN
         v := LLVMBuildSExt(builder, v, i32ty, MakeCStr(''));
@@ -2161,14 +2190,29 @@ BEGIN
       BEGIN
         IF have_width THEN CONCAT(fmt, '%*llu') ELSE CONCAT(fmt, '%llu');
       END
-      ELSE IF last_val_tk = TK_REAL32 THEN
+      ELSE IF (last_val_tk = TK_REAL) OR (last_val_tk = TK_REAL32) THEN
       BEGIN
-        v := LLVMBuildFPExt(builder, v, dblty, MakeCStr(''));
-        IF have_width THEN CONCAT(fmt, '%*E') ELSE CONCAT(fmt, '%14.7E');
-      END
-      ELSE IF last_val_tk = TK_REAL THEN
-      BEGIN
-        IF have_width THEN CONCAT(fmt, '%*E') ELSE CONCAT(fmt, '%14.7E');
+        IF last_val_tk = TK_REAL32 THEN v := LLVMBuildFPExt(builder, v, dblty, MakeCStr(''));
+        IF have_prec THEN
+        BEGIN
+          CONCAT(fmt, '%*.*f');
+          IF have_width THEN SetPtrArrayElem(vals, vi, width_val)
+          ELSE SetPtrArrayElem(vals, vi, LLVMConstInt(i32ty, 14, 0));
+          vi := vi + 1;
+          SetPtrArrayElem(vals, vi, prec_val);
+          vi := vi + 1;
+        END
+        ELSE IF have_width THEN
+        BEGIN
+          CONCAT(fmt, '%*E');
+          SetPtrArrayElem(vals, vi, width_val);
+          vi := vi + 1;
+        END
+        ELSE
+          CONCAT(fmt, '%14.7E');
+        SetPtrArrayElem(vals, vi, v);
+        vi := vi + 1;
+        handled_own_args := TRUE;
       END
       ELSE IF last_val_tk = TK_CHAR THEN
       BEGIN
@@ -2186,13 +2230,16 @@ BEGIN
       END
       ELSE
         AbortWith('codegen: unsupported WRITE argument type');
-      IF have_width THEN
+      IF NOT handled_own_args THEN
       BEGIN
-        SetPtrArrayElem(vals, vi, width_val);
+        IF have_width THEN
+        BEGIN
+          SetPtrArrayElem(vals, vi, width_val);
+          vi := vi + 1;
+        END;
+        SetPtrArrayElem(vals, vi, v);
         vi := vi + 1;
       END;
-      SetPtrArrayElem(vals, vi, v);
-      vi := vi + 1;
     END;
   END;
   IF newline THEN AppendChar(fmt, CHR(10));
