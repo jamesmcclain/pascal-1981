@@ -2782,6 +2782,9 @@ PROCEDURE CodegenForStmt(stmt: ADRMEM);
 VAR
   var_name: Str255;
   symi: INTEGER32;
+  var_tk: INTEGER;
+  var_llty: ADRMEM;
+  start_node, end_node: ADRMEM;
   start_val, end_val, cur_val, cmp_val, next_val: ADRMEM;
   loop_bb, body_bb, step_bb, end_bb: ADRMEM;
   down: BOOLEAN;
@@ -2790,17 +2793,19 @@ BEGIN
   symi := LookupSym(var_name);
   IF symi = 0 THEN
     AbortWith2('codegen: undefined FOR loop variable: ', var_name);
-  IF symbols[symi].tk <> TK_INTEGER THEN
-    AbortWith('codegen: FOR loop variable must be INTEGER');
+  var_tk := symbols[symi].tk;
+  IF NOT IsIntegerFamilyTk(var_tk) THEN
+    AbortWith('codegen: FOR loop variable must be an integer-family type');
+  var_llty := LLVMTypeForTk(var_tk);
 
-  start_val := CodegenExpr(GetObj(stmt, 'start'));
-  IF last_val_tk <> TK_INTEGER THEN
-    AbortWith('codegen: FOR loop bounds must be INTEGER');
+  start_node := GetObj(stmt, 'start');
+  start_val := CodegenExpr(start_node);
+  start_val := CoerceForAssign(start_val, last_val_tk, var_tk, start_node, var_name);
   LLVMBuildStore(builder, start_val, symbols[symi].llvm_val);
 
-  end_val := CodegenExpr(GetObj(stmt, 'end'));
-  IF last_val_tk <> TK_INTEGER THEN
-    AbortWith('codegen: FOR loop bounds must be INTEGER');
+  end_node := GetObj(stmt, 'end');
+  end_val := CodegenExpr(end_node);
+  end_val := CoerceForAssign(end_val, last_val_tk, var_tk, end_node, var_name);
 
   down := GetStr(stmt, 'direction') = 'DOWNTO';
 
@@ -2811,7 +2816,7 @@ BEGIN
 
   LLVMBuildBr(builder, loop_bb);
   LLVMPositionBuilderAtEnd(builder, loop_bb);
-  cur_val := LLVMBuildLoad2(builder, i16ty, symbols[symi].llvm_val, MakeCStr(''));
+  cur_val := LLVMBuildLoad2(builder, var_llty, symbols[symi].llvm_val, MakeCStr(''));
   IF down THEN
     cmp_val := LLVMBuildICmp(builder, LLVMIntSGE, cur_val, end_val, MakeCStr(''))
   ELSE
@@ -2823,11 +2828,11 @@ BEGIN
   LLVMBuildBr(builder, step_bb);
 
   LLVMPositionBuilderAtEnd(builder, step_bb);
-  cur_val := LLVMBuildLoad2(builder, i16ty, symbols[symi].llvm_val, MakeCStr(''));
+  cur_val := LLVMBuildLoad2(builder, var_llty, symbols[symi].llvm_val, MakeCStr(''));
   IF down THEN
-    next_val := LLVMBuildSub(builder, cur_val, LLVMConstInt(i16ty, 1, 0), MakeCStr(''))
+    next_val := LLVMBuildSub(builder, cur_val, LLVMConstInt(var_llty, 1, 0), MakeCStr(''))
   ELSE
-    next_val := LLVMBuildAdd(builder, cur_val, LLVMConstInt(i16ty, 1, 0), MakeCStr(''));
+    next_val := LLVMBuildAdd(builder, cur_val, LLVMConstInt(var_llty, 1, 0), MakeCStr(''));
   LLVMBuildStore(builder, next_val, symbols[symi].llvm_val);
   LLVMBuildBr(builder, loop_bb);
 
