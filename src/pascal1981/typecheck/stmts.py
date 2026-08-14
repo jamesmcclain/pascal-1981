@@ -377,6 +377,21 @@ class StmtsMixin:
             self.error(f"'{stmt.name}' is not a procedure", stmt)
             return
 
+        # Check argument count up front, even for a zero-arg call: a call
+        # with no arguments at all (e.g. a bare `EXIT;`-style call to a
+        # foreign [C] procedure declared with parameters) previously skipped
+        # this whole block because it's gated on `if stmt.args:`, which is
+        # falsy for an empty/absent arg list -- letting an arity mismatch
+        # through to codegen, where the C-ABI call builder indexes past the
+        # end of the empty arg_exprs list and crashes instead of reporting a
+        # clean type error.
+        if not stmt.args and not is_builtin:
+            expected_args = len(sym.type.params)
+            _is_variadic_proc = getattr(sym.type, 'is_variadic', False)
+            if expected_args > 0 and not _is_variadic_proc:
+                self.error(f"Procedure '{stmt.name}' expects {expected_args} arguments, got 0", stmt)
+                return
+
         # Check argument types (including built-in procedures)
         if stmt.args:
             # Special handling for string procedures (section 7.2)
