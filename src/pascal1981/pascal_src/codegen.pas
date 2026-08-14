@@ -273,6 +273,7 @@ CONST
   MAX_TYPES = 200;
   MAX_FIELDS = 500;
   MAX_RECORD_FIELDS = 32;
+  MAX_CONSTS = 200;
 
 TYPE
   PAdr = ^ADRMEM;
@@ -298,6 +299,16 @@ TYPE
     fname: Str255;
     field_tid: INTEGER;
     field_index: INTEGER; { 0-based, matches the LLVM struct's GEP index }
+  END;
+
+  ConstRec = RECORD
+    name: Str255;
+    ival: INTEGER64; { every CONST this file's own native sources declare is
+                        a plain (optionally negated) integer literal -- see
+                        CodegenConstDecl -- so a single INTEGER64 value slot
+                        is sufficient, matching the Python reference's own
+                        eval_const_expr/self.constants side table rather
+                        than materializing a real LLVM global for each. }
   END;
 
   SymRec = RECORD
@@ -396,6 +407,9 @@ VAR
 
   routines: ARRAY [1..MAX_ROUTINES] OF RoutineRec;
   nroutines: INTEGER32;
+
+  const_tbl: ARRAY [1..MAX_CONSTS] OF ConstRec;
+  nconsts: INTEGER32;
 
   cur_func_name: Str255; { '' unless codegen'ing a FUNCTION body, in which
                            case it is that function's own name -- mirrors
@@ -784,16 +798,48 @@ BEGIN
   END;
 END;
 
+FUNCTION LookupConst(name: Str255): INTEGER32;
+VAR
+  i: INTEGER32;
+  found: INTEGER32;
+BEGIN
+  found := 0;
+  FOR i := 1 TO nconsts DO
+    IF const_tbl[i].name = name THEN found := i;
+  LookupConst := found;
+END;
+
 FUNCTION ResolveIntLiteral(node: ADRMEM): INTEGER;
 { An array index bound is a full constant-expression AST node (the parser
   never unwraps it the way it does e.g. NamedType.param) -- so reading it
   needs to drill into the node's own 'value' field, not treat the node
-  itself as a bare JSON number. Scoped to the literal case only; a CONST-
-  identifier or computed bound is not yet supported. }
+  itself as a bare JSON number. Also resolves a bare Identifier bound
+  through the CONST table (e.g. "ARRAY [1..MAX_SYMBOLS]"), pervasive in
+  this repository's own native sources; any other computed bound expression
+  is still not supported. }
+VAR
+  nm: Str255;
+  ci: INTEGER32;
 BEGIN
-  IF NodeType(node) <> 'IntLiteral' THEN
-    AbortWith('codegen: array index bounds must be integer literals');
-  ResolveIntLiteral := GetInt(node, 'value');
+  IF NodeType(node) = 'IntLiteral' THEN
+    ResolveIntLiteral := GetInt(node, 'value')
+  ELSE IF NodeType(node) = 'Identifier' THEN
+  BEGIN
+    nm := GetStr(node, 'name');
+    ci := LookupConst(nm);
+    IF ci = 0 THEN
+    BEGIN
+      AbortWith2('codegen: undefined constant in array index bound: ', nm);
+      ResolveIntLiteral := 0;
+    END
+    ELSE
+      ResolveIntLiteral := const_tbl[ci].ival;
+  END
+  ELSE
+  BEGIN
+    AbortWith('codegen: array index bounds must be integer literals or CONST identifiers');
+    ResolveIntLiteral := 0;
+  END;
 END;
 
 FUNCTION ResolveTypeExpr(te: ADRMEM): INTEGER;
@@ -1786,6 +1832,7 @@ VAR
   nt: Str255;
   nm: Str255;
   symi: INTEGER32;
+  consti: INTEGER32;
   ch: Str255;
   res, addr: ADRMEM;
   result_tid: INTEGER;
@@ -1821,15 +1868,24 @@ BEGIN
   BEGIN
     nm := GetStr(node, 'name');
     symi := LookupSym(nm);
-    IF symi = 0 THEN
-    BEGIN
-      AbortWith2('codegen: undefined variable: ', nm);
-      res := NIL;
-    END
-    ELSE
+    IF symi <> 0 THEN
     BEGIN
       res := LLVMBuildLoad2(builder, LLVMTypeForTk(symbols[symi].tk), symbols[symi].llvm_val, MakeCStr(''));
       last_val_tk := symbols[symi].tk;
+    END
+    ELSE
+    BEGIN
+      consti := LookupConst(nm);
+      IF consti = 0 THEN
+      BEGIN
+        AbortWith2('codegen: undefined variable: ', nm);
+        res := NIL;
+      END
+      ELSE
+      BEGIN
+        res := LLVMConstInt(i16ty, const_tbl[consti].ival, 1);
+        last_val_tk := TK_INTEGER;
+      END;
     END;
   END
   ELSE IF nt = 'Designator' THEN
@@ -3503,6 +3559,23 @@ BEGIN
   types[tid].name := name;
 END;
 
+PROCEDURE CodegenConstDecl(decl: ADRMEM);
+{ Every CONST this file's own native sources declare is a plain (optionally
+  MINUS-negated) integer literal -- see IntLiteralValue, reused here
+  unchanged -- so this compile-time-folds and remembers the value in
+  `const_tbl`, mirroring the Python reference's eval_const_expr/self.constants
+  side table rather than emitting a real LLVM global. }
+VAR
+  name: Str255;
+BEGIN
+  name := GetStr(decl, 'name');
+  IF LookupConst(name) <> 0 THEN
+    AbortWith2('codegen: duplicate const declaration: ', name);
+  nconsts := nconsts + 1;
+  const_tbl[nconsts].name := name;
+  const_tbl[nconsts].ival := IntLiteralValue(GetObj(decl, 'value'));
+END;
+
 PROCEDURE CodegenDecl(decl: ADRMEM);
 VAR
   nt: Str255;
@@ -3510,6 +3583,7 @@ BEGIN
   nt := NodeType(decl);
   IF nt = 'VarDecl' THEN CodegenVarDecl(decl)
   ELSE IF nt = 'TypeDecl' THEN CodegenTypeDecl(decl)
+  ELSE IF nt = 'ConstDecl' THEN CodegenConstDecl(decl)
   ELSE IF nt = 'ProcDecl' THEN CodegenRoutineDecl(decl, FALSE)
   ELSE IF nt = 'FuncDecl' THEN CodegenRoutineDecl(decl, TRUE)
   ELSE
@@ -3527,6 +3601,8 @@ VAR
   ok: CINT;
   ir_text: ADRMEM;
   res_c: CINT;
+  local_ifaces: ADRMEM;
+  n_local_ifaces, li: INTEGER32;
 
 BEGIN
   root := ReadAllStdin;
@@ -3660,11 +3736,27 @@ BEGIN
   scope_top := 0;
   in_local_scope := FALSE;
   nroutines := 0;
+  nconsts := 0;
   cur_func_name := '';
   ntypes := 13; { ids 1..13 are the bare TK_INTEGER..TK_ADRMEM scalars, not
                  `types` table entries -- the first RegisterType call must
                  hand out id 14, not 1. }
   nfields := 0;
+
+  { local_interfaces: InterfaceUnit blocks spliced in ahead of the PROGRAM
+    keyword via $INCLUDE (e.g. jsonutil.inc's "INTERFACE; UNIT jsonutil(...)
+    ... END;"), holding declarations -- notably the Str255 = LSTRING(255)
+    TYPE alias -- that ordinary top-level code in this same file (and its
+    own EXTERN routine signatures, spliced in right alongside) depends on.
+    Not part of block.decls at all, so must be walked separately, before
+    the real program block, to match declaration order in the source. }
+  local_ifaces := GetObj(root, 'local_interfaces');
+  IF local_ifaces <> NIL THEN
+  BEGIN
+    n_local_ifaces := ArrSize(local_ifaces);
+    FOR li := 0 TO n_local_ifaces - 1 DO
+      CodegenDeclList(GetObj(ArrItem(local_ifaces, li), 'decls'));
+  END;
 
   block := GetObj(root, 'block');
   IF NodeType(block) <> 'Block' THEN
