@@ -934,7 +934,21 @@ BEGIN
   ELSE IF CurKind = 'IDENTIFIER' THEN
   BEGIN
     name := CurLex;
-    IF NextKind = 'LPAREN' THEN
+    IF (name = 'RETYPE') AND (NextKind = 'LPAREN') THEN
+    BEGIN
+      pos := pos + 2;
+      val_str := CurLex;
+      Expect('IDENTIFIER');
+      Expect('COMMA');
+      expr := ParseExpression;
+      Expect('RPAREN');
+      node := CreateNode('RetypeExpr');
+      AddStringField(node, 'type_id', val_str);
+      AddField(node, 'expr', expr);
+      AddField(node, 'selectors', cJSON_CreateArray);
+      ParseFactor := node;
+    END
+    ELSE IF NextKind = 'LPAREN' THEN
     BEGIN
       pos := pos + 2;
       IF CurKind <> 'RPAREN' THEN

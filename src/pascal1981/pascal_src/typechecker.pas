@@ -708,8 +708,8 @@ FUNCTION CheckExpr(node: ADRMEM): INTEGER;
 VAR
   nt, name: Str255;
   si: INTEGER32;
-  left_node, right_node, operand_node: ADRMEM;
-  lt, rt, ot, op_kind: INTEGER;
+  left_node, right_node, operand_node, type_node: ADRMEM;
+  lt, rt, ot, op_kind, aux, aux2, idx_tk: INTEGER;
   op: Str255;
 BEGIN
   nt := NodeType(node);
@@ -744,6 +744,17 @@ BEGIN
     CheckExpr := CheckDesignator(node)
   ELSE IF nt = 'FuncCall' THEN
     CheckExpr := CheckFuncCall(node)
+  ELSE IF nt = 'RetypeExpr' THEN
+  BEGIN
+    { RETYPE(TypeName, expr) is a language construct, not a function call.
+      Resolve its target through the normal NamedType path and still check
+      the source expression. }
+    ot := CheckExpr(GetObj(node, 'expr'));
+    type_node := CreateNode('NamedType');
+    AddStringField(type_node, 'name', GetStr(node, 'type_id'));
+    ResolveTypeExpr(type_node, lt, aux, aux2, idx_tk);
+    CheckExpr := lt;
+  END
   ELSE IF nt = 'BinOp' THEN
   BEGIN
     left_node := GetObj(node, 'left');
