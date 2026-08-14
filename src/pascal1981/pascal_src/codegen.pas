@@ -4304,13 +4304,14 @@ BEGIN
 END;
 
 PROCEDURE CodegenLaunch(args: ADRMEM);
-{ First host-launch slice: LAUNCH(kernel, grid, block, actuals...). It uses
-  the CPU shim's real void** ABI and a generated dispatch thunk. }
+{ Host launch ABI: LAUNCH(kernel, grid, block, actuals...) or its six-value
+  geometry form. It uses the CPU shim's real void** ABI and a dispatch thunk. }
 VAR
   kernel, actual: ADRMEM;
   kernel_name: Str255;
   ridx, n, expected, i: INTEGER32;
   grid, block, val, cell, argv, argv_ptr, thunk: ADRMEM;
+  geom: ARRAY[1..6] OF ADRMEM;
   actual_tk: INTEGER;
   indices, call_args: ADRMEM;
 BEGIN
@@ -4323,16 +4324,28 @@ BEGIN
   ridx := LookupRoutine(kernel_name);
   IF ridx = 0 THEN AbortWith2('codegen: unknown LAUNCH kernel: ', kernel_name);
   expected := routines[ridx].nparams;
-  IF n <> expected + 3 THEN
-    AbortWith('codegen: LAUNCH currently supports only 1-D grid/block geometry');
-  grid := CodegenExpr(ArrItem(args, 1));
-  grid := LaunchI64(grid, last_val_tk);
-  block := CodegenExpr(ArrItem(args, 2));
-  block := LaunchI64(block, last_val_tk);
+  IF (n <> expected + 3) AND (n <> expected + 7) THEN
+    AbortWith('codegen: LAUNCH expects 2 or 6 geometry values');
+  IF n = expected + 3 THEN
+  BEGIN
+    grid := CodegenExpr(ArrItem(args, 1));
+    grid := LaunchI64(grid, last_val_tk);
+    block := CodegenExpr(ArrItem(args, 2));
+    block := LaunchI64(block, last_val_tk);
+    geom[1] := grid; geom[2] := LLVMConstInt(i64ty, 1, 0); geom[3] := LLVMConstInt(i64ty, 1, 0);
+    geom[4] := block; geom[5] := LLVMConstInt(i64ty, 1, 0); geom[6] := LLVMConstInt(i64ty, 1, 0);
+  END
+  ELSE
+    FOR i := 1 TO 6 DO
+    BEGIN
+      geom[i] := CodegenExpr(ArrItem(args, i));
+      geom[i] := LaunchI64(geom[i], last_val_tk);
+    END;
   argv := EntryAlloca(LLVMArrayType(i8ptrty, expected), 'launch_argv');
   FOR i := 0 TO expected - 1 DO
   BEGIN
-    actual := ArrItem(args, i + 3);
+    IF n = expected + 3 THEN actual := ArrItem(args, i + 3)
+    ELSE actual := ArrItem(args, i + 7);
     val := CodegenExpr(actual);
     actual_tk := last_val_tk;
     val := CoerceForAssign(val, actual_tk, routines[ridx].param_tk[i + 1], actual, kernel_name);
@@ -4352,12 +4365,12 @@ BEGIN
   thunk := EmitLaunchThunk(ridx);
   call_args := AllocPtrArray(8);
   SetPtrArrayElem(call_args, 0, LLVMBuildBitCast(builder, thunk, i8ptrty, MakeCStr('')));
-  SetPtrArrayElem(call_args, 1, grid);
-  SetPtrArrayElem(call_args, 2, LLVMConstInt(i64ty, 1, 0));
-  SetPtrArrayElem(call_args, 3, LLVMConstInt(i64ty, 1, 0));
-  SetPtrArrayElem(call_args, 4, block);
-  SetPtrArrayElem(call_args, 5, LLVMConstInt(i64ty, 1, 0));
-  SetPtrArrayElem(call_args, 6, LLVMConstInt(i64ty, 1, 0));
+  SetPtrArrayElem(call_args, 1, geom[1]);
+  SetPtrArrayElem(call_args, 2, geom[2]);
+  SetPtrArrayElem(call_args, 3, geom[3]);
+  SetPtrArrayElem(call_args, 4, geom[4]);
+  SetPtrArrayElem(call_args, 5, geom[5]);
+  SetPtrArrayElem(call_args, 6, geom[6]);
   SetPtrArrayElem(call_args, 7, argv_ptr);
   val := LLVMBuildCall2(builder, launch_fnty, launch_fn, call_args, 8, MakeCStr(''));
 END;
