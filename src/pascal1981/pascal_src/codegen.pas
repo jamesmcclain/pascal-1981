@@ -4804,7 +4804,7 @@ VAR
   local_ifaces: ADRMEM;
   n_local_ifaces, li: INTEGER32;
   root_nt: Str255;
-  is_device_root, is_program: BOOLEAN;
+  is_device_root, is_program, is_implementation: BOOLEAN;
   unit_decls, init_body: ADRMEM;
   init_fnty, init_fn, init_bb: ADRMEM;
   init_name, unit_name: Str255;
@@ -4815,18 +4815,10 @@ BEGIN
   root_nt := NodeType(root);
   is_device_root := GetBool(root, 'is_device');
 
-  { DEVICE INTERFACE/DEVICE IMPLEMENTATION units (GPU/PTX codegen) are a much
-    larger, separate feature (device address spaces, PTX backend, kernel
-    launch ABI -- see the Python reference's codegen/*.py device paths) --
-    stub them out with a clear, explicit error rather than silently
-    mis-codegening them as ordinary host units. }
-  IF (root_nt = 'ImplementationUnit') AND is_device_root THEN
-    AbortWith('codegen: DEVICE IMPLEMENTATION units are not yet supported by the native code generator');
-  IF (root_nt = 'InterfaceUnit') AND is_device_root THEN
-    AbortWith('codegen: DEVICE INTERFACE units are not yet supported by the native code generator');
-
   is_program := root_nt = 'ProgramUnit';
-  IF (NOT is_program) AND (root_nt <> 'ImplementationUnit') THEN
+  is_implementation := root_nt = 'ImplementationUnit';
+  IF (NOT is_program) AND (root_nt <> 'ModuleUnit') AND
+     (root_nt <> 'InterfaceUnit') AND (NOT is_implementation) THEN
     AbortWith2('codegen: unsupported root unit kind: ', root_nt);
 
   ctx := LLVMContextCreate;
@@ -5014,28 +5006,21 @@ BEGIN
   END
   ELSE
   BEGIN
-    { ImplementationUnit (host): unlike a $INCLUDEd unit's INTERFACE header
-      (spliced separately into root.local_interfaces, and already walked by
-      the unconditional loop above -- which for a self-contained one-file
-      UNIT like jsonutil.pas is this SAME unit's own INTERFACE section,
-      registering its Str255/CharBuf256/PCharBuf TYPE aliases and forward
-      routine signatures already), root.interface here is that identical
-      content restated for pairing purposes -- NOT a second copy to codegen
-      again (doing so double-registers the same TYPE names and aborts with
-      "duplicate type declaration"). Just codegen the IMPLEMENTATION
-      section's own decls; the interface's forward FuncDecl/ProcDecl
-      placeholders get filled in via CodegenRoutineDecl's existing
-      FORWARD-reconciliation path when the impl's same-named decl arrives. }
+    { MODULE and INTERFACE compilands are library objects with root-level
+      declarations. An IMPLEMENTATION's matching interface was already
+      walked from local_interfaces above, so its declarations reconcile with
+      those forward placeholders instead of registering duplicates. }
     unit_decls := GetObj(root, 'decls');
     CodegenDeclList(unit_decls);
 
-    { A UNIT initialization BEGIN...END body is emitted as its own callable
-      function, matching the reference convention. Linking code is then free
-      to arrange one call to pascal_init_<unit> before the program body; a
-      UNIT object itself must not grow a process-wide main function. }
+    { Only an ordinary IMPLEMENTATION has startup code. DEVICE units have no
+      host startup context; reject an initializer rather than emitting a host
+      function into a device object. }
     init_body := GetObj(root, 'init_body');
-    IF (init_body <> NIL) AND (ArrSize(init_body) > 0) THEN
+    IF is_implementation AND (init_body <> NIL) AND (ArrSize(init_body) > 0) THEN
     BEGIN
+      IF is_device_root THEN
+        AbortWith('codegen: DEVICE IMPLEMENTATION units cannot have initialization bodies');
       init_name := 'pascal_init_';
       unit_name := GetStr(root, 'name');
       { LLVM symbol spelling is case-sensitive; use the same lower-case
