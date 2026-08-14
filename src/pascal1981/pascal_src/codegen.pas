@@ -92,14 +92,33 @@
   "faithful dialect pair" restriction), WRD (any INTEGER/WORD/CHAR/
   BOOLEAN/INTEGER8 argument widens/passes-through to WORD), and BYWORD
   (packs two INTEGER/WORD/CHAR/BOOLEAN byte-ish values into one WORD).
-  Not yet covered: WRD8/WORD8 (would need a whole additional WORD8 scalar
-  type not requested alongside WORD/INTEGER8), files, multi-dimension
-  arrays, CHAR-keyed CASE, CASE label ranges, REAL's width+precision WRITE
-  formatting (%*.*f), MATHCK/RANGECK-style runtime traps (including
-  CONCAT/COPYLST/COPYSTR/INSERT's own capacity overflow, which is
-  unchecked -- same simplification as an unchecked array index elsewhere
-  in this file), C-ABI externs, units, and DEVICE MODULE/PTX generation.
-  Anything not yet covered is
+  Also covers the rest of the wide-integer/REAL32 extension family: WORD8
+  (8-bit unsigned, tid TK_WORD8, LLVM i8, prints %u) and WRD8 (any
+  non-REAL argument narrows/passes-through to WORD8, mirroring WRD);
+  INTEGER32/WORD32 (32-bit, tid TK_INTEGER32/TK_WORD32, LLVM i32) and
+  INTEGER64/WORD64 (64-bit, tid TK_INTEGER64/TK_WORD64, LLVM i64, printed
+  via %lld/%llu); and REAL32 (32-bit float, tid TK_REAL32, LLVM float),
+  which widens implicitly into REAL on assignment (fpext) like the
+  reference, plus (a documented, deliberate looseness beyond the
+  reference, mirroring INTEGER8's own literal exemption) lets a bare REAL
+  literal narrow (fptrunc) into a REAL32 target, since this file's
+  RealLiteral codegen has no context-type threading to make the literal
+  itself REAL32-typed the way the reference's typechecker does. As with
+  WORD/INTEGER8, a compile-time INTEGER *literal* may additionally assign
+  into any of these wider integer targets (rebuilt at the target's own
+  width, not truncated through the native 16-bit INTEGER path) and adapts
+  the same way as an operand in a same-kind BinOp comparison/arithmetic
+  expression against another wide-integer-typed operand -- e.g. `w32 > 0`
+  -- mirroring the reference's literal_context threading; two operands of
+  genuinely different wide-integer/REAL32 widths together (no literal
+  involved) are still rejected, same as the file's existing no-implicit-
+  promotion rule for plain INTEGER/REAL. Not yet covered: files,
+  multi-dimension arrays, CHAR-keyed CASE, CASE label ranges, REAL's
+  width+precision WRITE formatting (%*.*f), MATHCK/RANGECK-style runtime
+  traps (including CONCAT/COPYLST/COPYSTR/INSERT's own capacity overflow,
+  which is unchecked -- same simplification as an unchecked array index
+  elsewhere in this file), C-ABI externs, units, and DEVICE MODULE/PTX
+  generation. Anything not yet covered is
   rejected loudly via AbortWith rather than silently mishandled
   or miscompiled -- reject unhandled constructs instead of guessing, the
   same discipline the earlier native stages (lexer.pas/parser.pas/
@@ -169,6 +188,9 @@ FUNCTION LLVMBuildFCmp(b: ADRMEM; pred: CINT; lhs: ADRMEM; rhs: ADRMEM; name: AD
 FUNCTION LLVMBuildSExt(b: ADRMEM; val: ADRMEM; destty: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildSIToFP(b: ADRMEM; val: ADRMEM; destty: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildFPToSI(b: ADRMEM; val: ADRMEM; destty: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMBuildFPExt(b: ADRMEM; val: ADRMEM; destty: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMBuildFPTrunc(b: ADRMEM; val: ADRMEM; destty: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMFloatTypeInContext(ctx: ADRMEM): ADRMEM [C]; EXTERN;
 PROCEDURE LLVMBuildBr(b: ADRMEM; dest: ADRMEM) [C]; EXTERN;
 PROCEDURE LLVMBuildCondBr(b: ADRMEM; cond: ADRMEM; then_bb: ADRMEM; else_bb: ADRMEM) [C]; EXTERN;
 FUNCTION LLVMBuildCall2(b: ADRMEM; fty: ADRMEM; fn: ADRMEM; args: ADRMEM; nargs: CINT; name: ADRMEM): ADRMEM [C]; EXTERN;
@@ -212,16 +234,30 @@ CONST
     tag). Unlike the Python reference, this file has no feature-gate
     mechanism, so INTEGER8 is always available here rather than gated
     behind -f wide-integers. }
-  { ids 1..6 are the bare scalar kinds (INTEGER/REAL/BOOLEAN/CHAR/WORD/
-    INTEGER8); ids 7+ are markers whose real tid is an index into `types`
-    (see TypeKind/LLVMTypeForTk) -- bumped up from the original 5 to make
-    room for WORD/INTEGER8 alongside the original four bare scalars. }
-  TK_ARRAY   = 7;
-  TK_RECORD  = 8;
-  TK_LSTRING = 9;
-  TK_POINTER = 10;
-  TK_STRING  = 11;
-  TK_SET     = 12;
+  TK_WORD8    = 7;  { 8-bit unsigned, LLVM i8 -- the unsigned sibling of
+    INTEGER8, printed via %u like WORD. }
+  TK_INTEGER32 = 8;  { 32-bit signed, LLVM i32. }
+  TK_WORD32    = 9;  { 32-bit unsigned, LLVM i32, printed via %u. }
+  TK_INTEGER64 = 10; { 64-bit signed, LLVM i64, printed via %lld. }
+  TK_WORD64    = 11; { 64-bit unsigned, LLVM i64, printed via %llu. }
+  TK_REAL32    = 12; { 32-bit float, LLVM float -- REAL32 widens implicitly
+    into REAL (fpext) on assignment; the reverse is not implicit, matching
+    the Python reference, except this file additionally allows a bare REAL
+    literal to narrow (fptrunc) into a REAL32 target, mirroring the same
+    literal-only looseness INTEGER8 already gets relative to the reference
+    (see CoerceForAssign) since this file's literal codegen has no
+    context-type threading to make RealLiteral itself REAL32-typed. }
+  { ids 1..12 are the bare scalar kinds (INTEGER/REAL/BOOLEAN/CHAR/WORD/
+    INTEGER8/WORD8/INTEGER32/WORD32/INTEGER64/WORD64/REAL32); ids 13+ are
+    markers whose real tid is an index into `types` (see TypeKind/
+    LLVMTypeForTk) -- bumped up from the original 7 to make room for the
+    rest of the wide-integer/REAL32 extension family. }
+  TK_ARRAY   = 13;
+  TK_RECORD  = 14;
+  TK_LSTRING = 15;
+  TK_POINTER = 16;
+  TK_STRING  = 17;
+  TK_SET     = 18;
 
   MAX_SYMBOLS = 500;
   MAX_SCOPES = 64;
@@ -286,7 +322,7 @@ TYPE
 
 VAR
   ctx, modl, builder: ADRMEM;
-  i32ty, i16ty, i8ty, i1ty, i64ty, dblty, i8ptrty, voidty: ADRMEM;
+  i32ty, i16ty, i8ty, i1ty, i64ty, dblty, f32ty, i8ptrty, voidty: ADRMEM;
   setty: ADRMEM; { the one physical set representation shared by every SET
                    type regardless of declared base range, matching the
                    Python reference's set_llvm_type: a fixed [4 x i64]
@@ -475,7 +511,13 @@ BEGIN
   ELSE IF tk = TK_CHAR THEN LLVMTypeForTk := i8ty
   ELSE IF tk = TK_WORD THEN LLVMTypeForTk := i16ty
   ELSE IF tk = TK_INTEGER8 THEN LLVMTypeForTk := i8ty
-  ELSE IF tk >= 7 THEN LLVMTypeForTk := types[tk].llvm_ty
+  ELSE IF tk = TK_WORD8 THEN LLVMTypeForTk := i8ty
+  ELSE IF tk = TK_INTEGER32 THEN LLVMTypeForTk := i32ty
+  ELSE IF tk = TK_WORD32 THEN LLVMTypeForTk := i32ty
+  ELSE IF tk = TK_INTEGER64 THEN LLVMTypeForTk := i64ty
+  ELSE IF tk = TK_WORD64 THEN LLVMTypeForTk := i64ty
+  ELSE IF tk = TK_REAL32 THEN LLVMTypeForTk := f32ty
+  ELSE IF tk >= 13 THEN LLVMTypeForTk := types[tk].llvm_ty
   ELSE
   BEGIN
     AbortWith('codegen: LLVMTypeForTk: unknown type kind');
@@ -484,10 +526,10 @@ BEGIN
 END;
 
 FUNCTION TypeKind(tid: INTEGER): INTEGER;
-{ tid <= 6 IS its own kind (a bare scalar TK_* constant); tid >= 7 is an
+{ tid <= 12 IS its own kind (a bare scalar TK_* constant); tid >= 13 is an
   index into `types`, whose own .tk says ARRAY or RECORD. }
 BEGIN
-  IF tid <= 6 THEN TypeKind := tid
+  IF tid <= 12 THEN TypeKind := tid
   ELSE TypeKind := types[tid].tk;
 END;
 
@@ -496,7 +538,7 @@ VAR
   i, found: INTEGER;
 BEGIN
   found := 0;
-  FOR i := 7 TO ntypes DO
+  FOR i := 13 TO ntypes DO
     IF types[i].name = name THEN found := i;
   LookupNamedType := found;
 END;
@@ -570,6 +612,88 @@ BEGIN
   ELSE IsIntLiteralLike := FALSE;
 END;
 
+FUNCTION MakeRadix64: INTEGER64;
+{ Builds the INTEGER64 value 1000000000 via small in-range INTEGER64
+  arithmetic -- the literal 1000000000 itself is out of range for this
+  compiler's default INTEGER (16-bit) and this file has no typed CONST
+  syntax to declare it directly as INTEGER64. }
+VAR
+  r: INTEGER64;
+BEGIN
+  r := 1000;
+  r := r * r;
+  r := r * 1000;
+  MakeRadix64 := r;
+END;
+
+FUNCTION Real64ToInt64(val: REAL): INTEGER64;
+{ TRUNC(x) for a REAL x outside INTEGER32's range is not usable directly
+  here: this host Pascal compiler's TRUNC always lowers to a 32-bit
+  float-to-int conversion regardless of the surrounding INTEGER64 context,
+  so a magnitude like 5000000000.0 overflows it (fptosi poison, observed
+  in practice as INTEGER32's MIN value) well before the result ever
+  reaches a 64-bit variable. Split into a base-1e9 high/low pair instead --
+  each TRUNC call only ever sees a magnitude comfortably inside INTEGER32's
+  range this way -- and recombine via INTEGER64 multiply/add, neither of
+  which goes through TRUNC. Sufficient for every literal this AST's JSON
+  encoding can represent exactly as a double in the first place (up to
+  2^53), which covers every wide-integer literal this file can compile. }
+CONST
+  RADIX = 1000000000.0;
+VAR
+  neg: BOOLEAN;
+  hi: INTEGER; { Only plain INTEGER (and INTEGER8) mix implicitly with REAL
+                  arithmetic in this dialect (type_system.py's "INTEGER op
+                  REAL" rule) -- INTEGER32/64 do not, and FLOAT() only
+                  accepts plain INTEGER too -- so hi*RADIX below needs hi
+                  kept at this native 16-bit width, even though it is then
+                  widened to INTEGER64 for the final recombination. Safe
+                  for any literal whose magnitude is less than roughly
+                  32767 * 1e9, comfortably covering every practical
+                  INTEGER64/WORD64 literal. }
+  lo: INTEGER64;
+  mag: REAL;
+BEGIN
+  neg := val < 0.0;
+  IF neg THEN mag := 0.0 - val ELSE mag := val;
+  hi := TRUNC(mag / RADIX);
+  lo := TRUNC(mag - hi * RADIX);
+  IF neg THEN Real64ToInt64 := 0 - (hi * MakeRadix64 + lo)
+  ELSE Real64ToInt64 := hi * MakeRadix64 + lo;
+END;
+
+FUNCTION IntLiteralValue(expr_node: ADRMEM): INTEGER64;
+{ The signed value of an IsIntLiteralLike node. Deliberately re-reads the
+  raw JSON value via GetReal (a full double, exact for every magnitude an
+  INTEGER64/WORD64 literal can take) rather than reusing CodegenExpr's own
+  IntLiteral result, or GetInt: CodegenExpr's path always builds an i16
+  constant (this dialect's native INTEGER width) and GetInt truncates to
+  INTEGER32, both silently losing magnitude for a literal destined for an
+  INTEGER64/WORD64 target, which needs the value rebuilt at the target's
+  own width instead. }
+BEGIN
+  IF NodeType(expr_node) = 'IntLiteral' THEN
+    IntLiteralValue := Real64ToInt64(GetReal(expr_node, 'value'))
+  ELSE IF (NodeType(expr_node) = 'UnaryOp') AND (GetStr(expr_node, 'op') = 'MINUS') THEN
+    IntLiteralValue := 0 - Real64ToInt64(GetReal(GetObj(expr_node, 'operand'), 'value'))
+  ELSE
+  BEGIN
+    AbortWith('codegen: IntLiteralValue: not a literal');
+    IntLiteralValue := 0;
+  END;
+END;
+
+FUNCTION IsWideIntTk(tk: INTEGER): BOOLEAN;
+{ Every integer-family scalar wider or differently-signed than plain
+  INTEGER -- the set of target kinds a bare INTEGER literal operand may
+  adapt to, in an assignment or (see CodegenBinOp) a same-op comparison/
+  arithmetic expression, mirroring the reference's literal_context
+  threading (typecheck/exprs.py). }
+BEGIN
+  IsWideIntTk := (tk = TK_WORD) OR (tk = TK_INTEGER8) OR (tk = TK_WORD8) OR
+    (tk = TK_INTEGER32) OR (tk = TK_WORD32) OR (tk = TK_INTEGER64) OR (tk = TK_WORD64);
+END;
+
 FUNCTION CoerceForAssign(v: ADRMEM; from_tid, to_tid: INTEGER; expr_node: ADRMEM; ctx_name: Str255): ADRMEM;
 { Resolve an assignment's RHS value against its target type, mirroring the
   Python reference's can_assign plus its _const_adapts_to_int_target
@@ -583,8 +707,23 @@ FUNCTION CoerceForAssign(v: ADRMEM; from_tid, to_tid: INTEGER; expr_node: ADRMEM
 BEGIN
   IF TypesCompatibleForAssign(from_tid, to_tid) THEN
     CoerceForAssign := v
-  ELSE IF (from_tid = TK_INTEGER) AND (to_tid = TK_INTEGER8) AND IsIntLiteralLike(expr_node) THEN
-    CoerceForAssign := LLVMBuildTrunc(builder, v, i8ty, MakeCStr(''))
+  ELSE IF (from_tid = TK_INTEGER) AND ((to_tid = TK_INTEGER8) OR (to_tid = TK_WORD8)) AND IsIntLiteralLike(expr_node) THEN
+    CoerceForAssign := LLVMConstInt(i8ty, IntLiteralValue(expr_node), 1)
+  ELSE IF (from_tid = TK_INTEGER) AND ((to_tid = TK_INTEGER32) OR (to_tid = TK_WORD32)) AND IsIntLiteralLike(expr_node) THEN
+    CoerceForAssign := LLVMConstInt(i32ty, IntLiteralValue(expr_node), 1)
+  ELSE IF (from_tid = TK_INTEGER) AND ((to_tid = TK_INTEGER64) OR (to_tid = TK_WORD64)) AND IsIntLiteralLike(expr_node) THEN
+    CoerceForAssign := LLVMConstInt(i64ty, IntLiteralValue(expr_node), 1)
+  ELSE IF (from_tid = TK_REAL32) AND (to_tid = TK_REAL) THEN
+    { REAL32 widens implicitly into REAL, matching the reference. }
+    CoerceForAssign := LLVMBuildFPExt(builder, v, dblty, MakeCStr(''))
+  ELSE IF (from_tid = TK_REAL) AND (to_tid = TK_REAL32) AND (NodeType(expr_node) = 'RealLiteral') THEN
+    { Narrowing REAL->REAL32 is not implicit in the reference either, but a
+      bare REAL32-context literal there resolves as REAL32 from the start
+      (context-typed literal codegen); this file's RealLiteral codegen has
+      no such context threading, so it always produces a REAL constant --
+      allow that literal (only) to narrow here, the same documented
+      looseness INTEGER8 already gets above. }
+    CoerceForAssign := LLVMBuildFPTrunc(builder, v, f32ty, MakeCStr(''))
   ELSE
   BEGIN
     AbortWith2('codegen: assignment type mismatch for: ', ctx_name);
@@ -606,6 +745,12 @@ BEGIN
   ELSE IF tid = TK_CHAR THEN TypeSizeBytes := 1
   ELSE IF tid = TK_WORD THEN TypeSizeBytes := 2
   ELSE IF tid = TK_INTEGER8 THEN TypeSizeBytes := 1
+  ELSE IF tid = TK_WORD8 THEN TypeSizeBytes := 1
+  ELSE IF tid = TK_INTEGER32 THEN TypeSizeBytes := 4
+  ELSE IF tid = TK_WORD32 THEN TypeSizeBytes := 4
+  ELSE IF tid = TK_INTEGER64 THEN TypeSizeBytes := 8
+  ELSE IF tid = TK_WORD64 THEN TypeSizeBytes := 8
+  ELSE IF tid = TK_REAL32 THEN TypeSizeBytes := 4
   ELSE IF TypeKind(tid) = TK_ARRAY THEN
     TypeSizeBytes := TypeSizeBytes(types[tid].elem_tid) * (types[tid].hi - types[tid].lo + 1)
   ELSE IF TypeKind(tid) = TK_RECORD THEN
@@ -658,12 +803,19 @@ BEGIN
   IF nt = 'NamedType' THEN
   BEGIN
     nm := GetStr(te, 'name');
-    IF nm = 'INTEGER' THEN tid := TK_INTEGER
+    IF (nm = 'INTEGER') OR (nm = 'INTEGER16') THEN tid := TK_INTEGER
     ELSE IF nm = 'REAL' THEN tid := TK_REAL
     ELSE IF nm = 'BOOLEAN' THEN tid := TK_BOOLEAN
     ELSE IF nm = 'CHAR' THEN tid := TK_CHAR
     ELSE IF (nm = 'WORD') OR (nm = 'WORD16') THEN tid := TK_WORD
     ELSE IF nm = 'INTEGER8' THEN tid := TK_INTEGER8
+    ELSE IF nm = 'WORD8' THEN tid := TK_WORD8
+    ELSE IF nm = 'INTEGER32' THEN tid := TK_INTEGER32
+    ELSE IF nm = 'WORD32' THEN tid := TK_WORD32
+    ELSE IF nm = 'INTEGER64' THEN tid := TK_INTEGER64
+    ELSE IF nm = 'WORD64' THEN tid := TK_WORD64
+    ELSE IF (nm = 'REAL32') THEN tid := TK_REAL32
+    ELSE IF nm = 'REAL64' THEN tid := TK_REAL
     ELSE IF nm = 'STRING' THEN
     BEGIN
       IF GetObjOrNil(te, 'param') = NIL THEN hi := 256
@@ -821,7 +973,7 @@ BEGIN
        (TypeKind(tk) = TK_LSTRING) OR (TypeKind(tk) = TK_POINTER) OR
        (TypeKind(tk) = TK_STRING) OR (TypeKind(tk) = TK_SET) THEN
       zero := LLVMConstNull(LLVMTypeForTk(tk))
-    ELSE IF tk = TK_REAL THEN zero := LLVMConstReal(dblty, 0.0)
+    ELSE IF (tk = TK_REAL) OR (tk = TK_REAL32) THEN zero := LLVMConstReal(LLVMTypeForTk(tk), 0.0)
     ELSE zero := LLVMConstInt(LLVMTypeForTk(tk), 0, 0);
     LLVMSetInitializer(gvar, zero);
   END;
@@ -1082,6 +1234,23 @@ BEGIN
   rval := CodegenExpr(right_node);
   rtk := last_val_tk;
 
+  { A bare INTEGER literal operand adapts to the other side's wider/
+    differently-signed integer type, mirroring the reference's
+    literal_context threading (typecheck/exprs.py): CodegenExpr always
+    builds an IntLiteral as plain 16-bit INTEGER with no knowledge of
+    context, so rebuild it at the sibling operand's own width here instead
+    of letting the ltk<>rtk check below reject it as "mixed-type". }
+  IF (ltk = TK_INTEGER) AND IsIntLiteralLike(left_node) AND IsWideIntTk(rtk) THEN
+  BEGIN
+    lval := LLVMConstInt(LLVMTypeForTk(rtk), IntLiteralValue(left_node), 1);
+    ltk := rtk;
+  END
+  ELSE IF (rtk = TK_INTEGER) AND IsIntLiteralLike(right_node) AND IsWideIntTk(ltk) THEN
+  BEGIN
+    rval := LLVMConstInt(LLVMTypeForTk(ltk), IntLiteralValue(right_node), 1);
+    rtk := ltk;
+  END;
+
   { A single flat ELSE IF chain, deliberately avoiding the bare EXIT
     statement: EXIT from deep inside nested IFs inside a FUNCTION triggers a
     pre-existing crash in the Python reference compiler's C-ABI call
@@ -1121,7 +1290,8 @@ BEGIN
       cross-width extension choice are signedness-aware there; this file
       has no cross-width mixing at all, so that distinction never applies
       here). }
-    IF (ltk = TK_INTEGER) OR (ltk = TK_WORD) OR (ltk = TK_INTEGER8) THEN
+    IF (ltk = TK_INTEGER) OR (ltk = TK_WORD) OR (ltk = TK_INTEGER8) OR (ltk = TK_WORD8) OR
+       (ltk = TK_INTEGER32) OR (ltk = TK_WORD32) OR (ltk = TK_INTEGER64) OR (ltk = TK_WORD64) THEN
     BEGIN
       IF op = 'EQ' THEN res := LLVMBuildICmp(builder, LLVMIntEQ, lval, rval, MakeCStr(''))
       ELSE IF op = 'NEQ' THEN res := LLVMBuildICmp(builder, LLVMIntNE, lval, rval, MakeCStr(''))
@@ -1130,7 +1300,7 @@ BEGIN
       ELSE IF op = 'GT' THEN res := LLVMBuildICmp(builder, LLVMIntSGT, lval, rval, MakeCStr(''))
       ELSE res := LLVMBuildICmp(builder, LLVMIntSGE, lval, rval, MakeCStr(''));
     END
-    ELSE IF ltk = TK_REAL THEN
+    ELSE IF (ltk = TK_REAL) OR (ltk = TK_REAL32) THEN
     BEGIN
       IF op = 'EQ' THEN res := LLVMBuildFCmp(builder, LLVMRealOEQ, lval, rval, MakeCStr(''))
       ELSE IF op = 'NEQ' THEN res := LLVMBuildFCmp(builder, LLVMRealONE, lval, rval, MakeCStr(''))
@@ -1146,12 +1316,14 @@ BEGIN
     END;
     last_val_tk := TK_BOOLEAN;
   END
-  ELSE IF (ltk = TK_INTEGER) OR (ltk = TK_WORD) OR (ltk = TK_INTEGER8) THEN
+  ELSE IF (ltk = TK_INTEGER) OR (ltk = TK_WORD) OR (ltk = TK_INTEGER8) OR (ltk = TK_WORD8) OR
+          (ltk = TK_INTEGER32) OR (ltk = TK_WORD32) OR (ltk = TK_INTEGER64) OR (ltk = TK_WORD64) THEN
   BEGIN
     { Same rationale as the comparison branch above: +/-/*/DIV/MOD on
-      WORD/INTEGER8 reuse plain INTEGER's signed instructions -- two's
-      complement add/sub/mul don't care about signedness, and the
-      reference hardcodes sdiv/srem even for WORD. }
+      WORD/INTEGER8 (and their wider WORD8/32/64, INTEGER32/64 siblings)
+      reuse plain INTEGER's signed instructions -- two's complement
+      add/sub/mul don't care about signedness, and the reference hardcodes
+      sdiv/srem even for the WORD family. }
     IF op = 'PLUS' THEN res := LLVMBuildAdd(builder, lval, rval, MakeCStr(''))
     ELSE IF op = 'MINUS' THEN res := LLVMBuildSub(builder, lval, rval, MakeCStr(''))
     ELSE IF op = 'MUL' THEN res := LLVMBuildMul(builder, lval, rval, MakeCStr(''))
@@ -1159,12 +1331,12 @@ BEGIN
     ELSE IF op = 'MOD' THEN res := LLVMBuildSRem(builder, lval, rval, MakeCStr(''))
     ELSE
     BEGIN
-      AbortWith2('codegen: unhandled INTEGER/WORD/INTEGER8 operator: ', op);
+      AbortWith2('codegen: unhandled integer-family operator: ', op);
       res := NIL;
     END;
     last_val_tk := ltk;
   END
-  ELSE IF ltk = TK_REAL THEN
+  ELSE IF (ltk = TK_REAL) OR (ltk = TK_REAL32) THEN
   BEGIN
     IF op = 'PLUS' THEN res := LLVMBuildFAdd(builder, lval, rval, MakeCStr(''))
     ELSE IF op = 'MINUS' THEN res := LLVMBuildFSub(builder, lval, rval, MakeCStr(''))
@@ -1172,10 +1344,10 @@ BEGIN
     ELSE IF op = 'SLASH' THEN res := LLVMBuildFDiv(builder, lval, rval, MakeCStr(''))
     ELSE
     BEGIN
-      AbortWith2('codegen: unhandled REAL operator: ', op);
+      AbortWith2('codegen: unhandled REAL/REAL32 operator: ', op);
       res := NIL;
     END;
-    last_val_tk := TK_REAL;
+    last_val_tk := ltk;
   END
   ELSE
   BEGIN
@@ -1195,11 +1367,14 @@ BEGIN
   IF op = 'MINUS' THEN
   BEGIN
     IF (tk = TK_INTEGER) OR (tk = TK_WORD) THEN res := LLVMBuildSub(builder, LLVMConstInt(i16ty, 0, 1), v, MakeCStr(''))
-    ELSE IF tk = TK_INTEGER8 THEN res := LLVMBuildSub(builder, LLVMConstInt(i8ty, 0, 1), v, MakeCStr(''))
+    ELSE IF (tk = TK_INTEGER8) OR (tk = TK_WORD8) THEN res := LLVMBuildSub(builder, LLVMConstInt(i8ty, 0, 1), v, MakeCStr(''))
+    ELSE IF (tk = TK_INTEGER32) OR (tk = TK_WORD32) THEN res := LLVMBuildSub(builder, LLVMConstInt(i32ty, 0, 1), v, MakeCStr(''))
+    ELSE IF (tk = TK_INTEGER64) OR (tk = TK_WORD64) THEN res := LLVMBuildSub(builder, LLVMConstInt(i64ty, 0, 1), v, MakeCStr(''))
     ELSE IF tk = TK_REAL THEN res := LLVMBuildFSub(builder, LLVMConstReal(dblty, 0.0), v, MakeCStr(''))
+    ELSE IF tk = TK_REAL32 THEN res := LLVMBuildFSub(builder, LLVMConstReal(f32ty, 0.0), v, MakeCStr(''))
     ELSE
     BEGIN
-      AbortWith('codegen: unary MINUS requires INTEGER/WORD/INTEGER8/REAL operand');
+      AbortWith('codegen: unary MINUS requires an integer-family or REAL/REAL32 operand');
       res := NIL;
     END;
     last_val_tk := tk;
@@ -1536,6 +1711,19 @@ BEGIN
     res := LLVMBuildTrunc(builder, res, i8ty, MakeCStr(''));
     last_val_tk := TK_CHAR;
   END
+  ELSE IF nm = 'WRD8' THEN
+  BEGIN
+    { WRD8(x): truncate/retype to the 8-bit unsigned WORD8 -- the 8-bit
+      sibling of WRD. Wider integers truncate to the low byte; i8-width
+      values (CHAR/INTEGER8/WORD8) pass through unchanged; BOOLEAN (i1
+      here, unlike the reference's i8-loaded BOOLEAN) zero-extends to i8. }
+    IF argtk = TK_REAL THEN
+      AbortWith('codegen: WRD8: REAL argument not supported');
+    IF (argtk = TK_CHAR) OR (argtk = TK_INTEGER8) OR (argtk = TK_WORD8) THEN res := v
+    ELSE IF argtk = TK_BOOLEAN THEN res := LLVMBuildZExt(builder, v, i8ty, MakeCStr(''))
+    ELSE res := LLVMBuildTrunc(builder, v, i8ty, MakeCStr(''));
+    last_val_tk := TK_WORD8;
+  END
   ELSE IF nm = 'WRD' THEN
   BEGIN
     { INTEGER/WORD (already i16) pass through unchanged; CHAR/BOOLEAN/
@@ -1704,7 +1892,7 @@ BEGIN
     ELSE IF (nm = 'CHR') OR (nm = 'ORD') OR (nm = 'ODD') OR (nm = 'SUCC') OR (nm = 'PRED')
       OR (nm = 'ABS') OR (nm = 'SQR') OR (nm = 'SQRT') OR (nm = 'SIN') OR (nm = 'COS')
       OR (nm = 'LN') OR (nm = 'EXP') OR (nm = 'ARCTAN') OR (nm = 'TRUNC') OR (nm = 'ROUND')
-      OR (nm = 'FLOAT') OR (nm = 'HIBYTE') OR (nm = 'LOBYTE') OR (nm = 'WRD') OR (nm = 'BYWORD') THEN
+      OR (nm = 'FLOAT') OR (nm = 'HIBYTE') OR (nm = 'LOBYTE') OR (nm = 'WRD') OR (nm = 'WRD8') OR (nm = 'BYWORD') THEN
       res := CodegenSimpleBuiltin(nm, GetObj(node, 'args'))
     ELSE
     BEGIN
@@ -1879,6 +2067,32 @@ BEGIN
           v := LLVMBuildSExt(builder, v, i32ty, MakeCStr(''));
           IF have_width THEN CONCAT(fmt, '%*d') ELSE CONCAT(fmt, '%d');
         END
+        ELSE IF last_val_tk = TK_WORD8 THEN
+        BEGIN
+          v := LLVMBuildZExt(builder, v, i32ty, MakeCStr(''));
+          IF have_width THEN CONCAT(fmt, '%*u') ELSE CONCAT(fmt, '%u');
+        END
+        ELSE IF last_val_tk = TK_INTEGER32 THEN
+        BEGIN
+          IF have_width THEN CONCAT(fmt, '%*d') ELSE CONCAT(fmt, '%d');
+        END
+        ELSE IF last_val_tk = TK_WORD32 THEN
+        BEGIN
+          IF have_width THEN CONCAT(fmt, '%*u') ELSE CONCAT(fmt, '%u');
+        END
+        ELSE IF last_val_tk = TK_INTEGER64 THEN
+        BEGIN
+          IF have_width THEN CONCAT(fmt, '%*lld') ELSE CONCAT(fmt, '%lld');
+        END
+        ELSE IF last_val_tk = TK_WORD64 THEN
+        BEGIN
+          IF have_width THEN CONCAT(fmt, '%*llu') ELSE CONCAT(fmt, '%llu');
+        END
+        ELSE IF last_val_tk = TK_REAL32 THEN
+        BEGIN
+          v := LLVMBuildFPExt(builder, v, dblty, MakeCStr(''));
+          IF have_width THEN CONCAT(fmt, '%*E') ELSE CONCAT(fmt, '%14.7E');
+        END
         ELSE IF last_val_tk = TK_REAL THEN
         BEGIN
           IF have_width THEN CONCAT(fmt, '%*E') ELSE CONCAT(fmt, '%14.7E');
@@ -1925,6 +2139,32 @@ BEGIN
       BEGIN
         v := LLVMBuildSExt(builder, v, i32ty, MakeCStr(''));
         IF have_width THEN CONCAT(fmt, '%*d') ELSE CONCAT(fmt, '%d');
+      END
+      ELSE IF last_val_tk = TK_WORD8 THEN
+      BEGIN
+        v := LLVMBuildZExt(builder, v, i32ty, MakeCStr(''));
+        IF have_width THEN CONCAT(fmt, '%*u') ELSE CONCAT(fmt, '%u');
+      END
+      ELSE IF last_val_tk = TK_INTEGER32 THEN
+      BEGIN
+        IF have_width THEN CONCAT(fmt, '%*d') ELSE CONCAT(fmt, '%d');
+      END
+      ELSE IF last_val_tk = TK_WORD32 THEN
+      BEGIN
+        IF have_width THEN CONCAT(fmt, '%*u') ELSE CONCAT(fmt, '%u');
+      END
+      ELSE IF last_val_tk = TK_INTEGER64 THEN
+      BEGIN
+        IF have_width THEN CONCAT(fmt, '%*lld') ELSE CONCAT(fmt, '%lld');
+      END
+      ELSE IF last_val_tk = TK_WORD64 THEN
+      BEGIN
+        IF have_width THEN CONCAT(fmt, '%*llu') ELSE CONCAT(fmt, '%llu');
+      END
+      ELSE IF last_val_tk = TK_REAL32 THEN
+      BEGIN
+        v := LLVMBuildFPExt(builder, v, dblty, MakeCStr(''));
+        IF have_width THEN CONCAT(fmt, '%*E') ELSE CONCAT(fmt, '%14.7E');
       END
       ELSE IF last_val_tk = TK_REAL THEN
       BEGIN
@@ -3090,7 +3330,7 @@ BEGIN
     cur_func_name := name;
     cur_func_ret_tk := ret_tk;
     cur_func_ret_slot := LLVMBuildAlloca(builder, ret_llvm_ty, MakeCStr('return_value'));
-    IF ret_tk = TK_REAL THEN LLVMBuildStore(builder, LLVMConstReal(dblty, 0.0), cur_func_ret_slot)
+    IF (ret_tk = TK_REAL) OR (ret_tk = TK_REAL32) THEN LLVMBuildStore(builder, LLVMConstReal(ret_llvm_ty, 0.0), cur_func_ret_slot)
     ELSE LLVMBuildStore(builder, LLVMConstInt(ret_llvm_ty, 0, 0), cur_func_ret_slot);
   END
   ELSE
@@ -3185,6 +3425,7 @@ BEGIN
   i1ty := LLVMInt1TypeInContext(ctx);
   i64ty := LLVMInt64TypeInContext(ctx);
   dblty := LLVMDoubleTypeInContext(ctx);
+  f32ty := LLVMFloatTypeInContext(ctx);
   i8ptrty := LLVMPointerType(i8ty, 0);
   voidty := LLVMVoidTypeInContext(ctx);
   setty := LLVMArrayType(i64ty, 4);
@@ -3304,9 +3545,9 @@ BEGIN
   in_local_scope := FALSE;
   nroutines := 0;
   cur_func_name := '';
-  ntypes := 6; { ids 1..6 are the bare TK_INTEGER..TK_INTEGER8 scalars, not
+  ntypes := 12; { ids 1..12 are the bare TK_INTEGER..TK_REAL32 scalars, not
                  `types` table entries -- the first RegisterType call must
-                 hand out id 7, not 1. }
+                 hand out id 13, not 1. }
   nfields := 0;
 
   block := GetObj(root, 'block');
