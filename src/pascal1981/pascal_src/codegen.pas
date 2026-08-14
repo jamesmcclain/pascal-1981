@@ -4421,7 +4421,8 @@ VAR
   args, arg0: ADRMEM;
   symi: INTEGER32;
   ptr_tid, pointee_tid: INTEGER;
-  raw, casted, call_args: ADRMEM;
+  raw, casted, call_args, bound, bytes, header: ADRMEM;
+  narg: INTEGER32;
 BEGIN
   name := GetStr(stmt, 'name');
   IF name = 'LAUNCH' THEN
@@ -4455,8 +4456,10 @@ BEGIN
   ELSE IF (name = 'NEW') OR (name = 'DISPOSE') THEN
   BEGIN
     args := GetObj(stmt, 'args');
-    IF ArrSize(args) <> 1 THEN
-      AbortWith2('codegen: expected one pointer argument to: ', name);
+    narg := ArrSize(args);
+    IF ((name = 'DISPOSE') AND (narg <> 1)) OR
+       ((name = 'NEW') AND (narg <> 1) AND (narg <> 2)) THEN
+      AbortWith2('codegen: wrong argument count for: ', name);
     arg0 := ArrItem(args, 0);
     IF NodeType(arg0) <> 'Identifier' THEN
       AbortWith2('codegen: argument must be a bare pointer variable: ', name);
@@ -4470,15 +4473,36 @@ BEGIN
     BEGIN
       pointee_tid := types[ptr_tid].elem_tid;
       call_args := AllocPtrArray(1);
-      SetPtrArrayElem(call_args, 0, LLVMConstInt(i32ty, TypeSizeBytes(pointee_tid), 0));
-      raw := LLVMBuildCall2(builder, malloc_fnty, malloc_fn, call_args, 1, MakeCStr(''));
-      casted := LLVMBuildBitCast(builder, raw, LLVMTypeForTk(ptr_tid), MakeCStr(''));
+      IF types[pointee_tid].is_super THEN
+      BEGIN
+        IF narg <> 2 THEN AbortWith('codegen: NEW of SUPER ARRAY needs an upper bound');
+        bound := CodegenExpr(ArrItem(args, 1));
+        bound := LaunchI64(bound, last_val_tk);
+        { malloc holds an i64 upper-bound header followed by flat elements. }
+        bytes := LLVMBuildAdd(builder, bound, LLVMConstInt(i64ty, 1 - types[pointee_tid].lo, 1), MakeCStr(''));
+        bytes := LLVMBuildMul(builder, bytes, LLVMConstInt(i64ty, TypeSizeBytes(types[pointee_tid].elem_tid), 0), MakeCStr(''));
+        bytes := LLVMBuildAdd(builder, bytes, LLVMConstInt(i64ty, 8, 0), MakeCStr(''));
+        SetPtrArrayElem(call_args, 0, bytes);
+        raw := LLVMBuildCall2(builder, malloc_fnty, malloc_fn, call_args, 1, MakeCStr(''));
+        LLVMBuildStore(builder, bound, raw);
+        header := LLVMBuildGEP2(builder, i8ty, raw, MakeArgs1(LLVMConstInt(i64ty, 8, 0)), 1, MakeCStr(''));
+        casted := LLVMBuildBitCast(builder, header, LLVMTypeForTk(ptr_tid), MakeCStr(''));
+      END
+      ELSE
+      BEGIN
+        SetPtrArrayElem(call_args, 0, LLVMConstInt(i64ty, TypeSizeBytes(pointee_tid), 0));
+        raw := LLVMBuildCall2(builder, malloc_fnty, malloc_fn, call_args, 1, MakeCStr(''));
+        casted := LLVMBuildBitCast(builder, raw, LLVMTypeForTk(ptr_tid), MakeCStr(''));
+      END;
       LLVMBuildStore(builder, casted, symbols[symi].llvm_val);
     END
     ELSE
     BEGIN
       raw := LLVMBuildLoad2(builder, LLVMTypeForTk(ptr_tid), symbols[symi].llvm_val, MakeCStr(''));
       casted := LLVMBuildBitCast(builder, raw, i8ptrty, MakeCStr(''));
+      IF types[types[ptr_tid].elem_tid].is_super THEN
+        casted := LLVMBuildGEP2(builder, i8ty, casted,
+          MakeArgs1(LLVMConstInt(i64ty, -8, 1)), 1, MakeCStr(''));
       call_args := AllocPtrArray(1);
       SetPtrArrayElem(call_args, 0, casted);
       discard := LLVMBuildCall2(builder, free_fnty, free_fn, call_args, 1, MakeCStr(''));
@@ -5101,7 +5125,8 @@ BEGIN
   printf_fn := LLVMAddFunction(modl, MakeCStr('printf'), printf_fnty);
 
   param_arr := AllocPtrArray(1);
-  SetPtrArrayElem(param_arr, 0, i32ty);
+  { C malloc takes size_t; the supported native host ABI is LP64. }
+  SetPtrArrayElem(param_arr, 0, i64ty);
   malloc_fnty := LLVMFunctionType(i8ptrty, param_arr, 1, 0);
   malloc_fn := LLVMAddFunction(modl, MakeCStr('malloc'), malloc_fnty);
 
