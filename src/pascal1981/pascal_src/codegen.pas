@@ -159,6 +159,11 @@ FUNCTION LLVMCreateBuilderInContext(ctx: ADRMEM): ADRMEM [C]; EXTERN;
 PROCEDURE LLVMPositionBuilderAtEnd(b: ADRMEM; bb: ADRMEM) [C]; EXTERN;
 PROCEDURE LLVMSetTarget(m: ADRMEM; triple: ADRMEM) [C]; EXTERN;
 PROCEDURE LLVMSetFunctionCallConv(fn: ADRMEM; cc: CINT) [C]; EXTERN;
+FUNCTION LLVMMDStringInContext2(ctx: ADRMEM; str: ADRMEM; slen: CLONG): ADRMEM [C]; EXTERN;
+FUNCTION LLVMMDNodeInContext2(ctx: ADRMEM; mds: ADRMEM; nmds: CLONG): ADRMEM [C]; EXTERN;
+FUNCTION LLVMValueAsMetadata(v: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMMetadataAsValue(ctx: ADRMEM; md: ADRMEM): ADRMEM [C]; EXTERN;
+PROCEDURE LLVMAddNamedMetadataOperand(m: ADRMEM; name: ADRMEM; v: ADRMEM) [C]; EXTERN;
 FUNCTION LLVMBuildGlobalStringPtr(b: ADRMEM; str: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMConstInt(ty: ADRMEM; n: CLONG; signext: CINT): ADRMEM [C]; EXTERN;
 FUNCTION LLVMConstReal(ty: ADRMEM; n: REAL): ADRMEM [C]; EXTERN;
@@ -4614,6 +4619,52 @@ BEGIN
     DeclareVar(CStrToStr255(cJSON_GetStringValue(ArrItem(names, i))), tk);
 END;
 
+PROCEDURE ApplyLaunchBoundAttrs(decl, fn: ADRMEM);
+{ NVPTX consumes launch bounds through legacy !nvvm.annotations metadata.
+  They are ptxas facts, so no host-target approximation is emitted. }
+VAR
+  attrs, attr, args, mds, mdnode: ADRMEM;
+  i, j, n, nargs: INTEGER32;
+  nm, key: Str255;
+BEGIN
+  IF NOT is_nvptx_device THEN
+    AbortWith('codegen: launch-bound attributes require an NVPTX DEVICE target');
+  attrs := GetObj(decl, 'attributes');
+  n := ArrSize(attrs);
+  FOR i := 0 TO n - 1 DO
+  BEGIN
+    attr := ArrItem(attrs, i);
+    nm := GetStr(attr, 'name');
+    IF (nm = 'MAXNTID') OR (nm = 'REQNTID') OR (nm = 'MINCTASM') THEN
+    BEGIN
+      args := GetObj(attr, 'arg');
+      nargs := ArrSize(args);
+      FOR j := 0 TO nargs - 1 DO
+      BEGIN
+        IF nm = 'MAXNTID' THEN
+        BEGIN
+          IF j = 0 THEN key := 'maxntidx'
+          ELSE IF j = 1 THEN key := 'maxntidy'
+          ELSE key := 'maxntidz';
+        END
+        ELSE IF nm = 'REQNTID' THEN
+        BEGIN
+          IF j = 0 THEN key := 'reqntidx'
+          ELSE IF j = 1 THEN key := 'reqntidy'
+          ELSE key := 'reqntidz';
+        END
+        ELSE key := 'minctasm';
+        mds := AllocPtrArray(3);
+        SetPtrArrayElem(mds, 0, LLVMValueAsMetadata(fn));
+        SetPtrArrayElem(mds, 1, LLVMMDStringInContext2(ctx, MakeCStr(key), ORD(key[0])));
+        SetPtrArrayElem(mds, 2, LLVMValueAsMetadata(LLVMConstInt(i32ty, ResolveIntLiteral(ArrItem(args, j)), 0)));
+        mdnode := LLVMMDNodeInContext2(ctx, mds, 3);
+        LLVMAddNamedMetadataOperand(modl, MakeCStr('nvvm.annotations'), LLVMMetadataAsValue(ctx, mdnode));
+      END;
+    END;
+  END;
+END;
+
 FUNCTION IsCForeignDecl(decl: ADRMEM): BOOLEAN;
 { True for an EXTERN/EXTERNAL routine carrying the [C] attribute -- mirrors
   the Python reference's CAbiMixin.is_c_abi_foreign (c_abi.py). Only routines
@@ -4914,7 +4965,10 @@ BEGIN
   { An exported DEVICE PROCEDURE becomes a launchable NVPTX entry. The
     interface placeholder has no flag; the implementation declaration does. }
   IF is_nvptx_device AND is_exported_entry THEN
+  BEGIN
     LLVMSetFunctionCallConv(fn, 71); { LLVMCCallConv::PTX_Kernel }
+    ApplyLaunchBoundAttrs(decl, fn);
+  END;
 
   { EXTERN/FORWARD placeholder: the function is declared (or was already,
     on a prior FORWARD pass) and registered, but there is no Block body to
