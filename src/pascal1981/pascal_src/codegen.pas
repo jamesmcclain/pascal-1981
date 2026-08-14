@@ -154,6 +154,7 @@ FUNCTION LLVMBuildZExt(b: ADRMEM; val: ADRMEM; destty: ADRMEM; name: ADRMEM): AD
 FUNCTION LLVMBuildTrunc(b: ADRMEM; val: ADRMEM; destty: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMFunctionType(ret_ty: ADRMEM; params: ADRMEM; pcount: CINT; vararg: CINT): ADRMEM [C]; EXTERN;
 FUNCTION LLVMAddFunction(m: ADRMEM; name: ADRMEM; fty: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMGetNamedFunction(m: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMAppendBasicBlockInContext(ctx: ADRMEM; fn: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMCreateBuilderInContext(ctx: ADRMEM): ADRMEM [C]; EXTERN;
 PROCEDURE LLVMPositionBuilderAtEnd(b: ADRMEM; bb: ADRMEM) [C]; EXTERN;
@@ -2643,7 +2644,12 @@ BEGIN
   ELSE IF nm = 'GRIDDIM_Z' THEN intrinsic_name := 'llvm.nvvm.read.ptx.sreg.nctaid.z'
   ELSE AbortWith2('codegen: unknown device index builtin: ', nm);
   fnty := LLVMFunctionType(i32ty, NIL, 0, 0);
-  fn := LLVMAddFunction(modl, MakeCStr(intrinsic_name), fnty);
+  { LLVMAddFunction renames a second declaration to .1.  That is fatal for
+    LLVM intrinsics, whose spelling encodes their signature.  An interface
+    declaration can make the implementation body encounter the same special
+    register more than once, so reuse the canonical intrinsic declaration. }
+  fn := LLVMGetNamedFunction(modl, MakeCStr(intrinsic_name));
+  IF fn = NIL THEN fn := LLVMAddFunction(modl, MakeCStr(intrinsic_name), fnty);
   CodegenDeviceIndex := LLVMBuildCall2(builder, fnty, fn, NIL, 0, MakeCStr(''));
   last_val_tk := TK_INTEGER32;
 END;
@@ -4494,7 +4500,8 @@ BEGIN
   IF is_nvptx_device THEN
   BEGIN
     fnty := LLVMFunctionType(voidty, NIL, 0, 0);
-    fn := LLVMAddFunction(modl, MakeCStr('llvm.nvvm.barrier0'), fnty);
+    fn := LLVMGetNamedFunction(modl, MakeCStr('llvm.nvvm.barrier0'));
+    IF fn = NIL THEN fn := LLVMAddFunction(modl, MakeCStr('llvm.nvvm.barrier0'), fnty);
     discard := LLVMBuildCall2(builder, fnty, fn, NIL, 0, MakeCStr(''));
   END;
 END;
