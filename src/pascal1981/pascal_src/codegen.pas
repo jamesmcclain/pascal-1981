@@ -325,6 +325,9 @@ TYPE
     nparams: INTEGER32;
     param_tk: ParamTkArr;
     param_is_var: ParamVarArr;
+    has_body: BOOLEAN; { FALSE for a FORWARD/EXTERN placeholder that hasn't
+                          yet been (or, for EXTERN, never will be) followed
+                          by its real Block-bodied definition. }
   END;
 
 VAR
@@ -826,6 +829,14 @@ BEGIN
     ELSE IF (nm = 'REAL32') THEN tid := TK_REAL32
     ELSE IF nm = 'REAL64' THEN tid := TK_REAL
     ELSE IF nm = 'ADRMEM' THEN tid := TK_ADRMEM
+    { C-ABI fixed-width aliases for [C]; EXTERN declarations, mapped the
+      same way the Python reference's BUILTIN_TYPE_ALIASES does: CCHAR->i8,
+      CSHORT->i16, CINT->i32, CLONG/CSIZE_T->i64 (LP64), CDOUBLE->f64. }
+    ELSE IF nm = 'CCHAR' THEN tid := TK_CHAR
+    ELSE IF nm = 'CSHORT' THEN tid := TK_INTEGER
+    ELSE IF nm = 'CINT' THEN tid := TK_INTEGER32
+    ELSE IF (nm = 'CLONG') OR (nm = 'CSIZE_T') THEN tid := TK_INTEGER64
+    ELSE IF nm = 'CDOUBLE' THEN tid := TK_REAL
     ELSE IF nm = 'STRING' THEN
     BEGIN
       IF GetObjOrNil(te, 'param') = NIL THEN hi := 256
@@ -3336,107 +3347,146 @@ VAR
   ret_tk: INTEGER;
   ret_llvm_ty, fnty, fn, entry_bb2: ADRMEM;
   param_val, palloca, ret_load: ADRMEM;
+  existing: INTEGER32;
+  ridx: INTEGER32;
+  has_block_body: BOOLEAN;
 BEGIN
   name := GetStr(decl, 'name');
-  IF LookupRoutine(name) <> 0 THEN
-    AbortWith2('codegen: duplicate routine declaration: ', name);
+  body_blk := GetObj(decl, 'body');
+  has_block_body := NodeType(body_blk) = 'Block';
 
-  params_arr := GetObj(decl, 'params');
-  FlattenParams(params_arr, n, names, tks, isvar);
-
-  param_llvm_types := AllocPtrArray(n);
-  FOR i := 1 TO n DO
+  existing := LookupRoutine(name);
+  IF existing <> 0 THEN
   BEGIN
-    IF isvar[i] THEN
-      SetPtrArrayElem(param_llvm_types, i - 1, LLVMPointerType(LLVMTypeForTk(tks[i]), 0))
-    ELSE
-      SetPtrArrayElem(param_llvm_types, i - 1, LLVMTypeForTk(tks[i]));
-  END;
-
-  IF is_func THEN
-  BEGIN
-    ret_tk := ResolveTypeExpr(GetObj(decl, 'return_type'));
+    { A prior FORWARD (or, degenerately, EXTERN) placeholder for this same
+      name -- reuse its already-declared LLVM function/type rather than
+      calling LLVMAddFunction again (which would just silently uniquify the
+      name into a second, wrong function). A second placeholder, or a
+      second real definition, for the same name is still an error. }
+    IF routines[existing].has_body OR (NOT has_block_body) THEN
+      AbortWith2('codegen: duplicate routine declaration: ', name);
+    ridx := existing;
+    fn := routines[ridx].fn;
+    fnty := routines[ridx].fnty;
+    ret_tk := routines[ridx].ret_tk;
     ret_llvm_ty := LLVMTypeForTk(ret_tk);
+    n := routines[ridx].nparams;
+    FOR i := 1 TO n DO
+    BEGIN
+      tks[i] := routines[ridx].param_tk[i];
+      isvar[i] := routines[ridx].param_is_var[i];
+    END;
+    params_arr := GetObj(decl, 'params');
+    FlattenParams(params_arr, n, names, tks, isvar);
+    routines[ridx].has_body := TRUE;
   END
   ELSE
   BEGIN
-    ret_tk := TK_UNKNOWN;
-    ret_llvm_ty := voidty;
-  END;
+    params_arr := GetObj(decl, 'params');
+    FlattenParams(params_arr, n, names, tks, isvar);
 
-  fnty := LLVMFunctionType(ret_llvm_ty, param_llvm_types, n, 0);
-  fn := LLVMAddFunction(modl, MakeCStr(name), fnty);
+    param_llvm_types := AllocPtrArray(n);
+    FOR i := 1 TO n DO
+    BEGIN
+      IF isvar[i] THEN
+        SetPtrArrayElem(param_llvm_types, i - 1, LLVMPointerType(LLVMTypeForTk(tks[i]), 0))
+      ELSE
+        SetPtrArrayElem(param_llvm_types, i - 1, LLVMTypeForTk(tks[i]));
+    END;
 
-  { Register the routine before codegen'ing its body -- direct
-    self-recursion (Fact calling Fact) needs the routine table entry to
-    already exist when the body's own FuncCall/ProcCallStmt nodes resolve
-    it. Mutual recursion (A calls B declared later) is out of scope, same
-    as it would be without a FORWARD declaration in standard Pascal. }
-  nroutines := nroutines + 1;
-  routines[nroutines].name := name;
-  routines[nroutines].is_func := is_func;
-  routines[nroutines].fn := fn;
-  routines[nroutines].fnty := fnty;
-  routines[nroutines].ret_tk := ret_tk;
-  routines[nroutines].nparams := n;
-  FOR i := 1 TO n DO
-  BEGIN
-    routines[nroutines].param_tk[i] := tks[i];
-    routines[nroutines].param_is_var[i] := isvar[i];
-  END;
-
-  entry_bb2 := LLVMAppendBasicBlockInContext(ctx, fn, MakeCStr('entry'));
-  LLVMPositionBuilderAtEnd(builder, entry_bb2);
-  cur_fn := fn;
-  PushScope;
-  in_local_scope := TRUE;
-
-  IF is_func THEN
-  BEGIN
-    cur_func_name := name;
-    cur_func_ret_tk := ret_tk;
-    cur_func_ret_slot := LLVMBuildAlloca(builder, ret_llvm_ty, MakeCStr('return_value'));
-    IF (ret_tk = TK_REAL) OR (ret_tk = TK_REAL32) THEN LLVMBuildStore(builder, LLVMConstReal(ret_llvm_ty, 0.0), cur_func_ret_slot)
-    ELSE LLVMBuildStore(builder, LLVMConstInt(ret_llvm_ty, 0, 0), cur_func_ret_slot);
-  END
-  ELSE
-    cur_func_name := '';
-
-  FOR i := 1 TO n DO
-  BEGIN
-    param_val := LLVMGetParam(fn, i - 1);
-    IF isvar[i] THEN
-      palloca := param_val { the incoming pointer already IS the storage }
+    IF is_func THEN
+    BEGIN
+      ret_tk := ResolveTypeExpr(GetObj(decl, 'return_type'));
+      ret_llvm_ty := LLVMTypeForTk(ret_tk);
+    END
     ELSE
     BEGIN
-      palloca := LLVMBuildAlloca(builder, LLVMTypeForTk(tks[i]), MakeCStr(names[i]));
-      LLVMBuildStore(builder, param_val, palloca);
+      ret_tk := TK_UNKNOWN;
+      ret_llvm_ty := voidty;
     END;
-    nsymbols := nsymbols + 1;
-    symbols[nsymbols].name := names[i];
-    symbols[nsymbols].tk := tks[i];
-    symbols[nsymbols].llvm_val := palloca;
+
+    fnty := LLVMFunctionType(ret_llvm_ty, param_llvm_types, n, 0);
+    fn := LLVMAddFunction(modl, MakeCStr(name), fnty);
+
+    { Register the routine before codegen'ing its body -- direct
+      self-recursion (Fact calling Fact) needs the routine table entry to
+      already exist when the body's own FuncCall/ProcCallStmt nodes resolve
+      it. Mutual recursion (A calls B declared later) is out of scope, same
+      as it would be without a FORWARD declaration in standard Pascal. }
+    nroutines := nroutines + 1;
+    ridx := nroutines;
+    routines[ridx].name := name;
+    routines[ridx].is_func := is_func;
+    routines[ridx].fn := fn;
+    routines[ridx].fnty := fnty;
+    routines[ridx].ret_tk := ret_tk;
+    routines[ridx].nparams := n;
+    FOR i := 1 TO n DO
+    BEGIN
+      routines[ridx].param_tk[i] := tks[i];
+      routines[ridx].param_is_var[i] := isvar[i];
+    END;
+    routines[ridx].has_body := has_block_body;
   END;
 
-  body_blk := GetObj(decl, 'body');
-  IF NodeType(body_blk) <> 'Block' THEN
-    AbortWith('codegen: expected Block as routine body');
-  CodegenDeclList(GetObj(body_blk, 'decls'));
-  CodegenStmtArray(GetObj(body_blk, 'body'));
-
-  IF is_func THEN
+  { EXTERN/FORWARD placeholder: the function is declared (or was already,
+    on a prior FORWARD pass) and registered, but there is no Block body to
+    codegen yet -- nothing further to do until (if ever) a real definition
+    for this same name arrives. Wrapped in an IF rather than a bare EXIT,
+    matching CodegenBinOp's established workaround for the host compiler's
+    EXIT-inside-nested-IFs C-ABI codegen crash (see its comment). }
+  IF has_block_body THEN
   BEGIN
-    ret_load := LLVMBuildLoad2(builder, ret_llvm_ty, cur_func_ret_slot, MakeCStr(''));
-    ret_load := LLVMBuildRet(builder, ret_load);
-  END
-  ELSE
-    LLVMBuildRetVoid(builder);
+    entry_bb2 := LLVMAppendBasicBlockInContext(ctx, fn, MakeCStr('entry'));
+    LLVMPositionBuilderAtEnd(builder, entry_bb2);
+    cur_fn := fn;
+    PushScope;
+    in_local_scope := TRUE;
 
-  PopScope;
-  in_local_scope := FALSE;
-  cur_func_name := '';
-  cur_fn := main_fn;
-  LLVMPositionBuilderAtEnd(builder, entry_bb);
+    IF is_func THEN
+    BEGIN
+      cur_func_name := name;
+      cur_func_ret_tk := ret_tk;
+      cur_func_ret_slot := LLVMBuildAlloca(builder, ret_llvm_ty, MakeCStr('return_value'));
+      IF (ret_tk = TK_REAL) OR (ret_tk = TK_REAL32) THEN LLVMBuildStore(builder, LLVMConstReal(ret_llvm_ty, 0.0), cur_func_ret_slot)
+      ELSE LLVMBuildStore(builder, LLVMConstInt(ret_llvm_ty, 0, 0), cur_func_ret_slot);
+    END
+    ELSE
+      cur_func_name := '';
+
+    FOR i := 1 TO n DO
+    BEGIN
+      param_val := LLVMGetParam(fn, i - 1);
+      IF isvar[i] THEN
+        palloca := param_val { the incoming pointer already IS the storage }
+      ELSE
+      BEGIN
+        palloca := LLVMBuildAlloca(builder, LLVMTypeForTk(tks[i]), MakeCStr(names[i]));
+        LLVMBuildStore(builder, param_val, palloca);
+      END;
+      nsymbols := nsymbols + 1;
+      symbols[nsymbols].name := names[i];
+      symbols[nsymbols].tk := tks[i];
+      symbols[nsymbols].llvm_val := palloca;
+    END;
+
+    CodegenDeclList(GetObj(body_blk, 'decls'));
+    CodegenStmtArray(GetObj(body_blk, 'body'));
+
+    IF is_func THEN
+    BEGIN
+      ret_load := LLVMBuildLoad2(builder, ret_llvm_ty, cur_func_ret_slot, MakeCStr(''));
+      ret_load := LLVMBuildRet(builder, ret_load);
+    END
+    ELSE
+      LLVMBuildRetVoid(builder);
+
+    PopScope;
+    in_local_scope := FALSE;
+    cur_func_name := '';
+    cur_fn := main_fn;
+    LLVMPositionBuilderAtEnd(builder, entry_bb);
+  END;
 END;
 
 PROCEDURE CodegenTypeDecl(decl: ADRMEM);
