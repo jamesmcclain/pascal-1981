@@ -157,6 +157,8 @@ FUNCTION LLVMAddFunction(m: ADRMEM; name: ADRMEM; fty: ADRMEM): ADRMEM [C]; EXTE
 FUNCTION LLVMAppendBasicBlockInContext(ctx: ADRMEM; fn: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMCreateBuilderInContext(ctx: ADRMEM): ADRMEM [C]; EXTERN;
 PROCEDURE LLVMPositionBuilderAtEnd(b: ADRMEM; bb: ADRMEM) [C]; EXTERN;
+PROCEDURE LLVMSetTarget(m: ADRMEM; triple: ADRMEM) [C]; EXTERN;
+PROCEDURE LLVMSetFunctionCallConv(fn: ADRMEM; cc: CINT) [C]; EXTERN;
 FUNCTION LLVMBuildGlobalStringPtr(b: ADRMEM; str: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMConstInt(ty: ADRMEM; n: CLONG; signext: CINT): ADRMEM [C]; EXTERN;
 FUNCTION LLVMConstReal(ty: ADRMEM; n: REAL): ADRMEM [C]; EXTERN;
@@ -213,6 +215,7 @@ FUNCTION malloc(size: CINT): ADRMEM [C]; EXTERN;
 PROCEDURE free(p: ADRMEM) [C]; EXTERN;
 FUNCTION puts(str: ADRMEM): CINT [C]; EXTERN;
 PROCEDURE exit(code: CINT) [C]; EXTERN;
+FUNCTION getenv(name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION cJSON_GetStringValue(item: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION cJSON_IsNull(item: ADRMEM): CINT [C]; EXTERN;
 
@@ -426,6 +429,8 @@ VAR
                     routine currently being codegen'd. }
   is_device_compiland: BOOLEAN; { fixed for the root compilation unit; type
                                    lowering needs it before routine codegen. }
+  is_nvptx_device: BOOLEAN; { true only when this DEVICE compiland targets
+                               nvptx64-nvidia-cuda. }
 
   types: ARRAY [1..MAX_TYPES] OF TypeRec;
   ntypes: INTEGER; { MAX_TYPES=200 is well under INTEGER's 16-bit range, so
@@ -1103,7 +1108,7 @@ END;
 
 FUNCTION ResolveTypeExpr(te: ADRMEM): INTEGER;
 VAR
-  nm, flavor: Str255;
+  nm, flavor, space_name: Str255;
   nt: Str255;
   tid: INTEGER;
   elem_tid, lo, hi, count: INTEGER;
@@ -1222,11 +1227,20 @@ BEGIN
     IF (flavor = 'ADS') AND (NOT is_device_compiland) THEN
       AbortWith('codegen: ADS pointers require a DEVICE compiland');
     elem_tid := ResolveTypeExpr(GetObj(te, 'base'));
-    { The CPU device backend deliberately collapses every ADS space to LLVM
-      address space zero. This preserves the host-callable device ABI now;
-      NVPTX's GLOBAL/SHARED/CONSTANT/LOCAL address-space mapping is a later
-      target-specific step. }
-    arr_ty := LLVMPointerType(LLVMTypeForTk(elem_tid), 0);
+    { The CPU device backend collapses every ADS space to address space zero.
+      NVPTX uses its ABI-defined GLOBAL/SHARED/CONSTANT/LOCAL spaces. }
+    IF is_nvptx_device THEN
+    BEGIN
+      space_name := GetStr(GetObj(te, 'space'), 'name');
+      IF space_name = 'GLOBAL' THEN lo := 1
+      ELSE IF space_name = 'SHARED' THEN lo := 3
+      ELSE IF space_name = 'CONSTANT' THEN lo := 4
+      ELSE IF space_name = 'LOCAL' THEN lo := 5
+      ELSE IF space_name = 'HOST' THEN lo := 0
+      ELSE AbortWith2('codegen: unsupported ADS space: ', space_name);
+    END
+    ELSE lo := 0;
+    arr_ty := LLVMPointerType(LLVMTypeForTk(elem_tid), lo);
     tid := RegisterType(TK_POINTER, elem_tid, 0, 0, arr_ty);
   END
   ELSE IF nt = 'SetType' THEN
@@ -4485,7 +4499,7 @@ VAR
   existing: INTEGER32;
   ridx: INTEGER32;
   has_block_body: BOOLEAN;
-  is_c: BOOLEAN;
+  is_c, is_exported_entry: BOOLEAN;
   agg_llvm_ty, byval_attr, align_attr: ADRMEM;
 BEGIN
   name := GetStr(decl, 'name');
@@ -4497,6 +4511,7 @@ BEGIN
     decl, so the routine table's own is_c (set once, at first declaration)
     is the source of truth once ridx is known; see below. }
   is_c := IsCForeignDecl(decl);
+  is_exported_entry := GetBool(decl, 'is_exported_entry');
 
   existing := LookupRoutine(name);
   IF existing <> 0 THEN
@@ -4651,6 +4666,11 @@ BEGIN
       END;
     END;
   END;
+
+  { An exported DEVICE PROCEDURE becomes a launchable NVPTX entry. The
+    interface placeholder has no flag; the implementation declaration does. }
+  IF is_nvptx_device AND is_exported_entry THEN
+    LLVMSetFunctionCallConv(fn, 71); { LLVMCCallConv::PTX_Kernel }
 
   { EXTERN/FORWARD placeholder: the function is declared (or was already,
     on a prior FORWARD pass) and registered, but there is no Block body to
@@ -4816,7 +4836,8 @@ VAR
   is_device_root, is_program, is_implementation: BOOLEAN;
   unit_decls, init_body: ADRMEM;
   init_fnty, init_fn, init_bb: ADRMEM;
-  init_name, unit_name: Str255;
+  init_name, unit_name, device_triple: Str255;
+  device_triple_raw: ADRMEM;
   unit_name_len, unit_name_i: INTEGER;
 
 BEGIN
@@ -4824,6 +4845,17 @@ BEGIN
   root_nt := NodeType(root);
   is_device_root := GetBool(root, 'is_device');
   is_device_compiland := is_device_root;
+  is_nvptx_device := FALSE;
+  device_triple_raw := NIL;
+  IF is_device_compiland THEN
+  BEGIN
+    device_triple_raw := getenv(MakeCStr('PASCAL_DEVICE_TRIPLE'));
+    IF device_triple_raw <> NIL THEN
+    BEGIN
+      device_triple := CStrToStr255(device_triple_raw);
+      is_nvptx_device := device_triple = 'nvptx64-nvidia-cuda';
+    END;
+  END;
 
   is_program := root_nt = 'ProgramUnit';
   is_implementation := root_nt = 'ImplementationUnit';
@@ -4833,6 +4865,7 @@ BEGIN
 
   ctx := LLVMContextCreate;
   modl := LLVMModuleCreateWithNameInContext(MakeCStr('pascal_program'), ctx);
+  IF is_nvptx_device THEN LLVMSetTarget(modl, device_triple_raw);
   i32ty := LLVMInt32TypeInContext(ctx);
   i16ty := LLVMInt16TypeInContext(ctx);
   i8ty := LLVMInt8TypeInContext(ctx);
