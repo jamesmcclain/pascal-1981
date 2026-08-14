@@ -315,6 +315,14 @@ CONST
   MAX_FIELDS = 500;
   MAX_RECORD_FIELDS = 32;
   MAX_CONSTS = 200;
+  MAX_DEV_ROUTINES = 128; { device routines registered for the kernel-entry
+    readonly summary below -- a separate, smaller table than `routines`
+    because it holds AST declaration nodes (needed before any of them is
+    lowered), not lowered LLVM functions. }
+  MAX_KERNELS = 64; { launchable kernels recorded per host compiland for the
+    launch registry (the CPU stand-in for a loaded CUDA module). }
+  MAX_CALL_EDGES = 128; { formal-forwarded-to-a-call edges recorded for one
+    routine body by ComputeReadonlyEffects. }
 
 TYPE
   PAdr = ^ADRMEM;
@@ -431,6 +439,46 @@ VAR
     [C] FOREIGN MEMORY-class byval call marshalling below, resolved once at
     init time (see byval_align_kinds_init) rather than re-resolving by name
     on every call site/declaration. }
+  readonly_kind_id, nocapture_kind_id, noalias_kind_id: CINT;
+  deref_kind_id: CINT; { and the kernel-entry parameter facts (readonly,
+    nocapture, noalias, dereferenceable), resolved the same way. }
+  noalias_kernel_params: BOOLEAN; { the LAUNCH contract's
+    distinct-buffers-don't-overlap fact. Off unless PASCAL_NOALIAS_KERNEL_PARAMS
+    is set in the environment: it is a policy assertion about the caller, not
+    something this compiler can prove, so it must be opted into explicitly
+    (the native counterpart of the reference's -f noalias-kernel-params). }
+  module_load_fnty, module_load_fn: ADRMEM;
+  module_getfn_fnty, module_getfn_fn: ADRMEM; { the two module-resolution
+    steps of the launch path (cuModuleLoadData / cuModuleGetFunction). }
+  device_backend_cuda: BOOLEAN; { PASCAL_DEVICE_BACKEND=cuda: the kernel is
+    the loaded PTX module, dispatched by name, so no in-process registry or
+    dispatch thunk is emitted and the PTX blob is an external symbol. }
+  klaunch_registry_gv: ADRMEM; { this compiland's registry global, created on
+    first LAUNCH and initialized once every LAUNCH has been lowered. }
+  device_ptx_gv: ADRMEM;
+  nkernels: INTEGER32;
+  kernel_name_tab: ARRAY [1..MAX_KERNELS] OF Str255;
+  kernel_thunk_tab: ARRAY [1..MAX_KERNELS] OF ADRMEM;
+  dev_ro_count: INTEGER32;
+  dev_ro_name: ARRAY [1..MAX_DEV_ROUTINES] OF Str255;
+  dev_ro_decl: ARRAY [1..MAX_DEV_ROUTINES] OF ADRMEM;
+  dev_ro_dup: ARRAY [1..MAX_DEV_ROUTINES] OF BOOLEAN;
+  dev_ro_nparams: ARRAY [1..MAX_DEV_ROUTINES] OF INTEGER32;
+  dev_ro_cached: ARRAY [1..MAX_DEV_ROUTINES] OF BOOLEAN;
+  dev_ro_busy: ARRAY [1..MAX_DEV_ROUTINES] OF BOOLEAN;
+  dev_ro_mask: ARRAY [1..MAX_DEV_ROUTINES] OF ParamVarArr; { entry i TRUE =
+    the i'th formal of that declaration is proven never written through and
+    never captured; see DeviceReadonlySummary. }
+  eff_nparams: INTEGER32; { ComputeReadonlyEffects's output, in globals rather
+    than VAR parameters because the walk itself is recursive: a caller copies
+    these out before recursing into another routine's summary. }
+  eff_pname: ParamNameArr;
+  eff_written, eff_escaped: ParamVarArr;
+  eff_has_with: BOOLEAN;
+  eff_ncalls: INTEGER32;
+  eff_call_formal: ARRAY [1..MAX_CALL_EDGES] OF INTEGER32;
+  eff_call_callee: ARRAY [1..MAX_CALL_EDGES] OF Str255;
+  eff_call_argpos: ARRAY [1..MAX_CALL_EDGES] OF INTEGER32;
   memcmp_fnty, memcmp_fn: ADRMEM; { for whole-string EQ/NEQ/LT/LE/GT/GE comparisons. }
   positn_fnty, positn_fn: ADRMEM;
   scaneq_fnty, scaneq_fn: ADRMEM;
@@ -4844,6 +4892,357 @@ BEGIN
   END;
 END;
 
+FUNCTION ParamNamesOf(decl: ADRMEM; VAR names: ParamNameArr): INTEGER32;
+{ Flatten one declaration's formal-parameter names only -- deliberately not
+  FlattenParams, which also resolves each type_expr and so would register
+  types for routines that may never be lowered. The readonly analysis below
+  runs before any body is lowered and needs nothing but the names. }
+VAR
+  params_arr, param, pnames: ADRMEM;
+  np, pi, nn, ni, n: INTEGER32;
+BEGIN
+  n := 0;
+  params_arr := GetObj(decl, 'params');
+  np := ArrSize(params_arr);
+  FOR pi := 0 TO np - 1 DO
+  BEGIN
+    param := ArrItem(params_arr, pi);
+    pnames := GetObj(param, 'names');
+    nn := ArrSize(pnames);
+    FOR ni := 0 TO nn - 1 DO
+      IF n < MAX_PARAMS THEN
+      BEGIN
+        n := n + 1;
+        names[n] := CStrToStr255(cJSON_GetStringValue(ArrItem(pnames, ni)));
+      END;
+  END;
+  ParamNamesOf := n;
+END;
+
+FUNCTION ReadonlyBareFormal(node: ADRMEM): INTEGER32;
+{ The 1-based formal index this node is a *bare* use of (a plain identifier,
+  or a selector-less designator), or 0. A bare use of a pointer formal hands
+  its raw pointer value to whatever surrounds it, so outside the one context
+  that is analyzable (a direct call actual) it counts as an escape. }
+VAR
+  nt, nm: Str255;
+  i: INTEGER32;
+BEGIN
+  ReadonlyBareFormal := 0;
+  IF node <> NIL THEN
+  BEGIN
+    nt := NodeType(node);
+    nm := '';
+    IF nt = 'Identifier' THEN nm := GetStr(node, 'name')
+    ELSE IF nt = 'Designator' THEN
+      IF ArrSize(GetObj(node, 'selectors')) = 0 THEN nm := GetStr(node, 'name');
+    IF nm <> '' THEN
+      FOR i := 1 TO eff_nparams DO
+        IF eff_pname[i] = nm THEN ReadonlyBareFormal := i;
+  END;
+END;
+
+FUNCTION AssignWritesThroughFormal(node: ADRMEM): INTEGER32;
+{ For an AssignStmt, the formal index written *through* (`p^... := x`), or 0.
+  A write to the pointer variable itself (`p := q`) is not a write to the
+  pointee and so does not disqualify readonly; the DEREF selector is what
+  distinguishes the two. }
+VAR
+  target, sels, sel: ADRMEM;
+  i, nsel, fi: INTEGER32;
+  has_deref: BOOLEAN;
+  nm: Str255;
+BEGIN
+  AssignWritesThroughFormal := 0;
+  target := GetObj(node, 'target');
+  IF NodeType(target) = 'Designator' THEN
+  BEGIN
+    nm := GetStr(target, 'name');
+    fi := 0;
+    FOR i := 1 TO eff_nparams DO
+      IF eff_pname[i] = nm THEN fi := i;
+    IF fi <> 0 THEN
+    BEGIN
+      sels := GetObj(target, 'selectors');
+      nsel := ArrSize(sels);
+      has_deref := FALSE;
+      FOR i := 0 TO nsel - 1 DO
+      BEGIN
+        sel := ArrItem(sels, i);
+        IF GetStr(sel, 'kind') = 'DEREF' THEN has_deref := TRUE;
+      END;
+      IF has_deref THEN AssignWritesThroughFormal := fi;
+    END;
+  END;
+END;
+
+PROCEDURE ScanReadonlyNode(node: ADRMEM);
+{ Accumulate one routine body's effects on its own formals into the eff_*
+  globals. Everything unrecognized fails closed: a bare formal anywhere but a
+  direct call actual is an escape, and a WITH anywhere disqualifies the whole
+  routine (WITH's field designators are not tied back to the originating
+  pointer expression by this purely syntactic walk, so a write inside a WITH
+  block could otherwise go unnoticed). }
+CONST
+  MAX_SCAN_ARGS = 64;
+VAR
+  nt: Str255;
+  nchild, ci, nargs, ai, fi: INTEGER32;
+  args, arg: ADRMEM;
+  forwarded: ARRAY [1..MAX_SCAN_ARGS] OF BOOLEAN;
+BEGIN
+  IF node <> NIL THEN
+  BEGIN
+    nt := NodeType(node);
+    { A nested routine is its own lexical body and its own call-graph node;
+      its effects are summarized separately, not folded into this one. }
+    IF (nt <> 'ProcDecl') AND (nt <> 'FuncDecl') THEN
+    BEGIN
+      IF nt = 'WithStmt' THEN eff_has_with := TRUE;
+      IF nt = 'AssignStmt' THEN
+      BEGIN
+        fi := AssignWritesThroughFormal(node);
+        IF fi <> 0 THEN eff_written[fi] := TRUE;
+      END;
+      IF (nt = 'FuncCall') OR (nt = 'ProcCallStmt') THEN
+      BEGIN
+        args := GetObj(node, 'args');
+        nargs := ArrSize(args);
+        FOR ai := 1 TO MAX_SCAN_ARGS DO forwarded[ai] := FALSE;
+        IF nargs <= MAX_SCAN_ARGS THEN
+          FOR ai := 0 TO nargs - 1 DO
+          BEGIN
+            arg := ArrItem(args, ai);
+            fi := ReadonlyBareFormal(arg);
+            IF fi <> 0 THEN
+            BEGIN
+              IF eff_ncalls >= MAX_CALL_EDGES THEN
+                { Out of edge slots: fail closed by treating the forward as an
+                  escape rather than dropping the fact on the floor. }
+                eff_escaped[fi] := TRUE
+              ELSE
+              BEGIN
+                eff_ncalls := eff_ncalls + 1;
+                eff_call_formal[eff_ncalls] := fi;
+                eff_call_callee[eff_ncalls] := GetStr(node, 'name');
+                eff_call_argpos[eff_ncalls] := ai;
+                forwarded[ai + 1] := TRUE;
+              END;
+            END;
+          END;
+        { A call node's only expression children are its actuals; the ones
+          recognized as direct forwards above are summarized through the
+          callee instead of being rescanned (which would call them escapes). }
+        FOR ai := 0 TO nargs - 1 DO
+          IF (nargs > MAX_SCAN_ARGS) OR (NOT forwarded[ai + 1]) THEN
+            ScanReadonlyNode(ArrItem(args, ai));
+      END
+      ELSE
+      BEGIN
+        fi := ReadonlyBareFormal(node);
+        IF fi <> 0 THEN eff_escaped[fi] := TRUE
+        ELSE
+        BEGIN
+          { Generic descent: cJSON links an object's members and an array's
+            elements through the same child list, so one loop walks both. }
+          nchild := ArrSize(node);
+          FOR ci := 0 TO nchild - 1 DO
+            ScanReadonlyNode(ArrItem(node, ci));
+        END;
+      END;
+    END;
+  END;
+END;
+
+PROCEDURE ComputeReadonlyEffects(decl: ADRMEM);
+{ Fill the eff_* globals for one declaration. Callers that then recurse into
+  another routine's summary must copy the results out first. }
+VAR
+  i: INTEGER32;
+  body: ADRMEM;
+BEGIN
+  eff_nparams := ParamNamesOf(decl, eff_pname);
+  FOR i := 1 TO MAX_PARAMS DO
+  BEGIN
+    eff_written[i] := FALSE;
+    eff_escaped[i] := FALSE;
+  END;
+  eff_has_with := FALSE;
+  eff_ncalls := 0;
+  body := GetObj(decl, 'body');
+  IF (eff_nparams > 0) AND (NodeType(body) = 'Block') THEN
+    ScanReadonlyNode(GetObj(body, 'body'));
+END;
+
+FUNCTION LookupDevRoutine(name: Str255): INTEGER32;
+VAR
+  i, found: INTEGER32;
+BEGIN
+  found := 0;
+  FOR i := 1 TO dev_ro_count DO
+    IF dev_ro_name[i] = name THEN found := i;
+  LookupDevRoutine := found;
+END;
+
+PROCEDURE RegisterDevRoutines(decls: ADRMEM);
+{ Record every body-bearing device routine, nested ones included, before any
+  of them is lowered -- a kernel entry may call a helper declared later in
+  the source. Body-less (interface/imported/EXTERN) declarations are left out
+  so they fail closed, and a duplicate name is marked ambiguous rather than
+  guessed about. }
+VAR
+  i, n, idx: INTEGER32;
+  item, body: ADRMEM;
+  nt, nm: Str255;
+  pnames: ParamNameArr;
+BEGIN
+  n := ArrSize(decls);
+  FOR i := 0 TO n - 1 DO
+  BEGIN
+    item := ArrItem(decls, i);
+    nt := NodeType(item);
+    IF (nt = 'ProcDecl') OR (nt = 'FuncDecl') THEN
+    BEGIN
+      body := GetObj(item, 'body');
+      IF NodeType(body) = 'Block' THEN
+      BEGIN
+        nm := GetStr(item, 'name');
+        idx := LookupDevRoutine(nm);
+        IF idx <> 0 THEN dev_ro_dup[idx] := TRUE
+        ELSE IF dev_ro_count < MAX_DEV_ROUTINES THEN
+        BEGIN
+          dev_ro_count := dev_ro_count + 1;
+          dev_ro_name[dev_ro_count] := nm;
+          dev_ro_decl[dev_ro_count] := item;
+          dev_ro_nparams[dev_ro_count] := ParamNamesOf(item, pnames);
+          dev_ro_dup[dev_ro_count] := FALSE;
+          dev_ro_cached[dev_ro_count] := FALSE;
+          dev_ro_busy[dev_ro_count] := FALSE;
+        END;
+        RegisterDevRoutines(GetObj(body, 'decls'));
+      END;
+    END;
+  END;
+END;
+
+FUNCTION DeviceReadonlySummary(idx: INTEGER32; VAR ro: ParamVarArr): INTEGER32;
+{ The formals of dev_ro_decl[idx] proven readonly across analyzable local
+  helpers, returning the formal count and filling `ro`. Unknown callees,
+  body-less/imported routines, ambiguous names, WITH, and call cycles all
+  withhold the fact rather than guess. The result is per-parameter: a helper
+  may write one buffer and stay readonly for another. }
+VAR
+  i, e, n, ncalls, cidx, cn, fi: INTEGER32;
+  has_with: BOOLEAN;
+  written, escaped, callee_ro: ParamVarArr;
+  call_formal, call_argpos: ARRAY [1..MAX_CALL_EDGES] OF INTEGER32;
+  call_callee: ARRAY [1..MAX_CALL_EDGES] OF Str255;
+BEGIN
+  IF dev_ro_cached[idx] THEN
+  BEGIN
+    FOR i := 1 TO MAX_PARAMS DO ro[i] := dev_ro_mask[idx][i];
+    DeviceReadonlySummary := dev_ro_nparams[idx];
+  END
+  ELSE IF dev_ro_busy[idx] THEN
+  BEGIN
+    { Cycle: withhold everything, and do not cache -- the enclosing call in
+      progress owns the real answer. }
+    FOR i := 1 TO MAX_PARAMS DO ro[i] := FALSE;
+    DeviceReadonlySummary := dev_ro_nparams[idx];
+  END
+  ELSE
+  BEGIN
+    dev_ro_busy[idx] := TRUE;
+    ComputeReadonlyEffects(dev_ro_decl[idx]);
+    n := eff_nparams;
+    has_with := eff_has_with;
+    ncalls := eff_ncalls;
+    FOR i := 1 TO MAX_PARAMS DO
+    BEGIN
+      written[i] := eff_written[i];
+      escaped[i] := eff_escaped[i];
+    END;
+    FOR e := 1 TO ncalls DO
+    BEGIN
+      call_formal[e] := eff_call_formal[e];
+      call_callee[e] := eff_call_callee[e];
+      call_argpos[e] := eff_call_argpos[e];
+    END;
+    FOR i := 1 TO MAX_PARAMS DO
+      ro[i] := (i <= n) AND (NOT has_with) AND (NOT written[i]) AND (NOT escaped[i]);
+    FOR e := 1 TO ncalls DO
+    BEGIN
+      fi := call_formal[e];
+      IF ro[fi] THEN
+      BEGIN
+        cidx := LookupDevRoutine(call_callee[e]);
+        IF cidx = 0 THEN ro[fi] := FALSE
+        ELSE IF dev_ro_dup[cidx] THEN ro[fi] := FALSE
+        ELSE
+        BEGIN
+          cn := DeviceReadonlySummary(cidx, callee_ro);
+          IF call_argpos[e] >= cn THEN ro[fi] := FALSE
+          ELSE IF NOT callee_ro[call_argpos[e] + 1] THEN ro[fi] := FALSE;
+        END;
+      END;
+    END;
+    dev_ro_busy[idx] := FALSE;
+    dev_ro_cached[idx] := TRUE;
+    FOR i := 1 TO MAX_PARAMS DO dev_ro_mask[idx][i] := ro[i];
+    DeviceReadonlySummary := n;
+  END;
+END;
+
+PROCEDURE ApplyKernelParamAttrs(decl, fn: ADRMEM; n: INTEGER32; VAR tks: ParamTkArr);
+{ Attach the pointer-parameter facts LLVM cannot infer for a bare device
+  pointer: natural alignment, dereferenceable, readonly/nocapture, and (only
+  when explicitly opted into) noalias. Called for a real NVPTX kernel entry
+  only, so this is inert on the CPU-device parity path. }
+VAR
+  i, cn: INTEGER32;
+  idx: INTEGER32;
+  ro: ParamVarArr;
+  pointee: INTEGER;
+  attr: ADRMEM;
+BEGIN
+  FOR i := 1 TO MAX_PARAMS DO ro[i] := FALSE;
+  idx := 0;
+  FOR i := 1 TO dev_ro_count DO
+    IF dev_ro_decl[i] = decl THEN idx := i;
+  IF idx <> 0 THEN cn := DeviceReadonlySummary(idx, ro);
+  FOR i := 1 TO n DO
+    IF TypeKind(tks[i]) = TK_POINTER THEN
+    BEGIN
+      pointee := types[tks[i]].elem_tid;
+      { Natural alignment of the pointee: without it the NVPTX backend
+        annotates every pointer parameter `.ptr .global .align 1`, though the
+        element type is known and genuinely better aligned than that. }
+      attr := LLVMCreateEnumAttribute(ctx, align_kind_id, TypeAlignBytes(pointee));
+      LLVMAddAttributeAtIndex(fn, i, attr);
+      { dereferenceable(bytes): only for a statically sized pointee. A SUPER
+        ARRAY has no static extent, and nothing ties such a buffer to
+        whichever sibling parameter might carry its length, so no size is
+        claimed for one. }
+      IF (TypeKind(pointee) = TK_ARRAY) AND (NOT types[pointee].is_super) THEN
+      BEGIN
+        attr := LLVMCreateEnumAttribute(ctx, deref_kind_id, TypeSizeBytes(pointee));
+        LLVMAddAttributeAtIndex(fn, i, attr);
+      END;
+      IF ro[i] THEN
+      BEGIN
+        attr := LLVMCreateEnumAttribute(ctx, readonly_kind_id, 0);
+        LLVMAddAttributeAtIndex(fn, i, attr);
+        attr := LLVMCreateEnumAttribute(ctx, nocapture_kind_id, 0);
+        LLVMAddAttributeAtIndex(fn, i, attr);
+      END;
+      IF noalias_kernel_params THEN
+      BEGIN
+        attr := LLVMCreateEnumAttribute(ctx, noalias_kind_id, 0);
+        LLVMAddAttributeAtIndex(fn, i, attr);
+      END;
+    END;
+END;
+
 PROCEDURE CodegenRoutineDecl(decl: ADRMEM; is_func: BOOLEAN);
 VAR
   name: Str255;
@@ -5034,6 +5433,7 @@ BEGIN
   IF is_nvptx_device AND is_exported_entry THEN
   BEGIN
     LLVMSetFunctionCallConv(fn, 71); { LLVMCCallConv::PTX_Kernel }
+    ApplyKernelParamAttrs(decl, fn, n, tks);
     ApplyLaunchBoundAttrs(decl, fn);
   END;
 
@@ -5202,7 +5602,7 @@ VAR
   unit_decls, init_body: ADRMEM;
   init_fnty, init_fn, init_bb: ADRMEM;
   init_name, unit_name, device_triple: Str255;
-  device_triple_raw, emit_ptx_raw, ptx_cpu_raw: ADRMEM;
+  device_triple_raw, emit_ptx_raw, ptx_cpu_raw, backend_raw: ADRMEM;
   target_out_raw, target_err_out_raw, ptx_err_out_raw, ptx_buffer_out_raw: ADRMEM;
   target_out, target_err_out, ptx_err_out, ptx_buffer_out: PAdr;
   target_ref, target_machine, target_layout, ptx_buffer, ptx_cpu: ADRMEM;
@@ -5218,6 +5618,11 @@ BEGIN
   device_triple_raw := NIL;
   emit_ptx_raw := getenv(MakeCStr('PASCAL_EMIT_PTX'));
   emit_ptx := emit_ptx_raw <> NIL;
+  noalias_kernel_params := getenv(MakeCStr('PASCAL_NOALIAS_KERNEL_PARAMS')) <> NIL;
+  device_backend_cuda := FALSE;
+  backend_raw := getenv(MakeCStr('PASCAL_DEVICE_BACKEND'));
+  IF backend_raw <> NIL THEN
+    device_backend_cuda := CStrToStr255(backend_raw) = 'cuda';
   IF is_device_compiland THEN
   BEGIN
     device_triple_raw := getenv(MakeCStr('PASCAL_DEVICE_TRIPLE'));
@@ -5307,6 +5712,10 @@ BEGIN
 
   byval_kind_id := LLVMGetEnumAttributeKindForName(MakeCStr('byval'), 5);
   align_kind_id := LLVMGetEnumAttributeKindForName(MakeCStr('align'), 5);
+  readonly_kind_id := LLVMGetEnumAttributeKindForName(MakeCStr('readonly'), 8);
+  nocapture_kind_id := LLVMGetEnumAttributeKindForName(MakeCStr('nocapture'), 9);
+  noalias_kind_id := LLVMGetEnumAttributeKindForName(MakeCStr('noalias'), 7);
+  deref_kind_id := LLVMGetEnumAttributeKindForName(MakeCStr('dereferenceable'), 15);
 
   param_arr := AllocPtrArray(3);
   SetPtrArrayElem(param_arr, 0, i8ptrty);
@@ -5406,6 +5815,10 @@ BEGIN
                  `types` table entries -- the first RegisterType call must
                  hand out id 14, not 1. }
   nfields := 0;
+  dev_ro_count := 0;
+  nkernels := 0;
+  klaunch_registry_gv := NIL;
+  device_ptx_gv := NIL;
 
   { local_interfaces: InterfaceUnit blocks spliced in ahead of the PROGRAM
     keyword via $INCLUDE (e.g. jsonutil.inc's "INTERFACE; UNIT jsonutil(...)
@@ -5442,6 +5855,10 @@ BEGIN
       walked from local_interfaces above, so its declarations reconcile with
       those forward placeholders instead of registering duplicates. }
     unit_decls := GetObj(root, 'decls');
+    { The kernel-entry readonly summary needs every locally defined device
+      routine registered before the first body is lowered -- an entry may call
+      a helper declared later in the source. }
+    IF is_nvptx_device THEN RegisterDevRoutines(unit_decls);
     CodegenDeclList(unit_decls);
 
     { Only an ordinary IMPLEMENTATION has startup code. DEVICE units have no
