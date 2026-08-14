@@ -59,13 +59,28 @@
   width+precision -> %*.*f case, which this file does not yet implement);
   and WRITE/WRITELN of a BOOLEAN argument, printed as the literal string
   "TRUE"/"FALSE" via a runtime icmp+select between two global string
-  constants, same as the reference. Not yet covered: LOWER/UPPER and other
-  non-string builtins, files, multi-dimension arrays, CHAR-keyed CASE,
-  CASE label ranges, REAL's width+precision WRITE formatting (%*.*f),
-  MATHCK/RANGECK-style runtime traps (including CONCAT/COPYLST/COPYSTR/
-  INSERT's own capacity overflow, which is unchecked -- same simplification
-  as an unchecked array index elsewhere in this file), C-ABI externs, units,
-  and DEVICE MODULE/PTX generation. Anything not yet covered is
+  constants, same as the reference; and the ordinal/math builtins CHR, ORD,
+  ODD, SUCC, PRED, ABS, SQR (pure inline IR, no runtime call) and SQRT,
+  SIN, COS, LN, EXP, ARCTAN, TRUNC, ROUND, FLOAT (SQRT/SIN/COS/LN/EXP/
+  ARCTAN call straight into libm -- declared+called as ordinary LLVM
+  externs exactly like malloc/printf are against libc, so a program built
+  from this file's IR must link -lm to satisfy them; TRUNC/ROUND produce a
+  16-bit INTEGER here rather than the Python reference's 32-bit result,
+  consistent with every other native-INTEGER value in this file), plus
+  LOWER/UPPER bound resolution for the fixed-bound cases this file's type
+  system represents -- TYPE-declared ARRAY (static lo..hi), STRING(n)
+  (1..n), and LSTRING(n) (0..n, its declared capacity, not the runtime
+  length) -- the dereferenced form UPPER(p^)/LOWER(p^), which the Python
+  reference resolves via a dynamic bound header for heap "super arrays",
+  is rejected, since this file has neither super arrays nor multi-
+  dimension arrays yet. Not yet covered: HIBYTE/LOBYTE/WRD/WRD8/BYWORD
+  (need the WORD/INTEGER8 types this file's scalar type system doesn't
+  have), files, multi-dimension arrays, CHAR-keyed CASE, CASE label
+  ranges, REAL's width+precision WRITE formatting (%*.*f), MATHCK/RANGECK-
+  style runtime traps (including CONCAT/COPYLST/COPYSTR/INSERT's own
+  capacity overflow, which is unchecked -- same simplification as an
+  unchecked array index elsewhere in this file), C-ABI externs, units, and
+  DEVICE MODULE/PTX generation. Anything not yet covered is
   rejected loudly via AbortWith rather than silently mishandled
   or miscompiled -- reject unhandled constructs instead of guessing, the
   same discipline the earlier native stages (lexer.pas/parser.pas/
@@ -132,6 +147,8 @@ FUNCTION LLVMBuildICmp(b: ADRMEM; pred: CINT; lhs: ADRMEM; rhs: ADRMEM; name: AD
 FUNCTION LLVMBuildSelect(b: ADRMEM; cond: ADRMEM; thenv: ADRMEM; elsev: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildFCmp(b: ADRMEM; pred: CINT; lhs: ADRMEM; rhs: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildSExt(b: ADRMEM; val: ADRMEM; destty: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMBuildSIToFP(b: ADRMEM; val: ADRMEM; destty: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMBuildFPToSI(b: ADRMEM; val: ADRMEM; destty: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 PROCEDURE LLVMBuildBr(b: ADRMEM; dest: ADRMEM) [C]; EXTERN;
 PROCEDURE LLVMBuildCondBr(b: ADRMEM; cond: ADRMEM; then_bb: ADRMEM; else_bb: ADRMEM) [C]; EXTERN;
 FUNCTION LLVMBuildCall2(b: ADRMEM; fty: ADRMEM; fn: ADRMEM; args: ADRMEM; nargs: CINT; name: ADRMEM): ADRMEM [C]; EXTERN;
@@ -266,6 +283,12 @@ VAR
     decode_value, declared+called exactly like malloc/free/printf above --
     a program built from this file's output must link libpascalrt.a, same
     as one built from the Python reference's output already must. }
+  sqrt_fnty, sqrt_fn, sin_fnty, sin_fn, cos_fnty, cos_fn: ADRMEM;
+  log_fnty, log_fn, exp_fnty, exp_fn, atan_fnty, atan_fn: ADRMEM; { REAL->REAL
+    libm functions backing SQRT/SIN/COS/LN/EXP/ARCTAN, declared+called as
+    ordinary LLVM externs against libm exactly like malloc/printf are
+    against libc -- a program built from this file's output must link -lm,
+    same as one built from the Python reference's output already must. }
   cur_fn: ADRMEM; { the LLVM function LLVMAppendBasicBlockInContext should
                     attach new blocks to: main_fn at top level, or the
                     routine currently being codegen'd. }
@@ -1296,6 +1319,120 @@ BEGIN
   END;
 END;
 
+FUNCTION MakeArgs1(v: ADRMEM): ADRMEM;
+VAR
+  a: ADRMEM;
+BEGIN
+  a := AllocPtrArray(1);
+  SetPtrArrayElem(a, 0, v);
+  MakeArgs1 := a;
+END;
+
+FUNCTION CodegenSimpleBuiltin(nm: Str255; args: ADRMEM): ADRMEM;
+{ The math/ordinal builtins that need no libpascalrt support: pure inline
+  LLVM IR (CHR/ORD/ODD/SUCC/PRED/ABS/SQR), or a single libm call
+  (SQRT/SIN/COS/LN/EXP/ARCTAN), mirroring the Python reference's exprs.py
+  1:1 except where this dialect's INTEGER is 16-bit rather than the
+  reference's 32-bit: ORD's result and TRUNC/ROUND's result are produced as
+  i16 here, not i32 -- consistent with every other native-INTEGER value in
+  this file, and with the dialect's own known 16-bit-INTEGER-overflow
+  behavior (not a bug -- see the codebase's own vintage-dialect notes). }
+VAR
+  v, is_neg, neg, half, res: ADRMEM;
+  argtk: INTEGER;
+BEGIN
+  v := CodegenExpr(ArrItem(args, 0));
+  argtk := last_val_tk;
+  IF nm = 'CHR' THEN
+  BEGIN
+    res := LLVMBuildTrunc(builder, v, i8ty, MakeCStr(''));
+    last_val_tk := TK_CHAR;
+  END
+  ELSE IF nm = 'ORD' THEN
+  BEGIN
+    IF argtk = TK_CHAR THEN res := LLVMBuildZExt(builder, v, i16ty, MakeCStr(''))
+    ELSE res := v;
+    last_val_tk := TK_INTEGER;
+  END
+  ELSE IF nm = 'ODD' THEN
+  BEGIN
+    res := LLVMBuildAnd(builder, v, LLVMConstInt(i16ty, 1, 0), MakeCStr(''));
+    res := LLVMBuildICmp(builder, LLVMIntNE, res, LLVMConstInt(i16ty, 0, 0), MakeCStr(''));
+    last_val_tk := TK_BOOLEAN;
+  END
+  ELSE IF nm = 'SUCC' THEN
+  BEGIN
+    IF argtk = TK_CHAR THEN res := LLVMBuildAdd(builder, v, LLVMConstInt(i8ty, 1, 0), MakeCStr(''))
+    ELSE res := LLVMBuildAdd(builder, v, LLVMConstInt(i16ty, 1, 0), MakeCStr(''));
+    last_val_tk := argtk;
+  END
+  ELSE IF nm = 'PRED' THEN
+  BEGIN
+    IF argtk = TK_CHAR THEN res := LLVMBuildSub(builder, v, LLVMConstInt(i8ty, 1, 0), MakeCStr(''))
+    ELSE res := LLVMBuildSub(builder, v, LLVMConstInt(i16ty, 1, 0), MakeCStr(''));
+    last_val_tk := argtk;
+  END
+  ELSE IF nm = 'ABS' THEN
+  BEGIN
+    IF argtk = TK_REAL THEN
+    BEGIN
+      is_neg := LLVMBuildFCmp(builder, LLVMRealOLT, v, LLVMConstReal(dblty, 0.0), MakeCStr(''));
+      neg := LLVMBuildFSub(builder, LLVMConstReal(dblty, 0.0), v, MakeCStr(''));
+    END
+    ELSE
+    BEGIN
+      is_neg := LLVMBuildICmp(builder, LLVMIntSLT, v, LLVMConstInt(i16ty, 0, 1), MakeCStr(''));
+      neg := LLVMBuildSub(builder, LLVMConstInt(i16ty, 0, 1), v, MakeCStr(''));
+    END;
+    res := LLVMBuildSelect(builder, is_neg, neg, v, MakeCStr(''));
+    last_val_tk := argtk;
+  END
+  ELSE IF nm = 'SQR' THEN
+  BEGIN
+    IF argtk = TK_REAL THEN res := LLVMBuildFMul(builder, v, v, MakeCStr(''))
+    ELSE res := LLVMBuildMul(builder, v, v, MakeCStr(''));
+    last_val_tk := argtk;
+  END
+  ELSE IF (nm = 'SQRT') OR (nm = 'SIN') OR (nm = 'COS') OR (nm = 'LN') OR (nm = 'EXP') OR (nm = 'ARCTAN') THEN
+  BEGIN
+    IF argtk <> TK_REAL THEN v := LLVMBuildSIToFP(builder, v, dblty, MakeCStr(''));
+    IF nm = 'SQRT' THEN res := LLVMBuildCall2(builder, sqrt_fnty, sqrt_fn, MakeArgs1(v), 1, MakeCStr(''))
+    ELSE IF nm = 'SIN' THEN res := LLVMBuildCall2(builder, sin_fnty, sin_fn, MakeArgs1(v), 1, MakeCStr(''))
+    ELSE IF nm = 'COS' THEN res := LLVMBuildCall2(builder, cos_fnty, cos_fn, MakeArgs1(v), 1, MakeCStr(''))
+    ELSE IF nm = 'LN' THEN res := LLVMBuildCall2(builder, log_fnty, log_fn, MakeArgs1(v), 1, MakeCStr(''))
+    ELSE IF nm = 'EXP' THEN res := LLVMBuildCall2(builder, exp_fnty, exp_fn, MakeArgs1(v), 1, MakeCStr(''))
+    ELSE res := LLVMBuildCall2(builder, atan_fnty, atan_fn, MakeArgs1(v), 1, MakeCStr(''));
+    last_val_tk := TK_REAL;
+  END
+  ELSE IF nm = 'TRUNC' THEN
+  BEGIN
+    IF argtk <> TK_REAL THEN v := LLVMBuildSIToFP(builder, v, dblty, MakeCStr(''));
+    res := LLVMBuildFPToSI(builder, v, i16ty, MakeCStr(''));
+    last_val_tk := TK_INTEGER;
+  END
+  ELSE IF nm = 'ROUND' THEN
+  BEGIN
+    IF argtk <> TK_REAL THEN v := LLVMBuildSIToFP(builder, v, dblty, MakeCStr(''));
+    is_neg := LLVMBuildFCmp(builder, LLVMRealOLT, v, LLVMConstReal(dblty, 0.0), MakeCStr(''));
+    half := LLVMBuildSelect(builder, is_neg, LLVMConstReal(dblty, -0.5), LLVMConstReal(dblty, 0.5), MakeCStr(''));
+    v := LLVMBuildFAdd(builder, v, half, MakeCStr(''));
+    res := LLVMBuildFPToSI(builder, v, i16ty, MakeCStr(''));
+    last_val_tk := TK_INTEGER;
+  END
+  ELSE IF nm = 'FLOAT' THEN
+  BEGIN
+    IF argtk = TK_REAL THEN res := v
+    ELSE res := LLVMBuildSIToFP(builder, v, dblty, MakeCStr(''));
+    last_val_tk := TK_REAL;
+  END
+  ELSE
+  BEGIN
+    AbortWith2('codegen: unsupported builtin: ', nm);
+    res := NIL;
+  END;
+  CodegenSimpleBuiltin := res;
+END;
+
 FUNCTION CodegenExpr(node: ADRMEM): ADRMEM;
 VAR
   nt: Str255;
@@ -1350,6 +1487,53 @@ BEGIN
     res := CodegenSetConstructor(node)
   ELSE IF nt = 'UnaryOp' THEN
     res := CodegenUnaryOp(GetStr(node, 'op'), GetObj(node, 'operand'))
+  ELSE IF (nt = 'UpperExpr') OR (nt = 'LowerExpr') THEN
+  BEGIN
+    { LOWER/UPPER bound resolution, scoped to the fixed-bound cases this
+      file's type system can represent: TYPE-declared ARRAY (static
+      lo/hi), STRING(n) (lower=1, upper=n), LSTRING(n) (lower=0,
+      upper=n -- the declared capacity, not the runtime length: the Python
+      reference resolves the same static bound for these, see exprs.py's
+      NamedType/ResolvedStringType/ResolvedLStringType branches). The
+      dereferenced form UPPER(p^)/LOWER(p^) -- bounds of a pointee, with a
+      dynamic upper bound for heap "super arrays" read from NEW's bound
+      header -- is not supported: this file has neither super arrays nor
+      multi-dimension arrays yet. }
+    IF GetBool(node, 'deref') THEN
+      AbortWith('codegen: UPPER/LOWER of a pointer dereference (p^) is not yet supported');
+    nm := GetStr(node, 'name');
+    symi := LookupSym(nm);
+    IF symi = 0 THEN
+    BEGIN
+      AbortWith2('codegen: undefined variable: ', nm);
+      res := NIL;
+    END
+    ELSE
+    BEGIN
+      result_tid := symbols[symi].tk;
+      IF TypeKind(result_tid) = TK_ARRAY THEN
+      BEGIN
+        IF nt = 'UpperExpr' THEN res := LLVMConstInt(i16ty, types[result_tid].hi, 1)
+        ELSE res := LLVMConstInt(i16ty, types[result_tid].lo, 1);
+      END
+      ELSE IF TypeKind(result_tid) = TK_STRING THEN
+      BEGIN
+        IF nt = 'UpperExpr' THEN res := LLVMConstInt(i16ty, types[result_tid].hi, 1)
+        ELSE res := LLVMConstInt(i16ty, 1, 1);
+      END
+      ELSE IF TypeKind(result_tid) = TK_LSTRING THEN
+      BEGIN
+        IF nt = 'UpperExpr' THEN res := LLVMConstInt(i16ty, types[result_tid].hi, 1)
+        ELSE res := LLVMConstInt(i16ty, 0, 1);
+      END
+      ELSE
+      BEGIN
+        AbortWith2('codegen: UPPER/LOWER not supported for variable: ', nm);
+        res := NIL;
+      END;
+      last_val_tk := TK_INTEGER;
+    END;
+  END
   ELSE IF nt = 'FuncCall' THEN
   BEGIN
     nm := GetStr(node, 'name');
@@ -1378,6 +1562,11 @@ BEGIN
       res := CodegenDecode(GetObj(node, 'args'));
       last_val_tk := TK_BOOLEAN;
     END
+    ELSE IF (nm = 'CHR') OR (nm = 'ORD') OR (nm = 'ODD') OR (nm = 'SUCC') OR (nm = 'PRED')
+      OR (nm = 'ABS') OR (nm = 'SQR') OR (nm = 'SQRT') OR (nm = 'SIN') OR (nm = 'COS')
+      OR (nm = 'LN') OR (nm = 'EXP') OR (nm = 'ARCTAN') OR (nm = 'TRUNC') OR (nm = 'ROUND')
+      OR (nm = 'FLOAT') THEN
+      res := CodegenSimpleBuiltin(nm, GetObj(node, 'args'))
     ELSE
     BEGIN
       symi := LookupRoutine(nm);
@@ -2920,6 +3109,36 @@ BEGIN
   SetPtrArrayElem(param_arr, 6, i32ty);
   decode_fnty := LLVMFunctionType(i32ty, param_arr, 7, 0);
   decode_fn := LLVMAddFunction(modl, MakeCStr('decode_value'), decode_fnty);
+
+  param_arr := AllocPtrArray(1);
+  SetPtrArrayElem(param_arr, 0, dblty);
+  sqrt_fnty := LLVMFunctionType(dblty, param_arr, 1, 0);
+  sqrt_fn := LLVMAddFunction(modl, MakeCStr('sqrt'), sqrt_fnty);
+
+  param_arr := AllocPtrArray(1);
+  SetPtrArrayElem(param_arr, 0, dblty);
+  sin_fnty := LLVMFunctionType(dblty, param_arr, 1, 0);
+  sin_fn := LLVMAddFunction(modl, MakeCStr('sin'), sin_fnty);
+
+  param_arr := AllocPtrArray(1);
+  SetPtrArrayElem(param_arr, 0, dblty);
+  cos_fnty := LLVMFunctionType(dblty, param_arr, 1, 0);
+  cos_fn := LLVMAddFunction(modl, MakeCStr('cos'), cos_fnty);
+
+  param_arr := AllocPtrArray(1);
+  SetPtrArrayElem(param_arr, 0, dblty);
+  log_fnty := LLVMFunctionType(dblty, param_arr, 1, 0);
+  log_fn := LLVMAddFunction(modl, MakeCStr('log'), log_fnty);
+
+  param_arr := AllocPtrArray(1);
+  SetPtrArrayElem(param_arr, 0, dblty);
+  exp_fnty := LLVMFunctionType(dblty, param_arr, 1, 0);
+  exp_fn := LLVMAddFunction(modl, MakeCStr('exp'), exp_fnty);
+
+  param_arr := AllocPtrArray(1);
+  SetPtrArrayElem(param_arr, 0, dblty);
+  atan_fnty := LLVMFunctionType(dblty, param_arr, 1, 0);
+  atan_fn := LLVMAddFunction(modl, MakeCStr('atan'), atan_fnty);
 
   nsymbols := 0;
   scope_top := 0;
