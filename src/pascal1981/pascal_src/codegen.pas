@@ -4806,6 +4806,9 @@ VAR
   root_nt: Str255;
   is_device_root, is_program: BOOLEAN;
   unit_decls, init_body: ADRMEM;
+  init_fnty, init_fn, init_bb: ADRMEM;
+  init_name, unit_name: Str255;
+  unit_name_len, unit_name_i: INTEGER;
 
 BEGIN
   root := ReadAllStdin;
@@ -5026,14 +5029,32 @@ BEGIN
     unit_decls := GetObj(root, 'decls');
     CodegenDeclList(unit_decls);
 
-    { UNIT initialization (a BEGIN...END body run once at program startup,
-      e.g. to set up module-level state) has no native codegen support yet
-      -- stub it out with an explicit error instead of silently dropping it,
-      matching the DEVICE-unit stubs above. jsonutil.pas has an empty
-      init_body, so this doesn't block self-hosting today. }
+    { A UNIT initialization BEGIN...END body is emitted as its own callable
+      function, matching the reference convention. Linking code is then free
+      to arrange one call to pascal_init_<unit> before the program body; a
+      UNIT object itself must not grow a process-wide main function. }
     init_body := GetObj(root, 'init_body');
     IF (init_body <> NIL) AND (ArrSize(init_body) > 0) THEN
-      AbortWith('codegen: UNIT initialization bodies are not yet supported by the native code generator');
+    BEGIN
+      init_name := 'pascal_init_';
+      unit_name := GetStr(root, 'name');
+      { LLVM symbol spelling is case-sensitive; use the same lower-case
+        unit suffix as the reference so separately built objects agree. }
+      unit_name_len := ORD(unit_name[0]);
+      FOR unit_name_i := 1 TO unit_name_len DO
+        IF (unit_name[unit_name_i] >= 'A') AND (unit_name[unit_name_i] <= 'Z') THEN
+          unit_name[unit_name_i] := CHR(ORD(unit_name[unit_name_i]) + 32);
+      CONCAT(init_name, unit_name);
+      init_fnty := LLVMFunctionType(i32ty, NIL, 0, 0);
+      init_fn := LLVMAddFunction(modl, MakeCStr(init_name), init_fnty);
+      init_bb := LLVMAppendBasicBlockInContext(ctx, init_fn, MakeCStr('entry'));
+      LLVMPositionBuilderAtEnd(builder, init_bb);
+      cur_fn := init_fn;
+      cur_func_name := '';
+      CodegenStmtArray(init_body);
+      IF LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) = NIL THEN
+        ret_val := LLVMBuildRet(builder, LLVMConstInt(i32ty, 0, 0));
+    END;
   END;
 
   verify_msg_raw := malloc(8);
