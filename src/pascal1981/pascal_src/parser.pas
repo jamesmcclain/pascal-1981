@@ -1611,8 +1611,18 @@ BEGIN
     ParseStatement := ParseLabelStmt
   ELSE IF k = 'IDENTIFIER' THEN
     ParseStatement := ParseAssignOrCallStmt
+  ELSE IF (k = 'SEMICOLON') OR (k = 'END') OR (k = 'UNTIL') OR
+          (k = 'ELSE') OR (k = 'OTHERWISE') OR (k = 'RPAREN') THEN
+    ParseStatement := CreateNode('EmptyStmt')
   ELSE
-    ParseStatement := CreateNode('EmptyStmt');
+  BEGIN
+    { An empty statement is legal only at a statement boundary.  Returning
+      one for arbitrary input leaves the token unconsumed and makes callers
+      such as ParseCompoundStmt loop forever on malformed source. }
+    res_c := puts(MakeCStr('Parser Error: expected statement'));
+    exit(1);
+    ParseStatement := NIL;
+  END;
 END;
 
 FUNCTION ParseIndexRange(allow_star: BOOLEAN): ADRMEM;
