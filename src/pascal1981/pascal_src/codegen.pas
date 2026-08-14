@@ -4148,8 +4148,39 @@ BEGIN
       ret_llvm_ty := voidty;
     END;
 
-    fnty := LLVMFunctionType(ret_llvm_ty, param_llvm_types, n, 0);
-    fn := LLVMAddFunction(modl, MakeCStr(name), fnty);
+    { A handful of C runtime/libm functions (malloc, free, printf, ...) are
+      already declared in the module by the init block above, for this
+      compiler's OWN internal codegen (NEW/DISPOSE, WRITE/WRITELN, string
+      builtins, SQRT/SIN/...) to call directly via their fn/fnty globals --
+      independently of whatever the source program's own [C]; EXTERN
+      declares under the same name (e.g. jsonutil.pas/lexer.pas both declare
+      `EXTERN malloc` for their own use). Reuse that existing LLVM function
+      instead of calling LLVMAddFunction again: a second LLVMAddFunction for
+      an already-declared name doesn't error, it silently uniquifies to
+      `malloc.1`/`free.2`/etc, which then has no real symbol to link against
+      -- found only by actually clang-linking self-hosted output, since
+      LLVMVerifyModule accepts the (internally consistent, if wrong) IR. }
+    IF name = 'malloc' THEN BEGIN fn := malloc_fn; fnty := malloc_fnty; END
+    ELSE IF name = 'free' THEN BEGIN fn := free_fn; fnty := free_fnty; END
+    ELSE IF name = 'memmove' THEN BEGIN fn := memmove_fn; fnty := memmove_fnty; END
+    ELSE IF name = 'memcmp' THEN BEGIN fn := memcmp_fn; fnty := memcmp_fnty; END
+    ELSE IF name = 'positn' THEN BEGIN fn := positn_fn; fnty := positn_fnty; END
+    ELSE IF name = 'scaneq' THEN BEGIN fn := scaneq_fn; fnty := scaneq_fnty; END
+    ELSE IF name = 'scanne' THEN BEGIN fn := scanne_fn; fnty := scanne_fnty; END
+    ELSE IF name = 'encode_value' THEN BEGIN fn := encode_fn; fnty := encode_fnty; END
+    ELSE IF name = 'decode_value' THEN BEGIN fn := decode_fn; fnty := decode_fnty; END
+    ELSE IF name = 'sqrt' THEN BEGIN fn := sqrt_fn; fnty := sqrt_fnty; END
+    ELSE IF name = 'sin' THEN BEGIN fn := sin_fn; fnty := sin_fnty; END
+    ELSE IF name = 'cos' THEN BEGIN fn := cos_fn; fnty := cos_fnty; END
+    ELSE IF name = 'log' THEN BEGIN fn := log_fn; fnty := log_fnty; END
+    ELSE IF name = 'exp' THEN BEGIN fn := exp_fn; fnty := exp_fnty; END
+    ELSE IF name = 'atan' THEN BEGIN fn := atan_fn; fnty := atan_fnty; END
+    ELSE IF name = 'printf' THEN BEGIN fn := printf_fn; fnty := printf_fnty; END
+    ELSE
+    BEGIN
+      fnty := LLVMFunctionType(ret_llvm_ty, param_llvm_types, n, 0);
+      fn := LLVMAddFunction(modl, MakeCStr(name), fnty);
+    END;
 
     { Register the routine before codegen'ing its body -- direct
       self-recursion (Fact calling Fact) needs the routine table entry to
