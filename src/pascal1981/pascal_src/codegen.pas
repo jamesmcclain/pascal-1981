@@ -4193,7 +4193,14 @@ BEGIN
       cur_func_ret_tk := ret_tk;
       cur_func_ret_slot := LLVMBuildAlloca(builder, ret_llvm_ty, MakeCStr('return_value'));
       IF (ret_tk = TK_REAL) OR (ret_tk = TK_REAL32) THEN LLVMBuildStore(builder, LLVMConstReal(ret_llvm_ty, 0.0), cur_func_ret_slot)
-      ELSE LLVMBuildStore(builder, LLVMConstInt(ret_llvm_ty, 0, 0), cur_func_ret_slot);
+      ELSE IF (ret_tk = TK_BOOLEAN) OR (ret_tk = TK_CHAR) OR IsIntegerFamilyTk(ret_tk) THEN
+        LLVMBuildStore(builder, LLVMConstInt(ret_llvm_ty, 0, 0), cur_func_ret_slot)
+      ELSE
+        { ADRMEM/POINTER, or an aggregate (LSTRING/STRING/ARRAY/RECORD)
+          return type -- neither fits LLVMConstInt (not an integer LLVM
+          type), so zero it via LLVMConstNull instead, matching the
+          reference's own all-zero default-return initialization. }
+        LLVMBuildStore(builder, LLVMConstNull(ret_llvm_ty), cur_func_ret_slot);
     END
     ELSE
       cur_func_name := '';
