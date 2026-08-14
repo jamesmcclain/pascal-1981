@@ -336,6 +336,15 @@ TYPE
     nparams: INTEGER32;
     param_tk: ParamTkArr;
     param_is_var: ParamVarArr;
+    param_needs_copy: ParamVarArr; { TRUE for a value-mode (no VAR/CONST)
+                                     ARRAY/RECORD/LSTRING/STRING param: still
+                                     passed as a pointer at the ABI level
+                                     (like param_is_var), but the callee
+                                     memcpy's it into a fresh local copy on
+                                     entry instead of aliasing the caller's
+                                     storage, matching Pascal value-parameter
+                                     semantics for an aggregate too large to
+                                     pass as a raw LLVM value. }
     has_body: BOOLEAN; { FALSE for a FORWARD/EXTERN placeholder that hasn't
                           yet been (or, for EXTERN, never will be) followed
                           by its real Block-bodied definition. }
@@ -1493,7 +1502,11 @@ BEGIN
     FOR i := 0 TO nargs - 1 DO
     BEGIN
       arg_node := ArrItem(args_arr, i);
-      IF routines[ri].param_is_var[i + 1] THEN
+      { needs_copy args (value-mode aggregates) are passed the exact same
+        way as VAR/CONST at the call site -- the address of the source
+        value -- the only difference is on the callee side, where it copies
+        instead of aliasing (see CodegenRoutineDecl). }
+      IF routines[ri].param_is_var[i + 1] OR routines[ri].param_needs_copy[i + 1] THEN
       BEGIN
         IF NodeType(arg_node) = 'Identifier' THEN
         BEGIN
@@ -3355,7 +3368,7 @@ BEGIN
 END;
 
 PROCEDURE FlattenParams(params_arr: ADRMEM; VAR n: INTEGER32; VAR names: ParamNameArr;
-                         VAR tks: ParamTkArr; VAR isvar: ParamVarArr);
+                         VAR tks: ParamTkArr; VAR isvar: ParamVarArr; VAR needs_copy: ParamVarArr);
 { A Pascal formal-parameter section groups several names under one type
   (`a, b: INTEGER`); this flattens that grouping into parallel arrays of
   one entry per actual parameter, matching how llvm-c's LLVMFunctionType
@@ -3365,7 +3378,7 @@ VAR
   np, pi, nn, ni: INTEGER32;
   param, pnames: ADRMEM;
   tk: INTEGER;
-  is_v: BOOLEAN;
+  is_v, needs_c: BOOLEAN;
 BEGIN
   n := 0;
   np := ArrSize(params_arr);
@@ -3373,10 +3386,19 @@ BEGIN
   BEGIN
     param := ArrItem(params_arr, pi);
     tk := ResolveTypeExpr(GetObj(param, 'type_expr'));
-    is_v := GetStr(param, 'mode') = 'VAR';
-    IF (NOT is_v) AND ((TypeKind(tk) = TK_ARRAY) OR (TypeKind(tk) = TK_RECORD) OR
-       (TypeKind(tk) = TK_LSTRING) OR (TypeKind(tk) = TK_STRING)) THEN
-      AbortWith('codegen: value-mode ARRAY/RECORD/LSTRING/STRING parameters are not supported (pass by VAR)');
+    { VAR/VARS/CONST/CONSTS are all reference-mode at the ABI level -- CONST
+      only additionally forbids mutation, a typechecker-level restriction,
+      not a codegen one, so it is passed the same way as VAR here: as a
+      pointer, never copied. }
+    is_v := (GetStr(param, 'mode') = 'VAR') OR (GetStr(param, 'mode') = 'VARS') OR
+            (GetStr(param, 'mode') = 'CONST') OR (GetStr(param, 'mode') = 'CONSTS');
+    { A plain value-mode ARRAY/RECORD/LSTRING/STRING param: too large to
+      pass as a raw LLVM value the way a scalar is, so it is passed as a
+      pointer too (see needs_copy at the routine-entry/call-site level),
+      but unlike VAR/CONST the callee must copy it so mutations don't leak
+      back into the caller's own storage. }
+    needs_c := (NOT is_v) AND ((TypeKind(tk) = TK_ARRAY) OR (TypeKind(tk) = TK_RECORD) OR
+       (TypeKind(tk) = TK_LSTRING) OR (TypeKind(tk) = TK_STRING));
     pnames := GetObj(param, 'names');
     nn := ArrSize(pnames);
     FOR ni := 0 TO nn - 1 DO
@@ -3386,6 +3408,7 @@ BEGIN
       names[n] := CStrToStr255(cJSON_GetStringValue(ArrItem(pnames, ni)));
       tks[n] := tk;
       isvar[n] := is_v;
+      needs_copy[n] := needs_c;
     END;
   END;
 END;
@@ -3398,6 +3421,7 @@ VAR
   names: ParamNameArr;
   tks: ParamTkArr;
   isvar: ParamVarArr;
+  needs_copy: ParamVarArr;
   param_llvm_types: ADRMEM;
   i: INTEGER32;
   ret_tk: INTEGER;
@@ -3406,6 +3430,8 @@ VAR
   existing: INTEGER32;
   ridx: INTEGER32;
   has_block_body: BOOLEAN;
+  copy_call_args: ADRMEM;
+  copy_src, copy_dst, copy_result: ADRMEM;
 BEGIN
   name := GetStr(decl, 'name');
   body_blk := GetObj(decl, 'body');
@@ -3431,20 +3457,21 @@ BEGIN
     BEGIN
       tks[i] := routines[ridx].param_tk[i];
       isvar[i] := routines[ridx].param_is_var[i];
+      needs_copy[i] := routines[ridx].param_needs_copy[i];
     END;
     params_arr := GetObj(decl, 'params');
-    FlattenParams(params_arr, n, names, tks, isvar);
+    FlattenParams(params_arr, n, names, tks, isvar, needs_copy);
     routines[ridx].has_body := TRUE;
   END
   ELSE
   BEGIN
     params_arr := GetObj(decl, 'params');
-    FlattenParams(params_arr, n, names, tks, isvar);
+    FlattenParams(params_arr, n, names, tks, isvar, needs_copy);
 
     param_llvm_types := AllocPtrArray(n);
     FOR i := 1 TO n DO
     BEGIN
-      IF isvar[i] THEN
+      IF isvar[i] OR needs_copy[i] THEN
         SetPtrArrayElem(param_llvm_types, i - 1, LLVMPointerType(LLVMTypeForTk(tks[i]), 0))
       ELSE
         SetPtrArrayElem(param_llvm_types, i - 1, LLVMTypeForTk(tks[i]));
@@ -3481,6 +3508,7 @@ BEGIN
     BEGIN
       routines[ridx].param_tk[i] := tks[i];
       routines[ridx].param_is_var[i] := isvar[i];
+      routines[ridx].param_needs_copy[i] := needs_copy[i];
     END;
     routines[ridx].has_body := has_block_body;
   END;
@@ -3515,6 +3543,21 @@ BEGIN
       param_val := LLVMGetParam(fn, i - 1);
       IF isvar[i] THEN
         palloca := param_val { the incoming pointer already IS the storage }
+      ELSE IF needs_copy[i] THEN
+      BEGIN
+        { Value-mode aggregate: param_val is a pointer to the caller's own
+          storage (see FlattenParams/needs_copy); give the callee its own
+          private copy so writes here don't alias the caller, matching
+          Pascal by-value parameter semantics. }
+        palloca := LLVMBuildAlloca(builder, LLVMTypeForTk(tks[i]), MakeCStr(names[i]));
+        copy_dst := LLVMBuildBitCast(builder, palloca, i8ptrty, MakeCStr(''));
+        copy_src := LLVMBuildBitCast(builder, param_val, i8ptrty, MakeCStr(''));
+        copy_call_args := AllocPtrArray(3);
+        SetPtrArrayElem(copy_call_args, 0, copy_dst);
+        SetPtrArrayElem(copy_call_args, 1, copy_src);
+        SetPtrArrayElem(copy_call_args, 2, LLVMConstInt(i64ty, TypeSizeBytes(tks[i]), 0));
+        copy_result := LLVMBuildCall2(builder, memmove_fnty, memmove_fn, copy_call_args, 3, MakeCStr(''));
+      END
       ELSE
       BEGIN
         palloca := LLVMBuildAlloca(builder, LLVMTypeForTk(tks[i]), MakeCStr(names[i]));
