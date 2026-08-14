@@ -633,6 +633,17 @@ BEGIN
     ((from_tid = TK_INTEGER) AND (to_tid = TK_WORD));
 END;
 
+FUNCTION LookupConst(name: Str255): INTEGER32;
+VAR
+  i: INTEGER32;
+  found: INTEGER32;
+BEGIN
+  found := 0;
+  FOR i := 1 TO nconsts DO
+    IF const_tbl[i].name = name THEN found := i;
+  LookupConst := found;
+END;
+
 FUNCTION IsIntLiteralLike(expr_node: ADRMEM): BOOLEAN;
 { A bare IntLiteral, or a unary-MINUS of one (`-50`) -- the two shapes a
   compile-time INTEGER constant can take as an AssignStmt's RHS in this
@@ -643,6 +654,11 @@ BEGIN
   IF NodeType(expr_node) = 'IntLiteral' THEN IsIntLiteralLike := TRUE
   ELSE IF (NodeType(expr_node) = 'UnaryOp') AND (GetStr(expr_node, 'op') = 'MINUS')
     AND (NodeType(GetObj(expr_node, 'operand')) = 'IntLiteral') THEN IsIntLiteralLike := TRUE
+  { A bare reference to a CONST name (e.g. comparing "tk = TK_WORD" where
+    TK_WORD is itself a CONST) folds to a compile-time INTEGER value just
+    like a literal does, so it gets the same wide-integer adaptation. }
+  ELSE IF (NodeType(expr_node) = 'Identifier') AND (LookupConst(GetStr(expr_node, 'name')) <> 0) THEN
+    IsIntLiteralLike := TRUE
   ELSE IsIntLiteralLike := FALSE;
 END;
 
@@ -710,6 +726,8 @@ BEGIN
     IntLiteralValue := Real64ToInt64(GetReal(expr_node, 'value'))
   ELSE IF (NodeType(expr_node) = 'UnaryOp') AND (GetStr(expr_node, 'op') = 'MINUS') THEN
     IntLiteralValue := 0 - Real64ToInt64(GetReal(GetObj(expr_node, 'operand'), 'value'))
+  ELSE IF (NodeType(expr_node) = 'Identifier') AND (LookupConst(GetStr(expr_node, 'name')) <> 0) THEN
+    IntLiteralValue := const_tbl[LookupConst(GetStr(expr_node, 'name'))].ival
   ELSE
   BEGIN
     AbortWith('codegen: IntLiteralValue: not a literal');
@@ -805,17 +823,6 @@ BEGIN
     AbortWith('codegen: TypeSizeBytes: unsupported type');
     TypeSizeBytes := 0;
   END;
-END;
-
-FUNCTION LookupConst(name: Str255): INTEGER32;
-VAR
-  i: INTEGER32;
-  found: INTEGER32;
-BEGIN
-  found := 0;
-  FOR i := 1 TO nconsts DO
-    IF const_tbl[i].name = name THEN found := i;
-  LookupConst := found;
 END;
 
 FUNCTION ResolveIntLiteral(node: ADRMEM): INTEGER;
@@ -1367,14 +1374,31 @@ BEGIN
       has no cross-width mixing at all, so that distinction never applies
       here). }
     IF (ltk = TK_INTEGER) OR (ltk = TK_WORD) OR (ltk = TK_INTEGER8) OR (ltk = TK_WORD8) OR
-       (ltk = TK_INTEGER32) OR (ltk = TK_WORD32) OR (ltk = TK_INTEGER64) OR (ltk = TK_WORD64) THEN
+       (ltk = TK_INTEGER32) OR (ltk = TK_WORD32) OR (ltk = TK_INTEGER64) OR (ltk = TK_WORD64) OR
+       (ltk = TK_CHAR) OR (ltk = TK_BOOLEAN) THEN
     BEGIN
+      { CHAR/BOOLEAN are ordinal in Pascal, so full ordering (not just EQ/
+        NEQ) is meaningful for them too, and LLVM's icmp works the same way
+        on their i8/i1 representations as on the integer widths above. }
       IF op = 'EQ' THEN res := LLVMBuildICmp(builder, LLVMIntEQ, lval, rval, MakeCStr(''))
       ELSE IF op = 'NEQ' THEN res := LLVMBuildICmp(builder, LLVMIntNE, lval, rval, MakeCStr(''))
       ELSE IF op = 'LT' THEN res := LLVMBuildICmp(builder, LLVMIntSLT, lval, rval, MakeCStr(''))
       ELSE IF op = 'LE' THEN res := LLVMBuildICmp(builder, LLVMIntSLE, lval, rval, MakeCStr(''))
       ELSE IF op = 'GT' THEN res := LLVMBuildICmp(builder, LLVMIntSGT, lval, rval, MakeCStr(''))
       ELSE res := LLVMBuildICmp(builder, LLVMIntSGE, lval, rval, MakeCStr(''));
+    END
+    ELSE IF (ltk = TK_ADRMEM) OR (TypeKind(ltk) = TK_POINTER) THEN
+    BEGIN
+      { Only equality is meaningful for a pointer/opaque handle (NIL checks,
+        pervasive in the other native sources) -- LLVM's icmp still needs an
+        integer predicate even for a pointer-typed operand. }
+      IF op = 'EQ' THEN res := LLVMBuildICmp(builder, LLVMIntEQ, lval, rval, MakeCStr(''))
+      ELSE IF op = 'NEQ' THEN res := LLVMBuildICmp(builder, LLVMIntNE, lval, rval, MakeCStr(''))
+      ELSE
+      BEGIN
+        AbortWith('codegen: only = and <> are supported for pointer/ADRMEM operands');
+        res := NIL;
+      END;
     END
     ELSE IF (ltk = TK_REAL) OR (ltk = TK_REAL32) THEN
     BEGIN
@@ -1866,6 +1890,12 @@ BEGIN
     ch := GetStr(node, 'value');
     res := LLVMConstInt(i8ty, ORD(ch[1]), 0);
     last_val_tk := TK_CHAR;
+  END
+  ELSE IF nt = 'BoolLiteral' THEN
+  BEGIN
+    IF GetBool(node, 'value') THEN res := LLVMConstInt(i1ty, 1, 0)
+    ELSE res := LLVMConstInt(i1ty, 0, 0);
+    last_val_tk := TK_BOOLEAN;
   END
   ELSE IF nt = 'NilLiteral' THEN
   BEGIN
