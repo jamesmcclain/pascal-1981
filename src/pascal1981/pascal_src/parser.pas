@@ -976,6 +976,34 @@ BEGIN
     Expect('RPAREN');
     ParseFactor := node;
   END
+  ELSE IF CurKind = 'UPPER' THEN
+  BEGIN
+    pos := pos + 1;
+    Expect('LPAREN');
+    name := CurLex;
+    Expect('IDENTIFIER');
+    node := CreateNode('UpperExpr');
+    AddStringField(node, 'name', name);
+    { UPPER(p^): bound of the pointee -- for a heap super array this is the
+      dynamic upper bound recorded by long-form NEW. Native codegen.pas
+      rejects this deref form (no super arrays there yet), but parsing it
+      is still correct regardless of what codegen later does with it. }
+    AddBoolField(node, 'deref', Match('POINTER'));
+    Expect('RPAREN');
+    ParseFactor := node;
+  END
+  ELSE IF CurKind = 'LOWER' THEN
+  BEGIN
+    pos := pos + 1;
+    Expect('LPAREN');
+    name := CurLex;
+    Expect('IDENTIFIER');
+    node := CreateNode('LowerExpr');
+    AddStringField(node, 'name', name);
+    AddBoolField(node, 'deref', Match('POINTER'));
+    Expect('RPAREN');
+    ParseFactor := node;
+  END
   ELSE
   BEGIN
     res_c := puts(MakeCStr('Parser Error: Invalid factor expression'));

@@ -19,8 +19,15 @@
   local_interfaces a USES clause splices in (their TYPE/PROC/FUNC
   signatures are registered exactly like an EXTERN decl's), pointer
   arithmetic (POINTER +/- an ordinal offset) and dereference (`p^`), STRING/
-  LSTRING character indexing (`s[i]`), the ORD/CHR/TRUNC/ROUND/SIZEOF
-  builtins, and non-PROGRAM compilation units (MODULE/INTERFACE/
+  LSTRING character indexing (`s[i]`), the ORD/CHR/TRUNC/ROUND/SIZEOF/ODD/
+  SUCC/PRED/ABS/SQR/SQRT/SIN/COS/LN/EXP/ARCTAN/FLOAT/HIBYTE/LOBYTE/WRD/
+  WRD8/BYWORD builtins (checked against this file's own coarse tk model --
+  e.g. WRD8 returns TK_WORD since there is no separate WORD8 tag here,
+  unlike codegen.pas's own tid scheme; codegen.pas re-resolves every type
+  itself by walking the AST directly rather than consuming this file's
+  inferred tk annotations, so that coarseness only affects this file's own
+  downstream error-checking precision, not the IR codegen.pas ultimately
+  emits), and non-PROGRAM compilation units (MODULE/INTERFACE/
   IMPLEMENTATION, which put `decls` directly on the root instead of nesting
   under a `block` the way a PROGRAM does -- see CheckUnit). DEVICE MODULE
   checks, VARARGS attribute checks, and UNIT interface/implementation
@@ -393,6 +400,13 @@ BEGIN
     CanAssign := TRUE
   ELSE IF (target_tk = TK_REAL) AND (expr_tk = TK_INTEGER) THEN
     CanAssign := TRUE
+  ELSE IF (target_tk = TK_WORD) AND (expr_tk = TK_INTEGER) THEN
+    { The vintage "INTEGER constant changes to WORD" rule (manual). The
+      Python reference only allows this for a *constant* INTEGER
+      expression; this file, like codegen.pas's own TypesCompatibleForAssign,
+      simplifies by allowing it for any INTEGER-typed expression, not just
+      literals -- a documented, deliberate looseness, not an oversight. }
+    CanAssign := TRUE
   ELSE IF (target_tk = TK_POINTER) AND (expr_tk = TK_POINTER) THEN
     CanAssign := TRUE
   ELSE
@@ -583,6 +597,90 @@ BEGIN
         AddError('TRUNC/ROUND argument must be REAL');
     END;
     CheckFuncCall := TK_INTEGER;
+    RETURN;
+  END;
+  IF name = 'ODD' THEN
+  BEGIN
+    IF nargs <> 1 THEN
+      AddError('ODD requires exactly one argument')
+    ELSE BEGIN
+      atk := CheckExpr(cJSON_GetArrayItem(args_arr, 0));
+      IF (atk <> TK_INTEGER) AND (atk <> TK_WORD) AND (atk <> TK_UNKNOWN) THEN
+        AddError('ODD argument must be INTEGER or WORD');
+    END;
+    CheckFuncCall := TK_BOOLEAN;
+    RETURN;
+  END;
+  IF (name = 'SUCC') OR (name = 'PRED') THEN
+  BEGIN
+    IF nargs <> 1 THEN
+    BEGIN
+      AddError('SUCC/PRED requires exactly one argument');
+      CheckFuncCall := TK_UNKNOWN;
+    END
+    ELSE BEGIN
+      atk := CheckExpr(cJSON_GetArrayItem(args_arr, 0));
+      IF (atk <> TK_INTEGER) AND (atk <> TK_WORD) AND (atk <> TK_CHAR) AND (atk <> TK_UNKNOWN) THEN
+        AddError('SUCC/PRED argument must be INTEGER, WORD, or CHAR');
+      CheckFuncCall := atk;
+    END;
+    RETURN;
+  END;
+  IF (name = 'ABS') OR (name = 'SQR') THEN
+  BEGIN
+    IF nargs <> 1 THEN
+    BEGIN
+      AddError('ABS/SQR requires exactly one argument');
+      CheckFuncCall := TK_UNKNOWN;
+    END
+    ELSE BEGIN
+      atk := CheckExpr(cJSON_GetArrayItem(args_arr, 0));
+      IF (atk <> TK_INTEGER) AND (atk <> TK_WORD) AND (atk <> TK_REAL) AND (atk <> TK_UNKNOWN) THEN
+        AddError('ABS/SQR argument must be INTEGER, WORD, or REAL');
+      CheckFuncCall := atk;
+    END;
+    RETURN;
+  END;
+  IF (name = 'SQRT') OR (name = 'SIN') OR (name = 'COS') OR (name = 'LN') OR
+     (name = 'EXP') OR (name = 'ARCTAN') OR (name = 'FLOAT') THEN
+  BEGIN
+    IF nargs <> 1 THEN
+      AddError('SQRT/SIN/COS/LN/EXP/ARCTAN/FLOAT requires exactly one argument')
+    ELSE BEGIN
+      atk := CheckExpr(cJSON_GetArrayItem(args_arr, 0));
+      IF (atk <> TK_INTEGER) AND (atk <> TK_WORD) AND (atk <> TK_REAL) AND (atk <> TK_UNKNOWN) THEN
+        AddError('SQRT/SIN/COS/LN/EXP/ARCTAN/FLOAT argument must be INTEGER, WORD, or REAL');
+    END;
+    CheckFuncCall := TK_REAL;
+    RETURN;
+  END;
+  IF (name = 'HIBYTE') OR (name = 'LOBYTE') THEN
+  BEGIN
+    IF nargs <> 1 THEN
+      AddError('HIBYTE/LOBYTE requires exactly one argument')
+    ELSE BEGIN
+      atk := CheckExpr(cJSON_GetArrayItem(args_arr, 0));
+      IF (atk <> TK_INTEGER) AND (atk <> TK_WORD) AND (atk <> TK_UNKNOWN) THEN
+        AddError('HIBYTE/LOBYTE argument must be INTEGER or WORD');
+    END;
+    CheckFuncCall := TK_CHAR;
+    RETURN;
+  END;
+  IF name = 'WRD8' THEN
+  BEGIN
+    IF nargs <> 1 THEN
+      AddError('WRD8 requires exactly one argument')
+    ELSE BEGIN
+      atk := CheckExpr(cJSON_GetArrayItem(args_arr, 0));
+      IF NOT IsOrdinal(atk) AND (atk <> TK_UNKNOWN) THEN
+        AddError('WRD8 argument must be an ordinal type');
+    END;
+    { typechecker.pas's coarse type model has no distinct WORD8 tag (see
+      the header comment); codegen.pas resolves the real result type
+      independently by re-walking the AST itself, so this tag is only
+      used for this file's own downstream error-checking, same as WRD
+      returning TK_WORD above. }
+    CheckFuncCall := TK_WORD;
     RETURN;
   END;
   si := LookupSymbol(name);
