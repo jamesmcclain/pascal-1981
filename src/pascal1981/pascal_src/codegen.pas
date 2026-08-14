@@ -307,12 +307,15 @@ TYPE
 
   ConstRec = RECORD
     name: Str255;
-    ival: INTEGER64; { every CONST this file's own native sources declare is
-                        a plain (optionally negated) integer literal -- see
-                        CodegenConstDecl -- so a single INTEGER64 value slot
-                        is sufficient, matching the Python reference's own
-                        eval_const_expr/self.constants side table rather
-                        than materializing a real LLVM global for each. }
+    ival: INTEGER64; { the folded value for a plain (optionally negated)
+                        integer-literal CONST -- see CodegenConstDecl --
+                        mirroring the Python reference's eval_const_expr/
+                        self.constants side table rather than materializing
+                        a real LLVM global for each. }
+    is_real: BOOLEAN; { TRUE if this CONST was instead a (optionally
+                         negated) REAL literal, e.g. `CONST RADIX = 1.0e9;`
+                         -- rval holds its value in that case, ival unused. }
+    rval: REAL;
   END;
 
   SymRec = RECORD
@@ -679,15 +682,25 @@ FUNCTION IsIntLiteralLike(expr_node: ADRMEM): BOOLEAN;
   file (no general constant-folding of arbitrary expressions, unlike the
   Python reference's _fold_const_int; this covers the shapes that actually
   occur in practice for the WORD/INTEGER8 constant-adaptation rule). }
+VAR
+  ci: INTEGER32;
 BEGIN
   IF NodeType(expr_node) = 'IntLiteral' THEN IsIntLiteralLike := TRUE
   ELSE IF (NodeType(expr_node) = 'UnaryOp') AND (GetStr(expr_node, 'op') = 'MINUS')
     AND (NodeType(GetObj(expr_node, 'operand')) = 'IntLiteral') THEN IsIntLiteralLike := TRUE
   { A bare reference to a CONST name (e.g. comparing "tk = TK_WORD" where
     TK_WORD is itself a CONST) folds to a compile-time INTEGER value just
-    like a literal does, so it gets the same wide-integer adaptation. }
-  ELSE IF (NodeType(expr_node) = 'Identifier') AND (LookupConst(GetStr(expr_node, 'name')) <> 0) THEN
-    IsIntLiteralLike := TRUE
+    like a literal does, so it gets the same wide-integer adaptation --
+    unless the CONST is itself a REAL literal (e.g. RADIX = 1.0e9). A plain
+    AND clause here would still index const_tbl[0] when LookupConst returns
+    0, since AND is not short-circuit in this dialect -- guard with a nested
+    IF instead. }
+  ELSE IF NodeType(expr_node) = 'Identifier' THEN
+  BEGIN
+    ci := LookupConst(GetStr(expr_node, 'name'));
+    IF ci = 0 THEN IsIntLiteralLike := FALSE
+    ELSE IsIntLiteralLike := NOT const_tbl[ci].is_real;
+  END
   ELSE IsIntLiteralLike := FALSE;
 END;
 
@@ -2315,8 +2328,16 @@ BEGIN
       routi := LookupRoutine(nm);
       IF consti <> 0 THEN
       BEGIN
-        res := LLVMConstInt(i16ty, const_tbl[consti].ival, 1);
-        last_val_tk := TK_INTEGER;
+        IF const_tbl[consti].is_real THEN
+        BEGIN
+          res := LLVMConstReal(dblty, const_tbl[consti].rval);
+          last_val_tk := TK_REAL;
+        END
+        ELSE
+        BEGIN
+          res := LLVMConstInt(i16ty, const_tbl[consti].ival, 1);
+          last_val_tk := TK_INTEGER;
+        END;
       END
       ELSE IF RoutineIsFunc(routi) THEN
         { A zero-arg FUNCTION called without parens (e.g. `getchar`,
@@ -4243,19 +4264,36 @@ END;
 
 PROCEDURE CodegenConstDecl(decl: ADRMEM);
 { Every CONST this file's own native sources declare is a plain (optionally
-  MINUS-negated) integer literal -- see IntLiteralValue, reused here
-  unchanged -- so this compile-time-folds and remembers the value in
-  `const_tbl`, mirroring the Python reference's eval_const_expr/self.constants
-  side table rather than emitting a real LLVM global. }
+  MINUS-negated) integer or REAL literal -- this compile-time-folds and
+  remembers the value in `const_tbl`, mirroring the Python reference's
+  eval_const_expr/self.constants side table rather than emitting a real LLVM
+  global. }
 VAR
   name: Str255;
+  val_node: ADRMEM;
 BEGIN
   name := GetStr(decl, 'name');
   IF LookupConst(name) <> 0 THEN
     AbortWith2('codegen: duplicate const declaration: ', name);
+  val_node := GetObj(decl, 'value');
   nconsts := nconsts + 1;
   const_tbl[nconsts].name := name;
-  const_tbl[nconsts].ival := IntLiteralValue(GetObj(decl, 'value'));
+  IF NodeType(val_node) = 'RealLiteral' THEN
+  BEGIN
+    const_tbl[nconsts].is_real := TRUE;
+    const_tbl[nconsts].rval := GetReal(val_node, 'value');
+  END
+  ELSE IF (NodeType(val_node) = 'UnaryOp') AND (GetStr(val_node, 'op') = 'MINUS')
+      AND (NodeType(GetObj(val_node, 'operand')) = 'RealLiteral') THEN
+  BEGIN
+    const_tbl[nconsts].is_real := TRUE;
+    const_tbl[nconsts].rval := 0.0 - GetReal(GetObj(val_node, 'operand'), 'value');
+  END
+  ELSE
+  BEGIN
+    const_tbl[nconsts].is_real := FALSE;
+    const_tbl[nconsts].ival := IntLiteralValue(val_node);
+  END;
 END;
 
 PROCEDURE CodegenDecl(decl: ADRMEM);
