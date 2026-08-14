@@ -4040,7 +4040,11 @@ BEGIN
     fn := routines[ridx].fn;
     fnty := routines[ridx].fnty;
     ret_tk := routines[ridx].ret_tk;
-    ret_llvm_ty := LLVMTypeForTk(ret_tk);
+    { A FORWARD-declared PROCEDURE (not FUNCTION) stores ret_tk as
+      TK_UNKNOWN, matching the non-forward branch below -- LLVMTypeForTk has
+      no case for TK_UNKNOWN, so it must not be called for a void routine. }
+    IF is_func THEN ret_llvm_ty := LLVMTypeForTk(ret_tk)
+    ELSE ret_llvm_ty := voidty;
     n := routines[ridx].nparams;
     FOR i := 1 TO n DO
     BEGIN
