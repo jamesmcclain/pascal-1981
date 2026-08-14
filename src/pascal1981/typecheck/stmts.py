@@ -226,9 +226,11 @@ class StmtsMixin:
 
     def check_return_stmt(self, stmt: ReturnStmt) -> None:
         """Type check a RETURN statement."""
-        # RETURN is only valid inside a function
-        if not self.current_function:
-            self.error("RETURN statement outside of function", stmt)
+        # RETURN is valid inside either a function or a procedure (codegen
+        # lowers it to a void ret when there's no current function -- see
+        # codegen_return_stmt in codegen/stmts.py).
+        if not self.current_function and not self.current_procedure:
+            self.error("RETURN statement outside of function or procedure", stmt)
             return
 
         # If function has return type, RETURN value must match
