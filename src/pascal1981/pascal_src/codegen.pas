@@ -49,15 +49,23 @@
   share that argument-list grammar; `:precision` parses but is ignored,
   matching the runtime, which has no REAL-formatting path either; DECODE's
   destination is scoped to INTEGER/CHAR, the two byte-widths its own
-  manual documents by name). Not yet covered: LOWER/UPPER and other
+  manual documents by name); and, on ordinary WRITE/WRITELN arguments
+  (StringLiteral/LSTRING/STRING/INTEGER/REAL/CHAR/BOOLEAN alike), a
+  `:width` field honored via printf's own `%*` dynamic-width specifier
+  (width is an arbitrary expression, evaluated and sign-extended to i32,
+  exactly like the Python reference's coerce_printf_int) -- `:precision`
+  parses but is ignored on this path, matching the reference's own
+  faithful-1981 default (it only ever consults precision for REAL's
+  width+precision -> %*.*f case, which this file does not yet implement);
+  and WRITE/WRITELN of a BOOLEAN argument, printed as the literal string
+  "TRUE"/"FALSE" via a runtime icmp+select between two global string
+  constants, same as the reference. Not yet covered: LOWER/UPPER and other
   non-string builtins, files, multi-dimension arrays, CHAR-keyed CASE,
-  CASE label ranges, WRITE width:precision on ordinary WRITE/WRITELN
-  arguments (only ENCODE's own width argument is covered), WRITE of a
-  BOOLEAN argument, MATHCK/RANGECK-style runtime traps (including
-  CONCAT/COPYLST/COPYSTR/INSERT's own capacity overflow, which is
-  unchecked -- same simplification as an unchecked array index elsewhere
-  in this file), C-ABI externs, units, and DEVICE MODULE/PTX generation.
-  Anything not yet covered is
+  CASE label ranges, REAL's width+precision WRITE formatting (%*.*f),
+  MATHCK/RANGECK-style runtime traps (including CONCAT/COPYLST/COPYSTR/
+  INSERT's own capacity overflow, which is unchecked -- same simplification
+  as an unchecked array index elsewhere in this file), C-ABI externs, units,
+  and DEVICE MODULE/PTX generation. Anything not yet covered is
   rejected loudly via AbortWith rather than silently mishandled
   or miscompiled -- reject unhandled constructs instead of guessing, the
   same discipline the earlier native stages (lexer.pas/parser.pas/
@@ -121,6 +129,7 @@ FUNCTION LLVMBuildURem(b: ADRMEM; lhs: ADRMEM; rhs: ADRMEM; name: ADRMEM): ADRME
 FUNCTION LLVMBuildExtractValue(b: ADRMEM; agg: ADRMEM; idx: CINT; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildInsertValue(b: ADRMEM; agg: ADRMEM; elt: ADRMEM; idx: CINT; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildICmp(b: ADRMEM; pred: CINT; lhs: ADRMEM; rhs: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMBuildSelect(b: ADRMEM; cond: ADRMEM; thenv: ADRMEM; elsev: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildFCmp(b: ADRMEM; pred: CINT; lhs: ADRMEM; rhs: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildSExt(b: ADRMEM; val: ADRMEM; destty: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 PROCEDURE LLVMBuildBr(b: ADRMEM; dest: ADRMEM) [C]; EXTERN;
@@ -1396,24 +1405,38 @@ END;
 
 { ============================ WRITE/WRITELN =============================== }
 
+FUNCTION EvalPrintfIntArg(node: ADRMEM): ADRMEM;
+{ Evaluate a WriteArg width/precision expression and coerce it to the C int
+  (i32) that printf's `*` specifier expects, mirroring the Python
+  reference's coerce_printf_int (types_map.py): native INTEGER is 16-bit, so
+  sign-extend it to i32; anything already i32 passes through unchanged. }
+VAR
+  v: ADRMEM;
+BEGIN
+  v := CodegenExpr(node);
+  IF last_val_tk = TK_INTEGER THEN
+    v := LLVMBuildSExt(builder, v, i32ty, MakeCStr(''));
+  EvalPrintfIntArg := v;
+END;
+
 PROCEDURE CodegenWriteArgs(args: ADRMEM; newline: BOOLEAN);
 VAR
   nargs, i: INTEGER32;
   fmt: Str255;
-  arg_node, expr: ADRMEM;
+  arg_node, expr, width_node, prec_node: ADRMEM;
   vals: ADRMEM;
-  v: ADRMEM;
+  v, width_val, is_true, bool_str: ADRMEM;
   strval: Str255;
   call_ret: ADRMEM;
   vi: INTEGER32;
   addr, len_ptr, chars_ptr, gep_idx, len_val: ADRMEM;
   lstr_tid: INTEGER;
   symi: INTEGER32;
-  is_lstring, is_string: BOOLEAN;
+  is_lstring, is_string, have_width: BOOLEAN;
 BEGIN
   nargs := ArrSize(args);
   fmt := '';
-  vals := AllocPtrArray(nargs * 2 + 1);
+  vals := AllocPtrArray(nargs * 3 + 1);
   vi := 1;
   FOR i := 0 TO nargs - 1 DO
   BEGIN
@@ -1421,13 +1444,29 @@ BEGIN
     IF NodeType(arg_node) <> 'WriteArg' THEN
       AbortWith('codegen: expected WriteArg node');
     expr := GetObj(arg_node, 'expr');
+    width_node := GetObjOrNil(arg_node, 'width');
+    prec_node := GetObjOrNil(arg_node, 'precision');
+    { Precision is not honored on the native WRITE path (matching the
+      Python reference's faithful-1981 default, which ignores string
+      precision and never consults precision at all for the generic
+      int/char/boolean case -- only REAL's width+precision -> %*.*f path
+      does, which native WRITE does not yet implement). }
+    have_width := width_node <> NIL;
+    IF have_width THEN width_val := EvalPrintfIntArg(width_node);
     is_lstring := FALSE;
     is_string := FALSE;
     IF NodeType(expr) = 'StringLiteral' THEN
     BEGIN
       strval := DecodeStringLiteral(GetStr(expr, 'value'));
       v := LLVMBuildGlobalStringPtr(builder, MakeCStr(strval), MakeCStr('str'));
-      CONCAT(fmt, '%s');
+      IF have_width THEN
+      BEGIN
+        CONCAT(fmt, '%*s');
+        SetPtrArrayElem(vals, vi, width_val);
+        vi := vi + 1;
+      END
+      ELSE
+        CONCAT(fmt, '%s');
       SetPtrArrayElem(vals, vi, v);
       vi := vi + 1;
     END
@@ -1458,7 +1497,14 @@ BEGIN
         SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
         SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 1, 0));
         chars_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(lstr_tid), addr, gep_idx, 2, MakeCStr(''));
-        CONCAT(fmt, '%.*s');
+        IF have_width THEN
+        BEGIN
+          CONCAT(fmt, '%*.*s');
+          SetPtrArrayElem(vals, vi, width_val);
+          vi := vi + 1;
+        END
+        ELSE
+          CONCAT(fmt, '%.*s');
         SetPtrArrayElem(vals, vi, len_val);
         vi := vi + 1;
         SetPtrArrayElem(vals, vi, chars_ptr);
@@ -1471,7 +1517,14 @@ BEGIN
         SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
         SetPtrArrayElem(gep_idx, 1, LLVMConstInt(i32ty, 0, 0));
         chars_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(lstr_tid), addr, gep_idx, 2, MakeCStr(''));
-        CONCAT(fmt, '%.*s');
+        IF have_width THEN
+        BEGIN
+          CONCAT(fmt, '%*.*s');
+          SetPtrArrayElem(vals, vi, width_val);
+          vi := vi + 1;
+        END
+        ELSE
+          CONCAT(fmt, '%.*s');
         SetPtrArrayElem(vals, vi, len_val);
         vi := vi + 1;
         SetPtrArrayElem(vals, vi, chars_ptr);
@@ -1483,14 +1536,33 @@ BEGIN
         IF last_val_tk = TK_INTEGER THEN
         BEGIN
           v := LLVMBuildSExt(builder, v, i32ty, MakeCStr(''));
-          CONCAT(fmt, '%d');
+          IF have_width THEN CONCAT(fmt, '%*d') ELSE CONCAT(fmt, '%d');
         END
         ELSE IF last_val_tk = TK_REAL THEN
-          CONCAT(fmt, '%14.7E')
+        BEGIN
+          IF have_width THEN CONCAT(fmt, '%*E') ELSE CONCAT(fmt, '%14.7E');
+        END
         ELSE IF last_val_tk = TK_CHAR THEN
-          CONCAT(fmt, '%c')
+        BEGIN
+          IF have_width THEN CONCAT(fmt, '%*c') ELSE CONCAT(fmt, '%c');
+        END
+        ELSE IF last_val_tk = TK_BOOLEAN THEN
+        BEGIN
+          is_true := LLVMBuildICmp(builder, LLVMIntNE, v, LLVMConstInt(i1ty, 0, 0), MakeCStr(''));
+          bool_str := LLVMBuildSelect(builder, is_true,
+            LLVMBuildGlobalStringPtr(builder, MakeCStr('TRUE'), MakeCStr('booltrue')),
+            LLVMBuildGlobalStringPtr(builder, MakeCStr('FALSE'), MakeCStr('boolfalse')),
+            MakeCStr(''));
+          v := bool_str;
+          IF have_width THEN CONCAT(fmt, '%*s') ELSE CONCAT(fmt, '%s');
+        END
         ELSE
           AbortWith('codegen: unsupported WRITE argument type');
+        IF have_width THEN
+        BEGIN
+          SetPtrArrayElem(vals, vi, width_val);
+          vi := vi + 1;
+        END;
         SetPtrArrayElem(vals, vi, v);
         vi := vi + 1;
       END;
@@ -1501,14 +1573,33 @@ BEGIN
       IF last_val_tk = TK_INTEGER THEN
       BEGIN
         v := LLVMBuildSExt(builder, v, i32ty, MakeCStr(''));
-        CONCAT(fmt, '%d');
+        IF have_width THEN CONCAT(fmt, '%*d') ELSE CONCAT(fmt, '%d');
       END
       ELSE IF last_val_tk = TK_REAL THEN
-        CONCAT(fmt, '%14.7E')
+      BEGIN
+        IF have_width THEN CONCAT(fmt, '%*E') ELSE CONCAT(fmt, '%14.7E');
+      END
       ELSE IF last_val_tk = TK_CHAR THEN
-        CONCAT(fmt, '%c')
+      BEGIN
+        IF have_width THEN CONCAT(fmt, '%*c') ELSE CONCAT(fmt, '%c');
+      END
+      ELSE IF last_val_tk = TK_BOOLEAN THEN
+      BEGIN
+        is_true := LLVMBuildICmp(builder, LLVMIntNE, v, LLVMConstInt(i1ty, 0, 0), MakeCStr(''));
+        bool_str := LLVMBuildSelect(builder, is_true,
+          LLVMBuildGlobalStringPtr(builder, MakeCStr('TRUE'), MakeCStr('booltrue')),
+          LLVMBuildGlobalStringPtr(builder, MakeCStr('FALSE'), MakeCStr('boolfalse')),
+          MakeCStr(''));
+        v := bool_str;
+        IF have_width THEN CONCAT(fmt, '%*s') ELSE CONCAT(fmt, '%s');
+      END
       ELSE
         AbortWith('codegen: unsupported WRITE argument type');
+      IF have_width THEN
+      BEGIN
+        SetPtrArrayElem(vals, vi, width_val);
+        vi := vi + 1;
+      END;
       SetPtrArrayElem(vals, vi, v);
       vi := vi + 1;
     END;
