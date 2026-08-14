@@ -73,14 +73,33 @@
   length) -- the dereferenced form UPPER(p^)/LOWER(p^), which the Python
   reference resolves via a dynamic bound header for heap "super arrays",
   is rejected, since this file has neither super arrays nor multi-
-  dimension arrays yet. Not yet covered: HIBYTE/LOBYTE/WRD/WRD8/BYWORD
-  (need the WORD/INTEGER8 types this file's scalar type system doesn't
-  have), files, multi-dimension arrays, CHAR-keyed CASE, CASE label
-  ranges, REAL's width+precision WRITE formatting (%*.*f), MATHCK/RANGECK-
-  style runtime traps (including CONCAT/COPYLST/COPYSTR/INSERT's own
-  capacity overflow, which is unchecked -- same simplification as an
-  unchecked array index elsewhere in this file), C-ABI externs, units, and
-  DEVICE MODULE/PTX generation. Anything not yet covered is
+  dimension arrays yet. Also covers WORD (16-bit, tid TK_WORD, same LLVM
+  i16 as INTEGER but a distinct tag -- WRITE prints it unsigned (%u,
+  zero-extended) and a compile-time INTEGER expression may assign into it
+  (the vintage "INTEGER constant changes to WORD" rule, simplified here to
+  apply to any expression, not just a literal -- a documented, deliberate
+  looseness relative to the Python reference's constant-only version) --
+  same-width arithmetic/comparisons still use signed instructions,
+  matching the reference's own hardcoded sdiv/srem/icmp-signed even for
+  WORD) and INTEGER8 (8-bit signed, tid TK_INTEGER8, LLVM i8 -- unlike the
+  reference this file has no feature-gate mechanism, so INTEGER8 is always
+  available rather than gated behind -f wide-integers; only a compile-time
+  INTEGER *literal* -- bare or unary-MINUS-wrapped -- may assign into an
+  INTEGER8 target, truncated to i8, matching the reference's constant-only
+  exemption more closely since narrowing isn't something this file wants
+  to allow silently for a non-constant value); plus HIBYTE/LOBYTE
+  (INTEGER/WORD argument only, returns CHAR, matching the reference's
+  "faithful dialect pair" restriction), WRD (any INTEGER/WORD/CHAR/
+  BOOLEAN/INTEGER8 argument widens/passes-through to WORD), and BYWORD
+  (packs two INTEGER/WORD/CHAR/BOOLEAN byte-ish values into one WORD).
+  Not yet covered: WRD8/WORD8 (would need a whole additional WORD8 scalar
+  type not requested alongside WORD/INTEGER8), files, multi-dimension
+  arrays, CHAR-keyed CASE, CASE label ranges, REAL's width+precision WRITE
+  formatting (%*.*f), MATHCK/RANGECK-style runtime traps (including
+  CONCAT/COPYLST/COPYSTR/INSERT's own capacity overflow, which is
+  unchecked -- same simplification as an unchecked array index elsewhere
+  in this file), C-ABI externs, units, and DEVICE MODULE/PTX generation.
+  Anything not yet covered is
   rejected loudly via AbortWith rather than silently mishandled
   or miscompiled -- reject unhandled constructs instead of guessing, the
   same discipline the earlier native stages (lexer.pas/parser.pas/
@@ -139,6 +158,7 @@ FUNCTION LLVMBuildOr(b: ADRMEM; lhs: ADRMEM; rhs: ADRMEM; name: ADRMEM): ADRMEM 
 FUNCTION LLVMBuildXor(b: ADRMEM; lhs: ADRMEM; rhs: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildNot(b: ADRMEM; val: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildShl(b: ADRMEM; lhs: ADRMEM; rhs: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMBuildLShr(b: ADRMEM; lhs: ADRMEM; rhs: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildUDiv(b: ADRMEM; lhs: ADRMEM; rhs: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildURem(b: ADRMEM; lhs: ADRMEM; rhs: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildExtractValue(b: ADRMEM; agg: ADRMEM; idx: CINT; name: ADRMEM): ADRMEM [C]; EXTERN;
@@ -180,12 +200,28 @@ CONST
   TK_REAL    = 2;
   TK_BOOLEAN = 3;
   TK_CHAR    = 4;
-  TK_ARRAY   = 5;
-  TK_RECORD  = 6;
-  TK_LSTRING = 7;
-  TK_POINTER = 8;
-  TK_STRING  = 9;
-  TK_SET     = 10;
+  TK_WORD    = 5; { 16-bit, same LLVM type (i16) as TK_INTEGER -- distinguished
+    only by this tag, used for WRITE's %u-vs-%d formatting and the vintage
+    "INTEGER constant assigns to WORD" rule. Per the Python reference,
+    same-width WORD arithmetic (DIV/MOD/comparisons) still uses *signed*
+    LLVM instructions (sdiv/srem/icmp signed), not unsigned ones -- only
+    WRITE formatting and (in the reference, not replicated here since this
+    file has no cross-width promotion at all) widening-extend choice are
+    signedness-aware. }
+  TK_INTEGER8 = 6; { 8-bit signed, LLVM i8 (same width as TK_CHAR, distinct
+    tag). Unlike the Python reference, this file has no feature-gate
+    mechanism, so INTEGER8 is always available here rather than gated
+    behind -f wide-integers. }
+  { ids 1..6 are the bare scalar kinds (INTEGER/REAL/BOOLEAN/CHAR/WORD/
+    INTEGER8); ids 7+ are markers whose real tid is an index into `types`
+    (see TypeKind/LLVMTypeForTk) -- bumped up from the original 5 to make
+    room for WORD/INTEGER8 alongside the original four bare scalars. }
+  TK_ARRAY   = 7;
+  TK_RECORD  = 8;
+  TK_LSTRING = 9;
+  TK_POINTER = 10;
+  TK_STRING  = 11;
+  TK_SET     = 12;
 
   MAX_SYMBOLS = 500;
   MAX_SCOPES = 64;
@@ -437,7 +473,9 @@ BEGIN
   ELSE IF tk = TK_REAL THEN LLVMTypeForTk := dblty
   ELSE IF tk = TK_BOOLEAN THEN LLVMTypeForTk := i1ty
   ELSE IF tk = TK_CHAR THEN LLVMTypeForTk := i8ty
-  ELSE IF tk >= 5 THEN LLVMTypeForTk := types[tk].llvm_ty
+  ELSE IF tk = TK_WORD THEN LLVMTypeForTk := i16ty
+  ELSE IF tk = TK_INTEGER8 THEN LLVMTypeForTk := i8ty
+  ELSE IF tk >= 7 THEN LLVMTypeForTk := types[tk].llvm_ty
   ELSE
   BEGIN
     AbortWith('codegen: LLVMTypeForTk: unknown type kind');
@@ -446,10 +484,10 @@ BEGIN
 END;
 
 FUNCTION TypeKind(tid: INTEGER): INTEGER;
-{ tid <= 4 IS its own kind (a bare scalar TK_* constant); tid >= 5 is an
+{ tid <= 6 IS its own kind (a bare scalar TK_* constant); tid >= 7 is an
   index into `types`, whose own .tk says ARRAY or RECORD. }
 BEGIN
-  IF tid <= 4 THEN TypeKind := tid
+  IF tid <= 6 THEN TypeKind := tid
   ELSE TypeKind := types[tid].tk;
 END;
 
@@ -458,7 +496,7 @@ VAR
   i, found: INTEGER;
 BEGIN
   found := 0;
-  FOR i := 5 TO ntypes DO
+  FOR i := 7 TO ntypes DO
     IF types[i].name = name THEN found := i;
   LookupNamedType := found;
 END;
@@ -506,8 +544,52 @@ FUNCTION TypesCompatibleForAssign(from_tid, to_tid: INTEGER): BOOLEAN;
   result) produced their tid, since every SET physically is the same
   [4 x i64] bitvector -- see EnsureGenericSetType. }
 BEGIN
+  { The vintage "INTEGER constant changes to WORD" rule (manual): the
+    Python reference only allows this for a *constant* INTEGER expression
+    (its _check_word_int_assign rejects a non-constant INTEGER value here
+    even though can_assign alone would accept it, requiring explicit
+    WRD(...) instead). This file doesn't constant-fold arbitrary
+    expressions, so it simplifies by allowing INTEGER->WORD for any
+    expression, not just literals -- a deliberate, documented looseness
+    relative to the reference, not an oversight. }
   TypesCompatibleForAssign := (from_tid = to_tid) OR
-    ((TypeKind(from_tid) = TK_SET) AND (TypeKind(to_tid) = TK_SET));
+    ((TypeKind(from_tid) = TK_SET) AND (TypeKind(to_tid) = TK_SET)) OR
+    ((from_tid = TK_INTEGER) AND (to_tid = TK_WORD));
+END;
+
+FUNCTION IsIntLiteralLike(expr_node: ADRMEM): BOOLEAN;
+{ A bare IntLiteral, or a unary-MINUS of one (`-50`) -- the two shapes a
+  compile-time INTEGER constant can take as an AssignStmt's RHS in this
+  file (no general constant-folding of arbitrary expressions, unlike the
+  Python reference's _fold_const_int; this covers the shapes that actually
+  occur in practice for the WORD/INTEGER8 constant-adaptation rule). }
+BEGIN
+  IF NodeType(expr_node) = 'IntLiteral' THEN IsIntLiteralLike := TRUE
+  ELSE IF (NodeType(expr_node) = 'UnaryOp') AND (GetStr(expr_node, 'op') = 'MINUS')
+    AND (NodeType(GetObj(expr_node, 'operand')) = 'IntLiteral') THEN IsIntLiteralLike := TRUE
+  ELSE IsIntLiteralLike := FALSE;
+END;
+
+FUNCTION CoerceForAssign(v: ADRMEM; from_tid, to_tid: INTEGER; expr_node: ADRMEM; ctx_name: Str255): ADRMEM;
+{ Resolve an assignment's RHS value against its target type, mirroring the
+  Python reference's can_assign plus its _const_adapts_to_int_target
+  exemption (consts.py): a compile-time INTEGER *literal* may flow into a
+  WORD or INTEGER8 target even where TypesCompatibleForAssign alone would
+  reject the tid mismatch (WORD is the same i16 as INTEGER, so the literal
+  needs no coercion; INTEGER8 is i8, so the literal is truncated). A
+  non-literal INTEGER expression assigned to WORD/INTEGER8 is rejected,
+  same as the reference (use WRD(...) / an INTEGER8-typed expression
+  explicitly). }
+BEGIN
+  IF TypesCompatibleForAssign(from_tid, to_tid) THEN
+    CoerceForAssign := v
+  ELSE IF (from_tid = TK_INTEGER) AND (to_tid = TK_INTEGER8) AND IsIntLiteralLike(expr_node) THEN
+    CoerceForAssign := LLVMBuildTrunc(builder, v, i8ty, MakeCStr(''))
+  ELSE
+  BEGIN
+    AbortWith2('codegen: assignment type mismatch for: ', ctx_name);
+    CoerceForAssign := v;
+  END;
 END;
 
 FUNCTION TypeSizeBytes(tid: INTEGER): INTEGER32;
@@ -522,6 +604,8 @@ BEGIN
   ELSE IF tid = TK_REAL THEN TypeSizeBytes := 8
   ELSE IF tid = TK_BOOLEAN THEN TypeSizeBytes := 1
   ELSE IF tid = TK_CHAR THEN TypeSizeBytes := 1
+  ELSE IF tid = TK_WORD THEN TypeSizeBytes := 2
+  ELSE IF tid = TK_INTEGER8 THEN TypeSizeBytes := 1
   ELSE IF TypeKind(tid) = TK_ARRAY THEN
     TypeSizeBytes := TypeSizeBytes(types[tid].elem_tid) * (types[tid].hi - types[tid].lo + 1)
   ELSE IF TypeKind(tid) = TK_RECORD THEN
@@ -578,6 +662,8 @@ BEGIN
     ELSE IF nm = 'REAL' THEN tid := TK_REAL
     ELSE IF nm = 'BOOLEAN' THEN tid := TK_BOOLEAN
     ELSE IF nm = 'CHAR' THEN tid := TK_CHAR
+    ELSE IF (nm = 'WORD') OR (nm = 'WORD16') THEN tid := TK_WORD
+    ELSE IF nm = 'INTEGER8' THEN tid := TK_INTEGER8
     ELSE IF nm = 'STRING' THEN
     BEGIN
       IF GetObjOrNil(te, 'param') = NIL THEN hi := 256
@@ -1029,7 +1115,13 @@ BEGIN
   END
   ELSE IF (op = 'EQ') OR (op = 'NEQ') OR (op = 'LT') OR (op = 'LE') OR (op = 'GT') OR (op = 'GE') THEN
   BEGIN
-    IF ltk = TK_INTEGER THEN
+    { WORD/INTEGER8 compare via the same *signed* icmp as plain INTEGER --
+      matching the Python reference, whose same-width WORD comparisons are
+      signed at the LLVM instruction level too (only WRITE formatting and
+      cross-width extension choice are signedness-aware there; this file
+      has no cross-width mixing at all, so that distinction never applies
+      here). }
+    IF (ltk = TK_INTEGER) OR (ltk = TK_WORD) OR (ltk = TK_INTEGER8) THEN
     BEGIN
       IF op = 'EQ' THEN res := LLVMBuildICmp(builder, LLVMIntEQ, lval, rval, MakeCStr(''))
       ELSE IF op = 'NEQ' THEN res := LLVMBuildICmp(builder, LLVMIntNE, lval, rval, MakeCStr(''))
@@ -1054,8 +1146,12 @@ BEGIN
     END;
     last_val_tk := TK_BOOLEAN;
   END
-  ELSE IF ltk = TK_INTEGER THEN
+  ELSE IF (ltk = TK_INTEGER) OR (ltk = TK_WORD) OR (ltk = TK_INTEGER8) THEN
   BEGIN
+    { Same rationale as the comparison branch above: +/-/*/DIV/MOD on
+      WORD/INTEGER8 reuse plain INTEGER's signed instructions -- two's
+      complement add/sub/mul don't care about signedness, and the
+      reference hardcodes sdiv/srem even for WORD. }
     IF op = 'PLUS' THEN res := LLVMBuildAdd(builder, lval, rval, MakeCStr(''))
     ELSE IF op = 'MINUS' THEN res := LLVMBuildSub(builder, lval, rval, MakeCStr(''))
     ELSE IF op = 'MUL' THEN res := LLVMBuildMul(builder, lval, rval, MakeCStr(''))
@@ -1063,10 +1159,10 @@ BEGIN
     ELSE IF op = 'MOD' THEN res := LLVMBuildSRem(builder, lval, rval, MakeCStr(''))
     ELSE
     BEGIN
-      AbortWith2('codegen: unhandled INTEGER operator: ', op);
+      AbortWith2('codegen: unhandled INTEGER/WORD/INTEGER8 operator: ', op);
       res := NIL;
     END;
-    last_val_tk := TK_INTEGER;
+    last_val_tk := ltk;
   END
   ELSE IF ltk = TK_REAL THEN
   BEGIN
@@ -1098,11 +1194,12 @@ BEGIN
   tk := last_val_tk;
   IF op = 'MINUS' THEN
   BEGIN
-    IF tk = TK_INTEGER THEN res := LLVMBuildSub(builder, LLVMConstInt(i16ty, 0, 1), v, MakeCStr(''))
+    IF (tk = TK_INTEGER) OR (tk = TK_WORD) THEN res := LLVMBuildSub(builder, LLVMConstInt(i16ty, 0, 1), v, MakeCStr(''))
+    ELSE IF tk = TK_INTEGER8 THEN res := LLVMBuildSub(builder, LLVMConstInt(i8ty, 0, 1), v, MakeCStr(''))
     ELSE IF tk = TK_REAL THEN res := LLVMBuildFSub(builder, LLVMConstReal(dblty, 0.0), v, MakeCStr(''))
     ELSE
     BEGIN
-      AbortWith('codegen: unary MINUS requires INTEGER/REAL operand');
+      AbortWith('codegen: unary MINUS requires INTEGER/WORD/INTEGER8/REAL operand');
       res := NIL;
     END;
     last_val_tk := tk;
@@ -1338,8 +1435,8 @@ FUNCTION CodegenSimpleBuiltin(nm: Str255; args: ADRMEM): ADRMEM;
   this file, and with the dialect's own known 16-bit-INTEGER-overflow
   behavior (not a bug -- see the codebase's own vintage-dialect notes). }
 VAR
-  v, is_neg, neg, half, res: ADRMEM;
-  argtk: INTEGER;
+  v, v2, is_neg, neg, half, res, hi16, lo16: ADRMEM;
+  argtk, argtk2: INTEGER;
 BEGIN
   v := CodegenExpr(ArrItem(args, 0));
   argtk := last_val_tk;
@@ -1424,6 +1521,48 @@ BEGIN
     IF argtk = TK_REAL THEN res := v
     ELSE res := LLVMBuildSIToFP(builder, v, dblty, MakeCStr(''));
     last_val_tk := TK_REAL;
+  END
+  ELSE IF (nm = 'HIBYTE') OR (nm = 'LOBYTE') THEN
+  BEGIN
+    { The reference (typecheck/exprs.py) restricts these to INTEGER/WORD
+      arguments only -- not INTEGER8/CHAR/BOOLEAN, despite the codegen
+      truncation working for any i16-or-narrower value -- and returns
+      CHAR, not a byte-integer type, since HIBYTE/LOBYTE is "the faithful
+      dialect pair" that predates the wide-integer extension family. }
+    IF (argtk <> TK_INTEGER) AND (argtk <> TK_WORD) THEN
+      AbortWith2('codegen: HIBYTE/LOBYTE require an INTEGER/WORD argument: ', nm);
+    IF nm = 'HIBYTE' THEN res := LLVMBuildLShr(builder, v, LLVMConstInt(i16ty, 8, 0), MakeCStr(''))
+    ELSE res := v;
+    res := LLVMBuildTrunc(builder, res, i8ty, MakeCStr(''));
+    last_val_tk := TK_CHAR;
+  END
+  ELSE IF nm = 'WRD' THEN
+  BEGIN
+    { INTEGER/WORD (already i16) pass through unchanged; CHAR/BOOLEAN/
+      INTEGER8 (i8) zero-extend to i16 -- matches the reference's WRD,
+      whose only width this file can ever produce is <=16 bits (no
+      INTEGER32/WORD32 here to exercise its truncating branch). }
+    IF (argtk = TK_INTEGER) OR (argtk = TK_WORD) THEN res := v
+    ELSE res := LLVMBuildZExt(builder, v, i16ty, MakeCStr(''));
+    last_val_tk := TK_WORD;
+  END
+  ELSE IF nm = 'BYWORD' THEN
+  BEGIN
+    { Pack two byte-ish values into one WORD: (hi&0xFF)<<8 | (lo&0xFF).
+      The reference's BYWORD argument allowlist is INTEGER/WORD/CHAR/
+      BOOLEAN only (unlike WRD's, it omits INTEGER8) -- not enforced here
+      since this file trusts whatever the typechecker already approved,
+      same discipline as every other builtin in this function. }
+    v2 := CodegenExpr(ArrItem(args, 1));
+    argtk2 := last_val_tk;
+    IF (argtk = TK_INTEGER) OR (argtk = TK_WORD) THEN hi16 := v
+    ELSE hi16 := LLVMBuildZExt(builder, v, i16ty, MakeCStr(''));
+    IF (argtk2 = TK_INTEGER) OR (argtk2 = TK_WORD) THEN lo16 := v2
+    ELSE lo16 := LLVMBuildZExt(builder, v2, i16ty, MakeCStr(''));
+    hi16 := LLVMBuildAnd(builder, hi16, LLVMConstInt(i16ty, 255, 0), MakeCStr(''));
+    lo16 := LLVMBuildAnd(builder, lo16, LLVMConstInt(i16ty, 255, 0), MakeCStr(''));
+    res := LLVMBuildOr(builder, LLVMBuildShl(builder, hi16, LLVMConstInt(i16ty, 8, 0), MakeCStr('')), lo16, MakeCStr(''));
+    last_val_tk := TK_WORD;
   END
   ELSE
   BEGIN
@@ -1565,7 +1704,7 @@ BEGIN
     ELSE IF (nm = 'CHR') OR (nm = 'ORD') OR (nm = 'ODD') OR (nm = 'SUCC') OR (nm = 'PRED')
       OR (nm = 'ABS') OR (nm = 'SQR') OR (nm = 'SQRT') OR (nm = 'SIN') OR (nm = 'COS')
       OR (nm = 'LN') OR (nm = 'EXP') OR (nm = 'ARCTAN') OR (nm = 'TRUNC') OR (nm = 'ROUND')
-      OR (nm = 'FLOAT') THEN
+      OR (nm = 'FLOAT') OR (nm = 'HIBYTE') OR (nm = 'LOBYTE') OR (nm = 'WRD') OR (nm = 'BYWORD') THEN
       res := CodegenSimpleBuiltin(nm, GetObj(node, 'args'))
     ELSE
     BEGIN
@@ -1727,6 +1866,19 @@ BEGIN
           v := LLVMBuildSExt(builder, v, i32ty, MakeCStr(''));
           IF have_width THEN CONCAT(fmt, '%*d') ELSE CONCAT(fmt, '%d');
         END
+        ELSE IF last_val_tk = TK_WORD THEN
+        BEGIN
+          { WORD prints unsigned, zero-extended, matching the Python
+            reference's io_write_read.py i16 branch (pas_ty is WORD/WORD16
+            -> conv='u', zext to i32). }
+          v := LLVMBuildZExt(builder, v, i32ty, MakeCStr(''));
+          IF have_width THEN CONCAT(fmt, '%*u') ELSE CONCAT(fmt, '%u');
+        END
+        ELSE IF last_val_tk = TK_INTEGER8 THEN
+        BEGIN
+          v := LLVMBuildSExt(builder, v, i32ty, MakeCStr(''));
+          IF have_width THEN CONCAT(fmt, '%*d') ELSE CONCAT(fmt, '%d');
+        END
         ELSE IF last_val_tk = TK_REAL THEN
         BEGIN
           IF have_width THEN CONCAT(fmt, '%*E') ELSE CONCAT(fmt, '%14.7E');
@@ -1760,6 +1912,16 @@ BEGIN
     BEGIN
       v := CodegenExpr(expr);
       IF last_val_tk = TK_INTEGER THEN
+      BEGIN
+        v := LLVMBuildSExt(builder, v, i32ty, MakeCStr(''));
+        IF have_width THEN CONCAT(fmt, '%*d') ELSE CONCAT(fmt, '%d');
+      END
+      ELSE IF last_val_tk = TK_WORD THEN
+      BEGIN
+        v := LLVMBuildZExt(builder, v, i32ty, MakeCStr(''));
+        IF have_width THEN CONCAT(fmt, '%*u') ELSE CONCAT(fmt, '%u');
+      END
+      ELSE IF last_val_tk = TK_INTEGER8 THEN
       BEGIN
         v := LLVMBuildSExt(builder, v, i32ty, MakeCStr(''));
         IF have_width THEN CONCAT(fmt, '%*d') ELSE CONCAT(fmt, '%d');
@@ -1830,8 +1992,7 @@ BEGIN
     { `FuncName := expr` inside FuncName's own body assigns through the
       return-value slot, not a symbol -- see cur_func_name's declaration. }
     v := CodegenExpr(GetObj(stmt, 'expr'));
-    IF NOT TypesCompatibleForAssign(last_val_tk, cur_func_ret_tk) THEN
-      AbortWith2('codegen: return-value type mismatch in: ', nm);
+    v := CoerceForAssign(v, last_val_tk, cur_func_ret_tk, GetObj(stmt, 'expr'), nm);
     LLVMBuildStore(builder, v, cur_func_ret_slot);
   END
   ELSE IF ArrSize(sel) = 0 THEN
@@ -1848,8 +2009,7 @@ BEGIN
     ELSE
     BEGIN
       v := CodegenExpr(GetObj(stmt, 'expr'));
-      IF NOT TypesCompatibleForAssign(last_val_tk, symbols[symi].tk) THEN
-        AbortWith2('codegen: assignment type mismatch for: ', nm);
+      v := CoerceForAssign(v, last_val_tk, symbols[symi].tk, GetObj(stmt, 'expr'), nm);
       LLVMBuildStore(builder, v, symbols[symi].llvm_val);
     END;
   END
@@ -1858,8 +2018,7 @@ BEGIN
     addr := ComputeDesignatorAddress(target);
     target_tid := last_val_tk;
     v := CodegenExpr(GetObj(stmt, 'expr'));
-    IF NOT TypesCompatibleForAssign(last_val_tk, target_tid) THEN
-      AbortWith2('codegen: assignment type mismatch for: ', nm);
+    v := CoerceForAssign(v, last_val_tk, target_tid, GetObj(stmt, 'expr'), nm);
     LLVMBuildStore(builder, v, addr);
   END;
 END;
@@ -3145,9 +3304,9 @@ BEGIN
   in_local_scope := FALSE;
   nroutines := 0;
   cur_func_name := '';
-  ntypes := 4; { ids 1..4 are the bare TK_INTEGER..TK_CHAR scalars, not
+  ntypes := 6; { ids 1..6 are the bare TK_INTEGER..TK_INTEGER8 scalars, not
                  `types` table entries -- the first RegisterType call must
-                 hand out id 5, not 1. }
+                 hand out id 7, not 1. }
   nfields := 0;
 
   block := GetObj(root, 'block');
