@@ -311,6 +311,7 @@ TYPE
     tk: INTEGER;      { TK_ARRAY or TK_RECORD }
     elem_tid: INTEGER; { ARRAY only: the element type's id }
     lo, hi: INTEGER;   { ARRAY only: the index range's bounds }
+    is_super: BOOLEAN; { SUPER ARRAY is represented as a flat element pointer }
     llvm_ty: ADRMEM;   { the cached LLVMTypeRef for this type }
   END;
 
@@ -702,6 +703,7 @@ BEGIN
   types[ntypes].elem_tid := elem_tid;
   types[ntypes].lo := lo;
   types[ntypes].hi := hi;
+  types[ntypes].is_super := FALSE;
   types[ntypes].llvm_ty := llvm_ty;
   RegisterType := ntypes;
 END;
@@ -1168,14 +1170,25 @@ BEGIN
   END
   ELSE IF nt = 'ArrayType' THEN
   BEGIN
-    IF GetBool(te, 'packed') OR GetBool(te, 'super') THEN
-      AbortWith('codegen: PACKED/SUPER arrays are not supported');
+    IF GetBool(te, 'packed') THEN
+      AbortWith('codegen: PACKED arrays are not supported');
     lo := ResolveIntLiteral(GetObj(GetObj(te, 'index_range'), 'low'));
-    hi := ResolveIntLiteral(GetObj(GetObj(te, 'index_range'), 'high'));
     elem_tid := ResolveTypeExpr(GetObj(te, 'element_type'));
-    count := hi - lo + 1;
-    arr_ty := LLVMArrayType(LLVMTypeForTk(elem_tid), count);
-    tid := RegisterType(TK_ARRAY, elem_tid, lo, hi, arr_ty);
+    IF GetBool(te, 'super') THEN
+    BEGIN
+      { A SUPER ARRAY has no physical aggregate header or upper bound. Its
+        representation is its element type, so ADS OF SUPER ARRAY becomes a
+        flat element pointer and c^[i] can use a one-index GEP. }
+      tid := RegisterType(TK_ARRAY, elem_tid, lo, lo, LLVMTypeForTk(elem_tid));
+      types[tid].is_super := TRUE;
+    END
+    ELSE
+    BEGIN
+      hi := ResolveIntLiteral(GetObj(GetObj(te, 'index_range'), 'high'));
+      count := hi - lo + 1;
+      arr_ty := LLVMArrayType(LLVMTypeForTk(elem_tid), count);
+      tid := RegisterType(TK_ARRAY, elem_tid, lo, hi, arr_ty);
+    END;
   END
   ELSE IF nt = 'RecordType' THEN
   BEGIN
@@ -2321,10 +2334,19 @@ BEGIN
         AND (last_val_tk <> TK_INTEGER64) AND (last_val_tk <> TK_WORD64) THEN
         AbortWith('codegen: an array index must be an integer-family type');
       offset := LLVMBuildSub(builder, idx_val, LLVMConstInt(LLVMTypeForTk(last_val_tk), types[cur_tid].lo, 1), MakeCStr(''));
-      gep_idx := AllocPtrArray(2);
-      SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
-      SetPtrArrayElem(gep_idx, 1, offset);
-      base_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(cur_tid), base_ptr, gep_idx, 2, MakeCStr(''));
+      IF types[cur_tid].is_super THEN
+      BEGIN
+        gep_idx := AllocPtrArray(1);
+        SetPtrArrayElem(gep_idx, 0, offset);
+        base_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(cur_tid), base_ptr, gep_idx, 1, MakeCStr(''));
+      END
+      ELSE
+      BEGIN
+        gep_idx := AllocPtrArray(2);
+        SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+        SetPtrArrayElem(gep_idx, 1, offset);
+        base_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(cur_tid), base_ptr, gep_idx, 2, MakeCStr(''));
+      END;
       cur_tid := types[cur_tid].elem_tid;
     END
     ELSE IF kind = 'DEREF' THEN
