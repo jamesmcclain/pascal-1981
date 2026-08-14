@@ -198,6 +198,9 @@ FUNCTION LLVMBuildPhi(b: ADRMEM; ty: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 PROCEDURE LLVMAddIncoming(phi: ADRMEM; vals: ADRMEM; blocks: ADRMEM; count: CINT) [C]; EXTERN;
 FUNCTION LLVMGetInsertBlock(b: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMGetBasicBlockTerminator(bb: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMGetEntryBasicBlock(fn: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMGetFirstInstruction(bb: ADRMEM): ADRMEM [C]; EXTERN;
+PROCEDURE LLVMPositionBuilderBefore(b: ADRMEM; instr: ADRMEM) [C]; EXTERN;
 FUNCTION LLVMBuildCall2(b: ADRMEM; fty: ADRMEM; fn: ADRMEM; args: ADRMEM; nargs: CINT; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildRet(b: ADRMEM; v: ADRMEM): ADRMEM [C]; EXTERN;
 PROCEDURE LLVMBuildRetVoid(b: ADRMEM) [C]; EXTERN;
@@ -463,6 +466,37 @@ VAR
 BEGIN
   res_c := puts(MakeCStr(msg));
   exit(1);
+END;
+
+FUNCTION EntryAlloca(ty: ADRMEM; name: Str255): ADRMEM;
+{ Every stack-slot alloca must live in the function's ENTRY block, not
+  wherever `builder` currently happens to be positioned -- an alloca inside
+  a loop body (or any block that runs more than once) executes AGAIN on
+  every pass, growing the stack without ever popping until the function
+  returns, not just once per function call the way a true local variable
+  does. Found via a real bug this way: parser.pas's token-reading loop
+  calls a helper with 15 string-literal arguments per iteration; each
+  materialized-literal temp used a bare LLVMBuildAlloca at the call site
+  (inside the loop body), so a several-thousand-token file blew the stack
+  and segfaulted deep inside an unrelated later call. Temporarily
+  repositions the builder to the entry block's first instruction (or its
+  end, if it has none yet), builds the alloca there, then restores the
+  builder to wherever it was -- safe to call from any block, including one
+  that has already been terminated by a br/ret (callers positioned at
+  entry itself, e.g. CodegenRoutineDecl's own param/return-slot allocas,
+  are unaffected: repositioning to entry when already at entry is a
+  no-op). }
+VAR
+  saved_bb, entry_bb, first_instr, res: ADRMEM;
+BEGIN
+  saved_bb := LLVMGetInsertBlock(builder);
+  entry_bb := LLVMGetEntryBasicBlock(cur_fn);
+  first_instr := LLVMGetFirstInstruction(entry_bb);
+  IF first_instr = NIL THEN LLVMPositionBuilderAtEnd(builder, entry_bb)
+  ELSE LLVMPositionBuilderBefore(builder, first_instr);
+  res := LLVMBuildAlloca(builder, ty, MakeCStr(name));
+  LLVMPositionBuilderAtEnd(builder, saved_bb);
+  EntryAlloca := res;
 END;
 
 FUNCTION GetObjOrNil(obj: ADRMEM; key: Str255): ADRMEM;
@@ -850,13 +884,76 @@ BEGIN
   END;
 END;
 
-FUNCTION TypeSizeBytes(tid: INTEGER): INTEGER32;
-{ Used only by NEW's malloc-sized allocation; not a general ABI sizeof (no
-  struct-padding modeling), sufficient for allocating one heap block of a
-  known Pascal type. }
+FUNCTION RoundUpBytes(n, a: INTEGER32): INTEGER32;
+{ Round n up to the next multiple of alignment a, matching the reference's
+  c_abi.py::_round_up -- shared by TypeSizeBytes/TypeAlignBytes's struct
+  layout below. }
+BEGIN
+  RoundUpBytes := ((n + a - 1) DIV a) * a;
+END;
+
+FUNCTION TypeAlignBytes(tid: INTEGER): INTEGER32;
+{ Natural (non-packed) byte alignment of a Pascal type's LLVM representation
+  -- mirrors the reference's c_abi.py::_align_of exactly (scalars align to
+  their width, ARRAY/RECORD take their element/field max), since
+  CodegenTypeDecl builds RECORD as an ordinary is_packed=0 LLVMStructType
+  (natural C-like layout with padding), not a byte-packed one. TypeSizeBytes
+  below depends on this agreeing with the real LLVM layout, or its
+  pointer-arithmetic callers (NEW-style malloc sizing, array-of-record
+  indexing) silently drift out of step with the actual field offsets LLVM's
+  GEP computes -- found via a real bug this way: a Token record mixing
+  Str255/INTEGER32 fields with a REAL field (needing 8-byte alignment)
+  computed too small a stride, corrupting the heap one record at a time
+  until a later, unrelated allocation crashed. }
 VAR
   i: INTEGER;
-  total: INTEGER32;
+  best, fa: INTEGER32;
+BEGIN
+  IF tid = TK_INTEGER THEN TypeAlignBytes := 2
+  ELSE IF tid = TK_WORD THEN TypeAlignBytes := 2
+  ELSE IF tid = TK_INTEGER8 THEN TypeAlignBytes := 1
+  ELSE IF tid = TK_WORD8 THEN TypeAlignBytes := 1
+  ELSE IF tid = TK_BOOLEAN THEN TypeAlignBytes := 1
+  ELSE IF tid = TK_CHAR THEN TypeAlignBytes := 1
+  ELSE IF tid = TK_INTEGER32 THEN TypeAlignBytes := 4
+  ELSE IF tid = TK_WORD32 THEN TypeAlignBytes := 4
+  ELSE IF tid = TK_REAL32 THEN TypeAlignBytes := 4
+  ELSE IF tid = TK_INTEGER64 THEN TypeAlignBytes := 8
+  ELSE IF tid = TK_WORD64 THEN TypeAlignBytes := 8
+  ELSE IF tid = TK_REAL THEN TypeAlignBytes := 8
+  ELSE IF tid = TK_ADRMEM THEN TypeAlignBytes := 8
+  ELSE IF TypeKind(tid) = TK_POINTER THEN TypeAlignBytes := 8
+  ELSE IF TypeKind(tid) = TK_ARRAY THEN TypeAlignBytes := TypeAlignBytes(types[tid].elem_tid)
+  ELSE IF TypeKind(tid) = TK_RECORD THEN
+  BEGIN
+    best := 1;
+    FOR i := 1 TO nfields DO
+      IF fields[i].rec_tid = tid THEN
+      BEGIN
+        fa := TypeAlignBytes(fields[i].field_tid);
+        IF fa > best THEN best := fa;
+      END;
+    TypeAlignBytes := best;
+  END
+  ELSE IF TypeKind(tid) = TK_LSTRING THEN TypeAlignBytes := 1
+  ELSE IF TypeKind(tid) = TK_STRING THEN TypeAlignBytes := 1
+  ELSE IF TypeKind(tid) = TK_SET THEN TypeAlignBytes := 8
+  ELSE
+  BEGIN
+    AbortWith('codegen: TypeAlignBytes: unsupported type');
+    TypeAlignBytes := 1;
+  END;
+END;
+
+FUNCTION TypeSizeBytes(tid: INTEGER): INTEGER32;
+{ Used by SIZEOF and NEW's malloc-sized allocation -- must agree exactly
+  with the real (natural-alignment) LLVM layout CodegenTypeDecl builds, so
+  ARRAY-of-RECORD pointer arithmetic (base + i * SIZEOF(rec)) lands on the
+  same offsets GEP does; see TypeAlignBytes above for why a naive
+  no-padding sum is wrong. }
+VAR
+  i: INTEGER;
+  off, fa: INTEGER32;
 BEGIN
   IF tid = TK_INTEGER THEN TypeSizeBytes := 2
   ELSE IF tid = TK_REAL THEN TypeSizeBytes := 8
@@ -872,14 +969,18 @@ BEGIN
   ELSE IF tid = TK_REAL32 THEN TypeSizeBytes := 4
   ELSE IF tid = TK_ADRMEM THEN TypeSizeBytes := 8
   ELSE IF TypeKind(tid) = TK_ARRAY THEN
-    TypeSizeBytes := TypeSizeBytes(types[tid].elem_tid) * (types[tid].hi - types[tid].lo + 1)
+    TypeSizeBytes := RoundUpBytes(TypeSizeBytes(types[tid].elem_tid), TypeAlignBytes(types[tid].elem_tid))
+                      * (types[tid].hi - types[tid].lo + 1)
   ELSE IF TypeKind(tid) = TK_RECORD THEN
   BEGIN
-    total := 0;
+    off := 0;
     FOR i := 1 TO nfields DO
       IF fields[i].rec_tid = tid THEN
-        total := total + TypeSizeBytes(fields[i].field_tid);
-    TypeSizeBytes := total;
+      BEGIN
+        fa := TypeAlignBytes(fields[i].field_tid);
+        off := RoundUpBytes(off, fa) + TypeSizeBytes(fields[i].field_tid);
+      END;
+    TypeSizeBytes := RoundUpBytes(off, TypeAlignBytes(tid));
   END
   ELSE IF TypeKind(tid) = TK_LSTRING THEN TypeSizeBytes := types[tid].hi + 1
   ELSE IF TypeKind(tid) = TK_STRING THEN TypeSizeBytes := types[tid].hi
@@ -1115,7 +1216,7 @@ BEGIN
   IF dup THEN
     AbortWith2('codegen: duplicate declaration: ', name);
   IF in_local_scope THEN
-    gvar := LLVMBuildAlloca(builder, LLVMTypeForTk(tk), MakeCStr(name))
+    gvar := EntryAlloca(LLVMTypeForTk(tk), name)
   ELSE
   BEGIN
     gvar := LLVMAddGlobal(modl, LLVMTypeForTk(tk), MakeCStr(name));
@@ -1217,7 +1318,7 @@ BEGIN
   high_val := CodegenExpr(high_node);
   IF last_val_tk <> TK_INTEGER THEN AbortWith('codegen: a set range bound must be INTEGER');
 
-  i_slot := LLVMBuildAlloca(builder, i16ty, MakeCStr(''));
+  i_slot := EntryAlloca(i16ty, '');
   LLVMBuildStore(builder, low_val, i_slot);
 
   loop_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('setrange_loop'));
@@ -1247,7 +1348,7 @@ VAR
   n, i: INTEGER32;
   ordv: ADRMEM;
 BEGIN
-  slot := LLVMBuildAlloca(builder, setty, MakeCStr(''));
+  slot := EntryAlloca(setty, '');
   LLVMBuildStore(builder, LLVMConstNull(setty), slot);
   elements := GetObj(node, 'elements');
   n := ArrSize(elements);
@@ -1275,7 +1376,7 @@ VAR
   ord64, word_idx, bit_idx, mask, word_val, anded: ADRMEM;
   gep_idx, word_ptr: ADRMEM;
 BEGIN
-  slot := LLVMBuildAlloca(builder, setty, MakeCStr(''));
+  slot := EntryAlloca(setty, '');
   LLVMBuildStore(builder, set_val, slot);
   ord64 := LLVMBuildSExt(builder, ordinal_val, i64ty, MakeCStr(''));
   word_idx := LLVMBuildUDiv(builder, ord64, LLVMConstInt(i64ty, 64, 0), MakeCStr(''));
@@ -1882,7 +1983,7 @@ BEGIN
               materialize the call's result into a fresh temporary and
               pass that temporary's address, same as ComputeDesignatorAddress
               does for the same shape reached via a Designator. }
-            v := LLVMBuildAlloca(builder, LLVMTypeForTk(routines[arg_routi].ret_tk), MakeCStr(''));
+            v := EntryAlloca(LLVMTypeForTk(routines[arg_routi].ret_tk), '');
             LLVMBuildStore(builder, CodegenCallCommon(arg_nm, NIL), v);
           END
           ELSE
@@ -1910,7 +2011,7 @@ BEGIN
             temporary, matching the reference's literal-into-aggregate-param
             coercion, then pass that temporary's address like any other
             needs_copy argument. }
-          v := LLVMBuildAlloca(builder, LLVMTypeForTk(routines[ri].param_tk[i + 1]), MakeCStr(''));
+          v := EntryAlloca(LLVMTypeForTk(routines[ri].param_tk[i + 1]), '');
           IF TypeKind(routines[ri].param_tk[i + 1]) = TK_LSTRING THEN
             CodegenLStringLiteralAssign(v, routines[ri].param_tk[i + 1], DecodeStringLiteral(GetStr(arg_node, 'value')))
           ELSE
@@ -1922,7 +2023,7 @@ BEGIN
             `StringEqual(UpperStr(val_str), 'TRUE')`) has no existing
             storage either -- materialize its result into a fresh
             temporary, same as the bare-niladic-call Identifier case above. }
-          v := LLVMBuildAlloca(builder, LLVMTypeForTk(routines[ri].param_tk[i + 1]), MakeCStr(''));
+          v := EntryAlloca(LLVMTypeForTk(routines[ri].param_tk[i + 1]), '');
           LLVMBuildStore(builder, CodegenExpr(arg_node), v);
         END
         ELSE
@@ -1979,7 +2080,7 @@ BEGIN
       reference's get_string_chars_and_len is_bare_func_ref handling. The
       selector loop below is a no-op since nsel = 0 here. }
     cur_tid := routines[LookupRoutine(nm)].ret_tk;
-    base_ptr := LLVMBuildAlloca(builder, LLVMTypeForTk(cur_tid), MakeCStr(''));
+    base_ptr := EntryAlloca(LLVMTypeForTk(cur_tid), '');
     LLVMBuildStore(builder, CodegenCallCommon(nm, NIL), base_ptr);
   END
   ELSE
@@ -3203,7 +3304,7 @@ BEGIN
         into a fresh temporary, same as ComputeDesignatorAddress and
         CodegenCallCommon's VAR-argument marshaling do for the same shape. }
       tid := routines[LookupRoutine(GetStr(expr, 'name'))].ret_tk;
-      addr := LLVMBuildAlloca(builder, LLVMTypeForTk(tid), MakeCStr(''));
+      addr := EntryAlloca(LLVMTypeForTk(tid), '');
       LLVMBuildStore(builder, CodegenCallCommon(GetStr(expr, 'name'), NIL), addr);
     END
     ELSE
@@ -3248,7 +3349,7 @@ BEGIN
       typechecker.pas) -- materialize the call's result into a fresh
       temporary, same idiom as the bare-niladic-Identifier branch above. }
     tid := routines[LookupRoutine(GetStr(expr, 'name'))].ret_tk;
-    addr := LLVMBuildAlloca(builder, LLVMTypeForTk(tid), MakeCStr(''));
+    addr := EntryAlloca(LLVMTypeForTk(tid), '');
     LLVMBuildStore(builder, CodegenCallCommon(GetStr(expr, 'name'), GetObj(expr, 'args')), addr);
     IF TypeKind(tid) = TK_LSTRING THEN
     BEGIN
@@ -3379,7 +3480,7 @@ VAR
   s_ptr, d_ptr, byte_val: ADRMEM;
   gep_idx: ADRMEM;
 BEGIN
-  i_slot := LLVMBuildAlloca(builder, i32ty, MakeCStr(''));
+  i_slot := EntryAlloca(i32ty, '');
   LLVMBuildStore(builder, LLVMConstInt(i32ty, 0, 0), i_slot);
 
   loop_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('strcpy_loop'));
@@ -3421,7 +3522,7 @@ VAR
   d_ptr: ADRMEM;
   gep_idx: ADRMEM;
 BEGIN
-  i_slot := LLVMBuildAlloca(builder, i32ty, MakeCStr(''));
+  i_slot := EntryAlloca(i32ty, '');
   LLVMBuildStore(builder, LLVMConstInt(i32ty, 0, 0), i_slot);
 
   loop_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('strfill_loop'));
@@ -4222,7 +4323,7 @@ BEGIN
     BEGIN
       cur_func_name := name;
       cur_func_ret_tk := ret_tk;
-      cur_func_ret_slot := LLVMBuildAlloca(builder, ret_llvm_ty, MakeCStr('return_value'));
+      cur_func_ret_slot := EntryAlloca(ret_llvm_ty, 'return_value');
       IF (ret_tk = TK_REAL) OR (ret_tk = TK_REAL32) THEN LLVMBuildStore(builder, LLVMConstReal(ret_llvm_ty, 0.0), cur_func_ret_slot)
       ELSE IF (ret_tk = TK_BOOLEAN) OR (ret_tk = TK_CHAR) OR IsIntegerFamilyTk(ret_tk) THEN
         LLVMBuildStore(builder, LLVMConstInt(ret_llvm_ty, 0, 0), cur_func_ret_slot)
@@ -4247,7 +4348,7 @@ BEGIN
           storage (see FlattenParams/needs_copy); give the callee its own
           private copy so writes here don't alias the caller, matching
           Pascal by-value parameter semantics. }
-        palloca := LLVMBuildAlloca(builder, LLVMTypeForTk(tks[i]), MakeCStr(names[i]));
+        palloca := EntryAlloca(LLVMTypeForTk(tks[i]), names[i]);
         copy_dst := LLVMBuildBitCast(builder, palloca, i8ptrty, MakeCStr(''));
         copy_src := LLVMBuildBitCast(builder, param_val, i8ptrty, MakeCStr(''));
         copy_call_args := AllocPtrArray(3);
@@ -4258,7 +4359,7 @@ BEGIN
       END
       ELSE
       BEGIN
-        palloca := LLVMBuildAlloca(builder, LLVMTypeForTk(tks[i]), MakeCStr(names[i]));
+        palloca := EntryAlloca(LLVMTypeForTk(tks[i]), names[i]);
         LLVMBuildStore(builder, param_val, palloca);
       END;
       nsymbols := nsymbols + 1;
