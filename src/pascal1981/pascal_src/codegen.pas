@@ -2575,6 +2575,35 @@ BEGIN
   CodegenSimpleBuiltin := res;
 END;
 
+FUNCTION CodegenDeviceIndex(nm: Str255): ADRMEM;
+{ Read one CUDA thread/block special register in an NVPTX DEVICE compiland.
+  The NVVM intrinsic names are lowered by llc to the corresponding PTX
+  special registers; CPU-device launch emulation is deliberately separate. }
+VAR
+  intrinsic_name: Str255;
+  fnty, fn: ADRMEM;
+BEGIN
+  IF NOT is_nvptx_device THEN
+    AbortWith2('codegen: device index builtin requires NVPTX target: ', nm);
+  IF nm = 'THREADIDX_X' THEN intrinsic_name := 'llvm.nvvm.read.ptx.sreg.tid.x'
+  ELSE IF nm = 'THREADIDX_Y' THEN intrinsic_name := 'llvm.nvvm.read.ptx.sreg.tid.y'
+  ELSE IF nm = 'THREADIDX_Z' THEN intrinsic_name := 'llvm.nvvm.read.ptx.sreg.tid.z'
+  ELSE IF nm = 'BLOCKIDX_X' THEN intrinsic_name := 'llvm.nvvm.read.ptx.sreg.ctaid.x'
+  ELSE IF nm = 'BLOCKIDX_Y' THEN intrinsic_name := 'llvm.nvvm.read.ptx.sreg.ctaid.y'
+  ELSE IF nm = 'BLOCKIDX_Z' THEN intrinsic_name := 'llvm.nvvm.read.ptx.sreg.ctaid.z'
+  ELSE IF nm = 'BLOCKDIM_X' THEN intrinsic_name := 'llvm.nvvm.read.ptx.sreg.ntid.x'
+  ELSE IF nm = 'BLOCKDIM_Y' THEN intrinsic_name := 'llvm.nvvm.read.ptx.sreg.ntid.y'
+  ELSE IF nm = 'BLOCKDIM_Z' THEN intrinsic_name := 'llvm.nvvm.read.ptx.sreg.ntid.z'
+  ELSE IF nm = 'GRIDDIM_X' THEN intrinsic_name := 'llvm.nvvm.read.ptx.sreg.nctaid.x'
+  ELSE IF nm = 'GRIDDIM_Y' THEN intrinsic_name := 'llvm.nvvm.read.ptx.sreg.nctaid.y'
+  ELSE IF nm = 'GRIDDIM_Z' THEN intrinsic_name := 'llvm.nvvm.read.ptx.sreg.nctaid.z'
+  ELSE AbortWith2('codegen: unknown device index builtin: ', nm);
+  fnty := LLVMFunctionType(i32ty, NIL, 0, 0);
+  fn := LLVMAddFunction(modl, MakeCStr(intrinsic_name), fnty);
+  CodegenDeviceIndex := LLVMBuildCall2(builder, fnty, fn, NIL, 0, MakeCStr(''));
+  last_val_tk := TK_INTEGER32;
+END;
+
 FUNCTION CodegenExpr(node: ADRMEM): ADRMEM;
 VAR
   nt: Str255;
@@ -2624,6 +2653,13 @@ BEGIN
   ELSE IF nt = 'Identifier' THEN
   BEGIN
     nm := GetStr(node, 'name');
+    IF (nm = 'THREADIDX_X') OR (nm = 'THREADIDX_Y') OR (nm = 'THREADIDX_Z') OR
+       (nm = 'BLOCKIDX_X') OR (nm = 'BLOCKIDX_Y') OR (nm = 'BLOCKIDX_Z') OR
+       (nm = 'BLOCKDIM_X') OR (nm = 'BLOCKDIM_Y') OR (nm = 'BLOCKDIM_Z') OR
+       (nm = 'GRIDDIM_X') OR (nm = 'GRIDDIM_Y') OR (nm = 'GRIDDIM_Z') THEN
+      res := CodegenDeviceIndex(nm)
+    ELSE
+    BEGIN
     symi := LookupSym(nm);
     IF symi <> 0 THEN
     BEGIN
@@ -2660,9 +2696,9 @@ BEGIN
         res := NIL;
       END;
     END;
+    END;
   END
-  ELSE IF nt = 'Designator' THEN
-  BEGIN
+  ELSE IF nt = 'Designator' THEN  BEGIN
     addr := ComputeDesignatorAddress(node);
     result_tid := last_val_tk;
     res := LLVMBuildLoad2(builder, LLVMTypeForTk(result_tid), addr, MakeCStr(''));
