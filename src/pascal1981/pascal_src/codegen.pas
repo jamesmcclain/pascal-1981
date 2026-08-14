@@ -1301,6 +1301,7 @@ BEGIN
     ELSE zero := LLVMConstInt(LLVMTypeForTk(tk), 0, 0);
     LLVMSetInitializer(gvar, zero);
   END;
+  IF nsymbols >= MAX_SYMBOLS THEN AbortWith('codegen: too many symbols');
   nsymbols := nsymbols + 1;
   symbols[nsymbols].name := name;
   symbols[nsymbols].tk := tk;
@@ -4601,6 +4602,7 @@ BEGIN
       already exist when the body's own FuncCall/ProcCallStmt nodes resolve
       it. Mutual recursion (A calls B declared later) is out of scope, same
       as it would be without a FORWARD declaration in standard Pascal. }
+    IF nroutines >= MAX_ROUTINES THEN AbortWith('codegen: too many routines');
     nroutines := nroutines + 1;
     ridx := nroutines;
     routines[ridx].name := name;
@@ -4699,6 +4701,7 @@ BEGIN
         palloca := EntryAlloca(LLVMTypeForTk(tks[i]), names[i]);
         LLVMBuildStore(builder, param_val, palloca);
       END;
+      IF nsymbols >= MAX_SYMBOLS THEN AbortWith('codegen: too many symbols');
       nsymbols := nsymbols + 1;
       symbols[nsymbols].name := names[i];
       symbols[nsymbols].tk := tks[i];
