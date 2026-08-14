@@ -4535,18 +4535,25 @@ FUNCTION LaunchThunkFor(ridx: INTEGER32): ADRMEM;
   would silently uniquify the symbol into a second, unregistered thunk. }
 VAR
   i, found: INTEGER32;
+  kname: Str255;
   thunk: ADRMEM;
 BEGIN
+  { The name is copied to a local before the comparison because this file's
+    own string-comparison lowering (IsStringShapedExpr) recognizes only a
+    bare identifier or literal as string-shaped: with a selector-bearing
+    designator on *both* sides it falls through to the scalar path and
+    rejects the operands outright. }
+  kname := routines[ridx].name;
   found := 0;
   FOR i := 1 TO nkernels DO
-    IF kernel_name_tab[i] = routines[ridx].name THEN found := i;
+    IF kernel_name_tab[i] = kname THEN found := i;
   IF found <> 0 THEN LaunchThunkFor := kernel_thunk_tab[found]
   ELSE
   BEGIN
     IF nkernels >= MAX_KERNELS THEN AbortWith('codegen: too many launched kernels');
     thunk := EmitLaunchThunk(ridx);
     nkernels := nkernels + 1;
-    kernel_name_tab[nkernels] := routines[ridx].name;
+    kernel_name_tab[nkernels] := kname;
     kernel_thunk_tab[nkernels] := thunk;
     LaunchThunkFor := thunk;
   END;
@@ -5520,6 +5527,15 @@ BEGIN
       fnty := LLVMFunctionType(ret_llvm_ty, param_llvm_types, n, 0);
       fn := LLVMAddFunction(modl, MakeCStr(name), fnty);
     END;
+
+    { Reusing an init-declared function means the LLVM signature that call
+      sites must satisfy is the init block's, not the source declaration's.
+      Where the two disagree the recorded parameter types have to follow the
+      real function, or CoerceForAssign marshals every actual to the source
+      width and LLVM rejects the call. `malloc(size: CINT)` is the live case:
+      the init block declares C's size_t (i64) on this LP64 host, while every
+      self-hosting source spells the parameter CINT (i32). }
+    IF (name = 'malloc') AND (n = 1) THEN tks[1] := TK_INTEGER64;
 
     { Register the routine before codegen'ing its body -- direct
       self-recursion (Fact calling Fact) needs the routine table entry to
