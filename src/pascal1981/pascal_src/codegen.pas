@@ -375,6 +375,7 @@ VAR
     and friends. NEW/DISPOSE must emit a runtime call instruction, not
     allocate on the compiler's own process heap. }
   memmove_fnty, memmove_fn: ADRMEM;
+  memcmp_fnty, memcmp_fn: ADRMEM; { for whole-string EQ/NEQ/LT/LE/GT/GE comparisons. }
   positn_fnty, positn_fn: ADRMEM;
   scaneq_fnty, scaneq_fn: ADRMEM;
   scanne_fnty, scanne_fn: ADRMEM;
@@ -628,9 +629,17 @@ BEGIN
     expressions, so it simplifies by allowing INTEGER->WORD for any
     expression, not just literals -- a deliberate, documented looseness
     relative to the reference, not an oversight. }
+  { ADRMEM is, in the reference type system, literally defined as
+    PointerType(CHAR_TYPE) -- the same type as this file's ^CHAR -- not a
+    distinct type that merely happens to share ADRMEM's i8ptrty LLVM
+    representation (see LLVMTypeForTk's TK_ADRMEM case). So ADRMEM and any
+    POINTER are mutually assignment-compatible here too, matching that
+    reference definition rather than inventing a new looseness. }
   TypesCompatibleForAssign := (from_tid = to_tid) OR
     ((TypeKind(from_tid) = TK_SET) AND (TypeKind(to_tid) = TK_SET)) OR
-    ((from_tid = TK_INTEGER) AND (to_tid = TK_WORD));
+    ((from_tid = TK_INTEGER) AND (to_tid = TK_WORD)) OR
+    ((from_tid = TK_ADRMEM) AND (TypeKind(to_tid) = TK_POINTER)) OR
+    ((TypeKind(from_tid) = TK_POINTER) AND (to_tid = TK_ADRMEM));
 END;
 
 FUNCTION LookupConst(name: Str255): INTEGER32;
@@ -776,6 +785,13 @@ BEGIN
       allow that literal (only) to narrow here, the same documented
       looseness INTEGER8 already gets above. }
     CoerceForAssign := LLVMBuildFPTrunc(builder, v, f32ty, MakeCStr(''))
+  ELSE IF ((from_tid = TK_INTEGER) OR (from_tid = TK_WORD) OR (from_tid = TK_INTEGER8) OR (from_tid = TK_WORD8)
+      OR (from_tid = TK_INTEGER32) OR (from_tid = TK_WORD32) OR (from_tid = TK_INTEGER64) OR (from_tid = TK_WORD64))
+      AND ((to_tid = TK_REAL) OR (to_tid = TK_REAL32)) THEN
+    { Integer-family -> floating: sitofp into the target float width,
+      matching the reference's general C-ABI argument coercion (not just a
+      literal exemption -- any integer-typed expression, e.g. cJSON_CreateNumber(int_var)). }
+    CoerceForAssign := LLVMBuildSIToFP(builder, v, LLVMTypeForTk(to_tid), MakeCStr(''))
   ELSE
   BEGIN
     AbortWith2('codegen: assignment type mismatch for: ', ctx_name);
@@ -1307,11 +1323,105 @@ BEGIN
   END;
 END;
 
+PROCEDURE ResolveStringExprCharsLen(expr: ADRMEM; VAR chars_ptr: ADRMEM; VAR len_val: ADRMEM); FORWARD;
+
+FUNCTION IsStringShapedExpr(node: ADRMEM): BOOLEAN;
+{ Mirrors the reference's codegen_binop._is_str_expr: a StringLiteral is
+  always string-shaped; a bare Identifier naming an LSTRING/STRING variable
+  is too; anything else (including a Designator with selectors, e.g. a
+  single-CHAR index into a Str255) is not -- a selector narrows away from
+  the base symbol's string type. }
+VAR
+  symi: INTEGER32;
+BEGIN
+  IF NodeType(node) = 'StringLiteral' THEN
+    IsStringShapedExpr := TRUE
+  ELSE IF NodeType(node) = 'Identifier' THEN
+  BEGIN
+    symi := LookupSym(GetStr(node, 'name'));
+    IsStringShapedExpr := (symi <> 0) AND
+      ((TypeKind(symbols[symi].tk) = TK_LSTRING) OR (TypeKind(symbols[symi].tk) = TK_STRING));
+  END
+  ELSE
+    IsStringShapedExpr := FALSE;
+END;
+
+FUNCTION CodegenStringBinOp(op: Str255; left_node, right_node: ADRMEM): ADRMEM;
+{ Whole-string EQ/NEQ/LT/LE/GT/GE, matching the reference's
+  codegen_string_binop: compare min(len)-many bytes via memcmp, then fold
+  in the length comparison the same way lexicographic ordering does. }
+VAR
+  l_chars, l_len, r_chars, r_len: ADRMEM;
+  min_len, min_len64, cmp_res, cmp_call_args: ADRMEM;
+  cmp_eq0, len_eq, len_lt, len_gt, cmp_lt0, cmp_gt0, res: ADRMEM;
+BEGIN
+  ResolveStringExprCharsLen(left_node, l_chars, l_len);
+  ResolveStringExprCharsLen(right_node, r_chars, r_len);
+  min_len := LLVMBuildSelect(builder, LLVMBuildICmp(builder, LLVMIntSLT, l_len, r_len, MakeCStr('')), l_len, r_len, MakeCStr(''));
+  min_len64 := LLVMBuildZExt(builder, min_len, i64ty, MakeCStr(''));
+  cmp_call_args := AllocPtrArray(3);
+  SetPtrArrayElem(cmp_call_args, 0, l_chars);
+  SetPtrArrayElem(cmp_call_args, 1, r_chars);
+  SetPtrArrayElem(cmp_call_args, 2, min_len64);
+  cmp_res := LLVMBuildCall2(builder, memcmp_fnty, memcmp_fn, cmp_call_args, 3, MakeCStr(''));
+  cmp_eq0 := LLVMBuildICmp(builder, LLVMIntEQ, cmp_res, LLVMConstInt(i32ty, 0, 1), MakeCStr(''));
+  len_eq := LLVMBuildICmp(builder, LLVMIntEQ, l_len, r_len, MakeCStr(''));
+  IF op = 'EQ' THEN
+    res := LLVMBuildAnd(builder, cmp_eq0, len_eq, MakeCStr(''))
+  ELSE IF op = 'NEQ' THEN
+    res := LLVMBuildNot(builder, LLVMBuildAnd(builder, cmp_eq0, len_eq, MakeCStr('')), MakeCStr(''))
+  ELSE IF op = 'LT' THEN
+  BEGIN
+    len_lt := LLVMBuildICmp(builder, LLVMIntSLT, l_len, r_len, MakeCStr(''));
+    cmp_lt0 := LLVMBuildICmp(builder, LLVMIntSLT, cmp_res, LLVMConstInt(i32ty, 0, 1), MakeCStr(''));
+    res := LLVMBuildOr(builder, cmp_lt0, LLVMBuildAnd(builder, cmp_eq0, len_lt, MakeCStr('')), MakeCStr(''));
+  END
+  ELSE IF op = 'LE' THEN
+  BEGIN
+    len_lt := LLVMBuildICmp(builder, LLVMIntSLE, l_len, r_len, MakeCStr(''));
+    cmp_lt0 := LLVMBuildICmp(builder, LLVMIntSLT, cmp_res, LLVMConstInt(i32ty, 0, 1), MakeCStr(''));
+    res := LLVMBuildOr(builder, cmp_lt0, LLVMBuildAnd(builder, cmp_eq0, len_lt, MakeCStr('')), MakeCStr(''));
+  END
+  ELSE IF op = 'GT' THEN
+  BEGIN
+    len_gt := LLVMBuildICmp(builder, LLVMIntSGT, l_len, r_len, MakeCStr(''));
+    cmp_gt0 := LLVMBuildICmp(builder, LLVMIntSGT, cmp_res, LLVMConstInt(i32ty, 0, 1), MakeCStr(''));
+    res := LLVMBuildOr(builder, cmp_gt0, LLVMBuildAnd(builder, cmp_eq0, len_gt, MakeCStr('')), MakeCStr(''));
+  END
+  ELSE IF op = 'GE' THEN
+  BEGIN
+    len_gt := LLVMBuildICmp(builder, LLVMIntSGE, l_len, r_len, MakeCStr(''));
+    cmp_gt0 := LLVMBuildICmp(builder, LLVMIntSGT, cmp_res, LLVMConstInt(i32ty, 0, 1), MakeCStr(''));
+    res := LLVMBuildOr(builder, cmp_gt0, LLVMBuildAnd(builder, cmp_eq0, len_gt, MakeCStr('')), MakeCStr(''));
+  END
+  ELSE
+  BEGIN
+    AbortWith2('codegen: unsupported string comparison operator: ', op);
+    res := NIL;
+  END;
+  CodegenStringBinOp := res;
+END;
+
+FUNCTION IsIntegerFamilyTk(tk: INTEGER): BOOLEAN;
+BEGIN
+  IsIntegerFamilyTk := (tk = TK_INTEGER) OR (tk = TK_WORD) OR (tk = TK_INTEGER8) OR (tk = TK_WORD8) OR
+    (tk = TK_INTEGER32) OR (tk = TK_WORD32) OR (tk = TK_INTEGER64) OR (tk = TK_WORD64);
+END;
+
 FUNCTION CodegenBinOp(op: Str255; left_node, right_node: ADRMEM): ADRMEM;
 VAR
   lval, rval, res: ADRMEM;
   ltk, rtk: INTEGER;
+  gep_idx: ADRMEM;
 BEGIN
+  IF ((op = 'EQ') OR (op = 'NEQ') OR (op = 'LT') OR (op = 'LE') OR (op = 'GT') OR (op = 'GE'))
+      AND (IsStringShapedExpr(left_node) OR IsStringShapedExpr(right_node)) THEN
+  BEGIN
+    res := CodegenStringBinOp(op, left_node, right_node);
+    last_val_tk := TK_BOOLEAN;
+  END
+  ELSE
+  BEGIN
   lval := CodegenExpr(left_node);
   ltk := last_val_tk;
   rval := CodegenExpr(right_node);
@@ -1360,6 +1470,26 @@ BEGIN
   END
   ELSE IF (TypeKind(ltk) = TK_SET) AND (TypeKind(rtk) = TK_SET) THEN
     res := CodegenSetBinOp(op, lval, rval)
+  ELSE IF (op = 'PLUS') AND ((ltk = TK_ADRMEM) OR (TypeKind(ltk) = TK_POINTER)) AND IsIntegerFamilyTk(rtk) THEN
+  BEGIN
+    { Raw pointer arithmetic (ptr + int), used throughout the lexer/parser's
+      hand-rolled buffer scanning (e.g. `p := src_buf + pos`). Matches the
+      reference's binary_op_result_type: the result keeps the pointer
+      operand's own type (ADRMEM is itself just PointerType(CHAR) there, so
+      "ADRMEM + int" and "^CHAR + int" are the same rule), via a
+      single-index GEP over the pointee's byte type. }
+    gep_idx := AllocPtrArray(1);
+    SetPtrArrayElem(gep_idx, 0, rval);
+    res := LLVMBuildGEP2(builder, i8ty, lval, gep_idx, 1, MakeCStr(''));
+    last_val_tk := ltk;
+  END
+  ELSE IF (op = 'PLUS') AND ((rtk = TK_ADRMEM) OR (TypeKind(rtk) = TK_POINTER)) AND IsIntegerFamilyTk(ltk) THEN
+  BEGIN
+    gep_idx := AllocPtrArray(1);
+    SetPtrArrayElem(gep_idx, 0, lval);
+    res := LLVMBuildGEP2(builder, i8ty, rval, gep_idx, 1, MakeCStr(''));
+    last_val_tk := rtk;
+  END
   ELSE IF ltk <> rtk THEN
   BEGIN
     AbortWith('codegen: mixed-type operands are not supported (no implicit promotion)');
@@ -1454,6 +1584,7 @@ BEGIN
     AbortWith('codegen: arithmetic operators support only INTEGER/REAL operands');
     res := NIL;
   END;
+  END;
   CodegenBinOp := res;
 END;
 
@@ -1493,6 +1624,9 @@ BEGIN
   END;
   CodegenUnaryOp := res;
 END;
+
+PROCEDURE CodegenLStringLiteralAssign(dest_addr: ADRMEM; dest_tid: INTEGER; s: Str255); FORWARD;
+PROCEDURE CodegenStringLiteralAssign(dest_addr: ADRMEM; dest_tid: INTEGER; s: Str255); FORWARD;
 
 FUNCTION CodegenCallCommon(name: Str255; args_arr: ADRMEM): ADRMEM;
 { Shared by a FuncCall expression and a bare ProcCallStmt that isn't
@@ -1547,6 +1681,22 @@ BEGIN
           v := ComputeDesignatorAddress(arg_node);
           IF last_val_tk <> routines[ri].param_tk[i + 1] THEN
             AbortWith2('codegen: VAR argument type mismatch calling: ', name);
+        END
+        ELSE IF (NodeType(arg_node) = 'StringLiteral') AND routines[ri].param_needs_copy[i + 1]
+            AND ((TypeKind(routines[ri].param_tk[i + 1]) = TK_LSTRING) OR (TypeKind(routines[ri].param_tk[i + 1]) = TK_STRING)) THEN
+        BEGIN
+          { A bare string-literal argument to a value-mode LSTRING/STRING
+            parameter (e.g. StartsWithLit('*)')) has no existing storage to
+            take the address of. Build the proper wire format (length-prefix
+            for LSTRING, blank-padded chars for STRING) into a fresh stack
+            temporary, matching the reference's literal-into-aggregate-param
+            coercion, then pass that temporary's address like any other
+            needs_copy argument. }
+          v := LLVMBuildAlloca(builder, LLVMTypeForTk(routines[ri].param_tk[i + 1]), MakeCStr(''));
+          IF TypeKind(routines[ri].param_tk[i + 1]) = TK_LSTRING THEN
+            CodegenLStringLiteralAssign(v, routines[ri].param_tk[i + 1], DecodeStringLiteral(GetStr(arg_node, 'value')))
+          ELSE
+            CodegenStringLiteralAssign(v, routines[ri].param_tk[i + 1], DecodeStringLiteral(GetStr(arg_node, 'value')));
         END
         ELSE
         BEGIN
@@ -3744,6 +3894,13 @@ BEGIN
   SetPtrArrayElem(param_arr, 2, i64ty);
   memmove_fnty := LLVMFunctionType(i8ptrty, param_arr, 3, 0);
   memmove_fn := LLVMAddFunction(modl, MakeCStr('memmove'), memmove_fnty);
+
+  param_arr := AllocPtrArray(3);
+  SetPtrArrayElem(param_arr, 0, i8ptrty);
+  SetPtrArrayElem(param_arr, 1, i8ptrty);
+  SetPtrArrayElem(param_arr, 2, i64ty);
+  memcmp_fnty := LLVMFunctionType(i32ty, param_arr, 3, 0);
+  memcmp_fn := LLVMAddFunction(modl, MakeCStr('memcmp'), memcmp_fnty);
 
   param_arr := AllocPtrArray(4);
   SetPtrArrayElem(param_arr, 0, i8ptrty);
