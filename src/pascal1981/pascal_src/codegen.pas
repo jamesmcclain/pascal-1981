@@ -494,6 +494,7 @@ FUNCTION DecodeStringLiteral(raw: Str255): Str255;
 VAR
   res: Str255;
   len, i, outlen: INTEGER;
+  is_escaped_quote: BOOLEAN;
 BEGIN
   len := ORD(raw[0]);
   outlen := 0;
@@ -501,7 +502,14 @@ BEGIN
   i := 2;
   WHILE i <= len - 1 DO
   BEGIN
-    IF (raw[i] = '''') AND (i + 1 <= len - 1) AND (raw[i + 1] = '''') THEN
+    { Plain AND is not short-circuit in this dialect -- guard the i+1
+      bounds check with a nested IF instead of chaining it into the same
+      AND expression as the raw[i + 1] read, or that read would still
+      execute even when i + 1 is out of range. }
+    is_escaped_quote := FALSE;
+    IF (raw[i] = '''') AND (i + 1 <= len - 1) THEN
+      is_escaped_quote := raw[i + 1] = '''';
+    IF is_escaped_quote THEN
     BEGIN
       outlen := outlen + 1;
       res[outlen] := '''';
@@ -1889,6 +1897,15 @@ BEGIN
           ELSE
             CodegenStringLiteralAssign(v, routines[ri].param_tk[i + 1], DecodeStringLiteral(GetStr(arg_node, 'value')));
         END
+        ELSE IF NodeType(arg_node) = 'FuncCall' THEN
+        BEGIN
+          { An aggregate-returning FuncCall argument (e.g.
+            `StringEqual(UpperStr(val_str), 'TRUE')`) has no existing
+            storage either -- materialize its result into a fresh
+            temporary, same as the bare-niladic-call Identifier case above. }
+          v := LLVMBuildAlloca(builder, LLVMTypeForTk(routines[ri].param_tk[i + 1]), MakeCStr(''));
+          LLVMBuildStore(builder, CodegenExpr(arg_node), v);
+        END
         ELSE
         BEGIN
           AbortWith2('codegen: a VAR argument must be an lvalue, calling: ', name);
@@ -3142,10 +3159,24 @@ BEGIN
   ELSE IF NodeType(expr) = 'Identifier' THEN
   BEGIN
     symi := LookupSym(GetStr(expr, 'name'));
-    IF symi = 0 THEN
-      AbortWith2('codegen: undefined variable: ', GetStr(expr, 'name'));
-    tid := symbols[symi].tk;
-    addr := symbols[symi].llvm_val;
+    IF (symi = 0) AND RoutineIsFunc(LookupRoutine(GetStr(expr, 'name'))) THEN
+    BEGIN
+      { A bare niladic-call Identifier (e.g. `CurKind = 'LBRACKET'`, an
+        aggregate Str255-returning FUNCTION called without parens) has no
+        symbol-table entry of its own -- materialize the call's result
+        into a fresh temporary, same as ComputeDesignatorAddress and
+        CodegenCallCommon's VAR-argument marshaling do for the same shape. }
+      tid := routines[LookupRoutine(GetStr(expr, 'name'))].ret_tk;
+      addr := LLVMBuildAlloca(builder, LLVMTypeForTk(tid), MakeCStr(''));
+      LLVMBuildStore(builder, CodegenCallCommon(GetStr(expr, 'name'), NIL), addr);
+    END
+    ELSE
+    BEGIN
+      IF symi = 0 THEN
+        AbortWith2('codegen: undefined variable: ', GetStr(expr, 'name'));
+      tid := symbols[symi].tk;
+      addr := symbols[symi].llvm_val;
+    END;
     IF TypeKind(tid) = TK_LSTRING THEN
     BEGIN
       gep_idx := AllocPtrArray(2);
