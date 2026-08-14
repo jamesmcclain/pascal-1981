@@ -4361,11 +4361,28 @@ VAR
   res_c: CINT;
   local_ifaces: ADRMEM;
   n_local_ifaces, li: INTEGER32;
+  root_nt: Str255;
+  is_device_root, is_program: BOOLEAN;
+  unit_decls, init_body: ADRMEM;
 
 BEGIN
   root := ReadAllStdin;
-  IF NodeType(root) <> 'ProgramUnit' THEN
-    AbortWith('codegen: expected ProgramUnit at root');
+  root_nt := NodeType(root);
+  is_device_root := GetBool(root, 'is_device');
+
+  { DEVICE INTERFACE/DEVICE IMPLEMENTATION units (GPU/PTX codegen) are a much
+    larger, separate feature (device address spaces, PTX backend, kernel
+    launch ABI -- see the Python reference's codegen/*.py device paths) --
+    stub them out with a clear, explicit error rather than silently
+    mis-codegening them as ordinary host units. }
+  IF (root_nt = 'ImplementationUnit') AND is_device_root THEN
+    AbortWith('codegen: DEVICE IMPLEMENTATION units are not yet supported by the native code generator');
+  IF (root_nt = 'InterfaceUnit') AND is_device_root THEN
+    AbortWith('codegen: DEVICE INTERFACE units are not yet supported by the native code generator');
+
+  is_program := root_nt = 'ProgramUnit';
+  IF (NOT is_program) AND (root_nt <> 'ImplementationUnit') THEN
+    AbortWith2('codegen: unsupported root unit kind: ', root_nt);
 
   ctx := LLVMContextCreate;
   modl := LLVMModuleCreateWithNameInContext(MakeCStr('pascal_program'), ctx);
@@ -4381,12 +4398,22 @@ BEGIN
   setty := LLVMArrayType(i64ty, 4);
   generic_set_tid := 0;
 
-  main_fnty := LLVMFunctionType(i32ty, NIL, 0, 0);
-  main_fn := LLVMAddFunction(modl, MakeCStr('main'), main_fnty);
-  entry_bb := LLVMAppendBasicBlockInContext(ctx, main_fn, MakeCStr('entry'));
-  builder := LLVMCreateBuilderInContext(ctx);
-  LLVMPositionBuilderAtEnd(builder, entry_bb);
-  cur_fn := main_fn;
+  { A UNIT compiland (ImplementationUnit) is a library object, not a program
+    -- no main/entry block, matching the reference's is_root_compiland check
+    (only PROGRAM owns the process-wide main/@input/@output). builder still
+    needs to exist since CodegenRoutineDecl repositions it per routine
+    regardless of compiland kind. }
+  IF is_program THEN
+  BEGIN
+    main_fnty := LLVMFunctionType(i32ty, NIL, 0, 0);
+    main_fn := LLVMAddFunction(modl, MakeCStr('main'), main_fnty);
+    entry_bb := LLVMAppendBasicBlockInContext(ctx, main_fn, MakeCStr('entry'));
+    builder := LLVMCreateBuilderInContext(ctx);
+    LLVMPositionBuilderAtEnd(builder, entry_bb);
+    cur_fn := main_fn;
+  END
+  ELSE
+    builder := LLVMCreateBuilderInContext(ctx);
 
   param_arr := AllocPtrArray(1);
   SetPtrArrayElem(param_arr, 0, i8ptrty);
@@ -4524,16 +4551,45 @@ BEGIN
       CodegenDeclList(GetObj(ArrItem(local_ifaces, li), 'decls'));
   END;
 
-  block := GetObj(root, 'block');
-  IF NodeType(block) <> 'Block' THEN
-    AbortWith('codegen: expected Block under ProgramUnit');
+  IF is_program THEN
+  BEGIN
+    block := GetObj(root, 'block');
+    IF NodeType(block) <> 'Block' THEN
+      AbortWith('codegen: expected Block under ProgramUnit');
 
-  CodegenDeclList(GetObj(block, 'decls'));
+    CodegenDeclList(GetObj(block, 'decls'));
 
-  body := GetObj(block, 'body');
-  CodegenStmtArray(body);
+    body := GetObj(block, 'body');
+    CodegenStmtArray(body);
 
-  ret_val := LLVMBuildRet(builder, LLVMConstInt(i32ty, 0, 0));
+    ret_val := LLVMBuildRet(builder, LLVMConstInt(i32ty, 0, 0));
+  END
+  ELSE
+  BEGIN
+    { ImplementationUnit (host): unlike a $INCLUDEd unit's INTERFACE header
+      (spliced separately into root.local_interfaces, and already walked by
+      the unconditional loop above -- which for a self-contained one-file
+      UNIT like jsonutil.pas is this SAME unit's own INTERFACE section,
+      registering its Str255/CharBuf256/PCharBuf TYPE aliases and forward
+      routine signatures already), root.interface here is that identical
+      content restated for pairing purposes -- NOT a second copy to codegen
+      again (doing so double-registers the same TYPE names and aborts with
+      "duplicate type declaration"). Just codegen the IMPLEMENTATION
+      section's own decls; the interface's forward FuncDecl/ProcDecl
+      placeholders get filled in via CodegenRoutineDecl's existing
+      FORWARD-reconciliation path when the impl's same-named decl arrives. }
+    unit_decls := GetObj(root, 'decls');
+    CodegenDeclList(unit_decls);
+
+    { UNIT initialization (a BEGIN...END body run once at program startup,
+      e.g. to set up module-level state) has no native codegen support yet
+      -- stub it out with an explicit error instead of silently dropping it,
+      matching the DEVICE-unit stubs above. jsonutil.pas has an empty
+      init_body, so this doesn't block self-hosting today. }
+    init_body := GetObj(root, 'init_body');
+    IF (init_body <> NIL) AND (ArrSize(init_body) > 0) THEN
+      AbortWith('codegen: UNIT initialization bodies are not yet supported by the native code generator');
+  END;
 
   verify_msg_raw := malloc(8);
   verify_msg := verify_msg_raw;
