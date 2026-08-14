@@ -1816,6 +1816,8 @@ VAR
   arg_node, v: ADRMEM;
   arg_nm: Str255;
   symi: INTEGER32;
+  arg_routi: INTEGER32;
+  is_bare_niladic_call: BOOLEAN;
   res: ADRMEM;
 BEGIN
   ri := LookupRoutine(name);
@@ -1843,11 +1845,27 @@ BEGIN
         BEGIN
           arg_nm := GetStr(arg_node, 'name');
           symi := LookupSym(arg_nm);
-          IF symi = 0 THEN
-            AbortWith2('codegen: undefined variable: ', arg_nm);
-          IF symbols[symi].tk <> routines[ri].param_tk[i + 1] THEN
-            AbortWith2('codegen: VAR argument type mismatch calling: ', name);
-          v := symbols[symi].llvm_val;
+          arg_routi := LookupRoutine(arg_nm);
+          is_bare_niladic_call := (symi = 0) AND RoutineIsFunc(arg_routi);
+          IF is_bare_niladic_call THEN
+          BEGIN
+            { A bare niladic-call Identifier (e.g. `StringEqual(CurKind,
+              target_k)`, an aggregate Str255-returning FUNCTION called
+              without parens) has no symbol-table entry of its own --
+              materialize the call's result into a fresh temporary and
+              pass that temporary's address, same as ComputeDesignatorAddress
+              does for the same shape reached via a Designator. }
+            v := LLVMBuildAlloca(builder, LLVMTypeForTk(routines[arg_routi].ret_tk), MakeCStr(''));
+            LLVMBuildStore(builder, CodegenCallCommon(arg_nm, NIL), v);
+          END
+          ELSE
+          BEGIN
+            IF symi = 0 THEN
+              AbortWith2('codegen: undefined variable: ', arg_nm);
+            IF symbols[symi].tk <> routines[ri].param_tk[i + 1] THEN
+              AbortWith2('codegen: VAR argument type mismatch calling: ', name);
+            v := symbols[symi].llvm_val;
+          END;
         END
         ELSE IF NodeType(arg_node) = 'Designator' THEN
         BEGIN
