@@ -1588,7 +1588,49 @@ BEGIN
       change (both i16), only the tracked Pascal type does. }
     ltk := TK_INTEGER
   ELSE IF (ltk = TK_INTEGER) AND (rtk = TK_WORD) THEN
-    rtk := TK_INTEGER;
+    rtk := TK_INTEGER
+  ELSE IF (op = 'SLASH') AND IsIntegerFamilyTk(ltk) AND IsIntegerFamilyTk(rtk) THEN
+  BEGIN
+    { SLASH is always real division in Pascal (7/2 = 3.5), forcing a
+      floating result even for two INTEGER operands -- matches the
+      reference's is_real rule, which treats a bare SLASH as an implicit
+      REAL/REAL context even with no floating operand in sight. Promote
+      both operands to REAL here; the REAL-arithmetic dispatch branch below
+      then does the actual FDiv. This MUST live in the promotion chain, not
+      the operator-dispatch chain below -- putting a promotion-only branch
+      (one that doesn't itself set `res`) as a terminal arm of that single
+      ELSE IF chain would short-circuit past the actual FDiv/FAdd/etc. dispatch
+      entirely, leaving `res` unassigned/garbage (found via a real bug this
+      way: `int_part * 10.0 + (...)` silently emitted no FAdd at all). }
+    lval := LLVMBuildSIToFP(builder, lval, dblty, MakeCStr(''));
+    rval := LLVMBuildSIToFP(builder, rval, dblty, MakeCStr(''));
+    ltk := TK_REAL;
+    rtk := TK_REAL;
+  END
+  ELSE IF IsIntegerFamilyTk(ltk) AND ((rtk = TK_REAL) OR (rtk = TK_REAL32)) THEN
+  BEGIN
+    { Mixed INTEGER-family/REAL operand: the integer side implicitly
+      promotes to the other side's floating width, matching the
+      reference's is_real widening (codegen_binop). Same chain-placement
+      rationale as the SLASH branch above. }
+    lval := LLVMBuildSIToFP(builder, lval, LLVMTypeForTk(rtk), MakeCStr(''));
+    ltk := rtk;
+  END
+  ELSE IF ((ltk = TK_REAL) OR (ltk = TK_REAL32)) AND IsIntegerFamilyTk(rtk) THEN
+  BEGIN
+    rval := LLVMBuildSIToFP(builder, rval, LLVMTypeForTk(ltk), MakeCStr(''));
+    rtk := ltk;
+  END
+  ELSE IF (ltk = TK_REAL32) AND (rtk = TK_REAL) THEN
+  BEGIN
+    lval := LLVMBuildFPExt(builder, lval, dblty, MakeCStr(''));
+    ltk := TK_REAL;
+  END
+  ELSE IF (ltk = TK_REAL) AND (rtk = TK_REAL32) THEN
+  BEGIN
+    rval := LLVMBuildFPExt(builder, rval, dblty, MakeCStr(''));
+    rtk := TK_REAL;
+  END;
 
   { A single flat ELSE IF chain, deliberately avoiding a bare EXIT
     statement: this dialect has no EXIT statement/procedure at all (verified
@@ -1634,42 +1676,6 @@ BEGIN
     SetPtrArrayElem(gep_idx, 0, lval);
     res := LLVMBuildGEP2(builder, i8ty, rval, gep_idx, 1, MakeCStr(''));
     last_val_tk := rtk;
-  END
-  ELSE IF (op = 'SLASH') AND IsIntegerFamilyTk(ltk) AND IsIntegerFamilyTk(rtk) THEN
-  BEGIN
-    { SLASH is always real division in Pascal (7/2 = 3.5), forcing a
-      floating result even for two INTEGER operands -- matches the
-      reference's is_real rule, which treats a bare SLASH as an implicit
-      REAL/REAL context even with no floating operand in sight. Promote
-      both operands to REAL here and let the REAL-arithmetic branch below
-      do the actual FDiv, rather than duplicating that dispatch. }
-    lval := LLVMBuildSIToFP(builder, lval, dblty, MakeCStr(''));
-    rval := LLVMBuildSIToFP(builder, rval, dblty, MakeCStr(''));
-    ltk := TK_REAL;
-    rtk := TK_REAL;
-  END
-  ELSE IF IsIntegerFamilyTk(ltk) AND ((rtk = TK_REAL) OR (rtk = TK_REAL32)) THEN
-  BEGIN
-    { Mixed INTEGER-family/REAL operand: the integer side implicitly
-      promotes to the other side's floating width, matching the
-      reference's is_real widening (codegen_binop). }
-    lval := LLVMBuildSIToFP(builder, lval, LLVMTypeForTk(rtk), MakeCStr(''));
-    ltk := rtk;
-  END
-  ELSE IF ((ltk = TK_REAL) OR (ltk = TK_REAL32)) AND IsIntegerFamilyTk(rtk) THEN
-  BEGIN
-    rval := LLVMBuildSIToFP(builder, rval, LLVMTypeForTk(ltk), MakeCStr(''));
-    rtk := ltk;
-  END
-  ELSE IF (ltk = TK_REAL32) AND (rtk = TK_REAL) THEN
-  BEGIN
-    lval := LLVMBuildFPExt(builder, lval, dblty, MakeCStr(''));
-    ltk := TK_REAL;
-  END
-  ELSE IF (ltk = TK_REAL) AND (rtk = TK_REAL32) THEN
-  BEGIN
-    rval := LLVMBuildFPExt(builder, rval, dblty, MakeCStr(''));
-    rtk := TK_REAL;
   END
   ELSE IF ltk <> rtk THEN
   BEGIN
