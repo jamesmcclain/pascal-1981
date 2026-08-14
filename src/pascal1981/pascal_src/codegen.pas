@@ -1963,37 +1963,17 @@ BEGIN
     FOR i := 0 TO nargs - 1 DO
     BEGIN
       arg_node := ArrItem(args_arr, i);
-      { needs_copy args (value-mode aggregates) are passed the exact same
-        way as VAR/CONST at the call site -- the address of the source
-        value -- the only difference is on the callee side, where it copies
-        instead of aliasing (see CodegenRoutineDecl). }
-      IF routines[ri].param_is_var[i + 1] OR routines[ri].param_needs_copy[i + 1] THEN
+      IF routines[ri].param_is_var[i + 1] THEN
       BEGIN
         IF NodeType(arg_node) = 'Identifier' THEN
         BEGIN
           arg_nm := GetStr(arg_node, 'name');
           symi := LookupSym(arg_nm);
-          arg_routi := LookupRoutine(arg_nm);
-          is_bare_niladic_call := (symi = 0) AND RoutineIsFunc(arg_routi);
-          IF is_bare_niladic_call THEN
-          BEGIN
-            { A bare niladic-call Identifier (e.g. `StringEqual(CurKind,
-              target_k)`, an aggregate Str255-returning FUNCTION called
-              without parens) has no symbol-table entry of its own --
-              materialize the call's result into a fresh temporary and
-              pass that temporary's address, same as ComputeDesignatorAddress
-              does for the same shape reached via a Designator. }
-            v := EntryAlloca(LLVMTypeForTk(routines[arg_routi].ret_tk), '');
-            LLVMBuildStore(builder, CodegenCallCommon(arg_nm, NIL), v);
-          END
-          ELSE
-          BEGIN
-            IF symi = 0 THEN
-              AbortWith2('codegen: undefined variable: ', arg_nm);
-            IF symbols[symi].tk <> routines[ri].param_tk[i + 1] THEN
-              AbortWith2('codegen: VAR argument type mismatch calling: ', name);
-            v := symbols[symi].llvm_val;
-          END;
+          IF symi = 0 THEN
+            AbortWith2('codegen: undefined variable: ', arg_nm);
+          IF symbols[symi].tk <> routines[ri].param_tk[i + 1] THEN
+            AbortWith2('codegen: VAR argument type mismatch calling: ', name);
+          v := symbols[symi].llvm_val;
         END
         ELSE IF NodeType(arg_node) = 'Designator' THEN
         BEGIN
@@ -2001,36 +1981,68 @@ BEGIN
           IF last_val_tk <> routines[ri].param_tk[i + 1] THEN
             AbortWith2('codegen: VAR argument type mismatch calling: ', name);
         END
-        ELSE IF (NodeType(arg_node) = 'StringLiteral') AND routines[ri].param_needs_copy[i + 1]
-            AND ((TypeKind(routines[ri].param_tk[i + 1]) = TK_LSTRING) OR (TypeKind(routines[ri].param_tk[i + 1]) = TK_STRING)) THEN
-        BEGIN
-          { A bare string-literal argument to a value-mode LSTRING/STRING
-            parameter (e.g. StartsWithLit('*)')) has no existing storage to
-            take the address of. Build the proper wire format (length-prefix
-            for LSTRING, blank-padded chars for STRING) into a fresh stack
-            temporary, matching the reference's literal-into-aggregate-param
-            coercion, then pass that temporary's address like any other
-            needs_copy argument. }
-          v := EntryAlloca(LLVMTypeForTk(routines[ri].param_tk[i + 1]), '');
-          IF TypeKind(routines[ri].param_tk[i + 1]) = TK_LSTRING THEN
-            CodegenLStringLiteralAssign(v, routines[ri].param_tk[i + 1], DecodeStringLiteral(GetStr(arg_node, 'value')))
-          ELSE
-            CodegenStringLiteralAssign(v, routines[ri].param_tk[i + 1], DecodeStringLiteral(GetStr(arg_node, 'value')));
-        END
-        ELSE IF NodeType(arg_node) = 'FuncCall' THEN
-        BEGIN
-          { An aggregate-returning FuncCall argument (e.g.
-            `StringEqual(UpperStr(val_str), 'TRUE')`) has no existing
-            storage either -- materialize its result into a fresh
-            temporary, same as the bare-niladic-call Identifier case above. }
-          v := EntryAlloca(LLVMTypeForTk(routines[ri].param_tk[i + 1]), '');
-          LLVMBuildStore(builder, CodegenExpr(arg_node), v);
-        END
         ELSE
         BEGIN
           AbortWith2('codegen: a VAR argument must be an lvalue, calling: ', name);
           v := NIL;
         END;
+      END
+      ELSE IF routines[ri].param_needs_copy[i + 1] THEN
+      BEGIN
+        { Value-mode ARRAY/RECORD/LSTRING/STRING aggregate parameter: the
+          callee now expects a first-class LLVM aggregate value (matching
+          the Python reference), not an address -- see CodegenRoutineDecl's
+          signature/prologue above. Every sub-case below produces that SSA
+          aggregate value instead of a pointer to one. }
+        IF NodeType(arg_node) = 'Identifier' THEN
+        BEGIN
+          arg_nm := GetStr(arg_node, 'name');
+          symi := LookupSym(arg_nm);
+          arg_routi := LookupRoutine(arg_nm);
+          is_bare_niladic_call := (symi = 0) AND RoutineIsFunc(arg_routi);
+          IF is_bare_niladic_call THEN
+            { A bare niladic-call Identifier (e.g. an aggregate-returning
+              FUNCTION called without parens) already produces its result
+              as an SSA aggregate value -- pass it straight through. }
+            v := CodegenCallCommon(arg_nm, NIL)
+          ELSE
+          BEGIN
+            IF symi = 0 THEN
+              AbortWith2('codegen: undefined variable: ', arg_nm);
+            IF symbols[symi].tk <> routines[ri].param_tk[i + 1] THEN
+              AbortWith2('codegen: value-aggregate argument type mismatch calling: ', name);
+            v := LLVMBuildLoad2(builder, LLVMTypeForTk(symbols[symi].tk), symbols[symi].llvm_val, MakeCStr(''));
+          END;
+        END
+        ELSE IF NodeType(arg_node) = 'Designator' THEN
+        BEGIN
+          v := ComputeDesignatorAddress(arg_node);
+          IF last_val_tk <> routines[ri].param_tk[i + 1] THEN
+            AbortWith2('codegen: value-aggregate argument type mismatch calling: ', name);
+          v := LLVMBuildLoad2(builder, LLVMTypeForTk(last_val_tk), v, MakeCStr(''));
+        END
+        ELSE IF (NodeType(arg_node) = 'StringLiteral')
+            AND ((TypeKind(routines[ri].param_tk[i + 1]) = TK_LSTRING) OR (TypeKind(routines[ri].param_tk[i + 1]) = TK_STRING)) THEN
+        BEGIN
+          { A bare string-literal argument to a value-mode LSTRING/STRING
+            parameter (e.g. StartsWithLit('*)')) has no existing storage to
+            load from. Build the proper wire format (length-prefix for
+            LSTRING, blank-padded chars for STRING) into a fresh stack
+            temporary, matching the reference's literal-into-aggregate-param
+            coercion, then load the temporary into an SSA value. }
+          v := EntryAlloca(LLVMTypeForTk(routines[ri].param_tk[i + 1]), '');
+          IF TypeKind(routines[ri].param_tk[i + 1]) = TK_LSTRING THEN
+            CodegenLStringLiteralAssign(v, routines[ri].param_tk[i + 1], DecodeStringLiteral(GetStr(arg_node, 'value')))
+          ELSE
+            CodegenStringLiteralAssign(v, routines[ri].param_tk[i + 1], DecodeStringLiteral(GetStr(arg_node, 'value')));
+          v := LLVMBuildLoad2(builder, LLVMTypeForTk(routines[ri].param_tk[i + 1]), v, MakeCStr(''));
+        END
+        ELSE
+          { Any other value-mode aggregate-shaped expression (a FuncCall, or
+            anything else CodegenExpr can produce) is already an SSA
+            aggregate value -- no address needed at all, unlike the old
+            pointer-passing convention. }
+          v := CodegenExpr(arg_node);
       END
       ELSE
       BEGIN
@@ -4187,8 +4199,6 @@ VAR
   existing: INTEGER32;
   ridx: INTEGER32;
   has_block_body: BOOLEAN;
-  copy_call_args: ADRMEM;
-  copy_src, copy_dst, copy_result: ADRMEM;
 BEGIN
   name := GetStr(decl, 'name');
   body_blk := GetObj(decl, 'body');
@@ -4232,9 +4242,15 @@ BEGIN
     param_llvm_types := AllocPtrArray(n);
     FOR i := 1 TO n DO
     BEGIN
-      IF isvar[i] OR needs_copy[i] THEN
+      IF isvar[i] THEN
         SetPtrArrayElem(param_llvm_types, i - 1, LLVMPointerType(LLVMTypeForTk(tks[i]), 0))
       ELSE
+        { needs_copy[i] (value-mode ARRAY/RECORD/LSTRING/STRING aggregate)
+          is passed as a first-class LLVM aggregate value, matching the
+          Python reference (codegen/types_map.py) -- not a pointer. The
+          incoming value itself becomes the callee's private copy in the
+          prologue below, so Pascal by-value semantics still hold without
+          any caller-visible aliasing. }
         SetPtrArrayElem(param_llvm_types, i - 1, LLVMTypeForTk(tks[i]));
     END;
 
@@ -4344,18 +4360,13 @@ BEGIN
         palloca := param_val { the incoming pointer already IS the storage }
       ELSE IF needs_copy[i] THEN
       BEGIN
-        { Value-mode aggregate: param_val is a pointer to the caller's own
-          storage (see FlattenParams/needs_copy); give the callee its own
-          private copy so writes here don't alias the caller, matching
-          Pascal by-value parameter semantics. }
+        { Value-mode aggregate: param_val is the first-class LLVM aggregate
+          value itself (see the signature construction above), not a
+          pointer -- matching the Python reference. Storing it into a fresh
+          local alloca IS the callee's private copy; identical shape to the
+          plain scalar ELSE branch below. }
         palloca := EntryAlloca(LLVMTypeForTk(tks[i]), names[i]);
-        copy_dst := LLVMBuildBitCast(builder, palloca, i8ptrty, MakeCStr(''));
-        copy_src := LLVMBuildBitCast(builder, param_val, i8ptrty, MakeCStr(''));
-        copy_call_args := AllocPtrArray(3);
-        SetPtrArrayElem(copy_call_args, 0, copy_dst);
-        SetPtrArrayElem(copy_call_args, 1, copy_src);
-        SetPtrArrayElem(copy_call_args, 2, LLVMConstInt(i64ty, TypeSizeBytes(tks[i]), 0));
-        copy_result := LLVMBuildCall2(builder, memmove_fnty, memmove_fn, copy_call_args, 3, MakeCStr(''));
+        LLVMBuildStore(builder, param_val, palloca);
       END
       ELSE
       BEGIN
