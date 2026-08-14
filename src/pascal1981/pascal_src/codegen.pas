@@ -2682,7 +2682,20 @@ BEGIN
   ELSE IF nt = 'Identifier' THEN
   BEGIN
     nm := GetStr(node, 'name');
-    IF (nm = 'THREADIDX_X') OR (nm = 'THREADIDX_Y') OR (nm = 'THREADIDX_Z') OR
+    { These unsigned maxima have all bits set.  LLVMConstInt takes the
+      machine bit pattern through the signed CLONG binding, so -1 is the
+      correct i32/i64 payload; WRITE chooses %u/%llu from last_val_tk. }
+    IF nm = 'MAXWORD32' THEN
+    BEGIN
+      res := LLVMConstInt(i32ty, -1, 0);
+      last_val_tk := TK_WORD32;
+    END
+    ELSE IF nm = 'MAXWORD64' THEN
+    BEGIN
+      res := LLVMConstInt(i64ty, -1, 0);
+      last_val_tk := TK_WORD64;
+    END
+    ELSE IF (nm = 'THREADIDX_X') OR (nm = 'THREADIDX_Y') OR (nm = 'THREADIDX_Z') OR
        (nm = 'BLOCKIDX_X') OR (nm = 'BLOCKIDX_Y') OR (nm = 'BLOCKIDX_Z') OR
        (nm = 'BLOCKDIM_X') OR (nm = 'BLOCKDIM_Y') OR (nm = 'BLOCKDIM_Z') OR
        (nm = 'GRIDDIM_X') OR (nm = 'GRIDDIM_Y') OR (nm = 'GRIDDIM_Z') THEN
