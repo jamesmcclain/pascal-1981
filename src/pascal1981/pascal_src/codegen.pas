@@ -1716,7 +1716,7 @@ FUNCTION CodegenBinOp(op: Str255; left_node, right_node: ADRMEM): ADRMEM;
 VAR
   lval, rval, res: ADRMEM;
   ltk, rtk: INTEGER;
-  gep_idx: ADRMEM;
+  gep_idx, ptr_elem_ty: ADRMEM;
 BEGIN
   IF (op = 'AND_THEN') OR (op = 'OR_ELSE') THEN
     res := CodegenShortCircuitBinOp(op, left_node, right_node)
@@ -1847,22 +1847,23 @@ BEGIN
     res := CodegenSetBinOp(op, lval, rval)
   ELSE IF (op = 'PLUS') AND ((ltk = TK_ADRMEM) OR (TypeKind(ltk) = TK_POINTER)) AND IsIntegerFamilyTk(rtk) THEN
   BEGIN
-    { Raw pointer arithmetic (ptr + int), used throughout the lexer/parser's
-      hand-rolled buffer scanning (e.g. `p := src_buf + pos`). Matches the
-      reference's binary_op_result_type: the result keeps the pointer
-      operand's own type (ADRMEM is itself just PointerType(CHAR) there, so
-      "ADRMEM + int" and "^CHAR + int" are the same rule), via a
-      single-index GEP over the pointee's byte type. }
+    { ADRMEM and ^CHAR are byte-addressed, but a general POINTER must use
+      its declared pointee type as LLVM's GEP source element type. In
+      particular, ^ADRMEM is a pointer-slot array, not a byte array. }
+    IF ltk = TK_ADRMEM THEN ptr_elem_ty := i8ty
+    ELSE ptr_elem_ty := LLVMTypeForTk(types[ltk].elem_tid);
     gep_idx := AllocPtrArray(1);
     SetPtrArrayElem(gep_idx, 0, rval);
-    res := LLVMBuildGEP2(builder, i8ty, lval, gep_idx, 1, MakeCStr(''));
+    res := LLVMBuildGEP2(builder, ptr_elem_ty, lval, gep_idx, 1, MakeCStr(''));
     last_val_tk := ltk;
   END
   ELSE IF (op = 'PLUS') AND ((rtk = TK_ADRMEM) OR (TypeKind(rtk) = TK_POINTER)) AND IsIntegerFamilyTk(ltk) THEN
   BEGIN
+    IF rtk = TK_ADRMEM THEN ptr_elem_ty := i8ty
+    ELSE ptr_elem_ty := LLVMTypeForTk(types[rtk].elem_tid);
     gep_idx := AllocPtrArray(1);
     SetPtrArrayElem(gep_idx, 0, lval);
-    res := LLVMBuildGEP2(builder, i8ty, rval, gep_idx, 1, MakeCStr(''));
+    res := LLVMBuildGEP2(builder, ptr_elem_ty, rval, gep_idx, 1, MakeCStr(''));
     last_val_tk := rtk;
   END
   ELSE IF ltk <> rtk THEN
