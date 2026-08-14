@@ -224,7 +224,11 @@ BEGIN
     END;
     p_in_base := raw_input;
     p_in := p_in_base + len;
-    p_in^ := CHR(input_ch);
+    { getchar's CINT result is always -1 or a byte value 0..255 here (the
+      WHILE guard above excludes -1), but CHR wants a plain INTEGER and the
+      language has no implicit CINT/INTEGER32 -> INTEGER narrowing; RETYPE
+      makes the deliberate truncation explicit. }
+    p_in^ := CHR(RETYPE(INTEGER, input_ch));
     len := len + 1;
     input_ch := getchar;
   END;
