@@ -2636,7 +2636,7 @@ VAR
   consti: INTEGER32;
   routi: INTEGER32;
   ch: Str255;
-  res, addr: ADRMEM;
+  res, addr, super_ptr, super_header: ADRMEM;
   result_tid: INTEGER;
   target_item, target_str, sizeof_synth: ADRMEM;
   sizeof_bytes: INTEGER32;
@@ -2774,9 +2774,28 @@ BEGIN
       dynamic upper bound for heap "super arrays" read from NEW's bound
       header -- is not supported: this file has neither super arrays nor
       multi-dimension arrays yet. }
-    IF GetBool(node, 'deref') THEN
-      AbortWith('codegen: UPPER/LOWER of a pointer dereference (p^) is not yet supported');
     nm := GetStr(node, 'name');
+    IF GetBool(node, 'deref') THEN
+    BEGIN
+      symi := LookupSym(nm);
+      IF (symi = 0) OR (TypeKind(symbols[symi].tk) <> TK_POINTER) OR
+         (NOT types[types[symbols[symi].tk].elem_tid].is_super) THEN
+        AbortWith('codegen: UPPER/LOWER dereference requires a SUPER ARRAY pointer');
+      IF nt = 'LowerExpr' THEN
+        res := LLVMConstInt(i16ty, types[types[symbols[symi].tk].elem_tid].lo, 1)
+      ELSE
+      BEGIN
+        super_ptr := LLVMBuildLoad2(builder, LLVMTypeForTk(symbols[symi].tk), symbols[symi].llvm_val, MakeCStr(''));
+        super_ptr := LLVMBuildBitCast(builder, super_ptr, i8ptrty, MakeCStr(''));
+        super_header := LLVMBuildGEP2(builder, i8ty, super_ptr,
+          MakeArgs1(LLVMConstInt(i64ty, -8, 1)), 1, MakeCStr(''));
+        super_header := LLVMBuildBitCast(builder, super_header, LLVMPointerType(i64ty, 0), MakeCStr(''));
+        res := LLVMBuildLoad2(builder, i64ty, super_header, MakeCStr(''));
+      END;
+      last_val_tk := TK_INTEGER64;
+    END
+    ELSE
+    BEGIN
     symi := LookupSym(nm);
     IF symi = 0 THEN
     BEGIN
@@ -2807,6 +2826,7 @@ BEGIN
         res := NIL;
       END;
       last_val_tk := TK_INTEGER;
+    END;
     END;
   END
   ELSE IF nt = 'RetypeExpr' THEN
