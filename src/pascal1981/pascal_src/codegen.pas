@@ -1557,8 +1557,11 @@ BEGIN
       ELSE
       BEGIN
         v := CodegenExpr(arg_node);
-        IF last_val_tk <> routines[ri].param_tk[i + 1] THEN
-          AbortWith2('codegen: argument type mismatch calling: ', name);
+        { Value-mode call arguments get the same literal-adaptation leniency
+          as an assignment RHS (e.g. a bare INTEGER literal passed to a CINT
+          [C] EXTERN parameter, as with cJSON_CreateBool(1) or exit(1)):
+          reuse CoerceForAssign rather than a bare tid-equality check. }
+        v := CoerceForAssign(v, last_val_tk, routines[ri].param_tk[i + 1], arg_node, name);
       END;
       SetPtrArrayElem(call_args, i, v);
     END;
@@ -1870,6 +1873,7 @@ VAR
   nm: Str255;
   symi: INTEGER32;
   consti: INTEGER32;
+  routi: INTEGER32;
   ch: Str255;
   res, addr: ADRMEM;
   result_tid: INTEGER;
@@ -1919,15 +1923,23 @@ BEGIN
     ELSE
     BEGIN
       consti := LookupConst(nm);
-      IF consti = 0 THEN
-      BEGIN
-        AbortWith2('codegen: undefined variable: ', nm);
-        res := NIL;
-      END
-      ELSE
+      routi := LookupRoutine(nm);
+      IF consti <> 0 THEN
       BEGIN
         res := LLVMConstInt(i16ty, const_tbl[consti].ival, 1);
         last_val_tk := TK_INTEGER;
+      END
+      ELSE IF (routi <> 0) AND routines[routi].is_func THEN
+        { A zero-arg FUNCTION called without parens (e.g. `getchar`,
+          `cJSON_CreateObject` -- common for [C] EXTERN declarations):
+          Identifier and a bare FuncCall are the same AST shape here, so
+          fall through to the shared call path instead of treating it as an
+          undefined variable. }
+        res := CodegenCallCommon(nm, NIL)
+      ELSE
+      BEGIN
+        AbortWith2('codegen: undefined variable: ', nm);
+        res := NIL;
       END;
     END;
   END
