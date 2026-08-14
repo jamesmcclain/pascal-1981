@@ -145,7 +145,7 @@ BEGIN
   CreateFlagsObj := f_obj;
 END;
 
-PROCEDURE AddToken(kind: Str255; code: INTEGER; lexeme: Str255; val_type: INTEGER; int_val: INTEGER; real_val: REAL; str_val: Str255; line, col: INTEGER);
+PROCEDURE AddToken(kind: Str255; code: INTEGER; lexeme: Str255; val_type: INTEGER; int_val: INTEGER32; real_val: REAL; str_val: Str255; line, col: INTEGER);
 VAR
   tok_obj, val_item, flags_obj: ADRMEM;
   kind_ptr, lex_ptr, str_ptr, key_ptr: ADRMEM;
@@ -1245,8 +1245,17 @@ END;
 PROCEDURE ScanNumber;
 VAR
   start_pos: INTEGER32;
-  start_line, start_col, len, int_val, i: INTEGER;
-  radix, digit_val, exp_val, look: INTEGER;
+  start_line, start_col, len, exp_val, i: INTEGER;
+  int_val: INTEGER32; { the accumulated literal value can exceed 16-bit
+    INTEGER's range (e.g. any decimal literal above 32767, or a radix
+    literal like 16#FFFF) well before it is ever assigned into a
+    target-language variable -- this is purely the lexer's own scan
+    accumulator, so it needs the wider host-side width regardless of what
+    the dialect's own native INTEGER width is. exp_val stays plain
+    INTEGER: it only ever counts a REAL literal's decimal exponent digits
+    (used as a FOR loop bound below, which must match i's own INTEGER
+    type), never the literal's own value. }
+  radix, digit_val, look: INTEGER;
   real_val, frac_part, frac_scale: REAL;
   exp_neg: BOOLEAN;
   lexeme: Str255;
