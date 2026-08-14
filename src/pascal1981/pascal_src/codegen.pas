@@ -1071,6 +1071,34 @@ BEGIN
   END;
 END;
 
+FUNCTION TypeNameStrToTk(nm: Str255): INTEGER;
+{ Maps a RetypeExpr node's bare type_id string (e.g. 'INTEGER') to a tk.
+  Only the scalar integer-family names RETYPE is actually used with across
+  the self-hosting sources are covered -- unlike ResolveTypeExpr (which
+  resolves a full TypeExpr AST node and also handles STRING/records/etc),
+  this only needs to answer "what integer width is this". }
+VAR
+  tid: INTEGER;
+BEGIN
+  IF (nm = 'INTEGER') OR (nm = 'INTEGER16') THEN tid := TK_INTEGER
+  ELSE IF (nm = 'WORD') OR (nm = 'WORD16') THEN tid := TK_WORD
+  ELSE IF nm = 'INTEGER8' THEN tid := TK_INTEGER8
+  ELSE IF nm = 'WORD8' THEN tid := TK_WORD8
+  ELSE IF nm = 'INTEGER32' THEN tid := TK_INTEGER32
+  ELSE IF nm = 'WORD32' THEN tid := TK_WORD32
+  ELSE IF nm = 'INTEGER64' THEN tid := TK_INTEGER64
+  ELSE IF nm = 'WORD64' THEN tid := TK_WORD64
+  ELSE IF nm = 'CSHORT' THEN tid := TK_INTEGER
+  ELSE IF nm = 'CINT' THEN tid := TK_INTEGER32
+  ELSE IF (nm = 'CLONG') OR (nm = 'CSIZE_T') THEN tid := TK_INTEGER64
+  ELSE
+  BEGIN
+    AbortWith2('codegen: RETYPE target type not supported: ', nm);
+    tid := 0;
+  END;
+  TypeNameStrToTk := tid;
+END;
+
 FUNCTION ResolveTypeExpr(te: ADRMEM): INTEGER;
 VAR
   nm: Str255;
@@ -2694,6 +2722,45 @@ BEGIN
         res := NIL;
       END;
       last_val_tk := TK_INTEGER;
+    END;
+  END
+  ELSE IF nt = 'RetypeExpr' THEN
+  BEGIN
+    { RETYPE(TypeName, expr): the explicit reinterpret-cast builtin used
+      throughout the self-hosting sources for otherwise-implicit-narrowing
+      integer conversions the type system disallows implicitly (e.g.
+      INTEGER32/INTEGER64 -> INTEGER). Every self-hosting use is a plain
+      scalar integer-family narrow/widen -- aggregate/pointer reinterpret
+      (the reference codegen's fuller RetypeExpr handling in
+      codegen/exprs.py) is not needed here, so only that case is
+      implemented; anything else aborts with a clear diagnostic rather than
+      emitting something wrong. }
+    IF ArrSize(GetObj(node, 'selectors')) > 0 THEN
+    BEGIN
+      AbortWith2('codegen: RETYPE with selectors not supported', '');
+      res := NIL;
+    END
+    ELSE
+    BEGIN
+      res := CodegenExpr(GetObj(node, 'expr'));
+      result_tid := TypeNameStrToTk(GetStr(node, 'type_id'));
+      IF IsIntegerFamilyTk(last_val_tk) AND IsIntegerFamilyTk(result_tid) THEN
+      BEGIN
+        IF IntFamilyWidth(last_val_tk) > IntFamilyWidth(result_tid) THEN
+          res := LLVMBuildTrunc(builder, res, LLVMTypeForTk(result_tid), MakeCStr(''))
+        ELSE IF IntFamilyWidth(last_val_tk) < IntFamilyWidth(result_tid) THEN
+        BEGIN
+          IF IsUnsignedWordTk(last_val_tk) THEN
+            res := LLVMBuildZExt(builder, res, LLVMTypeForTk(result_tid), MakeCStr(''))
+          ELSE
+            res := LLVMBuildSExt(builder, res, LLVMTypeForTk(result_tid), MakeCStr(''));
+        END;
+        last_val_tk := result_tid;
+      END
+      ELSE
+      BEGIN
+        AbortWith2('codegen: RETYPE not supported for this type combination: ', GetStr(node, 'type_id'));
+      END;
     END;
   END
   ELSE IF nt = 'FuncCall' THEN

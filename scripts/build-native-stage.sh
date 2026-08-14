@@ -9,6 +9,17 @@
 # needs LLVM:
 #   scripts/build-native-stage.sh src/pascal1981/pascal_src/codegen.pas \
 #     /tmp/pascal1981-codegen-native -L/usr/lib/llvm-20/lib -lLLVM-20
+#
+# By default jsonutil.o is built via the pascal1981 Python CLI (hybrid
+# build). Set NATIVE_JSONUTIL to the path of a native-built codegen.pas
+# binary to instead generate jsonutil.o's IR with that native codegen
+# (front-end stages -- lex/parse/typecheck -- still run via the Python
+# CLI's --split-processes-equivalent stdin/stdout JSON protocol, which is
+# byte-for-byte what the native lexer/parser/typechecker binaries consume
+# and produce; only code generation is swapped to native). This exercises
+# native-compiled callers linked against a native-compiled jsonutil.o, e.g.
+# for verifying the byval aggregate-parameter fix (§1.1) under native+native
+# linkage rather than only the default hybrid linkage.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -31,7 +42,16 @@ stage_ll="$work_dir/$(basename "$stage_src" .pas).ll"
 
 (
   cd "$src_dir"
-  pascal1981 --dialect extended -c jsonutil.pas -o "$jsonutil_obj"
+  if [ -n "${NATIVE_JSONUTIL:-}" ]; then
+    jsonutil_ll="$work_dir/jsonutil.ll"
+    python3 -m pascal1981.cli_lex jsonutil.pas | \
+      python3 -m pascal1981.cli_parse --source-file jsonutil.pas --dialect extended | \
+      python3 -m pascal1981.cli_typecheck --source-file jsonutil.pas --dialect extended | \
+      "$NATIVE_JSONUTIL" > "$jsonutil_ll"
+    clang -c "$jsonutil_ll" -o "$jsonutil_obj"
+  else
+    pascal1981 --dialect extended -c jsonutil.pas -o "$jsonutil_obj"
+  fi
   pascal1981 --dialect extended -S "$(basename "$stage_src")" -o "$stage_ll"
 )
 
