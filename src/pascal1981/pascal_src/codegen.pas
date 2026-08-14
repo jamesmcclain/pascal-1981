@@ -194,6 +194,9 @@ FUNCTION LLVMBuildFPTrunc(b: ADRMEM; val: ADRMEM; destty: ADRMEM; name: ADRMEM):
 FUNCTION LLVMFloatTypeInContext(ctx: ADRMEM): ADRMEM [C]; EXTERN;
 PROCEDURE LLVMBuildBr(b: ADRMEM; dest: ADRMEM) [C]; EXTERN;
 PROCEDURE LLVMBuildCondBr(b: ADRMEM; cond: ADRMEM; then_bb: ADRMEM; else_bb: ADRMEM) [C]; EXTERN;
+FUNCTION LLVMBuildPhi(b: ADRMEM; ty: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
+PROCEDURE LLVMAddIncoming(phi: ADRMEM; vals: ADRMEM; blocks: ADRMEM; count: CINT) [C]; EXTERN;
+FUNCTION LLVMGetInsertBlock(b: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildCall2(b: ADRMEM; fty: ADRMEM; fn: ADRMEM; args: ADRMEM; nargs: CINT; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMBuildRet(b: ADRMEM; v: ADRMEM): ADRMEM [C]; EXTERN;
 PROCEDURE LLVMBuildRetVoid(b: ADRMEM) [C]; EXTERN;
@@ -1339,8 +1342,15 @@ BEGIN
   ELSE IF NodeType(node) = 'Identifier' THEN
   BEGIN
     symi := LookupSym(GetStr(node, 'name'));
-    IsStringShapedExpr := (symi <> 0) AND
-      ((TypeKind(symbols[symi].tk) = TK_LSTRING) OR (TypeKind(symbols[symi].tk) = TK_STRING));
+    { Plain AND is not short-circuit in this dialect (that is exactly what
+      AND_THEN/OR_ELSE exist for) -- a single `(symi <> 0) AND
+      (TypeKind(symbols[symi].tk) = ...)` expression would still evaluate
+      symbols[symi] even when symi = 0, reading out of bounds on this
+      1-based array. Guard with a nested IF instead. }
+    IF symi = 0 THEN
+      IsStringShapedExpr := FALSE
+    ELSE
+      IsStringShapedExpr := (TypeKind(symbols[symi].tk) = TK_LSTRING) OR (TypeKind(symbols[symi].tk) = TK_STRING);
   END
   ELSE
     IsStringShapedExpr := FALSE;
@@ -1408,13 +1418,74 @@ BEGIN
     (tk = TK_INTEGER32) OR (tk = TK_WORD32) OR (tk = TK_INTEGER64) OR (tk = TK_WORD64);
 END;
 
+FUNCTION IsUnsignedWordTk(tk: INTEGER): BOOLEAN;
+BEGIN
+  IsUnsignedWordTk := (tk = TK_WORD) OR (tk = TK_WORD8) OR (tk = TK_WORD32) OR (tk = TK_WORD64);
+END;
+
+FUNCTION IntFamilyWidth(tk: INTEGER): INTEGER;
+BEGIN
+  IF (tk = TK_INTEGER8) OR (tk = TK_WORD8) THEN IntFamilyWidth := 8
+  ELSE IF (tk = TK_INTEGER) OR (tk = TK_WORD) THEN IntFamilyWidth := 16
+  ELSE IF (tk = TK_INTEGER32) OR (tk = TK_WORD32) THEN IntFamilyWidth := 32
+  ELSE IntFamilyWidth := 64;
+END;
+
+FUNCTION CodegenShortCircuitBinOp(op: Str255; left_node, right_node: ADRMEM): ADRMEM;
+{ AND THEN / OR ELSE: the right operand must not be evaluated at all when
+  the left already decides the result -- e.g. typechecker.pas's own
+  `(i >= 1) AND THEN (symbols[i].name <> name)` relies on this to avoid
+  indexing symbols[0] out of bounds. Mirrors the reference's
+  codegen_short_circuit_binop: branch on the left value, only enter a
+  second block to evaluate the right operand, then phi the two paths
+  together instead of eagerly computing both operands up front. }
+VAR
+  left_val, right_val, short_val, phi: ADRMEM;
+  rhs_bb, merge_bb, left_bb, right_bb: ADRMEM;
+  incoming_vals, incoming_blocks: ADRMEM;
+BEGIN
+  left_val := CodegenExpr(left_node);
+  rhs_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('sc_rhs'));
+  merge_bb := LLVMAppendBasicBlockInContext(ctx, cur_fn, MakeCStr('sc_merge'));
+  IF op = 'AND_THEN' THEN
+  BEGIN
+    LLVMBuildCondBr(builder, left_val, rhs_bb, merge_bb);
+    short_val := LLVMConstInt(i1ty, 0, 0);
+  END
+  ELSE
+  BEGIN
+    LLVMBuildCondBr(builder, left_val, merge_bb, rhs_bb);
+    short_val := LLVMConstInt(i1ty, 1, 0);
+  END;
+  left_bb := LLVMGetInsertBlock(builder);
+
+  LLVMPositionBuilderAtEnd(builder, rhs_bb);
+  right_val := CodegenExpr(right_node);
+  right_bb := LLVMGetInsertBlock(builder);
+  LLVMBuildBr(builder, merge_bb);
+
+  LLVMPositionBuilderAtEnd(builder, merge_bb);
+  phi := LLVMBuildPhi(builder, i1ty, MakeCStr('sc_result'));
+  incoming_vals := AllocPtrArray(2);
+  SetPtrArrayElem(incoming_vals, 0, short_val);
+  SetPtrArrayElem(incoming_vals, 1, right_val);
+  incoming_blocks := AllocPtrArray(2);
+  SetPtrArrayElem(incoming_blocks, 0, left_bb);
+  SetPtrArrayElem(incoming_blocks, 1, right_bb);
+  LLVMAddIncoming(phi, incoming_vals, incoming_blocks, 2);
+  last_val_tk := TK_BOOLEAN;
+  CodegenShortCircuitBinOp := phi;
+END;
+
 FUNCTION CodegenBinOp(op: Str255; left_node, right_node: ADRMEM): ADRMEM;
 VAR
   lval, rval, res: ADRMEM;
   ltk, rtk: INTEGER;
   gep_idx: ADRMEM;
 BEGIN
-  IF ((op = 'EQ') OR (op = 'NEQ') OR (op = 'LT') OR (op = 'LE') OR (op = 'GT') OR (op = 'GE'))
+  IF (op = 'AND_THEN') OR (op = 'OR_ELSE') THEN
+    res := CodegenShortCircuitBinOp(op, left_node, right_node)
+  ELSE IF ((op = 'EQ') OR (op = 'NEQ') OR (op = 'LT') OR (op = 'LE') OR (op = 'GT') OR (op = 'GE'))
       AND (IsStringShapedExpr(left_node) OR IsStringShapedExpr(right_node)) THEN
   BEGIN
     res := CodegenStringBinOp(op, left_node, right_node);
@@ -1442,7 +1513,35 @@ BEGIN
   BEGIN
     rval := LLVMConstInt(LLVMTypeForTk(ltk), IntLiteralValue(right_node), 1);
     rtk := ltk;
-  END;
+  END
+  ELSE IF IsIntegerFamilyTk(ltk) AND IsIntegerFamilyTk(rtk) AND (ltk <> rtk) AND (IntFamilyWidth(ltk) <> IntFamilyWidth(rtk)) THEN
+  BEGIN
+    { General integer-family width promotion for two non-literal operands
+      of different widths (e.g. `start_pos + i` where start_pos is
+      INTEGER32 and i is plain INTEGER), matching the reference's
+      codegen_binop: extend the narrower operand to the wider width,
+      sign-extending unless the narrower side is itself a WORD family
+      (unsigned), mirroring _extend_int_for_pascal_expr's signedness rule. }
+    IF IntFamilyWidth(ltk) < IntFamilyWidth(rtk) THEN
+    BEGIN
+      IF IsUnsignedWordTk(ltk) THEN lval := LLVMBuildZExt(builder, lval, LLVMTypeForTk(rtk), MakeCStr(''))
+      ELSE lval := LLVMBuildSExt(builder, lval, LLVMTypeForTk(rtk), MakeCStr(''));
+      ltk := rtk;
+    END
+    ELSE
+    BEGIN
+      IF IsUnsignedWordTk(rtk) THEN rval := LLVMBuildZExt(builder, rval, LLVMTypeForTk(ltk), MakeCStr(''))
+      ELSE rval := LLVMBuildSExt(builder, rval, LLVMTypeForTk(ltk), MakeCStr(''));
+      rtk := ltk;
+    END;
+  END
+  ELSE IF (ltk = TK_WORD) AND (rtk = TK_INTEGER) THEN
+    { Same-width WORD/INTEGER mix widens to INTEGER, matching the
+      reference's "WORD mixed with INTEGER -> INTEGER" rule -- no bits
+      change (both i16), only the tracked Pascal type does. }
+    ltk := TK_INTEGER
+  ELSE IF (ltk = TK_INTEGER) AND (rtk = TK_WORD) THEN
+    rtk := TK_INTEGER;
 
   { A single flat ELSE IF chain, deliberately avoiding the bare EXIT
     statement: EXIT from deep inside nested IFs inside a FUNCTION triggers a
