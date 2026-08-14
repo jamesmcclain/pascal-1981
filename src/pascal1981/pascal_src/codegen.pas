@@ -1608,9 +1608,17 @@ BEGIN
         AbortWith('codegen: an INDEX selector was applied to a non-array');
       idx_expr := GetObj(sel, 'index_or_field');
       idx_val := CodegenExpr(idx_expr);
-      IF last_val_tk <> TK_INTEGER THEN
-        AbortWith('codegen: an array index must be INTEGER');
-      offset := LLVMBuildSub(builder, idx_val, LLVMConstInt(i16ty, types[cur_tid].lo, 1), MakeCStr(''));
+      { The reference codegen (resolve_designator_ptr_typed, types_map.py)
+        accepts any integer-family index width -- it just subtracts the
+        lower bound using a constant of the index's own LLVM type and lets
+        GEP take an index of whatever width it is, not just a plain
+        16-bit INTEGER. Match that here instead of requiring TK_INTEGER. }
+      IF (last_val_tk <> TK_INTEGER) AND (last_val_tk <> TK_WORD)
+        AND (last_val_tk <> TK_INTEGER8) AND (last_val_tk <> TK_WORD8)
+        AND (last_val_tk <> TK_INTEGER32) AND (last_val_tk <> TK_WORD32)
+        AND (last_val_tk <> TK_INTEGER64) AND (last_val_tk <> TK_WORD64) THEN
+        AbortWith('codegen: an array index must be an integer-family type');
+      offset := LLVMBuildSub(builder, idx_val, LLVMConstInt(LLVMTypeForTk(last_val_tk), types[cur_tid].lo, 1), MakeCStr(''));
       gep_idx := AllocPtrArray(2);
       SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
       SetPtrArrayElem(gep_idx, 1, offset);
