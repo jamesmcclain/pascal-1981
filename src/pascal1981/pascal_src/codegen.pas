@@ -289,7 +289,7 @@ CONST
   MAX_SYMBOLS = 500;
   MAX_SCOPES = 64;
   MAX_PARAMS = 16;
-  MAX_ROUTINES = 200;
+  MAX_ROUTINES = 256;
   MAX_TYPES = 200;
   MAX_FIELDS = 500;
   MAX_RECORD_FIELDS = 32;
@@ -4218,6 +4218,23 @@ BEGIN
   LLVMBuildStore(builder, new_len_byte, len_ptr);
 END;
 
+PROCEDURE CodegenDeviceSync(name: Str255);
+{ DEVICE synchronization. CPU-device execution is serial, so SYNCTHREADS is
+  a no-op there; NVPTX lowers it to the hardware block barrier. }
+VAR
+  fnty, fn: ADRMEM;
+  discard: ADRMEM;
+BEGIN
+  IF name <> 'SYNCTHREADS' THEN
+    AbortWith2('codegen: unknown device synchronization builtin: ', name);
+  IF is_nvptx_device THEN
+  BEGIN
+    fnty := LLVMFunctionType(voidty, NIL, 0, 0);
+    fn := LLVMAddFunction(modl, MakeCStr('llvm.nvvm.barrier0'), fnty);
+    discard := LLVMBuildCall2(builder, fnty, fn, NIL, 0, MakeCStr(''));
+  END;
+END;
+
 PROCEDURE CodegenProcCallStmt(stmt: ADRMEM);
 VAR
   name: Str255;
@@ -4228,7 +4245,9 @@ VAR
   raw, casted, call_args: ADRMEM;
 BEGIN
   name := GetStr(stmt, 'name');
-  IF name = 'WRITELN' THEN
+  IF is_device_compiland AND (name = 'SYNCTHREADS') THEN
+    CodegenDeviceSync(name)
+  ELSE IF name = 'WRITELN' THEN
     CodegenWriteArgs(GetObj(stmt, 'args'), TRUE)
   ELSE IF name = 'WRITE' THEN
     CodegenWriteArgs(GetObj(stmt, 'args'), FALSE)
