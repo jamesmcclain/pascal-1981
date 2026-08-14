@@ -122,7 +122,11 @@ BEGIN
     END;
     p_in_base := raw_input;
     p_in := p_in_base + len;
-    p_in^ := CHR(input_ch);
+    { getchar's CINT result is always 0..255 here (the WHILE guard above
+      excludes -1), but CHR wants a plain INTEGER and the language has no
+      implicit CINT/INTEGER32 -> INTEGER narrowing; RETYPE makes the
+      deliberate truncation explicit. }
+    p_in^ := CHR(RETYPE(INTEGER, input_ch));
     len := len + 1;
     input_ch := getchar;
   END;
@@ -732,7 +736,11 @@ BEGIN
   IF CurKind = 'INTEGER_LITERAL' THEN
   BEGIN
     node := CreateNode('IntLiteral');
-    AddIntField(node, 'value', CurValueInt());
+    { CurValueInt returns INTEGER32 (it holds a literal's full folded value),
+      but AddIntField's value param is a plain INTEGER and the language has
+      no implicit INTEGER32 -> INTEGER narrowing; RETYPE makes the
+      deliberate truncation explicit. }
+    AddIntField(node, 'value', RETYPE(INTEGER, CurValueInt()));
     Expect('INTEGER_LITERAL');
     ParseConstant := node;
   END
@@ -808,10 +816,14 @@ BEGIN
     IF CurKind = 'INTEGER_LITERAL' THEN
     BEGIN
       node := CreateNode('IntLiteral');
+      { CurValueInt returns INTEGER32 (it holds a literal's full folded
+        value), but AddIntField's value param is a plain INTEGER and the
+        language has no implicit INTEGER32 -> INTEGER narrowing; RETYPE
+        makes the deliberate truncation explicit. }
       IF sign_neg THEN
-        AddIntField(node, 'value', -CurValueInt())
+        AddIntField(node, 'value', -RETYPE(INTEGER, CurValueInt()))
       ELSE
-        AddIntField(node, 'value', CurValueInt());
+        AddIntField(node, 'value', RETYPE(INTEGER, CurValueInt()));
       Expect('INTEGER_LITERAL');
       ParseConstant := node;
     END
@@ -873,7 +885,11 @@ BEGIN
   ELSE IF CurKind = 'INTEGER_LITERAL' THEN
   BEGIN
     node := CreateNode('IntLiteral');
-    AddIntField(node, 'value', CurValueInt());
+    { CurValueInt returns INTEGER32 (it holds a literal's full folded value),
+      but AddIntField's value param is a plain INTEGER and the language has
+      no implicit INTEGER32 -> INTEGER narrowing; RETYPE makes the
+      deliberate truncation explicit. }
+    AddIntField(node, 'value', RETYPE(INTEGER, CurValueInt()));
     Expect('INTEGER_LITERAL');
     ParseFactor := node;
   END

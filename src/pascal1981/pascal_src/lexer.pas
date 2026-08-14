@@ -319,7 +319,11 @@ BEGIN
       free(old_buf);
     END;
     p := src_buf + src_len;
-    p^ := CHR(input_ch);
+    { getchar's CINT result is always 0..255 here (the WHILE guard above
+      excludes -1), but CHR wants a plain INTEGER and the language has no
+      implicit CINT/INTEGER32 -> INTEGER narrowing; RETYPE makes the
+      deliberate truncation explicit. }
+    p^ := CHR(RETYPE(INTEGER, input_ch));
     src_len := src_len + 1;
     input_ch := getchar;
   END;
@@ -370,7 +374,11 @@ BEGIN
         free(old_buf);
       END;
       p := out_buf + out_len;
-      p^ := CHR(ch);
+      { fgetc's CINT result is always 0..255 here (the WHILE guard above
+        excludes -1), but CHR wants a plain INTEGER and the language has no
+        implicit CINT/INTEGER32 -> INTEGER narrowing; RETYPE makes the
+        deliberate truncation explicit. }
+      p^ := CHR(RETYPE(INTEGER, ch));
       out_len := out_len + 1;
       ch := fgetc(f);
     END;
@@ -926,7 +934,7 @@ BEGIN
 
     ELSE IF name = 'ELSE' THEN
     BEGIN
-      SkipSourceBlock(closer);
+      result_str := SkipSourceBlock(closer);
       RETURN;
     END
 
@@ -1276,8 +1284,11 @@ BEGIN
 
   IF (src_pos < src_len) AND (ReadBufChar(src_pos) = '#') THEN
   BEGIN
-    { Radix literal, e.g. 16#FF -- the digit run just scanned is the base. }
-    radix := int_val;
+    { Radix literal, e.g. 16#FF -- the digit run just scanned is the base.
+      int_val is INTEGER32 (it accumulates any digit run's full value), but a
+      radix base is always small and the language has no implicit INTEGER32
+      -> INTEGER narrowing; RETYPE makes the deliberate truncation explicit. }
+    radix := RETYPE(INTEGER, int_val);
     AdvancePos(1); { consume '#' }
     int_val := 0;
     WHILE (src_pos < src_len) AND (RadixDigitValue(ReadBufChar(src_pos), radix) >= 0) DO
