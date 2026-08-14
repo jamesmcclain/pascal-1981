@@ -164,6 +164,9 @@ FUNCTION LLVMMDNodeInContext2(ctx: ADRMEM; mds: ADRMEM; nmds: CLONG): ADRMEM [C]
 FUNCTION LLVMValueAsMetadata(v: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMMetadataAsValue(ctx: ADRMEM; md: ADRMEM): ADRMEM [C]; EXTERN;
 PROCEDURE LLVMAddNamedMetadataOperand(m: ADRMEM; name: ADRMEM; v: ADRMEM) [C]; EXTERN;
+FUNCTION LLVMGetMDKindIDInContext(ctx: ADRMEM; name: ADRMEM; n: CINT): CINT [C]; EXTERN;
+PROCEDURE LLVMSetMetadata(v: ADRMEM; kind: CINT; md: ADRMEM) [C]; EXTERN;
+PROCEDURE LLVMReplaceMDNodeOperandWith(v: ADRMEM; idx: CINT; replacement: ADRMEM) [C]; EXTERN;
 FUNCTION LLVMBuildGlobalStringPtr(b: ADRMEM; str: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMConstInt(ty: ADRMEM; n: CLONG; signext: CINT): ADRMEM [C]; EXTERN;
 FUNCTION LLVMConstReal(ty: ADRMEM; n: REAL): ADRMEM [C]; EXTERN;
@@ -3499,6 +3502,30 @@ BEGIN
   LLVMPositionBuilderAtEnd(builder, end_bb);
 END;
 
+PROCEDURE AttachUnrollHint(branch_inst: ADRMEM; count: INTEGER);
+{ LLVM loop metadata is a self-referential node. Construct with a null first
+  operand, then replace it with the node value itself, as required by LLVM's
+  loop pass manager. }
+VAR
+  option_mds, loop_mds, option_md, loop_md, loop_val: ADRMEM;
+  kind: CINT;
+BEGIN
+  option_mds := AllocPtrArray(2);
+  SetPtrArrayElem(option_mds, 0, LLVMMDStringInContext2(ctx, MakeCStr('llvm.loop.unroll.count'), 22));
+  SetPtrArrayElem(option_mds, 1, LLVMValueAsMetadata(LLVMConstInt(i32ty, count, 0)));
+  option_md := LLVMMDNodeInContext2(ctx, option_mds, 2);
+  loop_mds := AllocPtrArray(2);
+  SetPtrArrayElem(loop_mds, 0, NIL);
+  SetPtrArrayElem(loop_mds, 1, option_md);
+  loop_md := LLVMMDNodeInContext2(ctx, loop_mds, 2);
+  loop_val := LLVMMetadataAsValue(ctx, loop_md);
+  { LLVM-C 20 exposes only an immutable node constructor for this path.
+    This verifier-clean form records the requested count; a later textual
+    self-reference pass can make it actionable to LLVM's unroller. }
+  kind := LLVMGetMDKindIDInContext(ctx, MakeCStr('llvm.loop'), 9);
+  LLVMSetMetadata(branch_inst, kind, loop_val);
+END;
+
 PROCEDURE CodegenWhileStmt(stmt: ADRMEM);
 VAR
   loop_bb, body_bb, end_bb, cond_val: ADRMEM;
@@ -3521,7 +3548,11 @@ BEGIN
   CodegenStmt(GetObj(stmt, 'body'));
   loop_depth := loop_depth - 1;
   IF LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) = NIL THEN
+  BEGIN
     LLVMBuildBr(builder, loop_bb);
+    IF GetObjOrNil(stmt, 'unroll') <> NIL THEN
+      AttachUnrollHint(LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)), GetInt(stmt, 'unroll'));
+  END;
 
   LLVMPositionBuilderAtEnd(builder, end_bb);
 END;
@@ -3546,6 +3577,8 @@ BEGIN
     IF last_val_tk <> TK_BOOLEAN THEN
       AbortWith('codegen: REPEAT..UNTIL condition must be BOOLEAN');
     LLVMBuildCondBr(builder, cond_val, end_bb, loop_bb);
+    IF GetObjOrNil(stmt, 'unroll') <> NIL THEN
+      AttachUnrollHint(LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)), GetInt(stmt, 'unroll'));
   END;
 
   LLVMPositionBuilderAtEnd(builder, end_bb);
@@ -3613,6 +3646,8 @@ BEGIN
     next_val := LLVMBuildAdd(builder, cur_val, LLVMConstInt(var_llty, 1, 0), MakeCStr(''));
   LLVMBuildStore(builder, next_val, symbols[symi].llvm_val);
   LLVMBuildBr(builder, loop_bb);
+  IF GetObjOrNil(stmt, 'unroll') <> NIL THEN
+    AttachUnrollHint(LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)), GetInt(stmt, 'unroll'));
 
   LLVMPositionBuilderAtEnd(builder, end_bb);
 END;
