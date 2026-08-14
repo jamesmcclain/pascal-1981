@@ -424,6 +424,8 @@ VAR
   cur_fn: ADRMEM; { the LLVM function LLVMAppendBasicBlockInContext should
                     attach new blocks to: main_fn at top level, or the
                     routine currently being codegen'd. }
+  is_device_compiland: BOOLEAN; { fixed for the root compilation unit; type
+                                   lowering needs it before routine codegen. }
 
   types: ARRAY [1..MAX_TYPES] OF TypeRec;
   ntypes: INTEGER; { MAX_TYPES=200 is well under INTEGER's 16-bit range, so
@@ -1101,7 +1103,7 @@ END;
 
 FUNCTION ResolveTypeExpr(te: ADRMEM): INTEGER;
 VAR
-  nm: Str255;
+  nm, flavor: Str255;
   nt: Str255;
   tid: INTEGER;
   elem_tid, lo, hi, count: INTEGER;
@@ -1214,9 +1216,16 @@ BEGIN
   END
   ELSE IF nt = 'PointerType' THEN
   BEGIN
-    IF GetStr(te, 'flavor') <> 'POINTER' THEN
-      AbortWith('codegen: only plain POINTER (not ADR/ADS) is supported');
+    flavor := GetStr(te, 'flavor');
+    IF (flavor <> 'POINTER') AND (flavor <> 'ADS') THEN
+      AbortWith('codegen: only POINTER and device ADS pointers are supported');
+    IF (flavor = 'ADS') AND (NOT is_device_compiland) THEN
+      AbortWith('codegen: ADS pointers require a DEVICE compiland');
     elem_tid := ResolveTypeExpr(GetObj(te, 'base'));
+    { The CPU device backend deliberately collapses every ADS space to LLVM
+      address space zero. This preserves the host-callable device ABI now;
+      NVPTX's GLOBAL/SHARED/CONSTANT/LOCAL address-space mapping is a later
+      target-specific step. }
     arr_ty := LLVMPointerType(LLVMTypeForTk(elem_tid), 0);
     tid := RegisterType(TK_POINTER, elem_tid, 0, 0, arr_ty);
   END
@@ -4814,6 +4823,7 @@ BEGIN
   root := ReadAllStdin;
   root_nt := NodeType(root);
   is_device_root := GetBool(root, 'is_device');
+  is_device_compiland := is_device_root;
 
   is_program := root_nt = 'ProgramUnit';
   is_implementation := root_nt = 'ImplementationUnit';
