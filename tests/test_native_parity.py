@@ -23,6 +23,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests.support import RUNTIME_LIB
+
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures"
 NATIVE_ENV = {
@@ -194,6 +196,85 @@ class TestNativeFixtureParity(unittest.TestCase):
                     source = Path(work) / f"{label}.pas"
                     source.write_text(text)
                     self._assert_same_acceptance(source, stages=2)
+
+
+def _link_and_run(ir_text, exe_name):
+    """Link LLVM IR against the Pascal runtime and run it.
+
+    Returns (returncode, stdout, stderr).  This is the gate LLVMVerifyModule
+    cannot be: a module can verify clean and still miscompile (the §1.1
+    by-value-aggregate ABI bug and the malloc.1 uniquification bug were both
+    verifier-clean but wrong), so native codegen output is only trusted once
+    it links and runs the way the Python reference does.
+    """
+    with tempfile.TemporaryDirectory() as work:
+        ll_path = os.path.join(work, "p.ll")
+        with open(ll_path, "w") as handle:
+            handle.write(ir_text)
+        exe_path = os.path.join(work, exe_name)
+        link = _run(["clang", ll_path, RUNTIME_LIB, "-o", exe_path])
+        if link.returncode:
+            return link.returncode, "", link.stderr
+        run = _run([exe_path])
+        return run.returncode, run.stdout, run.stderr
+
+
+@unittest.skipUnless(
+    HAS_NATIVE_PIPELINE and shutil.which("clang"),
+    "requires the native pipeline + clang to link and run",
+)
+class TestNativeLinkAndRun(unittest.TestCase):
+    """Native codegen output must link and run, not merely assemble.
+
+    ``test_typecheck_success_fixtures_emit_valid_llvm`` above stops at
+    ``clang -x ir -c`` (assemble-only), which proves the IR is well-formed but
+    nothing about its behavior.  This class links a program exercising the
+    codegen paths most likely to be 'verifier-clean but wrong' -- by-value
+    aggregate parameters (the §1.1 ABI danger zone), record/array access,
+    loops, mixed REAL/INTEGER arithmetic, and function calls -- against the
+    real Pascal runtime, runs it, and requires the native stdout to match the
+    Python reference's stdout byte-for-byte.  It is the runtime enforcement
+    the §1.6 checklist item calls for; any codegen change that breaks
+    link-and-run now fails here rather than slipping past the verifier.
+    """
+
+    _PROGRAM = ("PROGRAM P(output);\n"
+                "TYPE\n"
+                "  Str255 = LSTRING(255);\n"
+                "  Rec = RECORD a: INTEGER32; b: REAL; c: ARRAY[0..3] OF INTEGER32 END;\n"
+                "VAR r: Rec; i: INTEGER; sum: INTEGER32;\n"
+                "FUNCTION firstch(s: Str255): CHAR;\n"
+                "BEGIN firstch := s[1] END;\n"
+                "FUNCTION double(x: INTEGER32): INTEGER32;\n"
+                "BEGIN double := x * 2 END;\n"
+                "BEGIN\n"
+                "  r.a := 41; r.b := 3.14; r.c[0] := 1; r.c[1] := 2; r.c[2] := 4; r.c[3] := 8;\n"
+                "  r.a := double(r.a + 1);\n"
+                "  sum := 0;\n"
+                "  FOR i := 0 TO 3 DO sum := sum + r.c[i];\n"
+                "  WRITELN(r.a);\n"
+                "  WRITELN(r.b);\n"
+                "  WRITELN(sum);\n"
+                "  WRITELN(firstch('hello'))\n"
+                "END.\n")
+
+    def test_native_codegen_output_links_and_runs_matching_python(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".pas", delete=False) as handle:
+            handle.write(self._PROGRAM)
+            source = Path(handle.name)
+        try:
+            python = _python_pipeline(source, stages=4)
+            native = _native_pipeline(source, stages=4)
+            self.assertEqual(python.returncode, 0, f"Python codegen rejected the program:\n{python.stderr}")
+            self.assertEqual(native.returncode, 0, f"Native codegen rejected the program:\n{native.stderr}")
+            py_rc, py_out, py_err = _link_and_run(python.stdout, "py-prog")
+            self.assertEqual(py_rc, 0, f"Python IR failed to link/run:\n{py_err}")
+            nat_rc, nat_out, nat_err = _link_and_run(native.stdout, "nat-prog")
+            self.assertEqual(nat_rc, 0, f"Native IR failed to link/run:\n{nat_err}")
+            self.assertEqual(nat_out, py_out, f"native/Python link-and-run output mismatch:\n"
+                             f"--- native ---\n{nat_out}\n--- python ---\n{py_out}")
+        finally:
+            os.unlink(source)
 
 
 if __name__ == "__main__":

@@ -6253,6 +6253,17 @@ BEGIN
   verify_msg_raw := malloc(8);
   verify_msg := verify_msg_raw;
   verify_msg^ := NIL;
+  { LLVMVerifyModule is a necessary gate, not a sufficient one: it catches
+    malformed IR (type errors, malformed instructions, dominance violations)
+    but not miscompilation. A module can verify clean and still produce wrong
+    output -- the by-value-aggregate ABI mismatch and the EXTERN uniquification
+    bug (malloc.1/free.2, where a second LLVMAddFunction silently uniquified
+    to a symbol nothing links against) were both verifier-clean but wrong, and
+    each was found only by clang-linking the output and running it. Any new
+    codegen path must be validated by linking the emitted IR against
+    libpascalrt.a and running it on real input, not by verification alone;
+    tests/test_native_parity.py::TestNativeLinkAndRun is the runtime gate that
+    enforces this for the self-hosting codegen paths. }
   ok := LLVMVerifyModule(modl, LLVMAbortProcessAction, verify_msg_raw);
   IF ok <> 0 THEN
   BEGIN
