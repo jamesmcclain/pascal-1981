@@ -333,6 +333,17 @@ CONST
   MAX_CALL_EDGES = 128; { formal-forwarded-to-a-call edges recorded for one
     routine body by ComputeReadonlyEffects. }
 
+  { Pointer-identity codes (TypeRec.ptr_space). PTR_SPACE_PLAIN is `^T`; the
+    rest name the ADS space written in the source. They are deliberately not
+    LLVM address-space numbers -- the address space depends on the target
+    (zero everywhere but NVPTX), while these do not. }
+  PTR_SPACE_PLAIN = 0;
+  PTR_SPACE_HOST = 1;
+  PTR_SPACE_GLOBAL = 2;
+  PTR_SPACE_SHARED = 3;
+  PTR_SPACE_CONSTANT = 4;
+  PTR_SPACE_LOCAL = 5;
+
 TYPE
   PAdr = ^ADRMEM;
 
@@ -350,6 +361,11 @@ TYPE
     elem_tid: INTEGER; { ARRAY only: the element type's id }
     lo, hi: INTEGER;   { ARRAY only: the index range's bounds }
     is_super: BOOLEAN; { SUPER ARRAY is represented as a flat element pointer }
+    ptr_space: INTEGER; { POINTER only: PTR_SPACE_PLAIN for `^T`, or the
+                          PTR_SPACE_* code of an ADS pointer's space. Part of
+                          the pointer's identity for assignment compatibility,
+                          independently of the LLVM address space, which is
+                          zero for every space outside an NVPTX compiland. }
     llvm_ty: ADRMEM;   { the cached LLVMTypeRef for this type }
   END;
 
@@ -832,6 +848,7 @@ BEGIN
   types[ntypes].lo := lo;
   types[ntypes].hi := hi;
   types[ntypes].is_super := FALSE;
+  types[ntypes].ptr_space := PTR_SPACE_PLAIN;
   types[ntypes].llvm_ty := llvm_ty;
   RegisterType := ntypes;
 END;
@@ -847,6 +864,24 @@ BEGIN
   IF generic_set_tid = 0 THEN
     generic_set_tid := RegisterType(TK_SET, TK_INTEGER, 0, 255, setty);
   EnsureGenericSetType := generic_set_tid;
+END;
+
+FUNCTION PointerSpacesCompatible(from_tid, to_tid: INTEGER): BOOLEAN;
+{ Assignment compatibility between two pointer types, mirroring the reference
+  type system's PointerType.equivalent_to: a plain `^T` is a wildcard against
+  any pointer flavor, and two ADS pointers agree only when their spaces do
+  (ADS(GLOBAL) OF T and ADS(SHARED) OF T are distinct, incompatible types).
+  Without this a host PROGRAM could not hand one of its own pointers to a
+  kernel declared `ADS(GLOBAL) OF T` by an imported DEVICE INTERFACE, since
+  the two type_exprs register separate tids. }
+BEGIN
+  IF (TypeKind(from_tid) <> TK_POINTER) OR (TypeKind(to_tid) <> TK_POINTER) THEN
+    PointerSpacesCompatible := FALSE
+  ELSE IF (types[from_tid].ptr_space = PTR_SPACE_PLAIN) OR
+          (types[to_tid].ptr_space = PTR_SPACE_PLAIN) THEN
+    PointerSpacesCompatible := TRUE
+  ELSE
+    PointerSpacesCompatible := types[from_tid].ptr_space = types[to_tid].ptr_space;
 END;
 
 FUNCTION TypesCompatibleForAssign(from_tid, to_tid: INTEGER): BOOLEAN;
@@ -874,7 +909,8 @@ BEGIN
     ((TypeKind(from_tid) = TK_SET) AND (TypeKind(to_tid) = TK_SET)) OR
     ((from_tid = TK_INTEGER) AND (to_tid = TK_WORD)) OR
     ((from_tid = TK_ADRMEM) AND (TypeKind(to_tid) = TK_POINTER)) OR
-    ((TypeKind(from_tid) = TK_POINTER) AND (to_tid = TK_ADRMEM));
+    ((TypeKind(from_tid) = TK_POINTER) AND (to_tid = TK_ADRMEM)) OR
+    PointerSpacesCompatible(from_tid, to_tid);
 END;
 
 FUNCTION LookupConst(name: Str255): INTEGER32;
@@ -1243,7 +1279,7 @@ VAR
   nm, flavor, space_name: Str255;
   nt: Str255;
   tid: INTEGER;
-  elem_tid, lo, hi, count: INTEGER;
+  elem_tid, lo, hi, count, space_code: INTEGER;
   arr_ty: ADRMEM;
   fields_arr, field_tuple, items, fnames_arr, ftype_expr: ADRMEM;
   nfd, fi, fn2, fni: INTEGER;
@@ -1370,21 +1406,38 @@ BEGIN
     IF (flavor = 'ADS') AND (NOT is_device_compiland) THEN
       AbortWith('codegen: ADS pointers require a DEVICE compiland');
     elem_tid := ResolveTypeExpr(GetObj(te, 'base'));
-    { The CPU device backend collapses every ADS space to address space zero.
-      NVPTX uses its ABI-defined GLOBAL/SHARED/CONSTANT/LOCAL spaces. }
-    IF is_nvptx_device THEN
+    { A pointer's flavor and, for ADS, its space are part of its identity for
+      assignment compatibility (PTR_SPACE_PLAIN and the PTR_SPACE_* codes are
+      what TypesCompatibleForAssign compares), so they are resolved for every
+      compiland. The LLVM address space is a separate question: only NVPTX has
+      the ABI-defined GLOBAL/SHARED/CONSTANT/LOCAL spaces, and the CPU device
+      collapses all of them to address space zero. }
+    IF flavor = 'ADS' THEN
     BEGIN
       space_name := GetStr(GetObj(te, 'space'), 'name');
-      IF space_name = 'GLOBAL' THEN lo := 1
-      ELSE IF space_name = 'SHARED' THEN lo := 3
-      ELSE IF space_name = 'CONSTANT' THEN lo := 4
-      ELSE IF space_name = 'LOCAL' THEN lo := 5
-      ELSE IF space_name = 'HOST' THEN lo := 0
-      ELSE AbortWith2('codegen: unsupported ADS space: ', space_name);
+      IF space_name = 'GLOBAL' THEN space_code := PTR_SPACE_GLOBAL
+      ELSE IF space_name = 'SHARED' THEN space_code := PTR_SPACE_SHARED
+      ELSE IF space_name = 'CONSTANT' THEN space_code := PTR_SPACE_CONSTANT
+      ELSE IF space_name = 'LOCAL' THEN space_code := PTR_SPACE_LOCAL
+      ELSE IF space_name = 'HOST' THEN space_code := PTR_SPACE_HOST
+      ELSE
+      BEGIN
+        AbortWith2('codegen: unsupported ADS space: ', space_name);
+        space_code := PTR_SPACE_HOST;
+      END;
     END
-    ELSE lo := 0;
+    ELSE space_code := PTR_SPACE_PLAIN;
+    lo := 0;
+    IF is_nvptx_device THEN
+    BEGIN
+      IF space_code = PTR_SPACE_GLOBAL THEN lo := 1
+      ELSE IF space_code = PTR_SPACE_SHARED THEN lo := 3
+      ELSE IF space_code = PTR_SPACE_CONSTANT THEN lo := 4
+      ELSE IF space_code = PTR_SPACE_LOCAL THEN lo := 5;
+    END;
     arr_ty := LLVMPointerType(LLVMTypeForTk(elem_tid), lo);
     tid := RegisterType(TK_POINTER, elem_tid, 0, 0, arr_ty);
+    types[tid].ptr_space := space_code;
   END
   ELSE IF nt = 'SetType' THEN
   BEGIN
@@ -4919,6 +4972,74 @@ BEGIN
     CodegenDecl(ArrItem(decls_arr, i));
 END;
 
+FUNCTION SameIdentifier(a, b: Str255): BOOLEAN;
+{ Case-insensitive identifier comparison. Symbol lookup elsewhere in this file
+  is exact-case (the front end hands identifiers through unchanged), but a USES
+  clause is matched against a UNIT heading written in a different file, where
+  the two spellings routinely differ in case -- and mismatching them here would
+  reject a program that otherwise compiles. }
+VAR
+  la, lb: Str255;
+  i, n: INTEGER;
+BEGIN
+  la := a;
+  lb := b;
+  n := ORD(la[0]);
+  FOR i := 1 TO n DO
+    IF (la[i] >= 'A') AND (la[i] <= 'Z') THEN la[i] := CHR(ORD(la[i]) + 32);
+  n := ORD(lb[0]);
+  FOR i := 1 TO n DO
+    IF (lb[i] >= 'A') AND (lb[i] <= 'Z') THEN lb[i] := CHR(ORD(lb[i]) + 32);
+  SameIdentifier := la = lb;
+END;
+
+PROCEDURE CheckUsesClauses(root, local_ifaces: ADRMEM);
+{ Reconcile the root's USES clauses against the INTERFACE headers spliced into
+  the same source file. The declarations themselves are lowered by walking
+  local_interfaces, so this adds no symbols; it exists so the two ways a USES
+  can fail to be honored -- no spliced header for the named unit, and a
+  renaming import list, which native codegen does not implement -- report
+  themselves instead of surfacing later as "unknown routine" at the call site
+  or, worse, binding a call to the wrong exported symbol. }
+VAR
+  uses_arr, clause, imports_arr: ADRMEM;
+  nclauses, ci, nimports, ii, nifaces, fi: INTEGER32;
+  unit_name, alias: Str255;
+  found: BOOLEAN;
+BEGIN
+  uses_arr := GetObj(root, 'uses');
+  IF uses_arr <> NIL THEN
+  BEGIN
+    nclauses := ArrSize(uses_arr);
+    FOR ci := 0 TO nclauses - 1 DO
+    BEGIN
+      clause := ArrItem(uses_arr, ci);
+      unit_name := GetStr(clause, 'name');
+      found := FALSE;
+      IF local_ifaces <> NIL THEN
+      BEGIN
+        nifaces := ArrSize(local_ifaces);
+        FOR fi := 0 TO nifaces - 1 DO
+          IF SameIdentifier(GetStr(ArrItem(local_ifaces, fi), 'name'), unit_name) THEN
+            found := TRUE;
+      END;
+      IF NOT found THEN
+        AbortWith2('codegen: USES unit needs a spliced INTERFACE header: ', unit_name);
+      imports_arr := GetObj(clause, 'imports');
+      IF imports_arr <> NIL THEN
+      BEGIN
+        nimports := ArrSize(imports_arr);
+        FOR ii := 0 TO nimports - 1 DO
+        BEGIN
+          alias := CStrToStr255(cJSON_GetStringValue(ArrItem(imports_arr, ii)));
+          IF LookupRoutine(alias) = 0 THEN
+            AbortWith2('codegen: renaming USES imports are not supported: ', alias);
+        END;
+      END;
+    END;
+  END;
+END;
+
 PROCEDURE CodegenVarDecl(decl: ADRMEM);
 VAR
   names: ADRMEM;
@@ -5805,7 +5926,7 @@ VAR
   local_ifaces: ADRMEM;
   n_local_ifaces, li: INTEGER32;
   root_nt: Str255;
-  is_device_root, is_program, is_implementation: BOOLEAN;
+  is_device_root, is_program, is_implementation, saved_device: BOOLEAN;
   unit_decls, init_body: ADRMEM;
   init_fnty, init_fn, init_bb: ADRMEM;
   init_name, unit_name, device_triple: Str255;
@@ -6055,8 +6176,23 @@ BEGIN
   BEGIN
     n_local_ifaces := ArrSize(local_ifaces);
     FOR li := 0 TO n_local_ifaces - 1 DO
+    BEGIN
+      { A DEVICE INTERFACE spliced into a host compiland (the shape a host
+        PROGRAM gets from `USES vadd (add)`) must be lowered in *device*
+        context, or an ADS(GLOBAL) OF T parameter would be rejected outright
+        here while the separately compiled kernel takes an address-space
+        pointer. The device triple only ever comes from a DEVICE root, so a
+        host compiland lowers these against the CPU device: every ADS space
+        collapses to address space zero, which is exactly the flat pointer
+        the CPU shim's kernel definition expects. }
+      saved_device := is_device_compiland;
+      is_device_compiland := is_device_compiland OR
+        GetBool(ArrItem(local_ifaces, li), 'is_device');
       CodegenDeclList(GetObj(ArrItem(local_ifaces, li), 'decls'));
+      is_device_compiland := saved_device;
+    END;
   END;
+  CheckUsesClauses(root, local_ifaces);
 
   IF is_program THEN
   BEGIN
