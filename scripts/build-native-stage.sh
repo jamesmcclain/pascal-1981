@@ -43,6 +43,15 @@ out_bin="$2"
 shift 2
 extra_args=("$@")
 
+# The stages recurse (recursive-descent parsing, recursive AST lowering), and
+# at -O0 every by-value Str255 argument gets its own spill slot, so one
+# expression-nesting level costs ~114KB of frame. -O1 folds those away and
+# brings the same level down to ~37KB -- an 8x cut in stack per unit of
+# nesting, which is what lets the stages run inside the default 8MB stack
+# instead of needing `ulimit -s unlimited` from whoever invokes them. Override
+# with STAGE_OPT= to build unoptimized.
+STAGE_OPT="${STAGE_OPT--O1}"
+
 src_dir="src/pascal1981/pascal_src"
 work_dir="$(mktemp -d)"
 trap 'rm -rf "$work_dir"' EXIT
@@ -59,12 +68,7 @@ native_jsonutil="${NATIVE_JSONUTIL:-$native_codegen}"
 run_frontend() {
   local src_file="$1"
   if [ -n "${NATIVE_LEXER:-}" ] && [ -n "${NATIVE_PARSER:-}" ] && [ -n "${NATIVE_TYPECHECKER:-}" ]; then
-    # The native parser's recursive-descent walk is no more stack-bounded than
-    # native codegen's lowering (see the note below): on a real source file it
-    # segfaults partway through under the default 8MB limit. Raise it for the
-    # whole native front end, not just codegen.
-    ( ulimit -s unlimited
-      "$NATIVE_LEXER" < "$src_file" | "$NATIVE_PARSER" | "$NATIVE_TYPECHECKER" )
+    "$NATIVE_LEXER" < "$src_file" | "$NATIVE_PARSER" | "$NATIVE_TYPECHECKER"
   else
     python3 -m pascal1981.cli_lex "$src_file" | \
       python3 -m pascal1981.cli_parse --source-file "$src_file" --dialect extended | \
@@ -74,28 +78,21 @@ run_frontend() {
 
 (
   cd "$src_dir"
-  # Native codegen's recursive-descent expression/statement lowering is not
-  # stack-bounded: long ELSE-IF chains (e.g. lexer.pas's GetKeywordCode) and
-  # other deep AST shapes can exceed the default 8MB stack ulimit and
-  # segfault partway through -- confirmed independent of this session's
-  # changes (reproduces on a pre-RetypeExpr native codegen binary too) and
-  # cured entirely by an unbounded stack, so it's a stack-depth limit, not a
-  # correctness bug. Raise the limit for native codegen invocations only.
   if [ -n "$native_jsonutil" ]; then
     jsonutil_ll="$work_dir/jsonutil.ll"
-    run_frontend jsonutil.pas | (ulimit -s unlimited && exec "$native_jsonutil") > "$jsonutil_ll"
-    clang -c "$jsonutil_ll" -o "$jsonutil_obj"
+    run_frontend jsonutil.pas | "$native_jsonutil" > "$jsonutil_ll"
+    clang $STAGE_OPT -c "$jsonutil_ll" -o "$jsonutil_obj"
   else
     pascal1981 --dialect extended -c jsonutil.pas -o "$jsonutil_obj"
   fi
   if [ -n "$native_codegen" ]; then
-    run_frontend "$(basename "$stage_src")" | (ulimit -s unlimited && exec "$native_codegen") > "$stage_ll"
+    run_frontend "$(basename "$stage_src")" | "$native_codegen" > "$stage_ll"
   else
     pascal1981 --dialect extended -S "$(basename "$stage_src")" -o "$stage_ll"
   fi
 )
 
-clang "$stage_ll" "$jsonutil_obj" -lcjson \
+clang $STAGE_OPT "$stage_ll" "$jsonutil_obj" -lcjson \
   "${extra_args[@]}" \
   "$(pascal1981 -print-file-name=libpascalrt.a)" \
   -o "$out_bin"
