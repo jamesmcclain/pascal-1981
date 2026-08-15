@@ -19,6 +19,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -168,6 +169,31 @@ class TestNativeFixtureParity(unittest.TestCase):
                 for label, result in (("Python", python), ("native", native)):
                     assembled = _run(["clang", "-x", "ir", "-c", "-o", os.devnull, "-"], result.stdout)
                     self.assertEqual(assembled.returncode, 0, f"{label} emitted invalid LLVM for {source}:\n{assembled.stderr}")
+
+    def test_depth_ceilings_have_the_same_boundary(self):
+        """Both parsers must accept and reject at exactly the same depth.
+
+        tests/test_depth_limits.py pins the two ceilings to the same numbers by
+        reading the constants out of the .pas sources, but equal constants are
+        not the same thing as equal behavior: an off-by-one in where either
+        parser increments would leave the compilers accepting different
+        languages while both files still read 64 and 256.  Only running the two
+        parsers against the boundary settles it.
+        """
+        from pascal1981.depth_limits import MAX_EXPR_DEPTH, MAX_STMT_DEPTH
+        from tests.test_depth_limits import nested_else_if, nested_parens
+
+        cases = []
+        for offset in (-1, 0):
+            cases.append((f"expr{MAX_EXPR_DEPTH + offset}", nested_parens(MAX_EXPR_DEPTH + offset)))
+            cases.append((f"stmt{MAX_STMT_DEPTH + offset}", nested_else_if(MAX_STMT_DEPTH + offset)))
+
+        with tempfile.TemporaryDirectory() as work:
+            for label, text in cases:
+                with self.subTest(case=label):
+                    source = Path(work) / f"{label}.pas"
+                    source.write_text(text)
+                    self._assert_same_acceptance(source, stages=2)
 
 
 if __name__ == "__main__":
