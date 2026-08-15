@@ -56,7 +56,7 @@ class SetsMixin:
 
         # Runtime path: materialize the constant part in a temporary and OR in
         # the dynamic elements bit by bit.
-        slot = self.builder.alloca(self.set_llvm_type(), name='settmp')
+        slot = self.entry_alloca(self.set_llvm_type(), name='settmp')
         self.builder.store(const_set, slot)
         for element in dynamic:
             if isinstance(element, RangeExpr):
@@ -100,7 +100,7 @@ class SetsMixin:
             ordinal = self.builder.trunc(ordinal, ir.IntType(32))
         word_index = self.builder.udiv(ordinal, ir.Constant(ir.IntType(32), 64))
         bit_index = self.builder.urem(ordinal, ir.Constant(ir.IntType(32), 64))
-        words_ptr = self.builder.alloca(self.set_llvm_type(), name='settmp')
+        words_ptr = self.entry_alloca(self.set_llvm_type(), name='settmp')
         self.builder.store(set_value, words_ptr)
         word_ptr = self.builder.gep(words_ptr, [ir.Constant(ir.IntType(32), 0), word_index])
         word = self.builder.load(word_ptr)
@@ -141,7 +141,7 @@ class SetsMixin:
         """Set every bit in [low, high] at runtime via a counted loop."""
         low = self._normalize_ordinal(self.codegen_expr(low_expr))
         high = self._normalize_ordinal(self.codegen_expr(high_expr))
-        counter = self.builder.alloca(ir.IntType(32), name='setrange')
+        counter = self.entry_alloca(ir.IntType(32), name='setrange')
         self.builder.store(low, counter)
         cond_block = self.builder.append_basic_block('setrange.cond')
         body_block = self.builder.append_basic_block('setrange.body')

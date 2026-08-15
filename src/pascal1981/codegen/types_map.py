@@ -310,7 +310,7 @@ class TypesMapMixin:
                     # site executed thousands of times (e.g. once per token
                     # while reading a token stream) exhausts the stack. An
                     # entry-block alloca is the same slot reused every time.
-                    buf = self.entry_alloca(target_type, name='str_lit_coerce_buf')
+                    buf = self.shared_temp_slot(target_type, 'str_lit_coerce_buf')
                     zero = ir.Constant(ir.IntType(32), 0)
                     one = ir.Constant(ir.IntType(32), 1)
                     length_64 = self.builder.zext(length, ir.IntType(64))

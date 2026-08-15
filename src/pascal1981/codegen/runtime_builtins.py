@@ -211,7 +211,7 @@ class RuntimeBuiltinsMixin:
             val = self.codegen_expr(name_arg)
             if val.type != ir.IntType(8):
                 raise
-            tmp = self.builder.alloca(ir.IntType(8), name='assign_char')
+            tmp = self.entry_alloca(ir.IntType(8), name='assign_char')
             self.builder.store(val, tmp)
             chars, length = tmp, ir.Constant(ir.IntType(32), 1)
         self.builder.call(self._file_helper('pas_file_assign'), [fcb_ptr, chars, length])
@@ -243,7 +243,7 @@ class RuntimeBuiltinsMixin:
         a_low = self._designator_array_low(a_arg)
         z_low, z_high = self._designator_array_bounds(z_arg)
 
-        j_var = self.builder.alloca(ir.IntType(32), name='pack_j')
+        j_var = self.entry_alloca(ir.IntType(32), name='pack_j')
         self.builder.store(ir.Constant(ir.IntType(32), z_low), j_var)
 
         loop_block = self.current_function.append_basic_block(name='pack_loop')
@@ -293,7 +293,7 @@ class RuntimeBuiltinsMixin:
         a_low = self._designator_array_low(a_arg)
         z_low, z_high = self._designator_array_bounds(z_arg)
 
-        j_var = self.builder.alloca(ir.IntType(32), name='unpack_j')
+        j_var = self.entry_alloca(ir.IntType(32), name='unpack_j')
         self.builder.store(ir.Constant(ir.IntType(32), z_low), j_var)
 
         loop_block = self.current_function.append_basic_block(name='unpack_loop')

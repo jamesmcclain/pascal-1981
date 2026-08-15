@@ -313,11 +313,11 @@ class ExprsMixin:
                 source_size = llvm_type_size(val.type)
                 target_size = llvm_type_size(target_llvm_type)
                 if source_size >= target_size:
-                    ptr = self.builder.alloca(val.type)
+                    ptr = self.entry_alloca(val.type)
                     self.builder.store(val, ptr)
                     casted_ptr = self.builder.bitcast(ptr, ir.PointerType(target_llvm_type))
                 else:
-                    ptr = self.builder.alloca(target_llvm_type)
+                    ptr = self.entry_alloca(target_llvm_type)
                     self.builder.store(self.zero_initializer(target_llvm_type), ptr)
                     source_ptr = self.builder.bitcast(ptr, ir.PointerType(val.type))
                     self.builder.store(val, source_ptr)
@@ -328,12 +328,12 @@ class ExprsMixin:
 
                 if source_size >= target_size:
                     # Source is larger or equal. Allocate source type.
-                    ptr = self.builder.alloca(val.type)
+                    ptr = self.entry_alloca(val.type)
                     self.builder.store(val, ptr)
                     casted_ptr = self.builder.bitcast(ptr, ir.PointerType(target_llvm_type))
                 else:
                     # Target is larger. Allocate target type.
-                    ptr = self.builder.alloca(target_llvm_type)
+                    ptr = self.entry_alloca(target_llvm_type)
                     self.builder.store(self.zero_initializer(target_llvm_type), ptr)
                     # Bitcast ptr to source pointer to store the smaller source value
                     source_ptr = self.builder.bitcast(ptr, ir.PointerType(val.type))

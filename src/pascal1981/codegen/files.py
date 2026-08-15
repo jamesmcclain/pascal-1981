@@ -26,8 +26,8 @@ class FilesMixin:
         # and never freed). For locals this lives in the function frame; for
         # program-level/predeclared files it lives in main's frame, i.e. for the
         # whole program. Either way it is reclaimed automatically.
-        fcb = self.builder.alloca(fcb_ty, name='file_fcb')
-        buf = self.builder.alloca(ir.ArrayType(ir.IntType(8), max(1, elem_size)), name='file_buf')
+        fcb = self.entry_alloca(fcb_ty, name='file_fcb')
+        buf = self.entry_alloca(ir.ArrayType(ir.IntType(8), max(1, elem_size)), name='file_buf')
         self.builder.store(ir.Constant(i32, elem_size), self.builder.gep(fcb, [zero, ir.Constant(i32, 0)]))
         self.builder.store(ir.Constant(i32, structure), self.builder.gep(fcb, [zero, ir.Constant(i32, 1)]))
         self.builder.store(ir.Constant(i32, 0), self.builder.gep(fcb, [zero, ir.Constant(i32, 2)]))

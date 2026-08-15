@@ -152,6 +152,8 @@ class CodegenBase:
         # infinite recursion: the handle is cached before its body is set.
         self._identified_records: Dict[str, ir.Type] = {}
         self.current_function: Optional[ir.Function] = None
+        # Shared entry-block scratch slots, keyed per function; see shared_temp_slot.
+        self._shared_temp_slots: dict = {}
         # Pascal-source name of the routine self.current_function was lowered
         # from, or None inside main/unit-init bodies that have no Pascal name.
         # Lets a bare occurrence of this name in an expression be recognized
@@ -594,13 +596,39 @@ class CodegenBase:
             self.builder.position_before(entry.instructions[0])
         else:
             self.builder.position_at_end(entry)
-        result = self.builder.alloca(llvm_type, name=name)
+        result = self.builder.alloca(llvm_type, name=name or '')
         # Restore the original builder without positioning after a terminator.
         if current_block.instructions and isinstance(current_block.instructions[-1], ir.Terminator):
             self.builder.position_before(current_block.instructions[-1])
         else:
             self.builder.position_at_end(current_block)
         return result
+
+    def shared_temp_slot(self, llvm_type: ir.Type, name: str) -> ir.AllocaInstr:
+        """Return one entry-block scratch slot shared by every call site.
+
+        An ``entry_alloca`` per call site is correct but not free: it costs a
+        distinct stack slot in the frame for every site, whether or not any two
+        of them are ever live at once.  A routine that compares one variable
+        against a few hundred string literals therefore pays a few hundred
+        ``STRING(255)`` slots -- tens of kilobytes of frame for scratch space
+        that is written and read back within a couple of instructions.  In a
+        recursive-descent front end that multiplies straight into recursion
+        depth, so it is worth sharing.
+
+        Only use this for a slot that is fully rewritten immediately before it
+        is read and dead immediately after, so no two uses can be live at the
+        same time.  ``name`` names the *class* of temporary, not the call site:
+        two sites asking for the same (type, name) pair get the same slot.
+        """
+        if self.current_function is None:
+            raise CodegenError('cannot allocate without a current function')
+        key = (id(self.current_function), name, str(llvm_type))
+        slot = self._shared_temp_slots.get(key)
+        if slot is None:
+            slot = self.entry_alloca(llvm_type, name=name)
+            self._shared_temp_slots[key] = slot
+        return slot
 
     def unique_name(self, prefix: str) -> str:
         """Generate a unique name."""
