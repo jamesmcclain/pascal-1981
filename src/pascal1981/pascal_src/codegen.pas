@@ -632,6 +632,53 @@ BEGIN
   AbortWith(msg);
 END;
 
+{ ===================== recursion-depth ceilings ======================
+
+  AST lowering recurses over the tree, so its stack use is bounded only by
+  the depth of the AST -- and the AST's depth is bounded only by the source.
+  Without a ceiling the only limit is the OS stack, and exceeding it is a
+  segfault with no diagnostic, which is what used to make callers of this
+  stage wrap it in `ulimit -s unlimited`.
+
+  The parser applies the same ceilings, at the same values, to the same two
+  cycles (CodegenExpr's operand walk and CodegenStmt's nested-statement
+  walk), so an AST that reaches codegen has already been accepted at these
+  depths -- these guards catch a hand-built or third-party AST rather than
+  anything the native front end can produce. See parser.pas's fuller note on
+  where the numbers come from and why bounding this is period-correct
+  ("Expression too complex", Aug-1981 manual, appendix A). }
+
+CONST
+  MAX_EXPR_DEPTH = 64;
+  MAX_STMT_DEPTH = 256;
+
+VAR
+  expr_depth, stmt_depth: INTEGER;
+
+PROCEDURE EnterExprLevel;
+BEGIN
+  expr_depth := expr_depth + 1;
+  IF expr_depth > MAX_EXPR_DEPTH THEN
+    AbortWith('codegen: expression too complex (nesting deeper than 64); try breaking it up with intermediate value assigns');
+END;
+
+PROCEDURE LeaveExprLevel;
+BEGIN
+  expr_depth := expr_depth - 1;
+END;
+
+PROCEDURE EnterStmtLevel;
+BEGIN
+  stmt_depth := stmt_depth + 1;
+  IF stmt_depth > MAX_STMT_DEPTH THEN
+    AbortWith('codegen: statements nested too deeply (deeper than 256); try splitting the routine up');
+END;
+
+PROCEDURE LeaveStmtLevel;
+BEGIN
+  stmt_depth := stmt_depth - 1;
+END;
+
 FUNCTION DecodeStringLiteral(raw: Str255): Str255;
 { raw is the token lexeme convention: outer single quotes kept, embedded
   quote pairs ('') collapsed to a single quote -- the inverse of lexer.py's
@@ -2725,6 +2772,7 @@ VAR
   target_item, target_str, sizeof_synth: ADRMEM;
   sizeof_bytes: INTEGER32;
 BEGIN
+  EnterExprLevel;
   nt := NodeType(node);
   IF nt = 'IntLiteral' THEN
   BEGIN
@@ -3020,6 +3068,7 @@ BEGIN
     AbortWith2('codegen: unhandled expression kind: ', nt);
     res := NIL;
   END;
+  LeaveExprLevel;
   CodegenExpr := res;
 END;
 
@@ -4832,6 +4881,7 @@ PROCEDURE CodegenStmt(stmt: ADRMEM);
 VAR
   nt, msg: Str255;
 BEGIN
+  EnterStmtLevel;
   nt := NodeType(stmt);
   IF nt = 'AssignStmt' THEN CodegenAssignStmt(stmt)
   ELSE IF nt = 'CompoundStmt' THEN CodegenStmtArray(GetObj(stmt, 'stmts'))
@@ -4851,6 +4901,7 @@ BEGIN
     CONCAT(msg, nt);
     AbortWith(msg);
   END;
+  LeaveStmtLevel;
 END;
 
 { ============================== declarations =============================== }
@@ -5764,6 +5815,8 @@ VAR
   unit_name_len, unit_name_i: INTEGER;
 
 BEGIN
+  expr_depth := 0;
+  stmt_depth := 0;
   root := ReadAllStdin;
   root_nt := NodeType(root);
   is_device_root := GetBool(root, 'is_device');
