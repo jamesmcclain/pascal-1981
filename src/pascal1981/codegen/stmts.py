@@ -69,6 +69,10 @@ class StmtsMixin:
 
     def codegen_stmt(self, stmt: Statement) -> None:
         """Codegen a statement."""
+        with self._stmt_depth.enter():
+            self._codegen_stmt_dispatch(stmt)
+
+    def _codegen_stmt_dispatch(self, stmt: Statement) -> None:
         # Track the metacommand flag state for expression-level checks
         # (INDEXCK, MATHCK, NILCK).  Statements that don't carry meta_flags
         # (compound/control-flow wrappers) inherit the last state seen, which

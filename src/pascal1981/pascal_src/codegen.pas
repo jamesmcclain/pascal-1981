@@ -646,7 +646,9 @@ END;
   depths -- these guards catch a hand-built or third-party AST rather than
   anything the native front end can produce. See parser.pas's fuller note on
   where the numbers come from and why bounding this is period-correct
-  ("Expression too complex", Aug-1981 manual, appendix A). }
+  ("Expression too complex", Aug-1981 manual, appendix A). The reference
+  compiler enforces the same ceilings on its own AST walks, for the same
+  reason: it too can be handed an AST from stdin. }
 
 CONST
   MAX_EXPR_DEPTH = 64;

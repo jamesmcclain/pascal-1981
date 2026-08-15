@@ -9,6 +9,7 @@ from .ast_nodes import (AdrExpr, AdsExpr, ArrayType, AssignStmt, Attribute, BinO
                         ImplementationUnit, IndexRange, InterfaceUnit, IntLiteral, LabelDecl, LabelStmt, LowerExpr, LStringType, ModuleUnit, NamedType, NilLiteral, Param,
                         PointerType, ProcCallStmt, ProcDecl, ProgramUnit, RangeExpr, RealLiteral, RecordType, RepeatStmt, ReturnStmt, RetypeExpr, Selector, SetConstructor, SetType,
                         SizeofExpr, Statement, StringLiteral, SubrangeType, Type, TypeDecl, UnaryOp, UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt, WriteArg)
+from .depth_limits import (EXPR_TOO_DEEP, MAX_EXPR_DEPTH, MAX_STMT_DEPTH, STMT_TOO_DEEP, DepthGuard)
 from .lexer import LexerError, Token, lex_file
 
 
@@ -21,6 +22,11 @@ class Parser:
     def __init__(self, tokens: Sequence[Token]):
         self.tokens = list(tokens)
         self.pos = 0
+        # Ceilings on the two recursive-descent cycles.  See depth_limits for
+        # why they exist, where the numbers come from, and why bounding this
+        # is what the vintage compiler did rather than a concession.
+        self._expr_depth = DepthGuard(MAX_EXPR_DEPTH, EXPR_TOO_DEEP, self.error)
+        self._stmt_depth = DepthGuard(MAX_STMT_DEPTH, STMT_TOO_DEEP, self.error)
 
     def current(self) -> Token:
         return self.tokens[self.pos]
@@ -518,6 +524,10 @@ class Parser:
         return dict(getattr(self.current(), 'flags', {}))
 
     def parse_statement(self) -> Statement:
+        with self._stmt_depth.enter():
+            return self._parse_statement_dispatch()
+
+    def _parse_statement_dispatch(self) -> Statement:
         kind = self.current().kind
         flags = self.current_flags()
         # A {$UNROLL n} stamp must land on the loop keyword it hints.  Catch a
@@ -765,13 +775,14 @@ class Parser:
         return left
 
     def parse_expression(self) -> Expression:
-        left = self.parse_simple_expression()
-        if self.current().kind in {'EQ', 'NEQ', 'LT', 'LE', 'GT', 'GE', 'IN'}:
-            op = self.current().kind
-            self.pos += 1
-            right = self.parse_simple_expression()
-            return BinOp(op, left, right)
-        return left
+        with self._expr_depth.enter():
+            left = self.parse_simple_expression()
+            if self.current().kind in {'EQ', 'NEQ', 'LT', 'LE', 'GT', 'GE', 'IN'}:
+                op = self.current().kind
+                self.pos += 1
+                right = self.parse_simple_expression()
+                return BinOp(op, left, right)
+            return left
 
     def parse_simple_expression(self) -> Expression:
         sign: Optional[str] = None

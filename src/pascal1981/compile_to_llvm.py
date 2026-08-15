@@ -30,6 +30,7 @@ import traceback
 
 from . import runtime_lib_path
 from .codegen_llvm import compile_to_llvm
+from .depth_limits import recursion_error_message
 from .features import all_features, resolve_features
 from .parser import parse_file
 from .type_checker import PascalTypeChecker
@@ -406,6 +407,9 @@ def main() -> int:
             cmd += ['-o', out]
             return _run_clang(cmd, verbose or args.dry_run, dry_run=args.dry_run)
 
+    except RecursionError:
+        print(f'Error: {recursion_error_message()}', file=sys.stderr)
+        return 1
     except Exception as exc:
         print(f'Error: {exc}', file=sys.stderr)
         if verbose:

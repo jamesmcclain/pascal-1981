@@ -16,6 +16,10 @@ class StmtsMixin:
 
     def check_statement(self, stmt: Statement) -> None:
         """Type check a statement."""
+        with self._stmt_depth.enter(stmt):
+            self._check_statement_dispatch(stmt)
+
+    def _check_statement_dispatch(self, stmt: Statement) -> None:
         if isinstance(stmt, CompoundStmt):
             for s in stmt.stmts:
                 self.check_statement(s)

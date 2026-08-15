@@ -27,6 +27,10 @@ class ExprsMixin:
 
     def codegen_expr(self, expr: Expression) -> ir.Value:
         """Codegen an expression."""
+        with self._expr_depth.enter():
+            return self._codegen_expr_dispatch(expr)
+
+    def _codegen_expr_dispatch(self, expr: Expression) -> ir.Value:
         if isinstance(expr, IntLiteral):
             resolved = getattr(expr, 'resolved_type', INTEGER_TYPE)
             if resolved == INTEGER64_TYPE or resolved == WORD64_TYPE:

@@ -9,6 +9,7 @@ import sys
 from typing import Sequence
 
 from .codegen_llvm import CodegenError, compile_to_llvm
+from .depth_limits import recursion_error_message
 from .features import resolve_features
 from .serialization import ast_from_json
 
@@ -64,6 +65,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     except FileNotFoundError as exc:
         print(f"File not found: {exc}", file=sys.stderr)
+        return 1
+    except RecursionError:
+        print(f"Error: {recursion_error_message()}", file=sys.stderr)
         return 1
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)

@@ -94,7 +94,13 @@ VAR
 
   Both figures assume the stage is built optimized (scripts/build-native-stage.sh
   passes -O1). Unoptimized, every by-value Str255 argument gets its own spill
-  slot and a level costs roughly 8x more. }
+  slot and a level costs roughly 8x more.
+
+  The reference compiler enforces the same two ceilings, at the same values,
+  on the same two cycles, so the two compilers accept the same language. It
+  cannot share these constants -- this file is Pascal -- so a test asserts the
+  two definitions agree and that both parsers accept and reject at exactly the
+  same depth. }
 
 CONST
   MAX_EXPR_DEPTH = 64;

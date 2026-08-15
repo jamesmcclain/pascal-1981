@@ -20,6 +20,10 @@ class ExprInferMixin:
 
     def infer_expression_type(self, expr: Expression, context_type: Optional[Type] = None) -> Optional[Type]:
         """Infer the type of an expression."""
+        with self._expr_depth.enter(expr):
+            return self._infer_expression_type_dispatch(expr, context_type)
+
+    def _infer_expression_type_dispatch(self, expr: Expression, context_type: Optional[Type] = None) -> Optional[Type]:
         if isinstance(expr, IntLiteral):
             self._check_integer_literal_range(expr, context_type)
             resolved = context_type if context_type in (INTEGER_TYPE, WORD_TYPE, WORD8_TYPE, WORD32_TYPE, WORD64_TYPE, INTEGER8_TYPE, INTEGER32_TYPE,

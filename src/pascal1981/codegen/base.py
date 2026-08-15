@@ -16,6 +16,7 @@ import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
 from ..ast_nodes import Declaration, FileType, NamedType, Type
+from ..depth_limits import (EXPR_TOO_DEEP, MAX_EXPR_DEPTH, MAX_STMT_DEPTH, STMT_TOO_DEEP, DepthGuard)
 
 
 class CodegenError(Exception):
@@ -152,6 +153,14 @@ class CodegenBase:
         # infinite recursion: the handle is cached before its body is set.
         self._identified_records: Dict[str, ir.Type] = {}
         self.current_function: Optional[ir.Function] = None
+        # Ceilings on the two recursive AST walks.  The parser applies the
+        # same ones to the same cycles, so an AST that came from it is already
+        # within them; these catch an AST handed straight to codegen instead
+        # -- cli_codegen reads one from stdin.  Raising CodegenError makes a
+        # depth failure read like every other lowering error.  See
+        # depth_limits for where the numbers come from.
+        self._expr_depth = DepthGuard(MAX_EXPR_DEPTH, EXPR_TOO_DEEP, self._raise_codegen_error)
+        self._stmt_depth = DepthGuard(MAX_STMT_DEPTH, STMT_TOO_DEEP, self._raise_codegen_error)
         # Shared entry-block scratch slots, keyed per function; see shared_temp_slot.
         self._shared_temp_slots: dict = {}
         # Pascal-source name of the routine self.current_function was lowered
@@ -579,6 +588,10 @@ class CodegenBase:
             elif value.type.width < ptr.type.pointee.width:
                 value = self.builder.zext(value, ptr.type.pointee)
         return self.builder.store(value, ptr, align=self.memory_alignment(ptr))
+
+    @staticmethod
+    def _raise_codegen_error(message: str) -> None:
+        raise CodegenError(message)
 
     def entry_alloca(self, llvm_type: ir.Type, name: Optional[str] = None) -> ir.AllocaInstr:
         """Create a static alloca in the current function's entry block.
