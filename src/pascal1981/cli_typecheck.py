@@ -8,6 +8,7 @@ import argparse
 import sys
 from typing import Sequence
 
+from .depth_limits import recursion_error_message
 from .features import resolve_features
 from .serialization import ast_from_json, ast_to_json
 from .type_checker import PascalTypeChecker
@@ -64,6 +65,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     except FileNotFoundError as exc:
         print(f"File not found: {exc}", file=sys.stderr)
+        return 1
+    except RecursionError:
+        print(f"Error: {recursion_error_message()}", file=sys.stderr)
         return 1
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)

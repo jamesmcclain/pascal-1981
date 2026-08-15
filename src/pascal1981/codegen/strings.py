@@ -62,7 +62,7 @@ class StringsMixin:
                 # precomputed_value instead of invoking the function again.
                 val_res = precomputed_value if precomputed_value is not None else self.codegen_expr(expr)
                 if isinstance(val_res.type, ir.ArrayType):
-                    val_ptr = self.builder.alloca(val_res.type)
+                    val_ptr = self.entry_alloca(val_res.type)
                     self.builder.store(val_res, val_ptr)
                     val = val_ptr
                 else:
@@ -90,7 +90,7 @@ class StringsMixin:
                 raise CodegenError(f"'{expr.name}' does not return a string type")
             val_res = precomputed_value if precomputed_value is not None else self.codegen_expr(expr)
             if isinstance(val_res.type, ir.ArrayType):
-                val_ptr = self.builder.alloca(val_res.type)
+                val_ptr = self.entry_alloca(val_res.type)
                 self.builder.store(val_res, val_ptr)
                 val = val_ptr
             else:
@@ -99,7 +99,7 @@ class StringsMixin:
             val = self.codegen_expr(expr)
 
         if not isinstance(val.type, ir.PointerType):
-            val_ptr = self.builder.alloca(val.type)
+            val_ptr = self.entry_alloca(val.type)
             self.builder.store(val, val_ptr)
             val = val_ptr
 

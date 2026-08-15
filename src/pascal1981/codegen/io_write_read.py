@@ -146,7 +146,7 @@ class IoWriteReadMixin:
                 # a plain variable/field read already comes back as a pointer
                 # and is unaffected.
                 if not isinstance(val.type, ir.PointerType):
-                    val_ptr = self.builder.alloca(val.type)
+                    val_ptr = self.entry_alloca(val.type)
                     self.builder.store(val, val_ptr)
                     val = val_ptr
                 zero = ir.Constant(ir.IntType(32), 0)
@@ -306,7 +306,7 @@ class IoWriteReadMixin:
         else:
             ty_name = ''
         if ty is INTEGER_TYPE or ty_name == 'INTEGER':
-            tmp = self.builder.alloca(ir.IntType(32), name='read_int_tmp')
+            tmp = self.entry_alloca(ir.IntType(32), name='read_int_tmp')
             fn = self.runtime_extern('pas_fread_int' if file_fcb is not None else 'pas_read_int')
             call_args = ([file_fcb, tmp] if file_fcb is not None else [tmp])
             self.builder.call(fn, call_args)
@@ -328,7 +328,7 @@ class IoWriteReadMixin:
                 table = self.enum_name_table(names or [])
                 zero = ir.Constant(ir.IntType(32), 0)
                 names_ptr = self.builder.gep(table, [zero, zero]) if names else ir.Constant(ir.IntType(8).as_pointer().as_pointer(), None)
-                tmp = self.builder.alloca(ir.IntType(32), name='read_enum_tmp')
+                tmp = self.entry_alloca(ir.IntType(32), name='read_enum_tmp')
                 if file_fcb is not None:
                     fn = self.runtime_extern('pas_fread_enum_name')
                     call_args = [file_fcb, tmp, names_ptr, ir.Constant(ir.IntType(32), len(names or []))]
@@ -340,7 +340,7 @@ class IoWriteReadMixin:
                 val = loaded if not hasattr(ptr.type, 'pointee') or loaded.type == ptr.type.pointee else self.builder.trunc(loaded, ptr.type.pointee)
                 self.emit_store(val, ptr)
                 return
-            tmp = self.builder.alloca(ir.IntType(32), name='read_enum_tmp')
+            tmp = self.entry_alloca(ir.IntType(32), name='read_enum_tmp')
             fn = self.runtime_extern('pas_fread_int' if file_fcb is not None else 'pas_read_int')
             call_args = ([file_fcb, tmp] if file_fcb is not None else [tmp])
             self.builder.call(fn, call_args)
@@ -390,7 +390,7 @@ class IoWriteReadMixin:
         if not is_lstring:
             raise CodegenError('READSET destination must be LSTRING')
         set_val = self.codegen_expr(set_expr)
-        set_slot = self.builder.alloca(self.set_llvm_type(), name='readset_set')
+        set_slot = self.entry_alloca(self.set_llvm_type(), name='readset_set')
         self.builder.store(set_val, set_slot)
         self.builder.call(self.runtime_extern('pas_freadset'),
                           [file_fcb, self.builder.bitcast(dest_ptr,

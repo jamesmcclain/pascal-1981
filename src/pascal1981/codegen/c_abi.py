@@ -322,7 +322,7 @@ class CAbiMixin:
             ptr = self.resolve_designator_ptr(arg_expr)
         if ptr is None:
             val = self.codegen_expr(arg_expr)
-            ptr = self.builder.alloca(val.type)
+            ptr = self.entry_alloca(val.type)
             self.builder.store(val, ptr)
         return self.builder.bitcast(ptr, ir.PointerType(agg_type))
 
@@ -371,7 +371,7 @@ class CAbiMixin:
         sret_slot = None
 
         if plan.ret_kind == 'memory':
-            sret_slot = self.builder.alloca(plan.ret_agg.agg_type)
+            sret_slot = self.entry_alloca(plan.ret_agg.agg_type)
             aa = ir.ArgumentAttributes()
             aa.add('sret')
             aa.add('noalias')
@@ -392,7 +392,7 @@ class CAbiMixin:
                 call_args.append(v)
             elif pp.kind == 'memory':
                 src = self._c_abi_arg_ptr(expr, pp.agg.agg_type)
-                tmp = self.builder.alloca(pp.agg.agg_type)
+                tmp = self.entry_alloca(pp.agg.agg_type)
                 self._c_abi_memcpy(tmp, src, pp.agg.size)
                 aa = ir.ArgumentAttributes()
                 aa.add('byval')
@@ -427,7 +427,7 @@ class CAbiMixin:
         # coerced return: store the register value(s) back through the aggregate's
         # own storage, then load the aggregate.
         agg = plan.ret_agg
-        slot = self.builder.alloca(agg.agg_type)
+        slot = self.entry_alloca(agg.agg_type)
         ret_ll = agg.pieces[0] if len(agg.pieces) == 1 else agg.coerced_struct()
         typed = self.builder.bitcast(slot, ir.PointerType(ret_ll))
         self.builder.store(call, typed)

@@ -65,6 +65,50 @@ VAR
   tokens_buf: ADRMEM; { heap allocated array of Token }
   num_tokens, pos: INTEGER32;
 
+{ ===================== recursion-depth ceilings ======================
+
+  Recursive descent is unbounded by construction: a source file can nest
+  expressions or statements as deeply as it likes, and each level costs a
+  real stack frame. Without a ceiling the only limit is the OS stack, and
+  exceeding it is a segfault with no diagnostic -- which is what used to
+  make callers of this parser wrap it in `ulimit -s unlimited`.
+
+  The vintage compiler bounded the same thing and said so: "Expression too
+  complex ... Try breaking up expression with intermediate value assigns"
+  and "Identifier scopes nested too deeply" are both documented fatal
+  conditions in the Aug-1981 manual. So a ceiling here is the period-correct
+  behavior, not a concession.
+
+  Sizing. The two recursion cycles cost very different amounts of stack per
+  level, so they get separate counters rather than one shared budget:
+
+    expression  ParseExpression -> ParseSimpleExpression -> ParseTerm ->
+                ParseFactor -> ParseExpression, about 37KB per level
+    statement   ParseStatement -> ParseStatement (ELSE branches, loop and
+                CASE bodies), about 7.6KB per level
+
+  At the ceilings below the worst case is 64*37KB + 256*7.6KB, about 4.3MB
+  -- comfortably inside a default 8MB stack, so the ceiling is what is
+  reached first and it is reached with a message. Real code is nowhere near
+  either: the deepest of the five self-hosting sources needs about 512KB.
+
+  Both figures assume the stage is built optimized (scripts/build-native-stage.sh
+  passes -O1). Unoptimized, every by-value Str255 argument gets its own spill
+  slot and a level costs roughly 8x more.
+
+  The reference compiler enforces the same two ceilings, at the same values,
+  on the same two cycles, so the two compilers accept the same language. It
+  cannot share these constants -- this file is Pascal -- so a test asserts the
+  two definitions agree and that both parsers accept and reject at exactly the
+  same depth. }
+
+CONST
+  MAX_EXPR_DEPTH = 64;
+  MAX_STMT_DEPTH = 256;
+
+VAR
+  expr_depth, stmt_depth: INTEGER;
+
 FUNCTION ReadBoolFlag(flags_json: ADRMEM; key_str: Str255): BOOLEAN;
 VAR
   item: ADRMEM;
@@ -523,6 +567,43 @@ BEGIN
   END
   ELSE
     Match := FALSE;
+END;
+
+{ Enter/leave one level of the expression recursion cycle. Every increment
+  must be paired with a decrement on every path out of the guarded routine,
+  so guard only routines with a single fall-through exit. }
+PROCEDURE EnterExprLevel;
+VAR
+  res_c: CINT;
+BEGIN
+  expr_depth := expr_depth + 1;
+  IF expr_depth > MAX_EXPR_DEPTH THEN
+  BEGIN
+    res_c := puts(MakeCStr('Parser Error: expression too complex (nesting deeper than 64); try breaking it up with intermediate value assigns'));
+    exit(1);
+  END;
+END;
+
+PROCEDURE LeaveExprLevel;
+BEGIN
+  expr_depth := expr_depth - 1;
+END;
+
+PROCEDURE EnterStmtLevel;
+VAR
+  res_c: CINT;
+BEGIN
+  stmt_depth := stmt_depth + 1;
+  IF stmt_depth > MAX_STMT_DEPTH THEN
+  BEGIN
+    res_c := puts(MakeCStr('Parser Error: statements nested too deeply (deeper than 256); try splitting the routine up'));
+    exit(1);
+  END;
+END;
+
+PROCEDURE LeaveStmtLevel;
+BEGIN
+  stmt_depth := stmt_depth - 1;
 END;
 
 { AST Builder Parser Stubs }
@@ -1109,6 +1190,7 @@ VAR
   left: ADRMEM;
   op_str, k: Str255;
 BEGIN
+  EnterExprLevel;
   left := ParseSimpleExpression;
   k := CurKind;
   IF (k = 'EQ') OR (k = 'NEQ') OR (k = 'LT') OR (k = 'LE') OR (k = 'GT') OR (k = 'GE') OR (k = 'IN') THEN
@@ -1119,6 +1201,7 @@ BEGIN
   END
   ELSE
     ParseExpression := left;
+  LeaveExprLevel;
 END;
 
 FUNCTION ParseBooleanExpression: ADRMEM;
@@ -1532,6 +1615,7 @@ VAR
   k: Str255;
   res_c: CINT;
 BEGIN
+  EnterStmtLevel;
   k := CurKind;
   { A $UNROLL(n) stamp must land on the loop keyword it hints. Catch a
     misplaced hint here rather than silently dropping it. }
@@ -1611,8 +1695,19 @@ BEGIN
     ParseStatement := ParseLabelStmt
   ELSE IF k = 'IDENTIFIER' THEN
     ParseStatement := ParseAssignOrCallStmt
+  ELSE IF (k = 'SEMICOLON') OR (k = 'END') OR (k = 'UNTIL') OR
+          (k = 'ELSE') OR (k = 'OTHERWISE') OR (k = 'RPAREN') THEN
+    ParseStatement := CreateNode('EmptyStmt')
   ELSE
-    ParseStatement := CreateNode('EmptyStmt');
+  BEGIN
+    { An empty statement is legal only at a statement boundary.  Returning
+      one for arbitrary input leaves the token unconsumed and makes callers
+      such as ParseCompoundStmt loop forever on malformed source. }
+    res_c := puts(MakeCStr('Parser Error: expected statement'));
+    exit(1);
+    ParseStatement := NIL;
+  END;
+  LeaveStmtLevel;
 END;
 
 FUNCTION ParseIndexRange(allow_star: BOOLEAN): ADRMEM;
@@ -2493,6 +2588,8 @@ VAR
 
 BEGIN
   pos := 0;
+  expr_depth := 0;
+  stmt_depth := 0;
   ReadInputAndParseTokens;
 
   interfaces_arr := cJSON_CreateArray;

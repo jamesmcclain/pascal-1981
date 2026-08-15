@@ -69,6 +69,10 @@ class StmtsMixin:
 
     def codegen_stmt(self, stmt: Statement) -> None:
         """Codegen a statement."""
+        with self._stmt_depth.enter():
+            self._codegen_stmt_dispatch(stmt)
+
+    def _codegen_stmt_dispatch(self, stmt: Statement) -> None:
         # Track the metacommand flag state for expression-level checks
         # (INDEXCK, MATHCK, NILCK).  Statements that don't carry meta_flags
         # (compound/control-flow wrappers) inherit the last state seen, which
@@ -147,7 +151,16 @@ class StmtsMixin:
 
         # Check if the target is a whole string type assignment
         is_str, max_len, is_dest_lstring = self.get_string_type_info(target_ast_type if target_ast_type is not None else symbol.type_expr)
-        if stmt.target.selectors and not (len(stmt.target.selectors) == 1 and stmt.target.selectors[0].kind == 'DEREF' and is_str):
+        # `resolve_designator_ptr_typed` already walked the selector chain and
+        # reports the type the pointer actually designates -- an LSTRING record
+        # field or array element stays a string, while indexing *into* a string
+        # narrows to CHAR.  Only when it could not resolve a type at all does
+        # the fallback (the base variable's own type) misdescribe a selector
+        # chain, and only then must a whole-string assignment be refused.
+        # Refusing it for every selector chain silently miscompiled
+        # `rec.field := 'text'` into a store of the literal's address into the
+        # first bytes of the destination string.
+        if target_ast_type is None and stmt.target.selectors and not (len(stmt.target.selectors) == 1 and stmt.target.selectors[0].kind == 'DEREF' and is_str):
             is_str = False
 
         # For whole-string assignments the RHS is independently re-evaluated

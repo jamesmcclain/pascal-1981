@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from .ast_nodes import (ASTNode, FuncDecl, ImplementationUnit, InterfaceUnit, ModuleUnit, ProcDecl, ProgramUnit)
 from .builtins_registry import register_builtins
+from .depth_limits import (EXPR_TOO_DEEP, MAX_EXPR_DEPTH, MAX_STMT_DEPTH, STMT_TOO_DEEP, DepthGuard, DepthLimitExceeded)
 from .symbol_table import SymbolTable
 from .type_system import Type
 from .typecheck import (BuiltinArgsMixin, ConstFoldMixin, DeclsMixin, DeviceCheckMixin, DiagnosticsMixin, ExprInferMixin, StmtsMixin, TypeChecker, TypeCheckError, TypeCheckResult,
@@ -46,6 +47,14 @@ class PascalTypeChecker(UnitsMixin, DeclsMixin, StmtsMixin, BuiltinArgsMixin, De
         # that forward and self pointer references (linked lists) resolve to a
         # stable object instead of falling back to ^CHAR.
         self._predeclared_types: set = set()
+        # Ceilings on the two recursive AST walks.  The parser applies the
+        # same ones to the same cycles, so an AST that came from it is already
+        # within them; these catch an AST handed straight to the checker
+        # instead -- cli_typecheck reads one from stdin, and nothing about
+        # that JSON has been through this front end's parser.  See
+        # depth_limits for where the numbers come from.
+        self._expr_depth = DepthGuard(MAX_EXPR_DEPTH, EXPR_TOO_DEEP, self.error)
+        self._stmt_depth = DepthGuard(MAX_STMT_DEPTH, STMT_TOO_DEEP, self.error)
         self._setup_builtins()
 
     def feature_enabled(self, name: str) -> bool:
@@ -65,6 +74,9 @@ class PascalTypeChecker(UnitsMixin, DeclsMixin, StmtsMixin, BuiltinArgsMixin, De
         self.symbol_table = SymbolTable()
         self._setup_builtins()
 
+        self._expr_depth.reset()
+        self._stmt_depth.reset()
+
         try:
             if isinstance(ast, ProgramUnit):
                 self.check_program_unit(ast)
@@ -76,6 +88,10 @@ class PascalTypeChecker(UnitsMixin, DeclsMixin, StmtsMixin, BuiltinArgsMixin, De
                 self.check_module_unit(ast)
             else:
                 self.error(f"Unknown root node type: {type(ast).__name__}", ast.location)
+        except DepthLimitExceeded:
+            # The ceiling diagnostic is already in self.errors; this exception
+            # exists only to unwind the walk, so it is not an internal error.
+            pass
         except Exception as e:
             self.error(f"Internal error during type checking: {e}", None)
 

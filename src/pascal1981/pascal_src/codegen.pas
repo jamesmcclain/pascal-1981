@@ -154,14 +154,34 @@ FUNCTION LLVMBuildZExt(b: ADRMEM; val: ADRMEM; destty: ADRMEM; name: ADRMEM): AD
 FUNCTION LLVMBuildTrunc(b: ADRMEM; val: ADRMEM; destty: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMFunctionType(ret_ty: ADRMEM; params: ADRMEM; pcount: CINT; vararg: CINT): ADRMEM [C]; EXTERN;
 FUNCTION LLVMAddFunction(m: ADRMEM; name: ADRMEM; fty: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMGetNamedFunction(m: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMAppendBasicBlockInContext(ctx: ADRMEM; fn: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMCreateBuilderInContext(ctx: ADRMEM): ADRMEM [C]; EXTERN;
 PROCEDURE LLVMPositionBuilderAtEnd(b: ADRMEM; bb: ADRMEM) [C]; EXTERN;
+PROCEDURE LLVMSetTarget(m: ADRMEM; triple: ADRMEM) [C]; EXTERN;
+PROCEDURE LLVMSetFunctionCallConv(fn: ADRMEM; cc: CINT) [C]; EXTERN;
+FUNCTION LLVMMDStringInContext2(ctx: ADRMEM; str: ADRMEM; slen: CLONG): ADRMEM [C]; EXTERN;
+FUNCTION LLVMMDNodeInContext2(ctx: ADRMEM; mds: ADRMEM; nmds: CLONG): ADRMEM [C]; EXTERN;
+FUNCTION LLVMValueAsMetadata(v: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMMetadataAsValue(ctx: ADRMEM; md: ADRMEM): ADRMEM [C]; EXTERN;
+PROCEDURE LLVMAddNamedMetadataOperand(m: ADRMEM; name: ADRMEM; v: ADRMEM) [C]; EXTERN;
+FUNCTION LLVMGetMDKindIDInContext(ctx: ADRMEM; name: ADRMEM; n: CINT): CINT [C]; EXTERN;
+PROCEDURE LLVMSetMetadata(v: ADRMEM; kind: CINT; md: ADRMEM) [C]; EXTERN;
+PROCEDURE LLVMReplaceMDNodeOperandWith(v: ADRMEM; idx: CINT; replacement: ADRMEM) [C]; EXTERN;
 FUNCTION LLVMBuildGlobalStringPtr(b: ADRMEM; str: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMConstInt(ty: ADRMEM; n: CLONG; signext: CINT): ADRMEM [C]; EXTERN;
 FUNCTION LLVMConstReal(ty: ADRMEM; n: REAL): ADRMEM [C]; EXTERN;
 FUNCTION LLVMAddGlobal(m: ADRMEM; ty: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 PROCEDURE LLVMSetInitializer(gvar: ADRMEM; val: ADRMEM) [C]; EXTERN;
+{ Constant-expression and global-variable shaping, used by the kernel launch
+  registry: parallel name/entry tables and the i8**/i8**/i64 struct
+  pointing at them. }
+FUNCTION LLVMConstArray(elem_ty: ADRMEM; vals: ADRMEM; count: CINT): ADRMEM [C]; EXTERN;
+FUNCTION LLVMConstStructInContext(ctx: ADRMEM; vals: ADRMEM; count: CINT; is_packed: CINT): ADRMEM [C]; EXTERN;
+FUNCTION LLVMConstBitCast(val: ADRMEM; ty: ADRMEM): ADRMEM [C]; EXTERN;
+FUNCTION LLVMConstPointerNull(ty: ADRMEM): ADRMEM [C]; EXTERN;
+PROCEDURE LLVMSetGlobalConstant(gvar: ADRMEM; is_constant: CINT) [C]; EXTERN;
+PROCEDURE LLVMSetLinkage(v: ADRMEM; linkage: CINT) [C]; EXTERN;
 FUNCTION LLVMBuildLoad2(b: ADRMEM; ty: ADRMEM; ptr: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
 PROCEDURE LLVMBuildStore(b: ADRMEM; val: ADRMEM; ptr: ADRMEM) [C]; EXTERN;
 FUNCTION LLVMBuildAdd(b: ADRMEM; lhs: ADRMEM; rhs: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTERN;
@@ -208,11 +228,24 @@ FUNCTION LLVMBuildAlloca(b: ADRMEM; ty: ADRMEM; name: ADRMEM): ADRMEM [C]; EXTER
 FUNCTION LLVMGetParam(fn: ADRMEM; idx: CINT): ADRMEM [C]; EXTERN;
 FUNCTION LLVMVoidTypeInContext(ctx: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION LLVMPrintModuleToString(m: ADRMEM): ADRMEM [C]; EXTERN;
+PROCEDURE LLVMInitializeNVPTXTargetInfo [C]; EXTERN;
+PROCEDURE LLVMInitializeNVPTXTarget [C]; EXTERN;
+PROCEDURE LLVMInitializeNVPTXTargetMC [C]; EXTERN;
+PROCEDURE LLVMInitializeNVPTXAsmPrinter [C]; EXTERN;
+FUNCTION LLVMGetTargetFromTriple(triple: ADRMEM; target_out: ADRMEM; error_out: ADRMEM): CINT [C]; EXTERN;
+FUNCTION LLVMCreateTargetMachine(target: ADRMEM; triple, cpu, features: ADRMEM; opt_level, reloc, code_model: CINT): ADRMEM [C]; EXTERN;
+FUNCTION LLVMCreateTargetDataLayout(tm: ADRMEM): ADRMEM [C]; EXTERN;
+PROCEDURE LLVMSetModuleDataLayout(m, layout: ADRMEM) [C]; EXTERN;
+FUNCTION LLVMTargetMachineEmitToMemoryBuffer(tm, m: ADRMEM; filetype: CINT; error_out, buffer_out: ADRMEM): CINT [C]; EXTERN;
+FUNCTION LLVMGetBufferStart(buffer: ADRMEM): ADRMEM [C]; EXTERN;
+PROCEDURE LLVMDisposeMemoryBuffer(buffer: ADRMEM) [C]; EXTERN;
+PROCEDURE LLVMDisposeTargetMachine(tm: ADRMEM) [C]; EXTERN;
 FUNCTION LLVMVerifyModule(m: ADRMEM; action: CINT; outmsg: ADRMEM): CINT [C]; EXTERN;
 FUNCTION malloc(size: CINT): ADRMEM [C]; EXTERN;
 PROCEDURE free(p: ADRMEM) [C]; EXTERN;
 FUNCTION puts(str: ADRMEM): CINT [C]; EXTERN;
 PROCEDURE exit(code: CINT) [C]; EXTERN;
+FUNCTION getenv(name: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION cJSON_GetStringValue(item: ADRMEM): ADRMEM [C]; EXTERN;
 FUNCTION cJSON_IsNull(item: ADRMEM): CINT [C]; EXTERN;
 
@@ -286,11 +319,30 @@ CONST
   MAX_SYMBOLS = 500;
   MAX_SCOPES = 64;
   MAX_PARAMS = 16;
-  MAX_ROUTINES = 200;
+  MAX_ROUTINES = 256;
   MAX_TYPES = 200;
   MAX_FIELDS = 500;
   MAX_RECORD_FIELDS = 32;
   MAX_CONSTS = 200;
+  MAX_DEV_ROUTINES = 128; { device routines registered for the kernel-entry
+    readonly summary below -- a separate, smaller table than `routines`
+    because it holds AST declaration nodes (needed before any of them is
+    lowered), not lowered LLVM functions. }
+  MAX_KERNELS = 64; { launchable kernels recorded per host compiland for the
+    launch registry (the CPU stand-in for a loaded CUDA module). }
+  MAX_CALL_EDGES = 128; { formal-forwarded-to-a-call edges recorded for one
+    routine body by ComputeReadonlyEffects. }
+
+  { Pointer-identity codes (TypeRec.ptr_space). PTR_SPACE_PLAIN is `^T`; the
+    rest name the ADS space written in the source. They are deliberately not
+    LLVM address-space numbers -- the address space depends on the target
+    (zero everywhere but NVPTX), while these do not. }
+  PTR_SPACE_PLAIN = 0;
+  PTR_SPACE_HOST = 1;
+  PTR_SPACE_GLOBAL = 2;
+  PTR_SPACE_SHARED = 3;
+  PTR_SPACE_CONSTANT = 4;
+  PTR_SPACE_LOCAL = 5;
 
 TYPE
   PAdr = ^ADRMEM;
@@ -308,6 +360,12 @@ TYPE
     tk: INTEGER;      { TK_ARRAY or TK_RECORD }
     elem_tid: INTEGER; { ARRAY only: the element type's id }
     lo, hi: INTEGER;   { ARRAY only: the index range's bounds }
+    is_super: BOOLEAN; { SUPER ARRAY is represented as a flat element pointer }
+    ptr_space: INTEGER; { POINTER only: PTR_SPACE_PLAIN for `^T`, or the
+                          PTR_SPACE_* code of an ADS pointer's space. Part of
+                          the pointer's identity for assignment compatibility,
+                          independently of the LLVM address space, which is
+                          zero for every space outside an NVPTX compiland. }
     llvm_ty: ADRMEM;   { the cached LLVMTypeRef for this type }
   END;
 
@@ -400,10 +458,53 @@ VAR
     and friends. NEW/DISPOSE must emit a runtime call instruction, not
     allocate on the compiler's own process heap. }
   memmove_fnty, memmove_fn: ADRMEM;
+  launch_fnty, launch_fn: ADRMEM; { CPU-device launch shim: entry, six
+                                  i64 geometry values, and void** argv. }
   byval_kind_id, align_kind_id: CINT; { LLVM enum attribute kind ids for the
     [C] FOREIGN MEMORY-class byval call marshalling below, resolved once at
     init time (see byval_align_kinds_init) rather than re-resolving by name
     on every call site/declaration. }
+  readonly_kind_id, nocapture_kind_id, noalias_kind_id: CINT;
+  deref_kind_id: CINT; { and the kernel-entry parameter facts (readonly,
+    nocapture, noalias, dereferenceable), resolved the same way. }
+  noalias_kernel_params: BOOLEAN; { the LAUNCH contract's
+    distinct-buffers-don't-overlap fact. Off unless PASCAL_NOALIAS_KERNEL_PARAMS
+    is set in the environment: it is a policy assertion about the caller, not
+    something this compiler can prove, so it must be opted into explicitly
+    (the native counterpart of the reference's -f noalias-kernel-params). }
+  module_load_fnty, module_load_fn: ADRMEM;
+  module_getfn_fnty, module_getfn_fn: ADRMEM; { the two module-resolution
+    steps of the launch path (cuModuleLoadData / cuModuleGetFunction). }
+  device_backend_cuda: BOOLEAN; { PASCAL_DEVICE_BACKEND=cuda: the kernel is
+    the loaded PTX module, dispatched by name, so no in-process registry or
+    dispatch thunk is emitted and the PTX blob is an external symbol. }
+  klaunch_registry_gv, klaunch_registry_ty: ADRMEM; { this compiland's
+    registry global, created on first LAUNCH and initialized once every
+    LAUNCH has been lowered. }
+  device_ptx_gv, device_ptx_ptr_val: ADRMEM;
+  nkernels: INTEGER32;
+  kernel_name_tab: ARRAY [1..MAX_KERNELS] OF Str255;
+  kernel_thunk_tab: ARRAY [1..MAX_KERNELS] OF ADRMEM;
+  dev_ro_count: INTEGER32;
+  dev_ro_name: ARRAY [1..MAX_DEV_ROUTINES] OF Str255;
+  dev_ro_decl: ARRAY [1..MAX_DEV_ROUTINES] OF ADRMEM;
+  dev_ro_dup: ARRAY [1..MAX_DEV_ROUTINES] OF BOOLEAN;
+  dev_ro_nparams: ARRAY [1..MAX_DEV_ROUTINES] OF INTEGER32;
+  dev_ro_cached: ARRAY [1..MAX_DEV_ROUTINES] OF BOOLEAN;
+  dev_ro_busy: ARRAY [1..MAX_DEV_ROUTINES] OF BOOLEAN;
+  dev_ro_mask: ARRAY [1..MAX_DEV_ROUTINES] OF ParamVarArr; { entry i TRUE =
+    the i'th formal of that declaration is proven never written through and
+    never captured; see DeviceReadonlySummary. }
+  eff_nparams: INTEGER32; { ComputeReadonlyEffects's output, in globals rather
+    than VAR parameters because the walk itself is recursive: a caller copies
+    these out before recursing into another routine's summary. }
+  eff_pname: ParamNameArr;
+  eff_written, eff_escaped: ParamVarArr;
+  eff_has_with: BOOLEAN;
+  eff_ncalls: INTEGER32;
+  eff_call_formal: ARRAY [1..MAX_CALL_EDGES] OF INTEGER32;
+  eff_call_callee: ARRAY [1..MAX_CALL_EDGES] OF Str255;
+  eff_call_argpos: ARRAY [1..MAX_CALL_EDGES] OF INTEGER32;
   memcmp_fnty, memcmp_fn: ADRMEM; { for whole-string EQ/NEQ/LT/LE/GT/GE comparisons. }
   positn_fnty, positn_fn: ADRMEM;
   scaneq_fnty, scaneq_fn: ADRMEM;
@@ -424,6 +525,10 @@ VAR
   cur_fn: ADRMEM; { the LLVM function LLVMAppendBasicBlockInContext should
                     attach new blocks to: main_fn at top level, or the
                     routine currently being codegen'd. }
+  is_device_compiland: BOOLEAN; { fixed for the root compilation unit; type
+                                   lowering needs it before routine codegen. }
+  is_nvptx_device: BOOLEAN; { true only when this DEVICE compiland targets
+                               nvptx64-nvidia-cuda. }
 
   types: ARRAY [1..MAX_TYPES] OF TypeRec;
   ntypes: INTEGER; { MAX_TYPES=200 is well under INTEGER's 16-bit range, so
@@ -541,6 +646,55 @@ BEGIN
   msg := prefix;
   CONCAT(msg, suffix);
   AbortWith(msg);
+END;
+
+{ ===================== recursion-depth ceilings ======================
+
+  AST lowering recurses over the tree, so its stack use is bounded only by
+  the depth of the AST -- and the AST's depth is bounded only by the source.
+  Without a ceiling the only limit is the OS stack, and exceeding it is a
+  segfault with no diagnostic, which is what used to make callers of this
+  stage wrap it in `ulimit -s unlimited`.
+
+  The parser applies the same ceilings, at the same values, to the same two
+  cycles (CodegenExpr's operand walk and CodegenStmt's nested-statement
+  walk), so an AST that reaches codegen has already been accepted at these
+  depths -- these guards catch a hand-built or third-party AST rather than
+  anything the native front end can produce. See parser.pas's fuller note on
+  where the numbers come from and why bounding this is period-correct
+  ("Expression too complex", Aug-1981 manual, appendix A). The reference
+  compiler enforces the same ceilings on its own AST walks, for the same
+  reason: it too can be handed an AST from stdin. }
+
+CONST
+  MAX_EXPR_DEPTH = 64;
+  MAX_STMT_DEPTH = 256;
+
+VAR
+  expr_depth, stmt_depth: INTEGER;
+
+PROCEDURE EnterExprLevel;
+BEGIN
+  expr_depth := expr_depth + 1;
+  IF expr_depth > MAX_EXPR_DEPTH THEN
+    AbortWith('codegen: expression too complex (nesting deeper than 64); try breaking it up with intermediate value assigns');
+END;
+
+PROCEDURE LeaveExprLevel;
+BEGIN
+  expr_depth := expr_depth - 1;
+END;
+
+PROCEDURE EnterStmtLevel;
+BEGIN
+  stmt_depth := stmt_depth + 1;
+  IF stmt_depth > MAX_STMT_DEPTH THEN
+    AbortWith('codegen: statements nested too deeply (deeper than 256); try splitting the routine up');
+END;
+
+PROCEDURE LeaveStmtLevel;
+BEGIN
+  stmt_depth := stmt_depth - 1;
 END;
 
 FUNCTION DecodeStringLiteral(raw: Str255): Str255;
@@ -693,6 +847,8 @@ BEGIN
   types[ntypes].elem_tid := elem_tid;
   types[ntypes].lo := lo;
   types[ntypes].hi := hi;
+  types[ntypes].is_super := FALSE;
+  types[ntypes].ptr_space := PTR_SPACE_PLAIN;
   types[ntypes].llvm_ty := llvm_ty;
   RegisterType := ntypes;
 END;
@@ -708,6 +864,24 @@ BEGIN
   IF generic_set_tid = 0 THEN
     generic_set_tid := RegisterType(TK_SET, TK_INTEGER, 0, 255, setty);
   EnsureGenericSetType := generic_set_tid;
+END;
+
+FUNCTION PointerSpacesCompatible(from_tid, to_tid: INTEGER): BOOLEAN;
+{ Assignment compatibility between two pointer types, mirroring the reference
+  type system's PointerType.equivalent_to: a plain `^T` is a wildcard against
+  any pointer flavor, and two ADS pointers agree only when their spaces do
+  (ADS(GLOBAL) OF T and ADS(SHARED) OF T are distinct, incompatible types).
+  Without this a host PROGRAM could not hand one of its own pointers to a
+  kernel declared `ADS(GLOBAL) OF T` by an imported DEVICE INTERFACE, since
+  the two type_exprs register separate tids. }
+BEGIN
+  IF (TypeKind(from_tid) <> TK_POINTER) OR (TypeKind(to_tid) <> TK_POINTER) THEN
+    PointerSpacesCompatible := FALSE
+  ELSE IF (types[from_tid].ptr_space = PTR_SPACE_PLAIN) OR
+          (types[to_tid].ptr_space = PTR_SPACE_PLAIN) THEN
+    PointerSpacesCompatible := TRUE
+  ELSE
+    PointerSpacesCompatible := types[from_tid].ptr_space = types[to_tid].ptr_space;
 END;
 
 FUNCTION TypesCompatibleForAssign(from_tid, to_tid: INTEGER): BOOLEAN;
@@ -735,7 +909,8 @@ BEGIN
     ((TypeKind(from_tid) = TK_SET) AND (TypeKind(to_tid) = TK_SET)) OR
     ((from_tid = TK_INTEGER) AND (to_tid = TK_WORD)) OR
     ((from_tid = TK_ADRMEM) AND (TypeKind(to_tid) = TK_POINTER)) OR
-    ((TypeKind(from_tid) = TK_POINTER) AND (to_tid = TK_ADRMEM));
+    ((TypeKind(from_tid) = TK_POINTER) AND (to_tid = TK_ADRMEM)) OR
+    PointerSpacesCompatible(from_tid, to_tid);
 END;
 
 FUNCTION LookupConst(name: Str255): INTEGER32;
@@ -1101,10 +1276,10 @@ END;
 
 FUNCTION ResolveTypeExpr(te: ADRMEM): INTEGER;
 VAR
-  nm: Str255;
+  nm, flavor, space_name: Str255;
   nt: Str255;
   tid: INTEGER;
-  elem_tid, lo, hi, count: INTEGER;
+  elem_tid, lo, hi, count, space_code: INTEGER;
   arr_ty: ADRMEM;
   fields_arr, field_tuple, items, fnames_arr, ftype_expr: ADRMEM;
   nfd, fi, fn2, fni: INTEGER;
@@ -1159,14 +1334,25 @@ BEGIN
   END
   ELSE IF nt = 'ArrayType' THEN
   BEGIN
-    IF GetBool(te, 'packed') OR GetBool(te, 'super') THEN
-      AbortWith('codegen: PACKED/SUPER arrays are not supported');
+    IF GetBool(te, 'packed') THEN
+      AbortWith('codegen: PACKED arrays are not supported');
     lo := ResolveIntLiteral(GetObj(GetObj(te, 'index_range'), 'low'));
-    hi := ResolveIntLiteral(GetObj(GetObj(te, 'index_range'), 'high'));
     elem_tid := ResolveTypeExpr(GetObj(te, 'element_type'));
-    count := hi - lo + 1;
-    arr_ty := LLVMArrayType(LLVMTypeForTk(elem_tid), count);
-    tid := RegisterType(TK_ARRAY, elem_tid, lo, hi, arr_ty);
+    IF GetBool(te, 'super') THEN
+    BEGIN
+      { A SUPER ARRAY has no physical aggregate header or upper bound. Its
+        representation is its element type, so ADS OF SUPER ARRAY becomes a
+        flat element pointer and c^[i] can use a one-index GEP. }
+      tid := RegisterType(TK_ARRAY, elem_tid, lo, lo, LLVMTypeForTk(elem_tid));
+      types[tid].is_super := TRUE;
+    END
+    ELSE
+    BEGIN
+      hi := ResolveIntLiteral(GetObj(GetObj(te, 'index_range'), 'high'));
+      count := hi - lo + 1;
+      arr_ty := LLVMArrayType(LLVMTypeForTk(elem_tid), count);
+      tid := RegisterType(TK_ARRAY, elem_tid, lo, hi, arr_ty);
+    END;
   END
   ELSE IF nt = 'RecordType' THEN
   BEGIN
@@ -1214,11 +1400,44 @@ BEGIN
   END
   ELSE IF nt = 'PointerType' THEN
   BEGIN
-    IF GetStr(te, 'flavor') <> 'POINTER' THEN
-      AbortWith('codegen: only plain POINTER (not ADR/ADS) is supported');
+    flavor := GetStr(te, 'flavor');
+    IF (flavor <> 'POINTER') AND (flavor <> 'ADS') THEN
+      AbortWith('codegen: only POINTER and device ADS pointers are supported');
+    IF (flavor = 'ADS') AND (NOT is_device_compiland) THEN
+      AbortWith('codegen: ADS pointers require a DEVICE compiland');
     elem_tid := ResolveTypeExpr(GetObj(te, 'base'));
-    arr_ty := LLVMPointerType(LLVMTypeForTk(elem_tid), 0);
+    { A pointer's flavor and, for ADS, its space are part of its identity for
+      assignment compatibility (PTR_SPACE_PLAIN and the PTR_SPACE_* codes are
+      what TypesCompatibleForAssign compares), so they are resolved for every
+      compiland. The LLVM address space is a separate question: only NVPTX has
+      the ABI-defined GLOBAL/SHARED/CONSTANT/LOCAL spaces, and the CPU device
+      collapses all of them to address space zero. }
+    IF flavor = 'ADS' THEN
+    BEGIN
+      space_name := GetStr(GetObj(te, 'space'), 'name');
+      IF space_name = 'GLOBAL' THEN space_code := PTR_SPACE_GLOBAL
+      ELSE IF space_name = 'SHARED' THEN space_code := PTR_SPACE_SHARED
+      ELSE IF space_name = 'CONSTANT' THEN space_code := PTR_SPACE_CONSTANT
+      ELSE IF space_name = 'LOCAL' THEN space_code := PTR_SPACE_LOCAL
+      ELSE IF space_name = 'HOST' THEN space_code := PTR_SPACE_HOST
+      ELSE
+      BEGIN
+        AbortWith2('codegen: unsupported ADS space: ', space_name);
+        space_code := PTR_SPACE_HOST;
+      END;
+    END
+    ELSE space_code := PTR_SPACE_PLAIN;
+    lo := 0;
+    IF is_nvptx_device THEN
+    BEGIN
+      IF space_code = PTR_SPACE_GLOBAL THEN lo := 1
+      ELSE IF space_code = PTR_SPACE_SHARED THEN lo := 3
+      ELSE IF space_code = PTR_SPACE_CONSTANT THEN lo := 4
+      ELSE IF space_code = PTR_SPACE_LOCAL THEN lo := 5;
+    END;
+    arr_ty := LLVMPointerType(LLVMTypeForTk(elem_tid), lo);
     tid := RegisterType(TK_POINTER, elem_tid, 0, 0, arr_ty);
+    types[tid].ptr_space := space_code;
   END
   ELSE IF nt = 'SetType' THEN
   BEGIN
@@ -2296,10 +2515,19 @@ BEGIN
         AND (last_val_tk <> TK_INTEGER64) AND (last_val_tk <> TK_WORD64) THEN
         AbortWith('codegen: an array index must be an integer-family type');
       offset := LLVMBuildSub(builder, idx_val, LLVMConstInt(LLVMTypeForTk(last_val_tk), types[cur_tid].lo, 1), MakeCStr(''));
-      gep_idx := AllocPtrArray(2);
-      SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
-      SetPtrArrayElem(gep_idx, 1, offset);
-      base_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(cur_tid), base_ptr, gep_idx, 2, MakeCStr(''));
+      IF types[cur_tid].is_super THEN
+      BEGIN
+        gep_idx := AllocPtrArray(1);
+        SetPtrArrayElem(gep_idx, 0, offset);
+        base_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(cur_tid), base_ptr, gep_idx, 1, MakeCStr(''));
+      END
+      ELSE
+      BEGIN
+        gep_idx := AllocPtrArray(2);
+        SetPtrArrayElem(gep_idx, 0, LLVMConstInt(i32ty, 0, 0));
+        SetPtrArrayElem(gep_idx, 1, offset);
+        base_ptr := LLVMBuildGEP2(builder, LLVMTypeForTk(cur_tid), base_ptr, gep_idx, 2, MakeCStr(''));
+      END;
       cur_tid := types[cur_tid].elem_tid;
     END
     ELSE IF kind = 'DEREF' THEN
@@ -2552,6 +2780,40 @@ BEGIN
   CodegenSimpleBuiltin := res;
 END;
 
+FUNCTION CodegenDeviceIndex(nm: Str255): ADRMEM;
+{ Read one CUDA thread/block special register in an NVPTX DEVICE compiland.
+  The NVVM intrinsic names are lowered by llc to the corresponding PTX
+  special registers; CPU-device launch emulation is deliberately separate. }
+VAR
+  intrinsic_name: Str255;
+  fnty, fn: ADRMEM;
+BEGIN
+  IF NOT is_nvptx_device THEN
+    AbortWith2('codegen: device index builtin requires NVPTX target: ', nm);
+  IF nm = 'THREADIDX_X' THEN intrinsic_name := 'llvm.nvvm.read.ptx.sreg.tid.x'
+  ELSE IF nm = 'THREADIDX_Y' THEN intrinsic_name := 'llvm.nvvm.read.ptx.sreg.tid.y'
+  ELSE IF nm = 'THREADIDX_Z' THEN intrinsic_name := 'llvm.nvvm.read.ptx.sreg.tid.z'
+  ELSE IF nm = 'BLOCKIDX_X' THEN intrinsic_name := 'llvm.nvvm.read.ptx.sreg.ctaid.x'
+  ELSE IF nm = 'BLOCKIDX_Y' THEN intrinsic_name := 'llvm.nvvm.read.ptx.sreg.ctaid.y'
+  ELSE IF nm = 'BLOCKIDX_Z' THEN intrinsic_name := 'llvm.nvvm.read.ptx.sreg.ctaid.z'
+  ELSE IF nm = 'BLOCKDIM_X' THEN intrinsic_name := 'llvm.nvvm.read.ptx.sreg.ntid.x'
+  ELSE IF nm = 'BLOCKDIM_Y' THEN intrinsic_name := 'llvm.nvvm.read.ptx.sreg.ntid.y'
+  ELSE IF nm = 'BLOCKDIM_Z' THEN intrinsic_name := 'llvm.nvvm.read.ptx.sreg.ntid.z'
+  ELSE IF nm = 'GRIDDIM_X' THEN intrinsic_name := 'llvm.nvvm.read.ptx.sreg.nctaid.x'
+  ELSE IF nm = 'GRIDDIM_Y' THEN intrinsic_name := 'llvm.nvvm.read.ptx.sreg.nctaid.y'
+  ELSE IF nm = 'GRIDDIM_Z' THEN intrinsic_name := 'llvm.nvvm.read.ptx.sreg.nctaid.z'
+  ELSE AbortWith2('codegen: unknown device index builtin: ', nm);
+  fnty := LLVMFunctionType(i32ty, NIL, 0, 0);
+  { LLVMAddFunction renames a second declaration to .1.  That is fatal for
+    LLVM intrinsics, whose spelling encodes their signature.  An interface
+    declaration can make the implementation body encounter the same special
+    register more than once, so reuse the canonical intrinsic declaration. }
+  fn := LLVMGetNamedFunction(modl, MakeCStr(intrinsic_name));
+  IF fn = NIL THEN fn := LLVMAddFunction(modl, MakeCStr(intrinsic_name), fnty);
+  CodegenDeviceIndex := LLVMBuildCall2(builder, fnty, fn, NIL, 0, MakeCStr(''));
+  last_val_tk := TK_INTEGER32;
+END;
+
 FUNCTION CodegenExpr(node: ADRMEM): ADRMEM;
 VAR
   nt: Str255;
@@ -2560,11 +2822,12 @@ VAR
   consti: INTEGER32;
   routi: INTEGER32;
   ch: Str255;
-  res, addr: ADRMEM;
+  res, addr, super_ptr, super_header: ADRMEM;
   result_tid: INTEGER;
   target_item, target_str, sizeof_synth: ADRMEM;
   sizeof_bytes: INTEGER32;
 BEGIN
+  EnterExprLevel;
   nt := NodeType(node);
   IF nt = 'IntLiteral' THEN
   BEGIN
@@ -2601,6 +2864,26 @@ BEGIN
   ELSE IF nt = 'Identifier' THEN
   BEGIN
     nm := GetStr(node, 'name');
+    { These unsigned maxima have all bits set.  LLVMConstInt takes the
+      machine bit pattern through the signed CLONG binding, so -1 is the
+      correct i32/i64 payload; WRITE chooses %u/%llu from last_val_tk. }
+    IF nm = 'MAXWORD32' THEN
+    BEGIN
+      res := LLVMConstInt(i32ty, -1, 0);
+      last_val_tk := TK_WORD32;
+    END
+    ELSE IF nm = 'MAXWORD64' THEN
+    BEGIN
+      res := LLVMConstInt(i64ty, -1, 0);
+      last_val_tk := TK_WORD64;
+    END
+    ELSE IF (nm = 'THREADIDX_X') OR (nm = 'THREADIDX_Y') OR (nm = 'THREADIDX_Z') OR
+       (nm = 'BLOCKIDX_X') OR (nm = 'BLOCKIDX_Y') OR (nm = 'BLOCKIDX_Z') OR
+       (nm = 'BLOCKDIM_X') OR (nm = 'BLOCKDIM_Y') OR (nm = 'BLOCKDIM_Z') OR
+       (nm = 'GRIDDIM_X') OR (nm = 'GRIDDIM_Y') OR (nm = 'GRIDDIM_Z') THEN
+      res := CodegenDeviceIndex(nm)
+    ELSE
+    BEGIN
     symi := LookupSym(nm);
     IF symi <> 0 THEN
     BEGIN
@@ -2637,9 +2920,9 @@ BEGIN
         res := NIL;
       END;
     END;
+    END;
   END
-  ELSE IF nt = 'Designator' THEN
-  BEGIN
+  ELSE IF nt = 'Designator' THEN  BEGIN
     addr := ComputeDesignatorAddress(node);
     result_tid := last_val_tk;
     res := LLVMBuildLoad2(builder, LLVMTypeForTk(result_tid), addr, MakeCStr(''));
@@ -2691,9 +2974,28 @@ BEGIN
       dynamic upper bound for heap "super arrays" read from NEW's bound
       header -- is not supported: this file has neither super arrays nor
       multi-dimension arrays yet. }
-    IF GetBool(node, 'deref') THEN
-      AbortWith('codegen: UPPER/LOWER of a pointer dereference (p^) is not yet supported');
     nm := GetStr(node, 'name');
+    IF GetBool(node, 'deref') THEN
+    BEGIN
+      symi := LookupSym(nm);
+      IF (symi = 0) OR (TypeKind(symbols[symi].tk) <> TK_POINTER) OR
+         (NOT types[types[symbols[symi].tk].elem_tid].is_super) THEN
+        AbortWith('codegen: UPPER/LOWER dereference requires a SUPER ARRAY pointer');
+      IF nt = 'LowerExpr' THEN
+        res := LLVMConstInt(i16ty, types[types[symbols[symi].tk].elem_tid].lo, 1)
+      ELSE
+      BEGIN
+        super_ptr := LLVMBuildLoad2(builder, LLVMTypeForTk(symbols[symi].tk), symbols[symi].llvm_val, MakeCStr(''));
+        super_ptr := LLVMBuildBitCast(builder, super_ptr, i8ptrty, MakeCStr(''));
+        super_header := LLVMBuildGEP2(builder, i8ty, super_ptr,
+          MakeArgs1(LLVMConstInt(i64ty, -8, 1)), 1, MakeCStr(''));
+        super_header := LLVMBuildBitCast(builder, super_header, LLVMPointerType(i64ty, 0), MakeCStr(''));
+        res := LLVMBuildLoad2(builder, i64ty, super_header, MakeCStr(''));
+      END;
+      last_val_tk := TK_INTEGER64;
+    END
+    ELSE
+    BEGIN
     symi := LookupSym(nm);
     IF symi = 0 THEN
     BEGIN
@@ -2724,6 +3026,7 @@ BEGIN
         res := NIL;
       END;
       last_val_tk := TK_INTEGER;
+    END;
     END;
   END
   ELSE IF nt = 'RetypeExpr' THEN
@@ -2820,6 +3123,7 @@ BEGIN
     AbortWith2('codegen: unhandled expression kind: ', nt);
     res := NIL;
   END;
+  LeaveExprLevel;
   CodegenExpr := res;
 END;
 
@@ -3378,6 +3682,30 @@ BEGIN
   LLVMPositionBuilderAtEnd(builder, end_bb);
 END;
 
+PROCEDURE AttachUnrollHint(branch_inst: ADRMEM; count: INTEGER);
+{ LLVM loop metadata is a self-referential node. Construct with a null first
+  operand, then replace it with the node value itself, as required by LLVM's
+  loop pass manager. }
+VAR
+  option_mds, loop_mds, option_md, loop_md, loop_val: ADRMEM;
+  kind: CINT;
+BEGIN
+  option_mds := AllocPtrArray(2);
+  SetPtrArrayElem(option_mds, 0, LLVMMDStringInContext2(ctx, MakeCStr('llvm.loop.unroll.count'), 22));
+  SetPtrArrayElem(option_mds, 1, LLVMValueAsMetadata(LLVMConstInt(i32ty, count, 0)));
+  option_md := LLVMMDNodeInContext2(ctx, option_mds, 2);
+  loop_mds := AllocPtrArray(2);
+  SetPtrArrayElem(loop_mds, 0, NIL);
+  SetPtrArrayElem(loop_mds, 1, option_md);
+  loop_md := LLVMMDNodeInContext2(ctx, loop_mds, 2);
+  loop_val := LLVMMetadataAsValue(ctx, loop_md);
+  { LLVM-C 20 exposes only an immutable node constructor for this path.
+    This verifier-clean form records the requested count; a later textual
+    self-reference pass can make it actionable to LLVM's unroller. }
+  kind := LLVMGetMDKindIDInContext(ctx, MakeCStr('llvm.loop'), 9);
+  LLVMSetMetadata(branch_inst, kind, loop_val);
+END;
+
 PROCEDURE CodegenWhileStmt(stmt: ADRMEM);
 VAR
   loop_bb, body_bb, end_bb, cond_val: ADRMEM;
@@ -3400,7 +3728,11 @@ BEGIN
   CodegenStmt(GetObj(stmt, 'body'));
   loop_depth := loop_depth - 1;
   IF LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) = NIL THEN
+  BEGIN
     LLVMBuildBr(builder, loop_bb);
+    IF GetObjOrNil(stmt, 'unroll') <> NIL THEN
+      AttachUnrollHint(LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)), GetInt(stmt, 'unroll'));
+  END;
 
   LLVMPositionBuilderAtEnd(builder, end_bb);
 END;
@@ -3425,6 +3757,8 @@ BEGIN
     IF last_val_tk <> TK_BOOLEAN THEN
       AbortWith('codegen: REPEAT..UNTIL condition must be BOOLEAN');
     LLVMBuildCondBr(builder, cond_val, end_bb, loop_bb);
+    IF GetObjOrNil(stmt, 'unroll') <> NIL THEN
+      AttachUnrollHint(LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)), GetInt(stmt, 'unroll'));
   END;
 
   LLVMPositionBuilderAtEnd(builder, end_bb);
@@ -3492,6 +3826,8 @@ BEGIN
     next_val := LLVMBuildAdd(builder, cur_val, LLVMConstInt(var_llty, 1, 0), MakeCStr(''));
   LLVMBuildStore(builder, next_val, symbols[symi].llvm_val);
   LLVMBuildBr(builder, loop_bb);
+  IF GetObjOrNil(stmt, 'unroll') <> NIL THEN
+    AttachUnrollHint(LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)), GetInt(stmt, 'unroll'));
 
   LLVMPositionBuilderAtEnd(builder, end_bb);
 END;
@@ -4195,6 +4531,278 @@ BEGIN
   LLVMBuildStore(builder, new_len_byte, len_ptr);
 END;
 
+FUNCTION LaunchI64(v: ADRMEM; tk: INTEGER): ADRMEM;
+BEGIN
+  IF (tk = TK_INTEGER64) OR (tk = TK_WORD64) THEN LaunchI64 := v
+  ELSE IF IsUnsignedWordTk(tk) THEN LaunchI64 := LLVMBuildZExt(builder, v, i64ty, MakeCStr(''))
+  ELSE LaunchI64 := LLVMBuildSExt(builder, v, i64ty, MakeCStr(''));
+END;
+
+FUNCTION EmitLaunchThunk(ridx: INTEGER32): ADRMEM;
+{ Emit the CPU-device entry adapter: void(i8** argv). Each argv slot points
+  to a typed argument cell, exactly as pas_dev_launch expects. }
+VAR
+  thunk_name: Str255;
+  thunk_ty, thunk, thunk_bb, saved_bb, saved_fn: ADRMEM;
+  argv, slot_addr, slot, typed, val: ADRMEM;
+  indices, call_args: ADRMEM;
+  i: INTEGER32;
+BEGIN
+  thunk_name := '__pas_klaunch_';
+  CONCAT(thunk_name, routines[ridx].name);
+  thunk_ty := LLVMFunctionType(voidty, MakeArgs1(LLVMPointerType(i8ptrty, 0)), 1, 0);
+  thunk := LLVMAddFunction(modl, MakeCStr(thunk_name), thunk_ty);
+  LLVMSetLinkage(thunk, 8); { LLVMInternalLinkage -- reached only through the
+                              registry, never by name from another object. }
+  thunk_bb := LLVMAppendBasicBlockInContext(ctx, thunk, MakeCStr('entry'));
+  saved_bb := LLVMGetInsertBlock(builder);
+  saved_fn := cur_fn;
+  LLVMPositionBuilderAtEnd(builder, thunk_bb);
+  cur_fn := thunk;
+  argv := LLVMGetParam(thunk, 0);
+  call_args := AllocPtrArray(routines[ridx].nparams);
+  FOR i := 0 TO routines[ridx].nparams - 1 DO
+  BEGIN
+    indices := AllocPtrArray(1);
+    SetPtrArrayElem(indices, 0, LLVMConstInt(i32ty, i, 0));
+    slot_addr := LLVMBuildGEP2(builder, i8ptrty, argv, indices, 1, MakeCStr(''));
+    slot := LLVMBuildLoad2(builder, i8ptrty, slot_addr, MakeCStr(''));
+    typed := LLVMBuildBitCast(builder, slot,
+      LLVMPointerType(LLVMTypeForTk(routines[ridx].param_tk[i + 1]), 0), MakeCStr(''));
+    val := LLVMBuildLoad2(builder, LLVMTypeForTk(routines[ridx].param_tk[i + 1]), typed, MakeCStr(''));
+    SetPtrArrayElem(call_args, i, val);
+  END;
+  val := LLVMBuildCall2(builder, routines[ridx].fnty, routines[ridx].fn,
+    call_args, routines[ridx].nparams, MakeCStr(''));
+  LLVMBuildRetVoid(builder);
+  cur_fn := saved_fn;
+  LLVMPositionBuilderAtEnd(builder, saved_bb);
+  EmitLaunchThunk := thunk;
+END;
+
+FUNCTION LaunchRegistryPtr: ADRMEM;
+{ An i8* to this compiland's kernel registry global -- the CPU stand-in for a
+  loaded CUDA module. The global is a shell here; EmitLaunchRegistry fills it
+  once every LAUNCH has recorded its kernel. Under the CUDA backend there is
+  no in-process registry (the kernel is the loaded PTX module and the shim
+  ignores this argument), so a null pointer is passed rather than referencing
+  a registry global nothing would define. }
+VAR
+  elems: ADRMEM;
+BEGIN
+  IF device_backend_cuda THEN
+    LaunchRegistryPtr := LLVMConstPointerNull(i8ptrty)
+  ELSE
+  BEGIN
+    IF klaunch_registry_gv = NIL THEN
+    BEGIN
+      elems := AllocPtrArray(3);
+      SetPtrArrayElem(elems, 0, LLVMPointerType(i8ptrty, 0));
+      SetPtrArrayElem(elems, 1, LLVMPointerType(i8ptrty, 0));
+      SetPtrArrayElem(elems, 2, i64ty);
+      klaunch_registry_ty := LLVMStructTypeInContext(ctx, elems, 3, 0);
+      klaunch_registry_gv := LLVMAddGlobal(modl, klaunch_registry_ty, MakeCStr('__pas_klaunch_registry'));
+      LLVMSetGlobalConstant(klaunch_registry_gv, 1);
+    END;
+    LaunchRegistryPtr := LLVMConstBitCast(klaunch_registry_gv, i8ptrty);
+  END;
+END;
+
+FUNCTION DevicePtxPtr: ADRMEM;
+{ An i8* to the device-PTX blob the loader consumes. The CPU device never
+  executes it -- its "module" is the registry -- but the mechanism is always
+  present so swapping in the CUDA shim is a pure runtime change. Under the
+  CUDA backend the blob is an external symbol built from the device unit's
+  own .ptx at link time, so the host object neither bakes the kernel text in
+  nor depends on the device artifact. }
+BEGIN
+  IF device_ptx_gv = NIL THEN
+  BEGIN
+    IF device_backend_cuda THEN
+    BEGIN
+      device_ptx_gv := LLVMAddGlobal(modl, LLVMArrayType(i8ty, 0), MakeCStr('__pas_device_ptx'));
+      LLVMSetGlobalConstant(device_ptx_gv, 1);
+      device_ptx_ptr_val := LLVMConstBitCast(device_ptx_gv, i8ptrty);
+    END
+    ELSE
+    BEGIN
+      device_ptx_ptr_val := LLVMBuildGlobalStringPtr(builder, MakeCStr(''), MakeCStr('__pas_device_ptx'));
+      device_ptx_gv := device_ptx_ptr_val;
+    END;
+  END;
+  DevicePtxPtr := device_ptx_ptr_val;
+END;
+
+FUNCTION LaunchThunkFor(ridx: INTEGER32): ADRMEM;
+{ The dispatch thunk for this kernel, emitted once and recorded in the
+  registry. A second LAUNCH of the same kernel reuses it -- emitting it again
+  would silently uniquify the symbol into a second, unregistered thunk. }
+VAR
+  i, found: INTEGER32;
+  kname: Str255;
+  thunk: ADRMEM;
+BEGIN
+  { The name is copied to a local before the comparison because this file's
+    own string-comparison lowering (IsStringShapedExpr) recognizes only a
+    bare identifier or literal as string-shaped: with a selector-bearing
+    designator on *both* sides it falls through to the scalar path and
+    rejects the operands outright. }
+  kname := routines[ridx].name;
+  found := 0;
+  FOR i := 1 TO nkernels DO
+    IF kernel_name_tab[i] = kname THEN found := i;
+  IF found <> 0 THEN LaunchThunkFor := kernel_thunk_tab[found]
+  ELSE
+  BEGIN
+    IF nkernels >= MAX_KERNELS THEN AbortWith('codegen: too many launched kernels');
+    thunk := EmitLaunchThunk(ridx);
+    nkernels := nkernels + 1;
+    kernel_name_tab[nkernels] := kname;
+    kernel_thunk_tab[nkernels] := thunk;
+    LaunchThunkFor := thunk;
+  END;
+END;
+
+PROCEDURE EmitLaunchRegistry;
+{ Fill the registry global from the launched-kernel list: a names table, an
+  entries (thunk) table, and the i8** names / i8** entries / i64 count
+  struct the shim's by-name lookup walks. A no-op for a compiland that
+  performed no launches, so launch-free output is unchanged. }
+VAR
+  names_vals, ent_vals, fields: ADRMEM;
+  names_gv, ent_gv: ADRMEM;
+  i: INTEGER32;
+BEGIN
+  IF (klaunch_registry_gv <> NIL) AND (nkernels > 0) THEN
+  BEGIN
+    names_vals := AllocPtrArray(nkernels);
+    ent_vals := AllocPtrArray(nkernels);
+    FOR i := 1 TO nkernels DO
+    BEGIN
+      SetPtrArrayElem(names_vals, i - 1,
+        LLVMBuildGlobalStringPtr(builder, MakeCStr(kernel_name_tab[i]), MakeCStr('kregname')));
+      SetPtrArrayElem(ent_vals, i - 1, LLVMConstBitCast(kernel_thunk_tab[i], i8ptrty));
+    END;
+    names_gv := LLVMAddGlobal(modl, LLVMArrayType(i8ptrty, nkernels), MakeCStr('__pas_kregnames'));
+    LLVMSetGlobalConstant(names_gv, 1);
+    LLVMSetInitializer(names_gv, LLVMConstArray(i8ptrty, names_vals, nkernels));
+    ent_gv := LLVMAddGlobal(modl, LLVMArrayType(i8ptrty, nkernels), MakeCStr('__pas_kregentries'));
+    LLVMSetGlobalConstant(ent_gv, 1);
+    LLVMSetInitializer(ent_gv, LLVMConstArray(i8ptrty, ent_vals, nkernels));
+    fields := AllocPtrArray(3);
+    SetPtrArrayElem(fields, 0, LLVMConstBitCast(names_gv, LLVMPointerType(i8ptrty, 0)));
+    SetPtrArrayElem(fields, 1, LLVMConstBitCast(ent_gv, LLVMPointerType(i8ptrty, 0)));
+    SetPtrArrayElem(fields, 2, LLVMConstInt(i64ty, nkernels, 0));
+    LLVMSetInitializer(klaunch_registry_gv, LLVMConstStructInContext(ctx, fields, 3, 0));
+  END;
+END;
+
+PROCEDURE CodegenLaunch(args: ADRMEM);
+{ Host launch ABI: LAUNCH(kernel, grid, block, actuals...) or its six-value
+  geometry form. It uses the CPU shim's real void** ABI and a dispatch thunk. }
+VAR
+  kernel, actual: ADRMEM;
+  kernel_name: Str255;
+  ridx, n, expected, i: INTEGER32;
+  grid, block, val, cell, argv, argv_ptr, thunk: ADRMEM;
+  dev_module, entry: ADRMEM;
+  geom: ARRAY[1..6] OF ADRMEM;
+  actual_tk: INTEGER;
+  indices, call_args: ADRMEM;
+BEGIN
+  n := ArrSize(args);
+  IF n < 3 THEN AbortWith('codegen: LAUNCH needs kernel, grid, and block');
+  kernel := ArrItem(args, 0);
+  IF NodeType(kernel) <> 'Identifier' THEN
+    AbortWith('codegen: LAUNCH kernel must be an identifier');
+  kernel_name := GetStr(kernel, 'name');
+  ridx := LookupRoutine(kernel_name);
+  IF ridx = 0 THEN AbortWith2('codegen: unknown LAUNCH kernel: ', kernel_name);
+  expected := routines[ridx].nparams;
+  IF (n <> expected + 3) AND (n <> expected + 7) THEN
+    AbortWith('codegen: LAUNCH expects 2 or 6 geometry values');
+  IF n = expected + 3 THEN
+  BEGIN
+    grid := CodegenExpr(ArrItem(args, 1));
+    grid := LaunchI64(grid, last_val_tk);
+    block := CodegenExpr(ArrItem(args, 2));
+    block := LaunchI64(block, last_val_tk);
+    geom[1] := grid; geom[2] := LLVMConstInt(i64ty, 1, 0); geom[3] := LLVMConstInt(i64ty, 1, 0);
+    geom[4] := block; geom[5] := LLVMConstInt(i64ty, 1, 0); geom[6] := LLVMConstInt(i64ty, 1, 0);
+  END
+  ELSE
+    FOR i := 1 TO 6 DO
+    BEGIN
+      geom[i] := CodegenExpr(ArrItem(args, i));
+      geom[i] := LaunchI64(geom[i], last_val_tk);
+    END;
+  argv := EntryAlloca(LLVMArrayType(i8ptrty, expected), 'launch_argv');
+  FOR i := 0 TO expected - 1 DO
+  BEGIN
+    IF n = expected + 3 THEN actual := ArrItem(args, i + 3)
+    ELSE actual := ArrItem(args, i + 7);
+    val := CodegenExpr(actual);
+    actual_tk := last_val_tk;
+    val := CoerceForAssign(val, actual_tk, routines[ridx].param_tk[i + 1], actual, kernel_name);
+    cell := EntryAlloca(LLVMTypeForTk(routines[ridx].param_tk[i + 1]), 'launch_arg');
+    LLVMBuildStore(builder, val, cell);
+    indices := AllocPtrArray(2);
+    SetPtrArrayElem(indices, 0, LLVMConstInt(i32ty, 0, 0));
+    SetPtrArrayElem(indices, 1, LLVMConstInt(i32ty, i, 0));
+    indices := LLVMBuildGEP2(builder, LLVMArrayType(i8ptrty, expected), argv, indices, 2, MakeCStr(''));
+    val := LLVMBuildBitCast(builder, cell, i8ptrty, MakeCStr(''));
+    LLVMBuildStore(builder, val, indices);
+  END;
+  indices := AllocPtrArray(2);
+  SetPtrArrayElem(indices, 0, LLVMConstInt(i32ty, 0, 0));
+  SetPtrArrayElem(indices, 1, LLVMConstInt(i32ty, 0, 0));
+  argv_ptr := LLVMBuildGEP2(builder, LLVMArrayType(i8ptrty, expected), argv, indices, 2, MakeCStr(''));
+  { Resolve the entry the way the CUDA driver does -- load the module, then
+    look the kernel up in it by name -- so the same call site serves both
+    backends. On the CPU device the module is this compiland's registry and
+    the resolved entry is the dispatch thunk; under the CUDA backend the
+    module is the loaded PTX and the shim dispatches by name, so no thunk or
+    registry is emitted at all (the host object then has no undefined kernel
+    symbol and needs no separate host-ABI device compile). }
+  IF NOT device_backend_cuda THEN thunk := LaunchThunkFor(ridx);
+  call_args := AllocPtrArray(2);
+  SetPtrArrayElem(call_args, 0, LaunchRegistryPtr);
+  SetPtrArrayElem(call_args, 1, DevicePtxPtr);
+  dev_module := LLVMBuildCall2(builder, module_load_fnty, module_load_fn, call_args, 2, MakeCStr(''));
+  call_args := AllocPtrArray(2);
+  SetPtrArrayElem(call_args, 0, dev_module);
+  SetPtrArrayElem(call_args, 1, LLVMBuildGlobalStringPtr(builder, MakeCStr(kernel_name), MakeCStr('kname')));
+  entry := LLVMBuildCall2(builder, module_getfn_fnty, module_getfn_fn, call_args, 2, MakeCStr(''));
+  call_args := AllocPtrArray(8);
+  SetPtrArrayElem(call_args, 0, entry);
+  SetPtrArrayElem(call_args, 1, geom[1]);
+  SetPtrArrayElem(call_args, 2, geom[2]);
+  SetPtrArrayElem(call_args, 3, geom[3]);
+  SetPtrArrayElem(call_args, 4, geom[4]);
+  SetPtrArrayElem(call_args, 5, geom[5]);
+  SetPtrArrayElem(call_args, 6, geom[6]);
+  SetPtrArrayElem(call_args, 7, argv_ptr);
+  val := LLVMBuildCall2(builder, launch_fnty, launch_fn, call_args, 8, MakeCStr(''));
+END;
+
+PROCEDURE CodegenDeviceSync(name: Str255);
+{ DEVICE synchronization. CPU-device execution is serial, so SYNCTHREADS is
+  a no-op there; NVPTX lowers it to the hardware block barrier. }
+VAR
+  fnty, fn: ADRMEM;
+  discard: ADRMEM;
+BEGIN
+  IF name <> 'SYNCTHREADS' THEN
+    AbortWith2('codegen: unknown device synchronization builtin: ', name);
+  IF is_nvptx_device THEN
+  BEGIN
+    fnty := LLVMFunctionType(voidty, NIL, 0, 0);
+    fn := LLVMGetNamedFunction(modl, MakeCStr('llvm.nvvm.barrier0'));
+    IF fn = NIL THEN fn := LLVMAddFunction(modl, MakeCStr('llvm.nvvm.barrier0'), fnty);
+    discard := LLVMBuildCall2(builder, fnty, fn, NIL, 0, MakeCStr(''));
+  END;
+END;
+
 PROCEDURE CodegenProcCallStmt(stmt: ADRMEM);
 VAR
   name: Str255;
@@ -4202,10 +4810,15 @@ VAR
   args, arg0: ADRMEM;
   symi: INTEGER32;
   ptr_tid, pointee_tid: INTEGER;
-  raw, casted, call_args: ADRMEM;
+  raw, casted, call_args, bound, bytes, header: ADRMEM;
+  narg: INTEGER32;
 BEGIN
   name := GetStr(stmt, 'name');
-  IF name = 'WRITELN' THEN
+  IF name = 'LAUNCH' THEN
+    CodegenLaunch(GetObj(stmt, 'args'))
+  ELSE IF is_device_compiland AND (name = 'SYNCTHREADS') THEN
+    CodegenDeviceSync(name)
+  ELSE IF name = 'WRITELN' THEN
     CodegenWriteArgs(GetObj(stmt, 'args'), TRUE)
   ELSE IF name = 'WRITE' THEN
     CodegenWriteArgs(GetObj(stmt, 'args'), FALSE)
@@ -4232,8 +4845,10 @@ BEGIN
   ELSE IF (name = 'NEW') OR (name = 'DISPOSE') THEN
   BEGIN
     args := GetObj(stmt, 'args');
-    IF ArrSize(args) <> 1 THEN
-      AbortWith2('codegen: expected one pointer argument to: ', name);
+    narg := ArrSize(args);
+    IF ((name = 'DISPOSE') AND (narg <> 1)) OR
+       ((name = 'NEW') AND (narg <> 1) AND (narg <> 2)) THEN
+      AbortWith2('codegen: wrong argument count for: ', name);
     arg0 := ArrItem(args, 0);
     IF NodeType(arg0) <> 'Identifier' THEN
       AbortWith2('codegen: argument must be a bare pointer variable: ', name);
@@ -4247,15 +4862,36 @@ BEGIN
     BEGIN
       pointee_tid := types[ptr_tid].elem_tid;
       call_args := AllocPtrArray(1);
-      SetPtrArrayElem(call_args, 0, LLVMConstInt(i32ty, TypeSizeBytes(pointee_tid), 0));
-      raw := LLVMBuildCall2(builder, malloc_fnty, malloc_fn, call_args, 1, MakeCStr(''));
-      casted := LLVMBuildBitCast(builder, raw, LLVMTypeForTk(ptr_tid), MakeCStr(''));
+      IF types[pointee_tid].is_super THEN
+      BEGIN
+        IF narg <> 2 THEN AbortWith('codegen: NEW of SUPER ARRAY needs an upper bound');
+        bound := CodegenExpr(ArrItem(args, 1));
+        bound := LaunchI64(bound, last_val_tk);
+        { malloc holds an i64 upper-bound header followed by flat elements. }
+        bytes := LLVMBuildAdd(builder, bound, LLVMConstInt(i64ty, 1 - types[pointee_tid].lo, 1), MakeCStr(''));
+        bytes := LLVMBuildMul(builder, bytes, LLVMConstInt(i64ty, TypeSizeBytes(types[pointee_tid].elem_tid), 0), MakeCStr(''));
+        bytes := LLVMBuildAdd(builder, bytes, LLVMConstInt(i64ty, 8, 0), MakeCStr(''));
+        SetPtrArrayElem(call_args, 0, bytes);
+        raw := LLVMBuildCall2(builder, malloc_fnty, malloc_fn, call_args, 1, MakeCStr(''));
+        LLVMBuildStore(builder, bound, raw);
+        header := LLVMBuildGEP2(builder, i8ty, raw, MakeArgs1(LLVMConstInt(i64ty, 8, 0)), 1, MakeCStr(''));
+        casted := LLVMBuildBitCast(builder, header, LLVMTypeForTk(ptr_tid), MakeCStr(''));
+      END
+      ELSE
+      BEGIN
+        SetPtrArrayElem(call_args, 0, LLVMConstInt(i64ty, TypeSizeBytes(pointee_tid), 0));
+        raw := LLVMBuildCall2(builder, malloc_fnty, malloc_fn, call_args, 1, MakeCStr(''));
+        casted := LLVMBuildBitCast(builder, raw, LLVMTypeForTk(ptr_tid), MakeCStr(''));
+      END;
       LLVMBuildStore(builder, casted, symbols[symi].llvm_val);
     END
     ELSE
     BEGIN
       raw := LLVMBuildLoad2(builder, LLVMTypeForTk(ptr_tid), symbols[symi].llvm_val, MakeCStr(''));
       casted := LLVMBuildBitCast(builder, raw, i8ptrty, MakeCStr(''));
+      IF types[types[ptr_tid].elem_tid].is_super THEN
+        casted := LLVMBuildGEP2(builder, i8ty, casted,
+          MakeArgs1(LLVMConstInt(i64ty, -8, 1)), 1, MakeCStr(''));
       call_args := AllocPtrArray(1);
       SetPtrArrayElem(call_args, 0, casted);
       discard := LLVMBuildCall2(builder, free_fnty, free_fn, call_args, 1, MakeCStr(''));
@@ -4300,6 +4936,7 @@ PROCEDURE CodegenStmt(stmt: ADRMEM);
 VAR
   nt, msg: Str255;
 BEGIN
+  EnterStmtLevel;
   nt := NodeType(stmt);
   IF nt = 'AssignStmt' THEN CodegenAssignStmt(stmt)
   ELSE IF nt = 'CompoundStmt' THEN CodegenStmtArray(GetObj(stmt, 'stmts'))
@@ -4319,6 +4956,7 @@ BEGIN
     CONCAT(msg, nt);
     AbortWith(msg);
   END;
+  LeaveStmtLevel;
 END;
 
 { ============================== declarations =============================== }
@@ -4334,6 +4972,74 @@ BEGIN
     CodegenDecl(ArrItem(decls_arr, i));
 END;
 
+FUNCTION SameIdentifier(a, b: Str255): BOOLEAN;
+{ Case-insensitive identifier comparison. Symbol lookup elsewhere in this file
+  is exact-case (the front end hands identifiers through unchanged), but a USES
+  clause is matched against a UNIT heading written in a different file, where
+  the two spellings routinely differ in case -- and mismatching them here would
+  reject a program that otherwise compiles. }
+VAR
+  la, lb: Str255;
+  i, n: INTEGER;
+BEGIN
+  la := a;
+  lb := b;
+  n := ORD(la[0]);
+  FOR i := 1 TO n DO
+    IF (la[i] >= 'A') AND (la[i] <= 'Z') THEN la[i] := CHR(ORD(la[i]) + 32);
+  n := ORD(lb[0]);
+  FOR i := 1 TO n DO
+    IF (lb[i] >= 'A') AND (lb[i] <= 'Z') THEN lb[i] := CHR(ORD(lb[i]) + 32);
+  SameIdentifier := la = lb;
+END;
+
+PROCEDURE CheckUsesClauses(root, local_ifaces: ADRMEM);
+{ Reconcile the root's USES clauses against the INTERFACE headers spliced into
+  the same source file. The declarations themselves are lowered by walking
+  local_interfaces, so this adds no symbols; it exists so the two ways a USES
+  can fail to be honored -- no spliced header for the named unit, and a
+  renaming import list, which native codegen does not implement -- report
+  themselves instead of surfacing later as "unknown routine" at the call site
+  or, worse, binding a call to the wrong exported symbol. }
+VAR
+  uses_arr, clause, imports_arr: ADRMEM;
+  nclauses, ci, nimports, ii, nifaces, fi: INTEGER32;
+  unit_name, alias: Str255;
+  found: BOOLEAN;
+BEGIN
+  uses_arr := GetObj(root, 'uses');
+  IF uses_arr <> NIL THEN
+  BEGIN
+    nclauses := ArrSize(uses_arr);
+    FOR ci := 0 TO nclauses - 1 DO
+    BEGIN
+      clause := ArrItem(uses_arr, ci);
+      unit_name := GetStr(clause, 'name');
+      found := FALSE;
+      IF local_ifaces <> NIL THEN
+      BEGIN
+        nifaces := ArrSize(local_ifaces);
+        FOR fi := 0 TO nifaces - 1 DO
+          IF SameIdentifier(GetStr(ArrItem(local_ifaces, fi), 'name'), unit_name) THEN
+            found := TRUE;
+      END;
+      IF NOT found THEN
+        AbortWith2('codegen: USES unit needs a spliced INTERFACE header: ', unit_name);
+      imports_arr := GetObj(clause, 'imports');
+      IF imports_arr <> NIL THEN
+      BEGIN
+        nimports := ArrSize(imports_arr);
+        FOR ii := 0 TO nimports - 1 DO
+        BEGIN
+          alias := CStrToStr255(cJSON_GetStringValue(ArrItem(imports_arr, ii)));
+          IF LookupRoutine(alias) = 0 THEN
+            AbortWith2('codegen: renaming USES imports are not supported: ', alias);
+        END;
+      END;
+    END;
+  END;
+END;
+
 PROCEDURE CodegenVarDecl(decl: ADRMEM);
 VAR
   names: ADRMEM;
@@ -4345,6 +5051,52 @@ BEGIN
   n := ArrSize(names);
   FOR i := 0 TO n - 1 DO
     DeclareVar(CStrToStr255(cJSON_GetStringValue(ArrItem(names, i))), tk);
+END;
+
+PROCEDURE ApplyLaunchBoundAttrs(decl, fn: ADRMEM);
+{ NVPTX consumes launch bounds through legacy !nvvm.annotations metadata.
+  They are ptxas facts, so no host-target approximation is emitted. }
+VAR
+  attrs, attr, args, mds, mdnode: ADRMEM;
+  i, j, n, nargs: INTEGER32;
+  nm, key: Str255;
+BEGIN
+  IF NOT is_nvptx_device THEN
+    AbortWith('codegen: launch-bound attributes require an NVPTX DEVICE target');
+  attrs := GetObj(decl, 'attributes');
+  n := ArrSize(attrs);
+  FOR i := 0 TO n - 1 DO
+  BEGIN
+    attr := ArrItem(attrs, i);
+    nm := GetStr(attr, 'name');
+    IF (nm = 'MAXNTID') OR (nm = 'REQNTID') OR (nm = 'MINCTASM') THEN
+    BEGIN
+      args := GetObj(attr, 'arg');
+      nargs := ArrSize(args);
+      FOR j := 0 TO nargs - 1 DO
+      BEGIN
+        IF nm = 'MAXNTID' THEN
+        BEGIN
+          IF j = 0 THEN key := 'maxntidx'
+          ELSE IF j = 1 THEN key := 'maxntidy'
+          ELSE key := 'maxntidz';
+        END
+        ELSE IF nm = 'REQNTID' THEN
+        BEGIN
+          IF j = 0 THEN key := 'reqntidx'
+          ELSE IF j = 1 THEN key := 'reqntidy'
+          ELSE key := 'reqntidz';
+        END
+        ELSE key := 'minctasm';
+        mds := AllocPtrArray(3);
+        SetPtrArrayElem(mds, 0, LLVMValueAsMetadata(fn));
+        SetPtrArrayElem(mds, 1, LLVMMDStringInContext2(ctx, MakeCStr(key), ORD(key[0])));
+        SetPtrArrayElem(mds, 2, LLVMValueAsMetadata(LLVMConstInt(i32ty, ResolveIntLiteral(ArrItem(args, j)), 0)));
+        mdnode := LLVMMDNodeInContext2(ctx, mds, 3);
+        LLVMAddNamedMetadataOperand(modl, MakeCStr('nvvm.annotations'), LLVMMetadataAsValue(ctx, mdnode));
+      END;
+    END;
+  END;
 END;
 
 FUNCTION IsCForeignDecl(decl: ADRMEM): BOOLEAN;
@@ -4459,6 +5211,357 @@ BEGIN
   END;
 END;
 
+FUNCTION ParamNamesOf(decl: ADRMEM; VAR names: ParamNameArr): INTEGER32;
+{ Flatten one declaration's formal-parameter names only -- deliberately not
+  FlattenParams, which also resolves each type_expr and so would register
+  types for routines that may never be lowered. The readonly analysis below
+  runs before any body is lowered and needs nothing but the names. }
+VAR
+  params_arr, param, pnames: ADRMEM;
+  np, pi, nn, ni, n: INTEGER32;
+BEGIN
+  n := 0;
+  params_arr := GetObj(decl, 'params');
+  np := ArrSize(params_arr);
+  FOR pi := 0 TO np - 1 DO
+  BEGIN
+    param := ArrItem(params_arr, pi);
+    pnames := GetObj(param, 'names');
+    nn := ArrSize(pnames);
+    FOR ni := 0 TO nn - 1 DO
+      IF n < MAX_PARAMS THEN
+      BEGIN
+        n := n + 1;
+        names[n] := CStrToStr255(cJSON_GetStringValue(ArrItem(pnames, ni)));
+      END;
+  END;
+  ParamNamesOf := n;
+END;
+
+FUNCTION ReadonlyBareFormal(node: ADRMEM): INTEGER32;
+{ The 1-based formal index this node is a *bare* use of (a plain identifier,
+  or a selector-less designator), or 0. A bare use of a pointer formal hands
+  its raw pointer value to whatever surrounds it, so outside the one context
+  that is analyzable (a direct call actual) it counts as an escape. }
+VAR
+  nt, nm: Str255;
+  i: INTEGER32;
+BEGIN
+  ReadonlyBareFormal := 0;
+  IF node <> NIL THEN
+  BEGIN
+    nt := NodeType(node);
+    nm := '';
+    IF nt = 'Identifier' THEN nm := GetStr(node, 'name')
+    ELSE IF nt = 'Designator' THEN
+      IF ArrSize(GetObj(node, 'selectors')) = 0 THEN nm := GetStr(node, 'name');
+    IF nm <> '' THEN
+      FOR i := 1 TO eff_nparams DO
+        IF eff_pname[i] = nm THEN ReadonlyBareFormal := i;
+  END;
+END;
+
+FUNCTION AssignWritesThroughFormal(node: ADRMEM): INTEGER32;
+{ For an AssignStmt, the formal index written *through* (`p^... := x`), or 0.
+  A write to the pointer variable itself (`p := q`) is not a write to the
+  pointee and so does not disqualify readonly; the DEREF selector is what
+  distinguishes the two. }
+VAR
+  target, sels, sel: ADRMEM;
+  i, nsel, fi: INTEGER32;
+  has_deref: BOOLEAN;
+  nm: Str255;
+BEGIN
+  AssignWritesThroughFormal := 0;
+  target := GetObj(node, 'target');
+  IF NodeType(target) = 'Designator' THEN
+  BEGIN
+    nm := GetStr(target, 'name');
+    fi := 0;
+    FOR i := 1 TO eff_nparams DO
+      IF eff_pname[i] = nm THEN fi := i;
+    IF fi <> 0 THEN
+    BEGIN
+      sels := GetObj(target, 'selectors');
+      nsel := ArrSize(sels);
+      has_deref := FALSE;
+      FOR i := 0 TO nsel - 1 DO
+      BEGIN
+        sel := ArrItem(sels, i);
+        IF GetStr(sel, 'kind') = 'DEREF' THEN has_deref := TRUE;
+      END;
+      IF has_deref THEN AssignWritesThroughFormal := fi;
+    END;
+  END;
+END;
+
+PROCEDURE ScanReadonlyNode(node: ADRMEM);
+{ Accumulate one routine body's effects on its own formals into the eff_*
+  globals. Everything unrecognized fails closed: a bare formal anywhere but a
+  direct call actual is an escape, and a WITH anywhere disqualifies the whole
+  routine (WITH's field designators are not tied back to the originating
+  pointer expression by this purely syntactic walk, so a write inside a WITH
+  block could otherwise go unnoticed). }
+CONST
+  MAX_SCAN_ARGS = 64;
+VAR
+  nt: Str255;
+  nchild, ci, nargs, ai, fi: INTEGER32;
+  args, arg: ADRMEM;
+  forwarded: ARRAY [1..MAX_SCAN_ARGS] OF BOOLEAN;
+BEGIN
+  IF node <> NIL THEN
+  BEGIN
+    nt := NodeType(node);
+    { A nested routine is its own lexical body and its own call-graph node;
+      its effects are summarized separately, not folded into this one. }
+    IF (nt <> 'ProcDecl') AND (nt <> 'FuncDecl') THEN
+    BEGIN
+      IF nt = 'WithStmt' THEN eff_has_with := TRUE;
+      IF nt = 'AssignStmt' THEN
+      BEGIN
+        fi := AssignWritesThroughFormal(node);
+        IF fi <> 0 THEN eff_written[fi] := TRUE;
+      END;
+      IF (nt = 'FuncCall') OR (nt = 'ProcCallStmt') THEN
+      BEGIN
+        args := GetObj(node, 'args');
+        nargs := ArrSize(args);
+        FOR ai := 1 TO MAX_SCAN_ARGS DO forwarded[ai] := FALSE;
+        IF nargs <= MAX_SCAN_ARGS THEN
+          FOR ai := 0 TO nargs - 1 DO
+          BEGIN
+            arg := ArrItem(args, ai);
+            fi := ReadonlyBareFormal(arg);
+            IF fi <> 0 THEN
+            BEGIN
+              IF eff_ncalls >= MAX_CALL_EDGES THEN
+                { Out of edge slots: fail closed by treating the forward as an
+                  escape rather than dropping the fact on the floor. }
+                eff_escaped[fi] := TRUE
+              ELSE
+              BEGIN
+                eff_ncalls := eff_ncalls + 1;
+                eff_call_formal[eff_ncalls] := fi;
+                eff_call_callee[eff_ncalls] := GetStr(node, 'name');
+                eff_call_argpos[eff_ncalls] := ai;
+                forwarded[ai + 1] := TRUE;
+              END;
+            END;
+          END;
+        { A call node's only expression children are its actuals; the ones
+          recognized as direct forwards above are summarized through the
+          callee instead of being rescanned (which would call them escapes). }
+        FOR ai := 0 TO nargs - 1 DO
+          IF (nargs > MAX_SCAN_ARGS) OR (NOT forwarded[ai + 1]) THEN
+            ScanReadonlyNode(ArrItem(args, ai));
+      END
+      ELSE
+      BEGIN
+        fi := ReadonlyBareFormal(node);
+        IF fi <> 0 THEN eff_escaped[fi] := TRUE
+        ELSE
+        BEGIN
+          { Generic descent: cJSON links an object's members and an array's
+            elements through the same child list, so one loop walks both. }
+          nchild := ArrSize(node);
+          FOR ci := 0 TO nchild - 1 DO
+            ScanReadonlyNode(ArrItem(node, ci));
+        END;
+      END;
+    END;
+  END;
+END;
+
+PROCEDURE ComputeReadonlyEffects(decl: ADRMEM);
+{ Fill the eff_* globals for one declaration. Callers that then recurse into
+  another routine's summary must copy the results out first. }
+VAR
+  i: INTEGER32;
+  body: ADRMEM;
+BEGIN
+  eff_nparams := ParamNamesOf(decl, eff_pname);
+  FOR i := 1 TO MAX_PARAMS DO
+  BEGIN
+    eff_written[i] := FALSE;
+    eff_escaped[i] := FALSE;
+  END;
+  eff_has_with := FALSE;
+  eff_ncalls := 0;
+  body := GetObj(decl, 'body');
+  IF (eff_nparams > 0) AND (NodeType(body) = 'Block') THEN
+    ScanReadonlyNode(GetObj(body, 'body'));
+END;
+
+FUNCTION LookupDevRoutine(name: Str255): INTEGER32;
+VAR
+  i, found: INTEGER32;
+BEGIN
+  found := 0;
+  FOR i := 1 TO dev_ro_count DO
+    IF dev_ro_name[i] = name THEN found := i;
+  LookupDevRoutine := found;
+END;
+
+PROCEDURE RegisterDevRoutines(decls: ADRMEM);
+{ Record every body-bearing device routine, nested ones included, before any
+  of them is lowered -- a kernel entry may call a helper declared later in
+  the source. Body-less (interface/imported/EXTERN) declarations are left out
+  so they fail closed, and a duplicate name is marked ambiguous rather than
+  guessed about. }
+VAR
+  i, n, idx: INTEGER32;
+  item, body: ADRMEM;
+  nt, nm: Str255;
+  pnames: ParamNameArr;
+BEGIN
+  n := ArrSize(decls);
+  FOR i := 0 TO n - 1 DO
+  BEGIN
+    item := ArrItem(decls, i);
+    nt := NodeType(item);
+    IF (nt = 'ProcDecl') OR (nt = 'FuncDecl') THEN
+    BEGIN
+      body := GetObj(item, 'body');
+      IF NodeType(body) = 'Block' THEN
+      BEGIN
+        nm := GetStr(item, 'name');
+        idx := LookupDevRoutine(nm);
+        IF idx <> 0 THEN dev_ro_dup[idx] := TRUE
+        ELSE IF dev_ro_count < MAX_DEV_ROUTINES THEN
+        BEGIN
+          dev_ro_count := dev_ro_count + 1;
+          dev_ro_name[dev_ro_count] := nm;
+          dev_ro_decl[dev_ro_count] := item;
+          dev_ro_nparams[dev_ro_count] := ParamNamesOf(item, pnames);
+          dev_ro_dup[dev_ro_count] := FALSE;
+          dev_ro_cached[dev_ro_count] := FALSE;
+          dev_ro_busy[dev_ro_count] := FALSE;
+        END;
+        RegisterDevRoutines(GetObj(body, 'decls'));
+      END;
+    END;
+  END;
+END;
+
+FUNCTION DeviceReadonlySummary(idx: INTEGER32; VAR ro: ParamVarArr): INTEGER32;
+{ The formals of dev_ro_decl[idx] proven readonly across analyzable local
+  helpers, returning the formal count and filling `ro`. Unknown callees,
+  body-less/imported routines, ambiguous names, WITH, and call cycles all
+  withhold the fact rather than guess. The result is per-parameter: a helper
+  may write one buffer and stay readonly for another. }
+VAR
+  i, e, n, ncalls, cidx, cn, fi: INTEGER32;
+  has_with: BOOLEAN;
+  written, escaped, callee_ro: ParamVarArr;
+  call_formal, call_argpos: ARRAY [1..MAX_CALL_EDGES] OF INTEGER32;
+  call_callee: ARRAY [1..MAX_CALL_EDGES] OF Str255;
+BEGIN
+  IF dev_ro_cached[idx] THEN
+  BEGIN
+    FOR i := 1 TO MAX_PARAMS DO ro[i] := dev_ro_mask[idx][i];
+    DeviceReadonlySummary := dev_ro_nparams[idx];
+  END
+  ELSE IF dev_ro_busy[idx] THEN
+  BEGIN
+    { Cycle: withhold everything, and do not cache -- the enclosing call in
+      progress owns the real answer. }
+    FOR i := 1 TO MAX_PARAMS DO ro[i] := FALSE;
+    DeviceReadonlySummary := dev_ro_nparams[idx];
+  END
+  ELSE
+  BEGIN
+    dev_ro_busy[idx] := TRUE;
+    ComputeReadonlyEffects(dev_ro_decl[idx]);
+    n := eff_nparams;
+    has_with := eff_has_with;
+    ncalls := eff_ncalls;
+    FOR i := 1 TO MAX_PARAMS DO
+    BEGIN
+      written[i] := eff_written[i];
+      escaped[i] := eff_escaped[i];
+    END;
+    FOR e := 1 TO ncalls DO
+    BEGIN
+      call_formal[e] := eff_call_formal[e];
+      call_callee[e] := eff_call_callee[e];
+      call_argpos[e] := eff_call_argpos[e];
+    END;
+    FOR i := 1 TO MAX_PARAMS DO
+      ro[i] := (i <= n) AND (NOT has_with) AND (NOT written[i]) AND (NOT escaped[i]);
+    FOR e := 1 TO ncalls DO
+    BEGIN
+      fi := call_formal[e];
+      IF ro[fi] THEN
+      BEGIN
+        cidx := LookupDevRoutine(call_callee[e]);
+        IF cidx = 0 THEN ro[fi] := FALSE
+        ELSE IF dev_ro_dup[cidx] THEN ro[fi] := FALSE
+        ELSE
+        BEGIN
+          cn := DeviceReadonlySummary(cidx, callee_ro);
+          IF call_argpos[e] >= cn THEN ro[fi] := FALSE
+          ELSE IF NOT callee_ro[call_argpos[e] + 1] THEN ro[fi] := FALSE;
+        END;
+      END;
+    END;
+    dev_ro_busy[idx] := FALSE;
+    dev_ro_cached[idx] := TRUE;
+    FOR i := 1 TO MAX_PARAMS DO dev_ro_mask[idx][i] := ro[i];
+    DeviceReadonlySummary := n;
+  END;
+END;
+
+PROCEDURE ApplyKernelParamAttrs(decl, fn: ADRMEM; n: INTEGER32; VAR tks: ParamTkArr);
+{ Attach the pointer-parameter facts LLVM cannot infer for a bare device
+  pointer: natural alignment, dereferenceable, readonly/nocapture, and (only
+  when explicitly opted into) noalias. Called for a real NVPTX kernel entry
+  only, so this is inert on the CPU-device parity path. }
+VAR
+  i, cn: INTEGER32;
+  idx: INTEGER32;
+  ro: ParamVarArr;
+  pointee: INTEGER;
+  attr: ADRMEM;
+BEGIN
+  FOR i := 1 TO MAX_PARAMS DO ro[i] := FALSE;
+  idx := 0;
+  FOR i := 1 TO dev_ro_count DO
+    IF dev_ro_decl[i] = decl THEN idx := i;
+  IF idx <> 0 THEN cn := DeviceReadonlySummary(idx, ro);
+  FOR i := 1 TO n DO
+    IF TypeKind(tks[i]) = TK_POINTER THEN
+    BEGIN
+      pointee := types[tks[i]].elem_tid;
+      { Natural alignment of the pointee: without it the NVPTX backend
+        annotates every pointer parameter `.ptr .global .align 1`, though the
+        element type is known and genuinely better aligned than that. }
+      attr := LLVMCreateEnumAttribute(ctx, align_kind_id, TypeAlignBytes(pointee));
+      LLVMAddAttributeAtIndex(fn, i, attr);
+      { dereferenceable(bytes): only for a statically sized pointee. A SUPER
+        ARRAY has no static extent, and nothing ties such a buffer to
+        whichever sibling parameter might carry its length, so no size is
+        claimed for one. }
+      IF (TypeKind(pointee) = TK_ARRAY) AND (NOT types[pointee].is_super) THEN
+      BEGIN
+        attr := LLVMCreateEnumAttribute(ctx, deref_kind_id, TypeSizeBytes(pointee));
+        LLVMAddAttributeAtIndex(fn, i, attr);
+      END;
+      IF ro[i] THEN
+      BEGIN
+        attr := LLVMCreateEnumAttribute(ctx, readonly_kind_id, 0);
+        LLVMAddAttributeAtIndex(fn, i, attr);
+        attr := LLVMCreateEnumAttribute(ctx, nocapture_kind_id, 0);
+        LLVMAddAttributeAtIndex(fn, i, attr);
+      END;
+      IF noalias_kernel_params THEN
+      BEGIN
+        attr := LLVMCreateEnumAttribute(ctx, noalias_kind_id, 0);
+        LLVMAddAttributeAtIndex(fn, i, attr);
+      END;
+    END;
+END;
+
 PROCEDURE CodegenRoutineDecl(decl: ADRMEM; is_func: BOOLEAN);
 VAR
   name: Str255;
@@ -4476,7 +5579,7 @@ VAR
   existing: INTEGER32;
   ridx: INTEGER32;
   has_block_body: BOOLEAN;
-  is_c: BOOLEAN;
+  is_c, is_exported_entry: BOOLEAN;
   agg_llvm_ty, byval_attr, align_attr: ADRMEM;
 BEGIN
   name := GetStr(decl, 'name');
@@ -4488,6 +5591,7 @@ BEGIN
     decl, so the routine table's own is_c (set once, at first declaration)
     is the source of truth once ridx is known; see below. }
   is_c := IsCForeignDecl(decl);
+  is_exported_entry := GetBool(decl, 'is_exported_entry');
 
   existing := LookupRoutine(name);
   IF existing <> 0 THEN
@@ -4598,6 +5702,15 @@ BEGIN
       fn := LLVMAddFunction(modl, MakeCStr(name), fnty);
     END;
 
+    { Reusing an init-declared function means the LLVM signature that call
+      sites must satisfy is the init block's, not the source declaration's.
+      Where the two disagree the recorded parameter types have to follow the
+      real function, or CoerceForAssign marshals every actual to the source
+      width and LLVM rejects the call. `malloc(size: CINT)` is the live case:
+      the init block declares C's size_t (i64) on this LP64 host, while every
+      self-hosting source spells the parameter CINT (i32). }
+    IF (name = 'malloc') AND (n = 1) THEN tks[1] := TK_INTEGER64;
+
     { Register the routine before codegen'ing its body -- direct
       self-recursion (Fact calling Fact) needs the routine table entry to
       already exist when the body's own FuncCall/ProcCallStmt nodes resolve
@@ -4641,6 +5754,15 @@ BEGIN
         END;
       END;
     END;
+  END;
+
+  { An exported DEVICE PROCEDURE becomes a launchable NVPTX entry. The
+    interface placeholder has no flag; the implementation declaration does. }
+  IF is_nvptx_device AND is_exported_entry THEN
+  BEGIN
+    LLVMSetFunctionCallConv(fn, 71); { LLVMCCallConv::PTX_Kernel }
+    ApplyKernelParamAttrs(decl, fn, n, tks);
+    ApplyLaunchBoundAttrs(decl, fn);
   END;
 
   { EXTERN/FORWARD placeholder: the function is declared (or was already,
@@ -4804,30 +5926,54 @@ VAR
   local_ifaces: ADRMEM;
   n_local_ifaces, li: INTEGER32;
   root_nt: Str255;
-  is_device_root, is_program: BOOLEAN;
+  is_device_root, is_program, is_implementation, saved_device: BOOLEAN;
   unit_decls, init_body: ADRMEM;
+  init_fnty, init_fn, init_bb: ADRMEM;
+  init_name, unit_name, device_triple: Str255;
+  device_triple_raw, emit_ptx_raw, ptx_cpu_raw, backend_raw: ADRMEM;
+  target_out_raw, target_err_out_raw, ptx_err_out_raw, ptx_buffer_out_raw: ADRMEM;
+  target_out, target_err_out, ptx_err_out, ptx_buffer_out: PAdr;
+  target_ref, target_machine, target_layout, ptx_buffer, ptx_cpu: ADRMEM;
+  emit_ptx: BOOLEAN;
+  unit_name_len, unit_name_i: INTEGER;
 
 BEGIN
+  expr_depth := 0;
+  stmt_depth := 0;
   root := ReadAllStdin;
   root_nt := NodeType(root);
   is_device_root := GetBool(root, 'is_device');
-
-  { DEVICE INTERFACE/DEVICE IMPLEMENTATION units (GPU/PTX codegen) are a much
-    larger, separate feature (device address spaces, PTX backend, kernel
-    launch ABI -- see the Python reference's codegen/*.py device paths) --
-    stub them out with a clear, explicit error rather than silently
-    mis-codegening them as ordinary host units. }
-  IF (root_nt = 'ImplementationUnit') AND is_device_root THEN
-    AbortWith('codegen: DEVICE IMPLEMENTATION units are not yet supported by the native code generator');
-  IF (root_nt = 'InterfaceUnit') AND is_device_root THEN
-    AbortWith('codegen: DEVICE INTERFACE units are not yet supported by the native code generator');
+  is_device_compiland := is_device_root;
+  is_nvptx_device := FALSE;
+  device_triple_raw := NIL;
+  emit_ptx_raw := getenv(MakeCStr('PASCAL_EMIT_PTX'));
+  emit_ptx := emit_ptx_raw <> NIL;
+  noalias_kernel_params := getenv(MakeCStr('PASCAL_NOALIAS_KERNEL_PARAMS')) <> NIL;
+  device_backend_cuda := FALSE;
+  backend_raw := getenv(MakeCStr('PASCAL_DEVICE_BACKEND'));
+  IF backend_raw <> NIL THEN
+    device_backend_cuda := CStrToStr255(backend_raw) = 'cuda';
+  IF is_device_compiland THEN
+  BEGIN
+    device_triple_raw := getenv(MakeCStr('PASCAL_DEVICE_TRIPLE'));
+    IF device_triple_raw <> NIL THEN
+    BEGIN
+      device_triple := CStrToStr255(device_triple_raw);
+      is_nvptx_device := device_triple = 'nvptx64-nvidia-cuda';
+    END;
+  END;
 
   is_program := root_nt = 'ProgramUnit';
-  IF (NOT is_program) AND (root_nt <> 'ImplementationUnit') THEN
+  is_implementation := root_nt = 'ImplementationUnit';
+  IF (NOT is_program) AND (root_nt <> 'ModuleUnit') AND
+     (root_nt <> 'InterfaceUnit') AND (NOT is_implementation) THEN
     AbortWith2('codegen: unsupported root unit kind: ', root_nt);
 
   ctx := LLVMContextCreate;
   modl := LLVMModuleCreateWithNameInContext(MakeCStr('pascal_program'), ctx);
+  IF is_nvptx_device THEN LLVMSetTarget(modl, device_triple_raw);
+  IF emit_ptx AND (NOT is_nvptx_device) THEN
+    AbortWith('codegen: PASCAL_EMIT_PTX requires a DEVICE compiland with PASCAL_DEVICE_TRIPLE=nvptx64-nvidia-cuda');
   i32ty := LLVMInt32TypeInContext(ctx);
   i16ty := LLVMInt16TypeInContext(ctx);
   i8ty := LLVMInt8TypeInContext(ctx);
@@ -4863,7 +6009,8 @@ BEGIN
   printf_fn := LLVMAddFunction(modl, MakeCStr('printf'), printf_fnty);
 
   param_arr := AllocPtrArray(1);
-  SetPtrArrayElem(param_arr, 0, i32ty);
+  { C malloc takes size_t; the supported native host ABI is LP64. }
+  SetPtrArrayElem(param_arr, 0, i64ty);
   malloc_fnty := LLVMFunctionType(i8ptrty, param_arr, 1, 0);
   malloc_fn := LLVMAddFunction(modl, MakeCStr('malloc'), malloc_fnty);
 
@@ -4879,8 +6026,40 @@ BEGIN
   memmove_fnty := LLVMFunctionType(i8ptrty, param_arr, 3, 0);
   memmove_fn := LLVMAddFunction(modl, MakeCStr('memmove'), memmove_fnty);
 
+  param_arr := AllocPtrArray(8);
+  SetPtrArrayElem(param_arr, 0, i8ptrty);
+  SetPtrArrayElem(param_arr, 1, i64ty);
+  SetPtrArrayElem(param_arr, 2, i64ty);
+  SetPtrArrayElem(param_arr, 3, i64ty);
+  SetPtrArrayElem(param_arr, 4, i64ty);
+  SetPtrArrayElem(param_arr, 5, i64ty);
+  SetPtrArrayElem(param_arr, 6, i64ty);
+  SetPtrArrayElem(param_arr, 7, LLVMPointerType(i8ptrty, 0));
+  { entry plus six geometry values plus argv: the CPU and CUDA shims share
+    this eight-parameter launch ABI. }
+  launch_fnty := LLVMFunctionType(voidty, param_arr, 8, 0);
+  launch_fn := LLVMAddFunction(modl, MakeCStr('pas_dev_launch'), launch_fnty);
+
+  { The two module-resolution steps ahead of it: cuModuleLoadData(registry,
+    ptx) and cuModuleGetFunction(module, name), both shaped as i8*(i8*, i8*).
+    The CPU and CUDA shims implement the same three-call path. }
+  param_arr := AllocPtrArray(2);
+  SetPtrArrayElem(param_arr, 0, i8ptrty);
+  SetPtrArrayElem(param_arr, 1, i8ptrty);
+  module_load_fnty := LLVMFunctionType(i8ptrty, param_arr, 2, 0);
+  module_load_fn := LLVMAddFunction(modl, MakeCStr('pas_dev_module_load'), module_load_fnty);
+  param_arr := AllocPtrArray(2);
+  SetPtrArrayElem(param_arr, 0, i8ptrty);
+  SetPtrArrayElem(param_arr, 1, i8ptrty);
+  module_getfn_fnty := LLVMFunctionType(i8ptrty, param_arr, 2, 0);
+  module_getfn_fn := LLVMAddFunction(modl, MakeCStr('pas_dev_module_get_function'), module_getfn_fnty);
+
   byval_kind_id := LLVMGetEnumAttributeKindForName(MakeCStr('byval'), 5);
   align_kind_id := LLVMGetEnumAttributeKindForName(MakeCStr('align'), 5);
+  readonly_kind_id := LLVMGetEnumAttributeKindForName(MakeCStr('readonly'), 8);
+  nocapture_kind_id := LLVMGetEnumAttributeKindForName(MakeCStr('nocapture'), 9);
+  noalias_kind_id := LLVMGetEnumAttributeKindForName(MakeCStr('noalias'), 7);
+  deref_kind_id := LLVMGetEnumAttributeKindForName(MakeCStr('dereferenceable'), 15);
 
   param_arr := AllocPtrArray(3);
   SetPtrArrayElem(param_arr, 0, i8ptrty);
@@ -4980,6 +6159,10 @@ BEGIN
                  `types` table entries -- the first RegisterType call must
                  hand out id 14, not 1. }
   nfields := 0;
+  dev_ro_count := 0;
+  nkernels := 0;
+  klaunch_registry_gv := NIL;
+  device_ptx_gv := NIL;
 
   { local_interfaces: InterfaceUnit blocks spliced in ahead of the PROGRAM
     keyword via $INCLUDE (e.g. jsonutil.inc's "INTERFACE; UNIT jsonutil(...)
@@ -4993,8 +6176,23 @@ BEGIN
   BEGIN
     n_local_ifaces := ArrSize(local_ifaces);
     FOR li := 0 TO n_local_ifaces - 1 DO
+    BEGIN
+      { A DEVICE INTERFACE spliced into a host compiland (the shape a host
+        PROGRAM gets from `USES vadd (add)`) must be lowered in *device*
+        context, or an ADS(GLOBAL) OF T parameter would be rejected outright
+        here while the separately compiled kernel takes an address-space
+        pointer. The device triple only ever comes from a DEVICE root, so a
+        host compiland lowers these against the CPU device: every ADS space
+        collapses to address space zero, which is exactly the flat pointer
+        the CPU shim's kernel definition expects. }
+      saved_device := is_device_compiland;
+      is_device_compiland := is_device_compiland OR
+        GetBool(ArrItem(local_ifaces, li), 'is_device');
       CodegenDeclList(GetObj(ArrItem(local_ifaces, li), 'decls'));
+      is_device_compiland := saved_device;
+    END;
   END;
+  CheckUsesClauses(root, local_ifaces);
 
   IF is_program THEN
   BEGIN
@@ -5007,38 +6205,65 @@ BEGIN
     body := GetObj(block, 'body');
     CodegenStmtArray(body);
 
+    EmitLaunchRegistry;
     ret_val := LLVMBuildRet(builder, LLVMConstInt(i32ty, 0, 0));
   END
   ELSE
   BEGIN
-    { ImplementationUnit (host): unlike a $INCLUDEd unit's INTERFACE header
-      (spliced separately into root.local_interfaces, and already walked by
-      the unconditional loop above -- which for a self-contained one-file
-      UNIT like jsonutil.pas is this SAME unit's own INTERFACE section,
-      registering its Str255/CharBuf256/PCharBuf TYPE aliases and forward
-      routine signatures already), root.interface here is that identical
-      content restated for pairing purposes -- NOT a second copy to codegen
-      again (doing so double-registers the same TYPE names and aborts with
-      "duplicate type declaration"). Just codegen the IMPLEMENTATION
-      section's own decls; the interface's forward FuncDecl/ProcDecl
-      placeholders get filled in via CodegenRoutineDecl's existing
-      FORWARD-reconciliation path when the impl's same-named decl arrives. }
+    { MODULE and INTERFACE compilands are library objects with root-level
+      declarations. An IMPLEMENTATION's matching interface was already
+      walked from local_interfaces above, so its declarations reconcile with
+      those forward placeholders instead of registering duplicates. }
     unit_decls := GetObj(root, 'decls');
+    { The kernel-entry readonly summary needs every locally defined device
+      routine registered before the first body is lowered -- an entry may call
+      a helper declared later in the source. }
+    IF is_nvptx_device THEN RegisterDevRoutines(unit_decls);
     CodegenDeclList(unit_decls);
 
-    { UNIT initialization (a BEGIN...END body run once at program startup,
-      e.g. to set up module-level state) has no native codegen support yet
-      -- stub it out with an explicit error instead of silently dropping it,
-      matching the DEVICE-unit stubs above. jsonutil.pas has an empty
-      init_body, so this doesn't block self-hosting today. }
+    { Only an ordinary IMPLEMENTATION has startup code. DEVICE units have no
+      host startup context; reject an initializer rather than emitting a host
+      function into a device object. }
     init_body := GetObj(root, 'init_body');
-    IF (init_body <> NIL) AND (ArrSize(init_body) > 0) THEN
-      AbortWith('codegen: UNIT initialization bodies are not yet supported by the native code generator');
+    IF is_implementation AND (init_body <> NIL) AND (ArrSize(init_body) > 0) THEN
+    BEGIN
+      IF is_device_root THEN
+        AbortWith('codegen: DEVICE IMPLEMENTATION units cannot have initialization bodies');
+      init_name := 'pascal_init_';
+      unit_name := GetStr(root, 'name');
+      { LLVM symbol spelling is case-sensitive; use the same lower-case
+        unit suffix as the reference so separately built objects agree. }
+      unit_name_len := ORD(unit_name[0]);
+      FOR unit_name_i := 1 TO unit_name_len DO
+        IF (unit_name[unit_name_i] >= 'A') AND (unit_name[unit_name_i] <= 'Z') THEN
+          unit_name[unit_name_i] := CHR(ORD(unit_name[unit_name_i]) + 32);
+      CONCAT(init_name, unit_name);
+      init_fnty := LLVMFunctionType(i32ty, NIL, 0, 0);
+      init_fn := LLVMAddFunction(modl, MakeCStr(init_name), init_fnty);
+      init_bb := LLVMAppendBasicBlockInContext(ctx, init_fn, MakeCStr('entry'));
+      LLVMPositionBuilderAtEnd(builder, init_bb);
+      cur_fn := init_fn;
+      cur_func_name := '';
+      CodegenStmtArray(init_body);
+      IF LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) = NIL THEN
+        ret_val := LLVMBuildRet(builder, LLVMConstInt(i32ty, 0, 0));
+    END;
   END;
 
   verify_msg_raw := malloc(8);
   verify_msg := verify_msg_raw;
   verify_msg^ := NIL;
+  { LLVMVerifyModule is a necessary gate, not a sufficient one: it catches
+    malformed IR (type errors, malformed instructions, dominance violations)
+    but not miscompilation. A module can verify clean and still produce wrong
+    output -- the by-value-aggregate ABI mismatch and the EXTERN uniquification
+    bug (malloc.1/free.2, where a second LLVMAddFunction silently uniquified
+    to a symbol nothing links against) were both verifier-clean but wrong, and
+    each was found only by clang-linking the output and running it. Any new
+    codegen path must be validated by linking the emitted IR against
+    libpascalrt.a and running it on real input, not by verification alone;
+    tests/test_native_parity.py::TestNativeLinkAndRun is the runtime gate that
+    enforces this for the self-hosting codegen paths. }
   ok := LLVMVerifyModule(modl, LLVMAbortProcessAction, verify_msg_raw);
   IF ok <> 0 THEN
   BEGIN
@@ -5047,6 +6272,58 @@ BEGIN
     exit(1);
   END;
 
-  ir_text := LLVMPrintModuleToString(modl);
-  res_c := puts(ir_text);
+  IF emit_ptx THEN
+  BEGIN
+    { This is deliberately a target-machine emission mode, not a shell-out to
+      llc: the native compiler owns the complete LLVM path just like the
+      Python driver. LLVMAssemblyFile is enum value 0. }
+    LLVMInitializeNVPTXTargetInfo;
+    LLVMInitializeNVPTXTarget;
+    LLVMInitializeNVPTXTargetMC;
+    LLVMInitializeNVPTXAsmPrinter;
+    target_out_raw := malloc(8);
+    target_err_out_raw := malloc(8);
+    target_out := target_out_raw;
+    target_err_out := target_err_out_raw;
+    target_out^ := NIL;
+    target_err_out^ := NIL;
+    ok := LLVMGetTargetFromTriple(device_triple_raw, target_out_raw, target_err_out_raw);
+    IF ok <> 0 THEN
+    BEGIN
+      res_c := puts(MakeCStr('codegen: cannot select NVPTX target:'));
+      res_c := puts(target_err_out^);
+      exit(1);
+    END;
+    target_ref := target_out^;
+    ptx_cpu_raw := getenv(MakeCStr('PASCAL_PTX_CPU'));
+    IF ptx_cpu_raw = NIL THEN ptx_cpu := MakeCStr('sm_70')
+    ELSE ptx_cpu := ptx_cpu_raw;
+    { LLVMCodeGenLevelNone, LLVMRelocDefault, LLVMCodeModelDefault. }
+    target_machine := LLVMCreateTargetMachine(target_ref, device_triple_raw, ptx_cpu, MakeCStr(''), 0, 0, 0);
+    IF target_machine = NIL THEN AbortWith('codegen: failed to create NVPTX target machine');
+    target_layout := LLVMCreateTargetDataLayout(target_machine);
+    LLVMSetModuleDataLayout(modl, target_layout);
+    ptx_err_out_raw := malloc(8);
+    ptx_buffer_out_raw := malloc(8);
+    ptx_err_out := ptx_err_out_raw;
+    ptx_buffer_out := ptx_buffer_out_raw;
+    ptx_err_out^ := NIL;
+    ptx_buffer_out^ := NIL;
+    ok := LLVMTargetMachineEmitToMemoryBuffer(target_machine, modl, 0, ptx_err_out_raw, ptx_buffer_out_raw);
+    IF ok <> 0 THEN
+    BEGIN
+      res_c := puts(MakeCStr('codegen: NVPTX assembly emission failed:'));
+      res_c := puts(ptx_err_out^);
+      exit(1);
+    END;
+    ptx_buffer := ptx_buffer_out^;
+    res_c := puts(LLVMGetBufferStart(ptx_buffer));
+    LLVMDisposeMemoryBuffer(ptx_buffer);
+    LLVMDisposeTargetMachine(target_machine);
+  END
+  ELSE
+  BEGIN
+    ir_text := LLVMPrintModuleToString(modl);
+    res_c := puts(ir_text);
+  END;
 END.
