@@ -299,33 +299,8 @@ class TypesMapMixin:
             # param type and, for a literal source, build the wire format
             # (length byte + chars, or blank-padded chars) properly instead.
             if target_ast_type is not None and isinstance(src_expr, StringLiteral):
-                is_str, max_len, is_lstring = self.get_string_type_info(target_ast_type)
-                if is_str:
-                    chars_ptr, length = self.get_string_chars_and_len(src_expr)
-                    # entry_alloca, not a raw self.builder.alloca: this runs
-                    # at whatever call site is coercing the literal (often
-                    # inside a loop), and a plain alloca there is a genuine
-                    # runtime stack-pointer decrement on every execution --
-                    # LLVM only reclaims it at function return, so a call
-                    # site executed thousands of times (e.g. once per token
-                    # while reading a token stream) exhausts the stack. An
-                    # entry-block alloca is the same slot reused every time.
-                    buf = self.shared_temp_slot(target_type, 'str_lit_coerce_buf')
-                    zero = ir.Constant(ir.IntType(32), 0)
-                    one = ir.Constant(ir.IntType(32), 1)
-                    length_64 = self.builder.zext(length, ir.IntType(64))
-                    if is_lstring:
-                        dest_chars = self.builder.gep(buf, [zero, one])
-                        self.builder.call(self.memcpy_func(), [dest_chars, chars_ptr, length_64])
-                        len_ptr = self.builder.gep(buf, [zero, zero])
-                        self.builder.store(self.builder.trunc(length, ir.IntType(8)), len_ptr)
-                    else:
-                        dest_chars = self.builder.gep(buf, [zero, zero])
-                        self.builder.call(self.memcpy_func(), [dest_chars, chars_ptr, length_64])
-                        pad_start = self.builder.gep(buf, [zero, length])
-                        pad_len = self.builder.sub(ir.Constant(ir.IntType(32), max_len), length)
-                        pad_len_64 = self.builder.zext(pad_len, ir.IntType(64))
-                        self.builder.call(self.memset_func(), [pad_start, ir.Constant(ir.IntType(32), 0x20), pad_len_64])
+                buf = self.string_literal_wire_ptr(target_type, target_ast_type, src_expr)
+                if buf is not None:
                     return self.builder.load(buf)
             return self.builder.load(self.builder.bitcast(value, target_type.as_pointer()))
 
@@ -404,6 +379,51 @@ class TypesMapMixin:
                 return self.builder.fpext(value, target_type)
             return self.builder.fptrunc(value, target_type)
         return value
+
+    def string_literal_wire_ptr(self, target_type: ir.Type, target_ast_type, expr: StringLiteral) -> Optional[ir.Value]:
+        """Build an LSTRING/STRING wire-format buffer for a bare string-literal
+        argument to a value-mode string parameter, returning a pointer to it
+        (``target_type``-shaped), or None if ``target_ast_type`` isn't a
+        genuine string-shaped Pascal type.
+
+        A StringLiteral lowers (via codegen_expr) to a plain null-terminated
+        char global with no length prefix, so bitcast-loading it straight into
+        an LSTRING(n)/STRING(n) parameter would misinterpret the literal's
+        first byte as the length byte (LSTRING) or skip the blank-padding
+        (STRING) -- this builds the real wire format instead. Shared by
+        coerce_arg (the plain scalar/VAR call-argument path) and
+        _c_abi_arg_ptr (the byval/coerced aggregate-argument path used by both
+        [C] FOREIGN and plain-Pascal routines), since a bare literal argument
+        to a value-mode string parameter can reach either.
+        """
+        is_str, max_len, is_lstring = self.get_string_type_info(target_ast_type)
+        if not is_str:
+            return None
+        chars_ptr, length = self.get_string_chars_and_len(expr)
+        # entry_alloca, not a raw self.builder.alloca: this runs at whatever
+        # call site is coercing the literal (often inside a loop), and a plain
+        # alloca there is a genuine runtime stack-pointer decrement on every
+        # execution -- LLVM only reclaims it at function return, so a call
+        # site executed thousands of times (e.g. once per token while reading
+        # a token stream) exhausts the stack. An entry-block alloca is the
+        # same slot reused every time.
+        buf = self.shared_temp_slot(target_type, 'str_lit_coerce_buf')
+        zero = ir.Constant(ir.IntType(32), 0)
+        one = ir.Constant(ir.IntType(32), 1)
+        length_64 = self.builder.zext(length, ir.IntType(64))
+        if is_lstring:
+            dest_chars = self.builder.gep(buf, [zero, one])
+            self.builder.call(self.memcpy_func(), [dest_chars, chars_ptr, length_64])
+            len_ptr = self.builder.gep(buf, [zero, zero])
+            self.builder.store(self.builder.trunc(length, ir.IntType(8)), len_ptr)
+        else:
+            dest_chars = self.builder.gep(buf, [zero, zero])
+            self.builder.call(self.memcpy_func(), [dest_chars, chars_ptr, length_64])
+            pad_start = self.builder.gep(buf, [zero, length])
+            pad_len = self.builder.sub(ir.Constant(ir.IntType(32), max_len), length)
+            pad_len_64 = self.builder.zext(pad_len, ir.IntType(64))
+            self.builder.call(self.memset_func(), [pad_start, ir.Constant(ir.IntType(32), 0x20), pad_len_64])
+        return buf
 
     def to_bool(self, cond: ir.Value) -> ir.Value:
         """Reduce a condition value to an i1 for a branch.

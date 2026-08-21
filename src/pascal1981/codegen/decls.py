@@ -955,7 +955,8 @@ class DeclsMixin:
                                                                         return_llvm,
                                                                         is_variadic=is_variadic,
                                                                         flat_sign_attrs=flat_sign_attrs,
-                                                                        ret_sign_attr=ret_sign_attr)
+                                                                        ret_sign_attr=ret_sign_attr,
+                                                                        flat_ast_types=flat_ast_types)
 
         func_type = ir.FunctionType(ir_ret, ir_args, var_arg=is_variadic)
         func = ir.Function(self.module, func_type, name=decl.name)
@@ -1020,10 +1021,26 @@ class DeclsMixin:
             # i32-returning shape (a harmless internal convention).
             kernel_entry = self._is_kernel_entry(decl)
             ret_ll = ir.VoidType() if kernel_entry else ir.IntType(32)
-        func_type = ir.FunctionType(ret_ll, param_types)
+
+        # Plain-Pascal by-value aggregate parameters/returns now use the same
+        # explicit SysV byval/sret/coerced classification as [C] FOREIGN
+        # routines (build_c_abi_plan), instead of crossing the LLVM call
+        # boundary as first-class aggregate values. A PROCEDURE's own return
+        # (the vintage i32/void convention above, never a Pascal aggregate)
+        # is untouched -- passing return_llvm=None below keeps ret_kind
+        # 'void' and leaves ret_ll alone; only ir_args (parameter shape)
+        # applies to a PROCEDURE's func_type.
+        ir_args, ir_ret, _sret, arg_attrs, plan = self.build_c_abi_plan(decl,
+                                                                        param_types,
+                                                                        flat_modes,
+                                                                        return_type if is_function else None,
+                                                                        is_variadic=False,
+                                                                        flat_ast_types=flat_ast_types)
+        func_type = ir.FunctionType(ir_ret if is_function else ret_ll, ir_args)
 
         attrs = {attr.name.upper() for attr in getattr(decl, 'attributes', [])}
         existing = self.scope.lookup(decl.name) if not is_function else None
+        newly_created = False
         if existing and isinstance(existing.llvm_value, ir.Function):
             func = existing.llvm_value
             if func.function_type != func_type:
@@ -1033,6 +1050,7 @@ class DeclsMixin:
         else:
             # Create function
             func = ir.Function(self.module, func_type, name=decl.name)
+            newly_created = True
         # Directive ('extern') and attributes ([PUBLIC]) both request external linkage.
         # Previously the eager extern dump masked a missing `directive` check here:
         # pre-registered externs already had linkage='external', so the condition
@@ -1042,8 +1060,22 @@ class DeclsMixin:
         if attrs.intersection({'PUBLIC', 'EXTERN', 'EXTERNAL'}) or _directive.upper() in ('EXTERN', 'EXTERNAL', 'PUBLIC'):
             func.linkage = 'external'
         self._apply_kernel_entry(decl, func)
+        if newly_created:
+            # byval(ty)/align (and sret(ty)/noalias/align for a MEMORY-class
+            # FUNCTION return) at the DECLARATION side, matching the [C]
+            # path (_codegen_c_abi_decl) -- only on first creation, exactly
+            # like a [C] EXTERN's attrs are set once and persist across a
+            # later FORWARD-reuse pass (this function object is the same
+            # ir.Function both times).
+            for idx, (names, align) in arg_attrs.items():
+                dst = func.args[idx].attributes
+                for a in names:
+                    dst.add(a)
+                if align is not None:
+                    dst.align = align
         self.proc_param_modes[decl.name.lower()] = flat_modes
         self.proc_param_types[decl.name.lower()] = flat_ast_types
+        self.c_abi_plans[decl.name.lower()] = plan
         self.scope.define(decl.name, func, decl.return_type if is_function else None)
 
         # If no body, it's extern/forward
@@ -1062,32 +1094,75 @@ class DeclsMixin:
         self.current_function_pascal_name = decl.name if is_function else None
         self.scope = Scope(parent=prev_scope)
 
-        # Bind parameters to the scope
+        # Bind parameters to the scope. args_iter walks LLVM arguments, which
+        # can outnumber Pascal parameters: a hidden sret pointer (consumed
+        # just below, before this loop, when the function's own return is
+        # MEMORY-class) and a COERCED aggregate parameter (which arrives as
+        # one LLVM argument per eightbyte, reconstructed into real storage
+        # here) both shift/expand this correspondence versus a 1:1 walk.
         args_iter = iter(func.args)
-        for param in effective_decl.params:
-            for name in param.names:
+        if is_function and plan.ret_kind == 'memory':
+            sret_ptr = next(args_iter)
+        flat_param_specs = [(param, name) for param in effective_decl.params for name in param.names]
+        i32 = ir.IntType(32)
+        for (param, name), pp in zip(flat_param_specs, plan.params):
+            is_param_flag = param.mode not in {'VAR', 'VARS', 'CONST', 'CONSTS'}
+            if pp.kind == 'coerced':
+                # Reverse of the caller's coerced marshalling (codegen_c_abi_call):
+                # write each incoming register piece back through the coerced
+                # piece struct laid over real aggregate-typed storage, so the
+                # rest of codegen sees an ordinary aggregate local. Over-aligned
+                # to a full eightbyte for the same reason the caller's own
+                # coerced storage is (a piece store can be wider than the
+                # aggregate's natural alignment).
+                slot = self.entry_alloca(pp.agg.agg_type, name=name + '_alloca')
+                slot.align = 8
+                typed = self.builder.bitcast(slot, ir.PointerType(pp.agg.coerced_struct()))
+                for pi in range(len(pp.agg.pieces)):
+                    piece_val = next(args_iter)
+                    gep = self.builder.gep(typed, [i32(0), i32(pi)], inbounds=True)
+                    self.builder.store(piece_val, gep)
+                self.scope.define(name, slot, param.type_expr, is_parameter=is_param_flag)
+            else:
+                # 'ref' (VAR/CONST, a pointer), 'scalar', and 'memory' (byval
+                # aggregate, also a pointer -- the caller already made a
+                # private copy, per SysV byval semantics, so it is used
+                # directly as this parameter's own storage, exactly like a
+                # 'ref' pointer) all bind the single incoming LLVM argument
+                # as-is; only 'coerced' needs reconstruction.
                 arg = next(args_iter)
                 arg.name = name
-                if isinstance(arg.type, (ir.ArrayType, ir.LiteralStructType)):
-                    param_alloca = self.entry_alloca(arg.type, name=name + '_alloca')
-                    self.builder.store(arg, param_alloca)
-                    self.scope.define(name, param_alloca, param.type_expr, is_parameter=param.mode not in {'VAR', 'VARS', 'CONST', 'CONSTS'})
-                else:
-                    self.scope.define(name, arg, param.type_expr, is_parameter=param.mode not in {'VAR', 'VARS', 'CONST', 'CONSTS'})
+                self.scope.define(name, arg, param.type_expr, is_parameter=is_param_flag)
 
         if is_function:
-            # Allocate space for return value
-            return_alloca = self.entry_alloca(return_type, name='return_value')
-            self.scope.define(decl.name, return_alloca, decl.return_type)
-            if isinstance(return_type, ir.PointerType):
-                init_val = ir.Constant(return_type, None)
-            elif isinstance(return_type, (ir.FloatType, ir.DoubleType)):
-                init_val = ir.Constant(return_type, 0.0)
-            elif isinstance(return_type, (ir.ArrayType, ir.LiteralStructType)):
-                init_val = ir.Constant(return_type, ir.Undefined)
+            if plan.ret_kind == 'memory':
+                # The hidden sret pointer already points at the caller's own
+                # result storage -- use it directly, exactly like a byval
+                # parameter uses its incoming pointer directly, so every
+                # RETURN/function-name-assignment site stores straight into
+                # the caller's buffer with no extra copy. Left uninitialized
+                # (no default-zero store), matching the prior aggregate
+                # convention below (ir.Undefined) -- neither promises a
+                # zeroed default if the body takes no assignment/RETURN path.
+                return_alloca = sret_ptr
+                self.scope.define(decl.name, return_alloca, decl.return_type)
+            elif plan.ret_kind == 'coerced':
+                return_alloca = self.entry_alloca(plan.ret_agg.agg_type, name='return_value')
+                return_alloca.align = 8
+                self.scope.define(decl.name, return_alloca, decl.return_type)
+                # Left uninitialized, matching the prior aggregate ir.Undefined
+                # convention (no all-zero default guarantee).
             else:
-                init_val = ir.Constant(return_type, 0)
-            self.builder.store(init_val, return_alloca)
+                # Allocate space for return value
+                return_alloca = self.entry_alloca(return_type, name='return_value')
+                self.scope.define(decl.name, return_alloca, decl.return_type)
+                if isinstance(return_type, ir.PointerType):
+                    init_val = ir.Constant(return_type, None)
+                elif isinstance(return_type, (ir.FloatType, ir.DoubleType)):
+                    init_val = ir.Constant(return_type, 0.0)
+                else:
+                    init_val = ir.Constant(return_type, 0)
+                self.builder.store(init_val, return_alloca)
 
         # Codegen body
         for inner_decl in decl.body.decls:
@@ -1099,7 +1174,25 @@ class DeclsMixin:
 
         # Default return / function result
         if not self.builder.block.is_terminated:
-            if is_function:
+            if is_function and plan.ret_kind == 'memory':
+                # Every RETURN/function-name-assignment already stored
+                # straight into the caller's sret buffer (return_alloca IS
+                # that pointer) -- nothing left to load, and this function's
+                # LLVM return type is void.
+                self.builder.ret_void()
+            elif is_function and plan.ret_kind == 'coerced':
+                # Reverse of the COERCED parameter prologue: view the
+                # (over-aligned) aggregate storage as the coerced register
+                # layout and read that layout back out as one value, ready
+                # to `ret` in one or two registers -- mirrors the caller
+                # side's own coerced-return reconstruction
+                # (codegen_c_abi_call) in the opposite direction.
+                agg = plan.ret_agg
+                coerced_ty = agg.pieces[0] if len(agg.pieces) == 1 else agg.coerced_struct()
+                typed = self.builder.bitcast(return_alloca, ir.PointerType(coerced_ty))
+                result = self.builder.load(typed)
+                self.builder.ret(result)
+            elif is_function:
                 result = self.builder.load(return_alloca)
                 self.builder.ret(result)
             elif isinstance(ret_ll, ir.VoidType):
