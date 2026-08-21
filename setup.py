@@ -137,7 +137,21 @@ class BuildPyWithRuntime(_build_py):
                     for stale in (dst, os.path.join(self.build_lib, "pascal1981", archive)):
                         if os.path.exists(stale):
                             print(f"* removing stale {stale}", file=sys.stderr)
-                            os.remove(stale)
+                            try:
+                                os.remove(stale)
+                            except PermissionError as exc:
+                                print(
+                                    f"error: cannot remove stale archive {stale}: {exc}\n"
+                                    "This is a leftover file from an earlier build (often one "
+                                    "run under a different user, e.g. via sudo), and its "
+                                    "containing directory isn't writable by the current user. "
+                                    f"Fix the permissions or delete it manually, e.g.:\n"
+                                    f"    rm -f {stale}\n"
+                                    "or remove the whole stale build/ directory and retry:\n"
+                                    "    rm -rf build",
+                                    file=sys.stderr,
+                                )
+                                sys.exit(1)
                 print(f"* skipping missing optional runtime archive {src}", file=sys.stderr)
                 continue
 
