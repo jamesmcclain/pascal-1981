@@ -329,10 +329,28 @@ class CAbiMixin:
             if wire_ptr is not None:
                 return wire_ptr
         ptr = None
-        if isinstance(arg_expr, Identifier):
-            ptr = self.resolve_designator_ptr(Designator(arg_expr.name, []))
-        elif isinstance(arg_expr, Designator):
-            ptr = self.resolve_designator_ptr(arg_expr)
+        if isinstance(arg_expr, (Identifier, Designator)):
+            # A bare niladic-call Identifier/Designator (vintage Pascal
+            # permits omitting the empty argument list, e.g. `StringEqual
+            # (CurKind, target_k)`) must not be resolved as a plain
+            # designator: that would return the ir.Function value itself,
+            # which then gets bitcast to the aggregate pointer type and
+            # memcpy'd as if it were the aggregate's storage -- reading raw
+            # bytes starting at the function's code address instead of
+            # actually calling it. Detect and call it, same as
+            # codegen_expr's Identifier/Designator branches and
+            # get_string_chars_and_len already do.
+            symbol = self.scope.lookup(arg_expr.name)
+            is_bare_func_ref = bool(symbol and isinstance(symbol.llvm_value, ir.Function) and not self.proc_param_modes.get(arg_expr.name.lower()))
+            if is_bare_func_ref:
+                from ..ast_nodes import FuncCall
+                val = self.codegen_func_call(FuncCall(arg_expr.name, []))
+                ptr = self.entry_alloca(val.type)
+                self.builder.store(val, ptr)
+            elif isinstance(arg_expr, Identifier):
+                ptr = self.resolve_designator_ptr(Designator(arg_expr.name, []))
+            else:
+                ptr = self.resolve_designator_ptr(arg_expr)
         if ptr is None:
             val = self.codegen_expr(arg_expr)
             ptr = self.entry_alloca(val.type)
