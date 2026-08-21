@@ -262,18 +262,27 @@ class BeautifyPreflightTests(unittest.TestCase):
         # is touched), isolating this test to yapf alone.
         isort_abs = shutil.which('isort')
         self.assertIsNotNone(isort_abs, 'isort must be on PATH for this test to isolate yapf')
-        yapf_abs = shutil.which('yapf')
-        self.assertIsNotNone(yapf_abs, 'yapf must be on PATH to strip it')
+        self.assertIsNotNone(shutil.which('yapf'), 'yapf must be on PATH to strip it')
 
         fakebin = Path(self._tmp.name) / 'fakebin'
         fakebin.mkdir(exist_ok=True)
         (fakebin / 'isort').write_text(f'#!/usr/bin/env bash\nexec {isort_abs!r} "$@"\n')
         (fakebin / 'isort').chmod(0o755)
 
+        # Resolve bash to an absolute path up front, and strip EVERY PATH
+        # directory that resolves yapf, not just the first shutil.which
+        # reports: PATH commonly lists a directory more than once (e.g. via
+        # a merged-usr symlink), and stripping only one hit would leave
+        # yapf still reachable through the other.
+        bash_abs = shutil.which('bash')
+        parts = os.environ.get('PATH', '').split(os.pathsep)
+        while shutil.which('yapf', path=os.pathsep.join(parts)):
+            hit = os.path.dirname(shutil.which('yapf', path=os.pathsep.join(parts)))
+            parts = [p for p in parts if p != hit]
+
         env = dict(os.environ)
-        parts = [p for p in env.get('PATH', '').split(os.pathsep) if p != os.path.dirname(yapf_abs)]
         env['PATH'] = f"{fakebin}{os.pathsep}" + os.pathsep.join(parts)
-        r = subprocess.run(['bash', str(self.repo / 'scripts' / 'beautify.sh')], cwd=self.repo, capture_output=True, text=True, env=env, timeout=60)
+        r = subprocess.run([bash_abs, str(self.repo / 'scripts' / 'beautify.sh')], cwd=self.repo, capture_output=True, text=True, env=env, timeout=60)
         self.assertNotEqual(r.returncode, 0)
         self.assertIn('yapf', r.stderr)
         self.assertIn('not found on PATH', r.stderr)
