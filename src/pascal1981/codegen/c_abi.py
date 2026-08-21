@@ -385,6 +385,13 @@ class CAbiMixin:
 
         if plan.ret_kind == 'memory':
             sret_slot = self.entry_alloca(plan.ret_agg.agg_type)
+            # The sret attribute below promises ret_agg.align to the callee;
+            # llvmlite's default alloca alignment for this IR type is not
+            # guaranteed to satisfy that, so force it explicitly. Leaving
+            # this unset lets the backend trust the attribute's alignment
+            # for wide/vectorized accesses against memory that isn't
+            # actually aligned that way.
+            sret_slot.align = plan.ret_agg.align
             aa = ir.ArgumentAttributes()
             aa.add('sret')
             aa.add('noalias')
@@ -406,6 +413,11 @@ class CAbiMixin:
             elif pp.kind == 'memory':
                 src = self._c_abi_arg_ptr(expr, pp.agg.agg_type, ast_type=pp.ast_type)
                 tmp = self.entry_alloca(pp.agg.agg_type)
+                # Same reasoning as sret_slot above: the byval attribute
+                # promises pp.agg.align to the callee, so force it on the
+                # temp actually handed over rather than leaving it at
+                # llvmlite's default alloca alignment.
+                tmp.align = pp.agg.align
                 self._c_abi_memcpy(tmp, src, pp.agg.size)
                 aa = ir.ArgumentAttributes()
                 aa.add('byval')
