@@ -130,7 +130,11 @@ class StmtsMixin:
             if (self.current_function_pascal_name and expr.name.lower() == self.current_function_pascal_name.lower() and not self.proc_param_types.get(expr.name.lower())):
                 return True
             symbol = self.scope.lookup(expr.name)
-            return bool(symbol and isinstance(symbol.llvm_value, ir.Function) and len(symbol.llvm_value.function_type.args) == 0)
+            # "Zero-argument" is checked against proc_param_modes (the Pascal
+            # parameter list), not the LLVM function's own arg count: a
+            # MEMORY-class aggregate-returning niladic FUNCTION carries a
+            # hidden sret argument despite having zero Pascal parameters.
+            return bool(symbol and isinstance(symbol.llvm_value, ir.Function) and not self.proc_param_modes.get(expr.name.lower()))
         return False
 
     def codegen_assign_stmt(self, stmt: AssignStmt) -> None:
@@ -1020,10 +1024,25 @@ class StmtsMixin:
         """
         ret_t = self.current_function.function_type.return_type
         if isinstance(ret_t, ir.VoidType):
+            # Covers both a void PROCEDURE/kernel entry and a MEMORY-class
+            # aggregate FUNCTION return: for the latter, every
+            # RETURN/function-name-assignment already stored straight into
+            # the caller's sret buffer, so there is nothing left to load.
             self.builder.ret_void()
         elif self.current_function_pascal_name is not None:
             symbol = self.scope.lookup(self.current_function_pascal_name)
-            result = self.builder.load(symbol.llvm_value)
+            plan = self.c_abi_plans.get(self.current_function_pascal_name.lower())
+            if plan is not None and plan.ret_kind == 'coerced':
+                # Mirror the coerced-return epilogue: view the aggregate
+                # storage as the coerced register layout and read that back
+                # out as one value, matching this function's declared
+                # (coerced) LLVM return type.
+                agg = plan.ret_agg
+                coerced_ty = agg.pieces[0] if len(agg.pieces) == 1 else agg.coerced_struct()
+                typed = self.builder.bitcast(symbol.llvm_value, ir.PointerType(coerced_ty))
+                result = self.builder.load(typed)
+            else:
+                result = self.builder.load(symbol.llvm_value)
             self.builder.ret(result)
         else:
             self.builder.ret(ir.Constant(ir.IntType(32), 0))

@@ -194,9 +194,105 @@ class TrackedHookTests(unittest.TestCase):
         self.assertEqual(r.stdout.split()[0], '100755')
 
 
+class BeautifyPreflightTests(unittest.TestCase):
+    """beautify.sh must fail loudly, before touching any file, when a
+    formatter is on PATH but doesn't actually run.
+
+    This is exactly the real-world failure that motivated the preflight
+    check: `pip install --user isort` leaves an `isort` shim on PATH whose
+    shebang points at a specific Python interpreter; if that interpreter's
+    environment later loses the isort package (a different venv becomes
+    active, the package gets uninstalled, ...), `command -v isort` still
+    finds the shim, so a naive presence-only check (and the old script,
+    which had none at all) would proceed and let a bare
+    ModuleNotFoundError traceback from deep inside a `find -exec` surface
+    instead of a clear, actionable message.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        root = Path(self._tmp.name)
+        self.repo = root / 'repo'
+        for d in ('src', 'tests', 'runtime'):
+            (self.repo / d).mkdir(parents=True)
+        (self.repo / 'setup.py').write_text('')
+        (self.repo / 'scripts').mkdir()
+        shutil.copy2(BEAUTIFY, self.repo / 'scripts' / 'beautify.sh')
+        # A file each formatter would touch if the preflight didn't stop it
+        # first -- used to confirm nothing was modified.
+        self.ugly_py = self.repo / 'tests' / 'z.py'
+        self.ugly_py.write_text('x = {   "a":1 }\n')
+
+    def _run_with_fake_bin(self, name: str, script: str):
+        """Run beautify.sh with a fake `name` shadowing the real one on
+        PATH (prepended, so it's found first, matching how a stale
+        ~/.local/bin shim shadows a working install)."""
+        fakebin = Path(self._tmp.name) / 'fakebin'
+        fakebin.mkdir(exist_ok=True)
+        (fakebin / name).write_text(script)
+        (fakebin / name).chmod(0o755)
+        env = dict(os.environ)
+        env['PATH'] = f"{fakebin}:{env.get('PATH', '')}"
+        return subprocess.run(['bash', str(self.repo / 'scripts' / 'beautify.sh')], cwd=self.repo, capture_output=True, text=True, env=env, timeout=60)
+
+    def test_broken_isort_shim_fails_with_actionable_message(self):
+        # Mirrors the real ~/.local/bin/isort shim: present, executes,
+        # but its own import fails -- a bare ModuleNotFoundError traceback.
+        r = self._run_with_fake_bin('isort', '#!/usr/bin/env bash\n'
+                                    'echo "ModuleNotFoundError: No module named '
+                                    "'"
+                                    'isort'
+                                    "'"
+                                    '" >&2\n'
+                                    'exit 1\n')
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('isort', r.stderr)
+        self.assertIn('does not run', r.stderr)
+        self.assertIn('pip install isort', r.stderr)
+        # Preflight ran before any find -exec: the ugly file is untouched.
+        self.assertEqual(self.ugly_py.read_text(), 'x = {   "a":1 }\n')
+
+    def test_missing_tool_fails_with_actionable_message(self):
+        # yapf genuinely absent from PATH -- command -v itself must fail.
+        # isort lives in the same directory as the real yapf on most
+        # installs, so stripping that directory would break isort's own
+        # check too; keep isort working via a fakebin shim that execs the
+        # real binary by its resolved absolute path (captured before PATH
+        # is touched), isolating this test to yapf alone.
+        isort_abs = shutil.which('isort')
+        self.assertIsNotNone(isort_abs, 'isort must be on PATH for this test to isolate yapf')
+        self.assertIsNotNone(shutil.which('yapf'), 'yapf must be on PATH to strip it')
+
+        fakebin = Path(self._tmp.name) / 'fakebin'
+        fakebin.mkdir(exist_ok=True)
+        (fakebin / 'isort').write_text(f'#!/usr/bin/env bash\nexec {isort_abs!r} "$@"\n')
+        (fakebin / 'isort').chmod(0o755)
+
+        # Resolve bash to an absolute path up front, and strip EVERY PATH
+        # directory that resolves yapf, not just the first shutil.which
+        # reports: PATH commonly lists a directory more than once (e.g. via
+        # a merged-usr symlink), and stripping only one hit would leave
+        # yapf still reachable through the other.
+        bash_abs = shutil.which('bash')
+        parts = os.environ.get('PATH', '').split(os.pathsep)
+        while shutil.which('yapf', path=os.pathsep.join(parts)):
+            hit = os.path.dirname(shutil.which('yapf', path=os.pathsep.join(parts)))
+            parts = [p for p in parts if p != hit]
+
+        env = dict(os.environ)
+        env['PATH'] = f"{fakebin}{os.pathsep}" + os.pathsep.join(parts)
+        r = subprocess.run([bash_abs, str(self.repo / 'scripts' / 'beautify.sh')], cwd=self.repo, capture_output=True, text=True, env=env, timeout=60)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('yapf', r.stderr)
+        self.assertIn('not found on PATH', r.stderr)
+        self.assertEqual(self.ugly_py.read_text(), 'x = {   "a":1 }\n')
+
+
 # Applied here rather than per-method so the whole module skips as one unit.
 PreCommitHookTests = requires_formatters(PreCommitHookTests)
 TrackedHookTests = unittest.skipUnless(shutil.which('git'), 'requires git')(TrackedHookTests)
+BeautifyPreflightTests = requires_formatters(BeautifyPreflightTests)
 
 if __name__ == '__main__':
     unittest.main()

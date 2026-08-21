@@ -74,6 +74,14 @@ $(BUILDDIR):
 
 clean:
 	rm -rf $(BUILDDIR)
+	@if [ -e $(BUILDDIR) ]; then \
+		echo "error: $(BUILDDIR) still exists after rm -rf." >&2; \
+		echo "Likely a permission issue (e.g. root-owned files left behind by" >&2; \
+		echo "a Docker bind mount) or a lingering mount point under it. Try:" >&2; \
+		echo "    sudo rm -rf $(BUILDDIR)" >&2; \
+		echo "or check for a mount with: mount | grep $(BUILDDIR)" >&2; \
+		exit 1; \
+	fi
 
 cleaner: clean
 

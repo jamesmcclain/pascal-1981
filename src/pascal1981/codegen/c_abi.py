@@ -134,6 +134,8 @@ class CParamPlan:
     llvm_type: Optional[ir.Type] = None  # ref/scalar: the single LLVM arg type
     agg: Optional[AggLowering] = None  # coerced/memory
     sign_attr: Optional[str] = None  # 'signext' | 'zeroext' | None (Phase 4)
+    ast_type: object = None  # the Pascal param's declared type_expr, for a bare
+    # string-literal argument's wire-format construction (_c_abi_arg_ptr)
 
 
 @dataclass
@@ -241,7 +243,7 @@ class CAbiMixin:
     def _c_abi(self):
         return c_abi_for_triple(getattr(self, 'host_triple', 'x86_64-pc-linux-gnu'))
 
-    def build_c_abi_plan(self, decl, flat_param_types, flat_modes, return_llvm, is_variadic=False, flat_sign_attrs=None, ret_sign_attr=None):
+    def build_c_abi_plan(self, decl, flat_param_types, flat_modes, return_llvm, is_variadic=False, flat_sign_attrs=None, ret_sign_attr=None, flat_ast_types=None):
         """Compute the coerced LLVM signature and the per-call marshalling plan.
 
         ``flat_param_types`` / ``flat_modes`` are already flattened per parameter
@@ -279,10 +281,11 @@ class CAbiMixin:
 
         for i, (llvm_t, mode) in enumerate(zip(flat_param_types, flat_modes)):
             sattr = flat_sign_attrs[i] if flat_sign_attrs and i < len(flat_sign_attrs) else None
+            ast_t = flat_ast_types[i] if flat_ast_types and i < len(flat_ast_types) else None
             by_ref = mode in {'VAR', 'VARS', 'CONST', 'CONSTS'}
             if by_ref or not abi.is_aggregate(llvm_t):
                 kind = 'ref' if by_ref else 'scalar'
-                params.append(CParamPlan(kind, llvm_type=llvm_t, sign_attr=sattr))
+                params.append(CParamPlan(kind, llvm_type=llvm_t, sign_attr=sattr, ast_type=ast_t))
                 # Attach signext/zeroext to the declaration arg attrs for sub-32-bit
                 # scalars (not references -- references are pointers, no extension).
                 if sattr and not by_ref and isinstance(llvm_t, ir.IntType) and llvm_t.width < 32:
@@ -291,11 +294,11 @@ class CAbiMixin:
                 continue
             agg = abi.classify_aggregate(llvm_t)
             if agg.kind == 'memory':
-                params.append(CParamPlan('memory', agg=agg))
+                params.append(CParamPlan('memory', agg=agg, ast_type=ast_t))
                 arg_attrs[len(ir_args)] = (('byval', ), agg.align)
                 ir_args.append(ir.PointerType(agg.agg_type))
             else:
-                params.append(CParamPlan('coerced', agg=agg))
+                params.append(CParamPlan('coerced', agg=agg, ast_type=ast_t))
                 ir_args.extend(agg.pieces)
 
         plan = CCallPlan(params,
@@ -308,18 +311,46 @@ class CAbiMixin:
 
     # -- call-site marshalling ------------------------------------------------
 
-    def _c_abi_arg_ptr(self, arg_expr, agg_type):
+    def _c_abi_arg_ptr(self, arg_expr, agg_type, ast_type=None):
         """Return a pointer (to ``agg_type``) holding the aggregate argument.
 
         Uses the designator's own storage when possible; otherwise spills the
-        computed value to a fresh slot.
+        computed value to a fresh slot. A bare string-literal argument to a
+        value-mode LSTRING/STRING parameter needs its own wire-format
+        construction (string_literal_wire_ptr) -- codegen_expr's own
+        StringLiteral lowering is a plain null-terminated char pointer, not
+        the aggregate's real in-memory layout, so a naive spill would produce
+        a garbage aggregate (bitcast-loading a pointer VALUE as if it were
+        [N x i8] storage).
         """
-        from ..ast_nodes import Designator, Identifier
+        from ..ast_nodes import Designator, Identifier, StringLiteral
+        if isinstance(arg_expr, StringLiteral) and ast_type is not None:
+            wire_ptr = self.string_literal_wire_ptr(agg_type, ast_type, arg_expr)
+            if wire_ptr is not None:
+                return wire_ptr
         ptr = None
-        if isinstance(arg_expr, Identifier):
-            ptr = self.resolve_designator_ptr(Designator(arg_expr.name, []))
-        elif isinstance(arg_expr, Designator):
-            ptr = self.resolve_designator_ptr(arg_expr)
+        if isinstance(arg_expr, (Identifier, Designator)):
+            # A bare niladic-call Identifier/Designator (vintage Pascal
+            # permits omitting the empty argument list, e.g. `StringEqual
+            # (CurKind, target_k)`) must not be resolved as a plain
+            # designator: that would return the ir.Function value itself,
+            # which then gets bitcast to the aggregate pointer type and
+            # memcpy'd as if it were the aggregate's storage -- reading raw
+            # bytes starting at the function's code address instead of
+            # actually calling it. Detect and call it, same as
+            # codegen_expr's Identifier/Designator branches and
+            # get_string_chars_and_len already do.
+            symbol = self.scope.lookup(arg_expr.name)
+            is_bare_func_ref = bool(symbol and isinstance(symbol.llvm_value, ir.Function) and not self.proc_param_modes.get(arg_expr.name.lower()))
+            if is_bare_func_ref:
+                from ..ast_nodes import FuncCall
+                val = self.codegen_func_call(FuncCall(arg_expr.name, []))
+                ptr = self.entry_alloca(val.type)
+                self.builder.store(val, ptr)
+            elif isinstance(arg_expr, Identifier):
+                ptr = self.resolve_designator_ptr(Designator(arg_expr.name, []))
+            else:
+                ptr = self.resolve_designator_ptr(arg_expr)
         if ptr is None:
             val = self.codegen_expr(arg_expr)
             ptr = self.entry_alloca(val.type)
@@ -372,6 +403,13 @@ class CAbiMixin:
 
         if plan.ret_kind == 'memory':
             sret_slot = self.entry_alloca(plan.ret_agg.agg_type)
+            # The sret attribute below promises ret_agg.align to the callee;
+            # llvmlite's default alloca alignment for this IR type is not
+            # guaranteed to satisfy that, so force it explicitly. Leaving
+            # this unset lets the backend trust the attribute's alignment
+            # for wide/vectorized accesses against memory that isn't
+            # actually aligned that way.
+            sret_slot.align = plan.ret_agg.align
             aa = ir.ArgumentAttributes()
             aa.add('sret')
             aa.add('noalias')
@@ -391,8 +429,13 @@ class CAbiMixin:
                     arg_attrs[len(call_args)] = aa
                 call_args.append(v)
             elif pp.kind == 'memory':
-                src = self._c_abi_arg_ptr(expr, pp.agg.agg_type)
+                src = self._c_abi_arg_ptr(expr, pp.agg.agg_type, ast_type=pp.ast_type)
                 tmp = self.entry_alloca(pp.agg.agg_type)
+                # Same reasoning as sret_slot above: the byval attribute
+                # promises pp.agg.align to the callee, so force it on the
+                # temp actually handed over rather than leaving it at
+                # llvmlite's default alloca alignment.
+                tmp.align = pp.agg.align
                 self._c_abi_memcpy(tmp, src, pp.agg.size)
                 aa = ir.ArgumentAttributes()
                 aa.add('byval')
@@ -400,7 +443,7 @@ class CAbiMixin:
                 arg_attrs[len(call_args)] = aa
                 call_args.append(tmp)
             else:  # coerced
-                src = self._c_abi_arg_ptr(expr, pp.agg.agg_type)
+                src = self._c_abi_arg_ptr(expr, pp.agg.agg_type, ast_type=pp.ast_type)
                 csrc = self.builder.bitcast(src, ir.PointerType(pp.agg.coerced_struct()))
                 for pi in range(len(pp.agg.pieces)):
                     gep = self.builder.gep(csrc, [i32(0), i32(pi)], inbounds=True)

@@ -195,8 +195,19 @@ class ExprsMixin:
             # `count := prime_count;`.  The type checker already treats such an
             # identifier as the function's return type; codegen must likewise
             # emit a zero-argument call whenever the symbol denotes a function.
-            if isinstance(symbol.llvm_value, ir.Function) and len(symbol.llvm_value.function_type.args) == 0:
-                return self.builder.call(symbol.llvm_value, [])
+            # "Parameterless" is checked against proc_param_modes (the Pascal
+            # parameter list), not the LLVM function's own arg count: a
+            # MEMORY-class aggregate-returning niladic FUNCTION has a hidden
+            # sret pointer as its one LLVM argument despite having zero
+            # Pascal parameters, so a raw len(function_type.args) == 0 check
+            # would miss it here and fall through to loading the function
+            # value itself as if it were a variable. Routes through
+            # codegen_func_call (not a bare builder.call) so that sret/
+            # coerced marshalling applies exactly as it would for an
+            # explicit `BigConst()` call, mirroring the self-recursion case
+            # just above.
+            if isinstance(symbol.llvm_value, ir.Function) and not self.proc_param_modes.get(expr.name.lower()):
+                return self.codegen_func_call(FuncCall(expr.name, []))
             # Parameters are passed by value, don't load them
             if symbol.is_parameter:
                 return symbol.llvm_value
@@ -239,8 +250,12 @@ class ExprsMixin:
             # so this branch needs the same niladic-function special case or
             # it falls through to resolve_designator_ptr/emit_load and loads
             # the function's own address instead of calling it).
-            if not expr.selectors and isinstance(symbol.llvm_value, ir.Function) and len(symbol.llvm_value.function_type.args) == 0:
-                return self.builder.call(symbol.llvm_value, [])
+            # See the Identifier branch above: "parameterless" is checked
+            # against proc_param_modes, not the LLVM arg count, since a
+            # MEMORY-class aggregate-returning niladic FUNCTION carries a
+            # hidden sret argument despite zero Pascal parameters.
+            if not expr.selectors and isinstance(symbol.llvm_value, ir.Function) and not self.proc_param_modes.get(expr.name.lower()):
+                return self.codegen_func_call(FuncCall(expr.name, []))
             # Parameters are passed by value; return the value directly when
             # there are no selectors. When selectors ARE present (e.g. p^[i]),
             # fall through to resolve_designator_ptr so the DEREF/INDEX chain
