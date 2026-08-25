@@ -25,7 +25,7 @@ RUN apt-get update \
         curl \
         git \
         indent \
-        libjson-dev \
+        libcjson-dev \
         libpng-dev \
         python3-venv \
         unzip \
