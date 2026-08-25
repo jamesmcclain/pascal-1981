@@ -14,12 +14,18 @@ FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
 #   clang-20        - the runtime Makefile's CC for this image; compiles both the
 #                     CPU shim and the CUDA shim against the CUDA 12.8 headers.
 #   curl            - convenience (fetching tools, e.g. installing Claude Code).
+#   git             - source control tooling used during development.
+#   indent          - C source formatter.
+#   libjson-dev     - JSON development headers.
 #   python3-venv    - the compiler is Python; deps go in a venv because Ubuntu
 #                     24.04 marks the system Python externally-managed (PEP 668).
 RUN apt-get update \
  && apt-get install -y \
         clang-20 \
         curl \
+        git \
+        indent \
+        libjson-dev \
         libpng-dev \
         python3-venv \
         unzip \
@@ -36,7 +42,7 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 # this llvmlite's LLVM to have the NVPTX backend registered -- verify after build
 # (see docker/README.md "Verify the environment"); if absent, that is the one
 # thing to resolve before the GPU path can emit PTX.
-RUN pip3 install pytest llvmlite==0.47
+RUN pip3 install pytest llvmlite==0.47 isort yapf
 
 WORKDIR /work
 
