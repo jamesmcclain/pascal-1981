@@ -13,7 +13,7 @@ def test_uses_imports_exported_data_declarations():
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         (root / "base.inc").write_text("""INTERFACE;
-UNIT base (Ping, Count, T, left, right);
+UNIT base;
 TYPE T = INTEGER;
 CONST Count = 2;
 VAR left, right: T;

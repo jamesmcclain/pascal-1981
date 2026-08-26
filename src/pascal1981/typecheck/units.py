@@ -77,8 +77,18 @@ class UnitsMixin:
                 # (TYPE, CONST, VAR) are excluded from this list; they are
                 # imported separately below so their presence does not inflate
                 # the export count.
-                export_name_set = {n.lower() for n in export_names}
-                routine_decls = [d for d in all_decls if isinstance(d, (ProcDecl, FuncDecl)) and getattr(d, 'name', '').lower() in export_name_set]
+                # An omitted UNIT export list is the compatibility spelling
+                # for the complete interface.  It is useful for interface-only
+                # foreign bindings, whose declarations have no Pascal bodies.
+                if export_names:
+                    export_name_set = {n.lower() for n in export_names}
+                    routine_decls = [d for d in all_decls if isinstance(d, (ProcDecl, FuncDecl)) and getattr(d, 'name', '').lower() in export_name_set]
+                else:
+                    export_name_set = {getattr(d, 'name', '').lower() for d in all_decls if getattr(d, 'name', None)}
+                    for decl in all_decls:
+                        if isinstance(decl, VarDecl):
+                            export_name_set.update(name.lower() for name in decl.names)
+                    routine_decls = [d for d in all_decls if isinstance(d, (ProcDecl, FuncDecl))]
 
                 # Validate: every name in the export list must have a matching decl.
                 # UNIT headings export data declarations too. VarDecl names
@@ -88,7 +98,7 @@ class UnitsMixin:
                     if isinstance(decl, VarDecl):
                         declared_names.update(name.lower() for name in decl.names)
                 missing = [n for n in export_names if n.lower() not in declared_names]
-                if missing:
+                if export_names and missing:
                     self.error(
                         f"Interface '{interface.name}' export list names not found "
                         f"in declarations: {missing}",
@@ -243,9 +253,18 @@ class UnitsMixin:
         """
         impl_decls = {getattr(decl, 'name', '').lower(): decl for decl in impl.decls if getattr(decl, 'name', None)}
 
-        for export_name in iface.params:
+        if iface.params:
+            export_names = list(iface.params)
+        else:
+            export_names = [decl.name for decl in iface.decls if isinstance(decl, (ProcDecl, FuncDecl)) and getattr(decl, 'name', None)]
+
+        for export_name in export_names:
             iface_decl = next((decl for decl in iface.decls if getattr(decl, 'name', '').lower() == export_name.lower()), None)
             if not iface_decl:
+                continue
+            attrs = {a.name.upper() for a in getattr(iface_decl, 'attributes', [])}
+            directive = (getattr(iface_decl, 'directive', None) or '').upper()
+            if directive in {'EXTERN', 'EXTERNAL'} or attrs & {'C', 'CDECL', 'EXTERN', 'EXTERNAL'}:
                 continue
 
             impl_decl = impl_decls.get(export_name.lower())
