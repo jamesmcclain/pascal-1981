@@ -16,7 +16,7 @@ from llvmlite.ir import IRBuilder
 
 from ..ast_nodes import (ArrayType, AssignStmt, ASTNode, ConstDecl, Declaration, Designator, EnumType, Expression, FileType, FuncCall, FuncDecl, Identifier, ImplementationUnit,
                          InterfaceUnit, LabelDecl, ModuleUnit, NamedType, Param, PointerType, ProcCallStmt, ProcDecl, ProgramUnit, RecordType, Selector, SetConstructor, SetType,
-                         StringLiteral, Type, TypeDecl, UseClause, ValueDecl, VarDecl, WithStmt)
+                         StringLiteral, Type, TypeDecl, UseClause, ValueDecl, VarDecl, WithStmt, effective_uses)
 from .base import CodegenError, Scope, _is_gpu_triple
 from .llvmlite_compat import (add_argument_attribute, add_function_string_attribute, nocapture_spelling)
 
@@ -197,6 +197,12 @@ class DeclsMixin:
         self.current_interface_decls = {getattr(decl, 'name', '').lower(): decl for decl in (unit.interface.decls if unit.interface else []) if getattr(decl, 'name', None)}
         try:
             with self._device_codegen_context(getattr(unit, 'is_device', False)):
+                # An IMPLEMENTATION inherits its INTERFACE's USES -- see
+                # typecheck/units.py::effective_uses. Without this the unit's
+                # own storage cannot be lowered, because the types naming it
+                # live in the used unit (cg_base.pas's VARs are Str255).
+                for use_clause in effective_uses(unit, unit.interface):
+                    self.codegen_use_clause(use_clause, local_interfaces=getattr(unit, 'local_interfaces', []))
                 self._prepare_device_readonly_summaries(unit.decls)
                 # Seed TYPE and CONST aliases from the interface so the
                 # implementation can reference them without restating.
@@ -264,7 +270,13 @@ class DeclsMixin:
         if isinstance(ast, InterfaceUnit):
             export_name_list = list(getattr(ast, 'params', []))
             routine_by_name = {getattr(d, 'name', '').lower(): d for d in all_iface_decls if isinstance(d, (ProcDecl, FuncDecl))}
-            export_routines = [(n, routine_by_name[n.lower()]) for n in export_name_list if n.lower() in routine_by_name]
+            if export_name_list:
+                export_routines = [(n, routine_by_name[n.lower()]) for n in export_name_list if n.lower() in routine_by_name]
+            else:
+                # An omitted export list (`UNIT cg_base;`) means the whole
+                # interface is exported, matching the type checker's rule in
+                # typecheck/units.py. Declaration order is the export order.
+                export_routines = [(d.name, d) for d in all_iface_decls if isinstance(d, (ProcDecl, FuncDecl)) and getattr(d, 'name', None)]
             # Also seed TYPE/CONST decls into the importing module's type_aliases
             # so the caller can reference shared buffer types by name.
             for decl in all_iface_decls:
@@ -274,6 +286,23 @@ class DeclsMixin:
                 elif isinstance(decl, ConstDecl) and getattr(decl, 'name', None):
                     if decl.name.upper() not in self.constants:
                         self.codegen_const_decl(decl)
+            # An exported VAR is storage owned by the IMPLEMENTATION, so the
+            # importer gets an initializer-less (i.e. `external global`)
+            # declaration that the linker resolves against that definition --
+            # the same shape the native compiler emits under
+            # lowering_spliced_interface. TYPE/CONST above are compile-time
+            # vocabulary and need no symbol.
+            exported_var_names = ({n.lower() for n in export_name_list} if export_name_list else None)
+            for decl in all_iface_decls:
+                if not isinstance(decl, VarDecl):
+                    continue
+                for name in decl.names:
+                    if exported_var_names is not None and name.lower() not in exported_var_names:
+                        continue
+                    if self.scope.lookup(name) is not None:
+                        continue
+                    gv = ir.GlobalVariable(self.module, self.llvm_type(decl.type_expr), name=name)
+                    self.scope.define(name, gv, decl.type_expr)
         else:
             export_routines = [(d.name, d) for d in all_iface_decls if isinstance(d, (ProcDecl, FuncDecl)) and getattr(d, 'name', None)]
 

@@ -1,4 +1,4 @@
-# Pascal-1981 Compiler
+# Pascal 1981 Compiler
 
 <img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/42f81123-5db6-4bb0-8661-84339ec218f9" />
 
@@ -19,6 +19,15 @@ Install the package from a checkout of this repository:
 
 ```bash
 python3 -m pip install .
+```
+
+A plain `pip install .` copies the sources into `site-packages`, so later
+edits to the checkout have no effect until you reinstall. If you are working
+on the compiler, install it editable instead, so `import pascal1981` resolves
+to the checkout:
+
+```bash
+python3 -m pip install -e .
 ```
 
 The pip build compiles the C runtime with `make` and `clang`. The build fails early if either tool is missing.

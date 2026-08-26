@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..ast_nodes import (BoolLiteral, ConstDecl, FuncDecl, ImplementationUnit, InterfaceUnit, IntLiteral, ModuleUnit, NamedType, ProcDecl, ProgramUnit, RealLiteral, StringLiteral,
-                         TypeDecl, UseClause, VarDecl)
+                         TypeDecl, UseClause, VarDecl, effective_uses)
 from ..parser import parse_file
 from ..symbol_table import Symbol
 from ..type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, ProcedureType, Type)
@@ -77,13 +77,28 @@ class UnitsMixin:
                 # (TYPE, CONST, VAR) are excluded from this list; they are
                 # imported separately below so their presence does not inflate
                 # the export count.
-                export_name_set = {n.lower() for n in export_names}
-                routine_decls = [d for d in all_decls if isinstance(d, (ProcDecl, FuncDecl)) and getattr(d, 'name', '').lower() in export_name_set]
+                # An omitted UNIT export list is the compatibility spelling
+                # for the complete interface.  It is useful for interface-only
+                # foreign bindings, whose declarations have no Pascal bodies.
+                if export_names:
+                    export_name_set = {n.lower() for n in export_names}
+                    routine_decls = [d for d in all_decls if isinstance(d, (ProcDecl, FuncDecl)) and getattr(d, 'name', '').lower() in export_name_set]
+                else:
+                    export_name_set = {getattr(d, 'name', '').lower() for d in all_decls if getattr(d, 'name', None)}
+                    for decl in all_decls:
+                        if isinstance(decl, VarDecl):
+                            export_name_set.update(name.lower() for name in decl.names)
+                    routine_decls = [d for d in all_decls if isinstance(d, (ProcDecl, FuncDecl))]
 
                 # Validate: every name in the export list must have a matching decl.
-                declared_names = {getattr(d, 'name', '').lower() for d in routine_decls}
+                # UNIT headings export data declarations too. VarDecl names
+                # are stored in ``names`` rather than ``name``.
+                declared_names = {getattr(d, 'name', '').lower() for d in all_decls}
+                for decl in all_decls:
+                    if isinstance(decl, VarDecl):
+                        declared_names.update(name.lower() for name in decl.names)
                 missing = [n for n in export_names if n.lower() not in declared_names]
-                if missing:
+                if export_names and missing:
                     self.error(
                         f"Interface '{interface.name}' export list names not found "
                         f"in declarations: {missing}",
@@ -107,7 +122,7 @@ class UnitsMixin:
                         if decl:
                             pairs.append((alias, ename, decl))
                 else:
-                    pairs = [(n, n, next(d for d in routine_decls if getattr(d, 'name', '').lower() == n.lower())) for n in export_names]
+                    pairs = [(decl.name, decl.name, decl) for decl in routine_decls]
 
                 # Import non-exported TYPE/CONST decls so the importing scope
                 # can reference shared buffer type names (e.g. PIXELS).  These
@@ -116,6 +131,16 @@ class UnitsMixin:
                 for decl in all_decls:
                     if isinstance(decl, (TypeDecl, ConstDecl)) and getattr(decl, 'name', None):
                         if not self.symbol_table.lookup_local(decl.name):
+                            self.check_declaration(decl)
+                    elif isinstance(decl, VarDecl):
+                        # TYPE/CONST above stay unconditional: an importer needs
+                        # the unit's shared type names to even spell the
+                        # signatures of the routines it did import (jsonutil
+                        # exports no types, yet every caller needs Str255).
+                        # A VAR is storage, not vocabulary, so importing an
+                        # unexported one would hand the caller private state --
+                        # gate those on the export set.
+                        if any(name and name.lower() in export_name_set and not self.symbol_table.lookup_local(name) for name in decl.names):
                             self.check_declaration(decl)
 
                 # Build the routine symbols under device context so parameter
@@ -234,9 +259,18 @@ class UnitsMixin:
         """
         impl_decls = {getattr(decl, 'name', '').lower(): decl for decl in impl.decls if getattr(decl, 'name', None)}
 
-        for export_name in iface.params:
+        if iface.params:
+            export_names = list(iface.params)
+        else:
+            export_names = [decl.name for decl in iface.decls if isinstance(decl, (ProcDecl, FuncDecl)) and getattr(decl, 'name', None)]
+
+        for export_name in export_names:
             iface_decl = next((decl for decl in iface.decls if getattr(decl, 'name', '').lower() == export_name.lower()), None)
             if not iface_decl:
+                continue
+            attrs = {a.name.upper() for a in getattr(iface_decl, 'attributes', [])}
+            directive = (getattr(iface_decl, 'directive', None) or '').upper()
+            if directive in {'EXTERN', 'EXTERNAL'} or attrs & {'C', 'CDECL', 'EXTERN', 'EXTERNAL'}:
                 continue
 
             impl_decl = impl_decls.get(export_name.lower())
@@ -443,16 +477,15 @@ class UnitsMixin:
             if getattr(impl, 'is_device', False):
                 self._mark_exported_entries(impl, iface)
 
-        if impl.uses:
-            for use_clause in impl.uses:
-                spliced = next(
-                    (i for i in getattr(impl, 'local_interfaces', []) if i.name.upper() == use_clause.name.upper()),
-                    None,
-                )
-                if spliced is None:
-                    self.error(f"Module '{use_clause.name}' must be provided by a spliced INTERFACE header in the source file", None)
-                    continue
-                self.import_symbols(spliced, use_clause)
+        for use_clause in effective_uses(impl, iface):
+            spliced = next(
+                (i for i in getattr(impl, 'local_interfaces', []) if i.name.upper() == use_clause.name.upper()),
+                None,
+            )
+            if spliced is None:
+                self.error(f"Module '{use_clause.name}' must be provided by a spliced INTERFACE header in the source file", None)
+                continue
+            self.import_symbols(spliced, use_clause)
 
         old_iface = self.current_interface_decls
         self.current_interface_decls = {getattr(decl, 'name', '').lower(): decl for decl in (iface.decls if iface else []) if getattr(decl, 'name', None)}
