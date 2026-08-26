@@ -81,7 +81,12 @@ class UnitsMixin:
                 routine_decls = [d for d in all_decls if isinstance(d, (ProcDecl, FuncDecl)) and getattr(d, 'name', '').lower() in export_name_set]
 
                 # Validate: every name in the export list must have a matching decl.
-                declared_names = {getattr(d, 'name', '').lower() for d in routine_decls}
+                # UNIT headings export data declarations too. VarDecl names
+                # are stored in ``names`` rather than ``name``.
+                declared_names = {getattr(d, 'name', '').lower() for d in all_decls}
+                for decl in all_decls:
+                    if isinstance(decl, VarDecl):
+                        declared_names.update(name.lower() for name in decl.names)
                 missing = [n for n in export_names if n.lower() not in declared_names]
                 if missing:
                     self.error(
@@ -107,15 +112,19 @@ class UnitsMixin:
                         if decl:
                             pairs.append((alias, ename, decl))
                 else:
-                    pairs = [(n, n, next(d for d in routine_decls if getattr(d, 'name', '').lower() == n.lower())) for n in export_names]
+                    pairs = [(decl.name, decl.name, decl) for decl in routine_decls]
 
                 # Import non-exported TYPE/CONST decls so the importing scope
                 # can reference shared buffer type names (e.g. PIXELS).  These
                 # are checked under the same device context so INTEGER32,
                 # ADS(GLOBAL), etc. resolve without errors.
                 for decl in all_decls:
-                    if isinstance(decl, (TypeDecl, ConstDecl)) and getattr(decl, 'name', None):
-                        if not self.symbol_table.lookup_local(decl.name):
+                    if isinstance(decl, (TypeDecl, ConstDecl, VarDecl)):
+                        if isinstance(decl, VarDecl):
+                            names = decl.names
+                        else:
+                            names = [getattr(decl, 'name', None)]
+                        if any(name and name.lower() in export_name_set and not self.symbol_table.lookup_local(name) for name in names):
                             self.check_declaration(decl)
 
                 # Build the routine symbols under device context so parameter
