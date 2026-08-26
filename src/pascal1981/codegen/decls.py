@@ -264,7 +264,13 @@ class DeclsMixin:
         if isinstance(ast, InterfaceUnit):
             export_name_list = list(getattr(ast, 'params', []))
             routine_by_name = {getattr(d, 'name', '').lower(): d for d in all_iface_decls if isinstance(d, (ProcDecl, FuncDecl))}
-            export_routines = [(n, routine_by_name[n.lower()]) for n in export_name_list if n.lower() in routine_by_name]
+            if export_name_list:
+                export_routines = [(n, routine_by_name[n.lower()]) for n in export_name_list if n.lower() in routine_by_name]
+            else:
+                # An omitted export list (`UNIT cg_base;`) means the whole
+                # interface is exported, matching the type checker's rule in
+                # typecheck/units.py. Declaration order is the export order.
+                export_routines = [(d.name, d) for d in all_iface_decls if isinstance(d, (ProcDecl, FuncDecl)) and getattr(d, 'name', None)]
             # Also seed TYPE/CONST decls into the importing module's type_aliases
             # so the caller can reference shared buffer types by name.
             for decl in all_iface_decls:
@@ -274,6 +280,23 @@ class DeclsMixin:
                 elif isinstance(decl, ConstDecl) and getattr(decl, 'name', None):
                     if decl.name.upper() not in self.constants:
                         self.codegen_const_decl(decl)
+            # An exported VAR is storage owned by the IMPLEMENTATION, so the
+            # importer gets an initializer-less (i.e. `external global`)
+            # declaration that the linker resolves against that definition --
+            # the same shape the native compiler emits under
+            # lowering_spliced_interface. TYPE/CONST above are compile-time
+            # vocabulary and need no symbol.
+            exported_var_names = ({n.lower() for n in export_name_list} if export_name_list else None)
+            for decl in all_iface_decls:
+                if not isinstance(decl, VarDecl):
+                    continue
+                for name in decl.names:
+                    if exported_var_names is not None and name.lower() not in exported_var_names:
+                        continue
+                    if self.scope.lookup(name) is not None:
+                        continue
+                    gv = ir.GlobalVariable(self.module, self.llvm_type(decl.type_expr), name=name)
+                    self.scope.define(name, gv, decl.type_expr)
         else:
             export_routines = [(d.name, d) for d in all_iface_decls if isinstance(d, (ProcDecl, FuncDecl)) and getattr(d, 'name', None)]
 

@@ -129,12 +129,18 @@ class UnitsMixin:
                 # are checked under the same device context so INTEGER32,
                 # ADS(GLOBAL), etc. resolve without errors.
                 for decl in all_decls:
-                    if isinstance(decl, (TypeDecl, ConstDecl, VarDecl)):
-                        if isinstance(decl, VarDecl):
-                            names = decl.names
-                        else:
-                            names = [getattr(decl, 'name', None)]
-                        if any(name and name.lower() in export_name_set and not self.symbol_table.lookup_local(name) for name in names):
+                    if isinstance(decl, (TypeDecl, ConstDecl)) and getattr(decl, 'name', None):
+                        if not self.symbol_table.lookup_local(decl.name):
+                            self.check_declaration(decl)
+                    elif isinstance(decl, VarDecl):
+                        # TYPE/CONST above stay unconditional: an importer needs
+                        # the unit's shared type names to even spell the
+                        # signatures of the routines it did import (jsonutil
+                        # exports no types, yet every caller needs Str255).
+                        # A VAR is storage, not vocabulary, so importing an
+                        # unexported one would hand the caller private state --
+                        # gate those on the export set.
+                        if any(name and name.lower() in export_name_set and not self.symbol_table.lookup_local(name) for name in decl.names):
                             self.check_declaration(decl)
 
                 # Build the routine symbols under device context so parameter
