@@ -68,6 +68,26 @@ class TypeResolveMixin:
         """Resolve a type expression to a Type object."""
         if isinstance(type_expr, NamedType):
             name = type_expr.name.upper()
+            # Predeclared type names are redefinable. IBM Pascal, Aug 1981, p.3-7:
+            # "The following are predeclared identifiers. They can be re-defined
+            # by the programmer, but doing this is not recommended." None of them
+            # appear in the reserved-word list -- the manual draws that contrast
+            # explicitly for NIL, which "cannot be redefined by the programmer"
+            # precisely "since it is a reserved word in ISO Pascal."
+            #
+            # So a user TYPE of that name wins wherever the source names it. The
+            # compiler's own internal uses of the built-in meaning are untouched:
+            # p.6228 says BOOLEAN "can be re-defined by the programmer, but the
+            # old type is implicitly used by the compiler for things like the IF
+            # statement and Boolean expressions."
+            #
+            # A parameterised spelling -- LSTRING(64), STRING(16) -- is the
+            # built-in super-array constructor, never the shadowing user type, so
+            # it skips this probe and still resolves below.
+            if type_expr.param is None:
+                shadow = self.symbol_table.lookup(type_expr.name)
+                if shadow and shadow.kind == 'type':
+                    return shadow.type
             if name == 'INTEGER':
                 return INTEGER_TYPE
             elif name == 'INTEGER8' and (self.feature_enabled('wide-integers') or self.in_device_module):
@@ -126,6 +146,8 @@ class TypeResolveMixin:
                 max_len = int(type_expr.param) if isinstance(type_expr.param, int) else 256
                 return LStringType(max_len)
             else:
+                # Unparameterised names were already probed above; this catches
+                # a user TYPE whose name carries a param the built-ins ignore.
                 sym = self.symbol_table.lookup(type_expr.name)
                 if sym and sym.kind == 'type':
                     return sym.type

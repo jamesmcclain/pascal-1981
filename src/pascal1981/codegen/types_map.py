@@ -66,6 +66,22 @@ class TypesMapMixin:
                 raise CodegenError(f'Unknown built-in type: {type_expr.name}')
         elif isinstance(type_expr, NamedType):
             name_up = type_expr.name.upper()
+            # A user TYPE of this name wins over the predeclared meaning -- see
+            # resolve_type in typecheck/types_resolve.py for the manual
+            # citations (p.3-7, and the BOOLEAN passage). This keeps llvm_type
+            # in step with get_string_type_info below, which has always
+            # preferred aliases; the two disagreeing is what made
+            # `TYPE Word = LSTRING(64)` typecheck and then die in
+            # codegen_var_decl with "'IntType' object has no attribute 'count'".
+            #
+            # A parameterised spelling -- LSTRING(64), STRING(16) -- is the
+            # built-in super-array constructor, never the shadowing user type,
+            # so it skips this probe.
+            if type_expr.param is None and name_up in self.type_aliases:
+                aliased = self.type_aliases[name_up]
+                if isinstance(aliased, RecordType):
+                    return self.named_record_struct(name_up, aliased)
+                return self.llvm_type(aliased)
             if name_up == 'LSTRING':
                 # LSTRING without explicit param: use default 256
                 param_val = int(type_expr.param) if type_expr.param else 256
@@ -116,25 +132,6 @@ class TypesMapMixin:
                 return ir.IntType(32)
             elif name_up == 'FCBFQQ':
                 return self.llvm_type(self.resolve_type_alias(type_expr))
-            # KNOWN INCONSISTENCY: the built-in names above are matched before
-            # this alias lookup, so a user TYPE that shadows one of them is
-            # silently ignored here -- while get_string_type_info() below
-            # consults self.type_aliases and never looks at the built-in names
-            # at all. The two therefore disagree about the same declaration:
-            #
-            #     TYPE Word = LSTRING(64);   { shadows the built-in WORD }
-            #     VAR current: Word;
-            #
-            # typechecks cleanly, then dies in codegen_var_decl with
-            # "'IntType' object has no attribute 'count'" -- get_string_type_info
-            # reports a string, so the LSTRING initializer path runs against the
-            # i16 that this function returned for the built-in WORD.
-            #
-            # Whether shadowing a built-in type name should be an error, or
-            # should work with the user's TYPE winning consistently, is
-            # undecided; the vintage manual is worth checking before choosing.
-            # Either way the crash is the wrong answer. Reproduces in a plain
-            # PROGRAM -- units are not involved.
             if name_up in self.type_aliases:
                 aliased = self.type_aliases[name_up]
                 if isinstance(aliased, RecordType):
@@ -477,6 +474,11 @@ class TypesMapMixin:
         # Check NamedType
         if isinstance(t, NamedType):
             name_up = t.name.upper()
+            # A bare STRING/LSTRING that names a user TYPE is that user type,
+            # not the built-in super array -- same shadowing rule as llvm_type.
+            # A parameterised STRING(16)/LSTRING(64) is always the built-in.
+            if t.param is None and name_up in self.type_aliases:
+                return self.get_string_type_info(self.type_aliases[name_up])
             if name_up == 'LSTRING':
                 return True, (int(t.param) if t.param is not None else 256), True
             elif name_up == 'STRING':
@@ -807,16 +809,19 @@ class TypesMapMixin:
         seen = set()
         while isinstance(type_expr, NamedType):
             key = type_expr.name.upper()
+            # A user TYPE of this name shadows the predeclared one, so the alias
+            # table is consulted before the three built-in file shapes below.
+            if type_expr.param is None and key not in seen and key in self.type_aliases:
+                seen.add(key)
+                type_expr = self.type_aliases[key]
+                continue
             if key == 'TEXT':
                 return FileType(NamedType('CHAR', None), structure='ASCII')
             if key == 'FILEMODES':
                 return EnumType(['SEQUENTIAL', 'TERMINAL', 'DIRECT'])
             if key == 'FCBFQQ':
                 return RecordType([(['MODE'], NamedType('FILEMODES', None)), (['TRAP'], NamedType('BOOLEAN', None)), (['ERRS'], NamedType('INTEGER', None))], False)
-            if key in seen or key not in self.type_aliases:
-                break
-            seen.add(key)
-            type_expr = self.type_aliases[key]
+            break
         return type_expr
 
     # ------------------------------------------------------------------
