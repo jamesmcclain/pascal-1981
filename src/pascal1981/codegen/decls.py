@@ -16,7 +16,7 @@ from llvmlite.ir import IRBuilder
 
 from ..ast_nodes import (ArrayType, AssignStmt, ASTNode, ConstDecl, Declaration, Designator, EnumType, Expression, FileType, FuncCall, FuncDecl, Identifier, ImplementationUnit,
                          InterfaceUnit, LabelDecl, ModuleUnit, NamedType, Param, PointerType, ProcCallStmt, ProcDecl, ProgramUnit, RecordType, Selector, SetConstructor, SetType,
-                         StringLiteral, Type, TypeDecl, UseClause, ValueDecl, VarDecl, WithStmt)
+                         StringLiteral, Type, TypeDecl, UseClause, ValueDecl, VarDecl, WithStmt, effective_uses)
 from .base import CodegenError, Scope, _is_gpu_triple
 from .llvmlite_compat import (add_argument_attribute, add_function_string_attribute, nocapture_spelling)
 
@@ -197,6 +197,12 @@ class DeclsMixin:
         self.current_interface_decls = {getattr(decl, 'name', '').lower(): decl for decl in (unit.interface.decls if unit.interface else []) if getattr(decl, 'name', None)}
         try:
             with self._device_codegen_context(getattr(unit, 'is_device', False)):
+                # An IMPLEMENTATION inherits its INTERFACE's USES -- see
+                # typecheck/units.py::effective_uses. Without this the unit's
+                # own storage cannot be lowered, because the types naming it
+                # live in the used unit (cg_base.pas's VARs are Str255).
+                for use_clause in effective_uses(unit, unit.interface):
+                    self.codegen_use_clause(use_clause, local_interfaces=getattr(unit, 'local_interfaces', []))
                 self._prepare_device_readonly_summaries(unit.decls)
                 # Seed TYPE and CONST aliases from the interface so the
                 # implementation can reference them without restating.

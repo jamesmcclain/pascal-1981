@@ -145,3 +145,39 @@ END.
         # llvmlite quotes global names, hence @"tally" rather than @tally.
         assert '@"tally" = external global' in result.stdout, result.stdout
         assert 'declare i32 @"Ping"' in result.stdout, result.stdout
+
+
+def test_implementation_inherits_interface_uses():
+    """An IMPLEMENTATION sees the units its own INTERFACE uses.
+
+    cg_base.pas carries no USES of its own -- ``USES jsonutil`` sits in the
+    spliced cg_base.inc -- yet the storage it defines is typed with jsonutil's
+    Str255. Without inheriting the interface's USES the implementation cannot
+    name the types of its own variables.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        (root / "vocab.inc").write_text("""INTERFACE;
+UNIT vocab (Ping);
+TYPE Token = LSTRING(64);
+PROCEDURE Ping(x: Token);
+END;
+""")
+        (root / "holder.inc").write_text("""INTERFACE;
+UNIT holder;
+USES vocab;
+VAR current: Token;
+END;
+""")
+        source = root / "holder.pas"
+        source.write_text("""(*$INCLUDE:'vocab.inc'*)
+(*$INCLUDE:'holder.inc'*)
+IMPLEMENTATION OF holder;
+VAR current: Token;
+BEGIN
+END.
+""")
+        result = _compile(root, source, last="cli_codegen")
+        assert result.returncode == 0, result.stderr
+        # The implementation owns the storage, so this is a definition.
+        assert '@"current" = global' in result.stdout, result.stdout

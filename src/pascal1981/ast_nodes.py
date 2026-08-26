@@ -502,3 +502,27 @@ class Selector(ASTNode):
 class UseClause(ASTNode):
     name: str
     imports: Optional[List[str]]  # None if no import list, else list of imported names
+
+
+def effective_uses(impl, iface) -> list:
+    """The USES clauses in force inside an IMPLEMENTATION.
+
+    An IMPLEMENTATION inherits its INTERFACE's USES. The interface's
+    declarations are written in the used unit's vocabulary, so the storage and
+    bodies the implementation supplies for them are too. cg_base.pas carries no
+    USES of its own -- ``USES jsonutil`` sits in cg_base.inc -- yet its VAR
+    section is full of jsonutil's Str255.
+
+    The interface's clauses come first, and a unit named by both is imported
+    once.
+    """
+    clauses = list(getattr(iface, 'uses', None) or []) + list(getattr(impl, 'uses', None) or [])
+    seen = set()
+    ordered = []
+    for clause in clauses:
+        key = clause.name.upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(clause)
+    return ordered

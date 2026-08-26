@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..ast_nodes import (BoolLiteral, ConstDecl, FuncDecl, ImplementationUnit, InterfaceUnit, IntLiteral, ModuleUnit, NamedType, ProcDecl, ProgramUnit, RealLiteral, StringLiteral,
-                         TypeDecl, UseClause, VarDecl)
+                         TypeDecl, UseClause, VarDecl, effective_uses)
 from ..parser import parse_file
 from ..symbol_table import Symbol
 from ..type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER_TYPE, REAL_TYPE, ProcedureType, Type)
@@ -477,16 +477,15 @@ class UnitsMixin:
             if getattr(impl, 'is_device', False):
                 self._mark_exported_entries(impl, iface)
 
-        if impl.uses:
-            for use_clause in impl.uses:
-                spliced = next(
-                    (i for i in getattr(impl, 'local_interfaces', []) if i.name.upper() == use_clause.name.upper()),
-                    None,
-                )
-                if spliced is None:
-                    self.error(f"Module '{use_clause.name}' must be provided by a spliced INTERFACE header in the source file", None)
-                    continue
-                self.import_symbols(spliced, use_clause)
+        for use_clause in effective_uses(impl, iface):
+            spliced = next(
+                (i for i in getattr(impl, 'local_interfaces', []) if i.name.upper() == use_clause.name.upper()),
+                None,
+            )
+            if spliced is None:
+                self.error(f"Module '{use_clause.name}' must be provided by a spliced INTERFACE header in the source file", None)
+                continue
+            self.import_symbols(spliced, use_clause)
 
         old_iface = self.current_interface_decls
         self.current_interface_decls = {getattr(decl, 'name', '').lower(): decl for decl in (iface.decls if iface else []) if getattr(decl, 'name', None)}
