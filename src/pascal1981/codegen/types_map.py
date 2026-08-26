@@ -116,6 +116,25 @@ class TypesMapMixin:
                 return ir.IntType(32)
             elif name_up == 'FCBFQQ':
                 return self.llvm_type(self.resolve_type_alias(type_expr))
+            # KNOWN INCONSISTENCY: the built-in names above are matched before
+            # this alias lookup, so a user TYPE that shadows one of them is
+            # silently ignored here -- while get_string_type_info() below
+            # consults self.type_aliases and never looks at the built-in names
+            # at all. The two therefore disagree about the same declaration:
+            #
+            #     TYPE Word = LSTRING(64);   { shadows the built-in WORD }
+            #     VAR current: Word;
+            #
+            # typechecks cleanly, then dies in codegen_var_decl with
+            # "'IntType' object has no attribute 'count'" -- get_string_type_info
+            # reports a string, so the LSTRING initializer path runs against the
+            # i16 that this function returned for the built-in WORD.
+            #
+            # Whether shadowing a built-in type name should be an error, or
+            # should work with the user's TYPE winning consistently, is
+            # undecided; the vintage manual is worth checking before choosing.
+            # Either way the crash is the wrong answer. Reproduces in a plain
+            # PROGRAM -- units are not involved.
             if name_up in self.type_aliases:
                 aliased = self.type_aliases[name_up]
                 if isinstance(aliased, RecordType):
