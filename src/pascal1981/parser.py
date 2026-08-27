@@ -1064,17 +1064,6 @@ class Parser:
             values = self.parse_identifier_list()
             self.expect('RPAREN')
             return EnumType(values)
-        if kind == 'LSTRING':
-            self.pos += 1
-            self.expect('LPAREN')
-            max_len_expr = self.parse_constant()
-            self.expect('RPAREN')
-            # Extract integer value from expression
-            if isinstance(max_len_expr, IntLiteral):
-                max_len = max_len_expr.value
-            else:
-                max_len = 256  # fallback
-            return LStringType(max_len)
         if kind == 'POINTER':
             self.pos += 1
             base = self.parse_type()

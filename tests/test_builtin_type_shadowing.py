@@ -89,18 +89,27 @@ TYPE
   STRING = RECORD
     tag: INTEGER;
   END;
+  LSTRING = RECORD
+    tag: INTEGER;
+  END;
 VAR
   r: STRING;
+  l: LSTRING;
   s: STRING(16);
+  ls: LSTRING(16);
 BEGIN
   r.tag := 7;
+  l.tag := 9;
   s := 'still builtin   ';
+  ls := 'also builtin    ';
   WRITELN(r.tag);
+  WRITELN(l.tag);
   WRITELN(s);
+  WRITELN(ls);
 END.
 """)
         self.assertEqual(rc, 0)
-        self.assertEqual(out.split(), ['7', 'still', 'builtin'])
+        self.assertEqual(out.split(), ['7', '9', 'still', 'builtin', 'also', 'builtin'])
 
     def test_unshadowed_builtins_are_unaffected(self):
         """The compiler's own internal uses keep the predeclared meaning."""
