@@ -257,7 +257,7 @@ class TestReadDispatchCodegen(unittest.TestCase):
 
     def test_enum_read_uses_numeric_reader_by_default(self):
         """Enum READ is readable and lowers through the integer reader by default."""
-        src = "PROGRAM P; TYPE C = (Red, Green); VAR c: C; BEGIN READLN(c) END."
+        src = "PROGRAM P; TYPE Color = (Red, Green); VAR c: Color; BEGIN READLN(c) END."
         ir = compile_to_ir(src)
         self.assertIn('call i32 @"pas_read_int"', ir)
 

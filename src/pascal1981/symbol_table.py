@@ -56,19 +56,20 @@ class Scope:
 
     def define(self, name: str, symbol: Symbol) -> None:
         """Define a symbol in this scope (not parent scopes)."""
-        self.symbols[name] = symbol
+        self.symbols[name.lower()] = symbol
 
     def lookup(self, name: str) -> Optional[Symbol]:
         """Look up a symbol, searching parent scopes if needed."""
-        if name in self.symbols:
-            return self.symbols[name]
+        key = name.lower()
+        if key in self.symbols:
+            return self.symbols[key]
         if self.parent:
             return self.parent.lookup(name)
         return None
 
     def lookup_local(self, name: str) -> Optional[Symbol]:
         """Look up a symbol only in this scope (not parents)."""
-        return self.symbols.get(name)
+        return self.symbols.get(name.lower())
 
     def all_symbols(self) -> Dict[str, Symbol]:
         """Return all symbols in this scope."""

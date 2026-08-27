@@ -132,9 +132,9 @@ class TestIdentifiedStructRegressions(unittest.TestCase):
         """Two distinct but structurally equal records still copy field-by-field,
         even though they now lower to separate identified structs."""
         src = """PROGRAM P(OUTPUT);
-TYPE A = RECORD c: INTEGER; t: INTEGER END;
-     B = RECORD c: INTEGER; t: INTEGER END;
-VAR a: A; b: B;
+TYPE RecA = RECORD c: INTEGER; t: INTEGER END;
+     RecB = RECORD c: INTEGER; t: INTEGER END;
+VAR a: RecA; b: RecB;
 BEGIN
   b.c := 7; b.t := 8;
   a := b;

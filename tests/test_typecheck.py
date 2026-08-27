@@ -251,11 +251,11 @@ class TestReadWriteTypecheck(unittest.TestCase):
         self.assertIn("unreadable", " ".join(str(e) for e in result.errors))
 
     def test_read_enum_allowed(self):
-        result = typecheck_source("PROGRAM P; TYPE C = (Red, Green); VAR c: C; BEGIN READLN(c) END.")
+        result = typecheck_source("PROGRAM P; TYPE Color = (Red, Green); VAR c: Color; BEGIN READLN(c) END.")
         self.assertTrue(result.success)
 
     def test_write_enum_still_allowed(self):
-        result = typecheck_source("PROGRAM P; TYPE C = (Red, Green); VAR c: C; BEGIN WRITELN(c) END.")
+        result = typecheck_source("PROGRAM P; TYPE Color = (Red, Green); VAR c: Color; BEGIN WRITELN(c) END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
     def test_writeln_accepts_leading_text_file_selector(self):
@@ -1368,7 +1368,7 @@ class TestRecordTypeChecking(unittest.TestCase):
     def test_field_access_is_case_insensitive(self):
         """Pascal identifiers are case-insensitive, so a field declared 'Count'
         is reachable as 'count'/'COUNT'/'cOuNt'."""
-        result = typecheck_source("PROGRAM P; TYPE R = RECORD Count: INTEGER END; VAR r: R; "
+        result = typecheck_source("PROGRAM P; TYPE Rec = RECORD Count: INTEGER END; VAR r: Rec; "
                                   "BEGIN r.count := 1; r.COUNT := 2; r.cOuNt := 3 END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
@@ -1385,9 +1385,9 @@ class TestRecordTypeChecking(unittest.TestCase):
         """Records with identical field order/types whose names differ only in
         case ARE equivalent (Pascal identifiers are case-insensitive)."""
         result = typecheck_source("PROGRAM P; "
-                                  "TYPE A = RECORD Count, Total: INTEGER END; "
-                                  "B = RECORD count, total: INTEGER END; "
-                                  "VAR a: A; b: B; BEGIN a := b END.")
+                                  "TYPE RecA = RECORD Count, Total: INTEGER END; "
+                                  "RecB = RECORD count, total: INTEGER END; "
+                                  "VAR a: RecA; b: RecB; BEGIN a := b END.")
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 
 
@@ -1397,9 +1397,9 @@ class TestValueInitializers(unittest.TestCase):
     def test_value_initializers_accept_supported_scalars_and_strings(self):
         src = ("PROGRAM P; TYPE NAME = PACKED ARRAY[1..10] OF CHAR; "
                "VAR i: INTEGER; r: REAL; c: CHAR; s: STRING(10); "
-               "ls: LSTRING(14); name: NAME; "
+               "ls: LSTRING(14); person_name: NAME; "
                "VALUE i := 10; r := 4.5; c := 'K'; s := 'Mr. Karate'; "
-               "ls := 'Mr. Karate'; name := 'Mr. Karate'; BEGIN END.")
+               "ls := 'Mr. Karate'; person_name := 'Mr. Karate'; BEGIN END.")
         result = typecheck_source(src)
         self.assertTrue(result.success, msg=" ".join(str(e) for e in result.errors))
 

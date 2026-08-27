@@ -95,19 +95,19 @@ class TestCodegenIR(unittest.TestCase):
 
     def test_proven_aggregate_geps_are_inbounds(self):
         """Fixed in-range array indexes and direct record fields carry inbounds."""
-        src = ("PROGRAM P; TYPE R = RECORD a, b: INTEGER END; "
-               "VAR a: ARRAY [5..7] OF INTEGER; r: R; "
+        src = ("PROGRAM P; TYPE Rec = RECORD a, b: INTEGER END; "
+               "VAR a: ARRAY [5..7] OF INTEGER; r: Rec; "
                "BEGIN a[6] := 1; r.b := a[6] END.")
         ir = compile_to_ir(src)
         self.assertIn('getelementptr inbounds [3 x i16], [3 x i16]* @"a"', ir)
-        self.assertIn('getelementptr inbounds %"R", %"R"* @"r", i32 0, i32 1', ir)
+        self.assertIn('getelementptr inbounds %"REC", %"REC"* @"r", i32 0, i32 1', ir)
 
     def test_nested_proven_aggregate_geps_remain_inbounds(self):
         """A proof survives only through proven array and record selectors."""
-        src = ("PROGRAM P; TYPE R = RECORD xs: ARRAY [5..7] OF INTEGER END; "
-               "VAR r: R; BEGIN r.xs[6] := 1 END.")
+        src = ("PROGRAM P; TYPE Rec = RECORD xs: ARRAY [5..7] OF INTEGER END; "
+               "VAR r: Rec; BEGIN r.xs[6] := 1 END.")
         ir = compile_to_ir(src)
-        self.assertIn('getelementptr inbounds %"R", %"R"* @"r", i32 0, i32 0', ir)
+        self.assertIn('getelementptr inbounds %"REC", %"REC"* @"r", i32 0, i32 0', ir)
         self.assertIn('getelementptr inbounds [3 x i16]', ir)
 
     def test_unproven_aggregate_geps_remain_plain(self):
@@ -1964,10 +1964,10 @@ END."""
         """A whole-record assignment between equivalent (same-order) records
         copies each field to its counterpart, even when names differ in case."""
         src = """PROGRAM P;
-TYPE A = RECORD Count: INTEGER; Total: INTEGER END;
-     B = RECORD count: INTEGER; total: INTEGER END;
-VAR a: A;
-    b: B;
+TYPE RecA = RECORD Count: INTEGER; Total: INTEGER END;
+     RecB = RECORD count: INTEGER; total: INTEGER END;
+VAR a: RecA;
+    b: RecB;
 BEGIN
     b.count := 7; b.total := 8;
     a := b;
