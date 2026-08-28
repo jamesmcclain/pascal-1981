@@ -6,9 +6,9 @@ from typing import List, Optional, Sequence, Union
 
 from .ast_nodes import (AdrExpr, AdsExpr, ArrayType, AssignStmt, Attribute, BinOp, Block, BoolLiteral, BreakStmt, BuiltinType, CaseElement, CaseStmt, CharLiteral, CompoundStmt,
                         ConstDecl, CycleStmt, Declaration, Designator, EmptyStmt, EnumType, Expression, FileType, ForStmt, FuncCall, FuncDecl, GotoStmt, Identifier, IfStmt,
-                        ImplementationUnit, IndexRange, InterfaceUnit, IntLiteral, LabelDecl, LabelStmt, LowerExpr, LStringType, ModuleUnit, NamedType, NilLiteral, Param,
-                        PointerType, ProcCallStmt, ProcDecl, ProgramUnit, RangeExpr, RealLiteral, RecordType, RepeatStmt, ReturnStmt, RetypeExpr, Selector, SetConstructor, SetType,
-                        SizeofExpr, Statement, StringLiteral, SubrangeType, Type, TypeDecl, UnaryOp, UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt, WriteArg)
+                        ImplementationUnit, IndexRange, InterfaceUnit, IntLiteral, LabelDecl, LabelStmt, LowerExpr, ModuleUnit, NamedType, NilLiteral, Param, PointerType,
+                        ProcCallStmt, ProcDecl, ProgramUnit, RangeExpr, RealLiteral, RecordType, RepeatStmt, ReturnStmt, RetypeExpr, Selector, SetConstructor, SetType, SizeofExpr,
+                        Statement, StringLiteral, SubrangeType, Type, TypeDecl, UnaryOp, UpperExpr, UseClause, ValueDecl, VarDecl, WhileStmt, WithStmt, WriteArg)
 from .depth_limits import (EXPR_TOO_DEEP, MAX_EXPR_DEPTH, MAX_STMT_DEPTH, STMT_TOO_DEEP, DepthGuard)
 from .lexer import LexerError, Token, lex_file
 
@@ -1064,17 +1064,6 @@ class Parser:
             values = self.parse_identifier_list()
             self.expect('RPAREN')
             return EnumType(values)
-        if kind == 'LSTRING':
-            self.pos += 1
-            self.expect('LPAREN')
-            max_len_expr = self.parse_constant()
-            self.expect('RPAREN')
-            # Extract integer value from expression
-            if isinstance(max_len_expr, IntLiteral):
-                max_len = max_len_expr.value
-            else:
-                max_len = 256  # fallback
-            return LStringType(max_len)
         if kind == 'POINTER':
             self.pos += 1
             base = self.parse_type()

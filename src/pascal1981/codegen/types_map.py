@@ -25,6 +25,38 @@ from .base import CodegenError
 class TypesMapMixin:
     """Mixin for type system operations."""
 
+    @staticmethod
+    def is_lstring_type(t: Optional[Type]) -> bool:
+        """True for every spelling an LSTRING reaches codegen as.
+
+        Since LSTRING became a predeclared identifier rather than a keyword,
+        `LSTRING(n)` parses as NamedType('LSTRING', n) and resolve_type_alias
+        leaves it alone (the name is built in, so it is not in type_aliases).
+        Matching only the AST/resolved node classes therefore missed the
+        common spelling outright -- that is what sent `s.LEN` into the
+        record-field path and failed the compile.
+        """
+        return (isinstance(t, (ResolvedLStringType, LStringType)) or (isinstance(t, NamedType) and t.name.upper() == 'LSTRING'))
+
+    def string_param_len(self, param, default: int = 256) -> int:
+        """Bound of a STRING(n)/LSTRING(n) super-array spelling.
+
+        parse_type keeps an integer bound as an int and a named-constant
+        bound as the identifier's own text, so a plain int(param) turned
+        `CONST N = 20; VAR s: LSTRING(N)` into an uncaught ValueError out of
+        codegen_var_decl.  Resolve the name against the constant table, and
+        fall back to the same default a bare STRING/LSTRING takes for a bound
+        the parser could not reduce to either form.
+        """
+        if param is None or isinstance(param, bool):
+            return default
+        if isinstance(param, int):
+            return param
+        val = self.constants.get(str(param).upper())
+        if isinstance(val, int) and not isinstance(val, bool):
+            return val
+        return default
+
     def llvm_type(self, type_expr: Type) -> ir.Type:
         """Convert a Pascal type to LLVM type."""
         if isinstance(type_expr, BuiltinType):
@@ -84,11 +116,11 @@ class TypesMapMixin:
                 return self.llvm_type(aliased)
             if name_up == 'LSTRING':
                 # LSTRING without explicit param: use default 256
-                param_val = int(type_expr.param) if type_expr.param else 256
+                param_val = self.string_param_len(type_expr.param)
                 return ir.ArrayType(ir.IntType(8), param_val + 1)
             elif name_up == 'STRING':
                 # STRING without explicit param: use default 256
-                param_val = int(type_expr.param) if type_expr.param else 256
+                param_val = self.string_param_len(type_expr.param)
                 return ir.ArrayType(ir.IntType(8), param_val)
             if name_up == 'ADRMEM':
                 return ir.PointerType(ir.IntType(8))
@@ -221,7 +253,7 @@ class TypesMapMixin:
             return self._scalar_size(t.name)
         elif isinstance(t, NamedType):
             if t.name.upper() in {'STRING', 'LSTRING'}:
-                return (int(t.param) if isinstance(t.param, int) else 256) + 1
+                return self.string_param_len(t.param) + 1
             return self._scalar_size(t.name)
         elif isinstance(t, SetType):
             return 32
@@ -480,9 +512,9 @@ class TypesMapMixin:
             if t.param is None and name_up in self.type_aliases:
                 return self.get_string_type_info(self.type_aliases[name_up])
             if name_up == 'LSTRING':
-                return True, (int(t.param) if t.param is not None else 256), True
+                return True, self.string_param_len(t.param), True
             elif name_up == 'STRING':
-                return True, (int(t.param) if t.param is not None else 256), False
+                return True, self.string_param_len(t.param), False
             elif name_up in self.type_aliases:
                 return self.get_string_type_info(self.type_aliases[name_up])
 
@@ -721,7 +753,7 @@ class TypesMapMixin:
                     cur_type = elem_type
                 elif selector.kind == 'FIELD':
                     base = self.resolve_type_alias(cur_type) if cur_type is not None else None
-                    if isinstance(base, (ResolvedLStringType, LStringType)):
+                    if self.is_lstring_type(base):
                         field = str(selector.index_or_field).upper()
                         if field == 'LEN':
                             ptr = self.builder.gep(ptr, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0)])

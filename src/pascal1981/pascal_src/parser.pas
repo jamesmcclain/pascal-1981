@@ -1810,8 +1810,7 @@ VAR
   node, idx_range, elem_type, base_type, space_expr: ADRMEM;
   packed_flag, is_super: BOOLEAN;
   nm: Str255;
-  fields_arr, names_arr, field_type, max_len_expr, param_expr, values_arr: ADRMEM;
-  max_len: INTEGER;
+  fields_arr, names_arr, field_type, param_expr, values_arr: ADRMEM;
   res_c: CINT;
 BEGIN
   packed_flag := Match('PACKED');
@@ -1884,17 +1883,6 @@ BEGIN
     Expect('RPAREN');
     node := CreateNode('EnumType');
     AddField(node, 'values', values_arr);
-    ParseType := node;
-  END
-  ELSE IF CurKind = 'LSTRING' THEN
-  BEGIN
-    pos := pos + 1;
-    Expect('LPAREN');
-    max_len_expr := ParseConstant;
-    Expect('RPAREN');
-    max_len := TRUNC(cJSON_GetNumberValue(cJSON_GetObjectItem(max_len_expr, MakeCStr('value'))));
-    node := CreateNode('LStringType');
-    AddIntField(node, 'max_len', max_len);
     ParseType := node;
   END
   ELSE IF CurKind = 'POINTER' THEN

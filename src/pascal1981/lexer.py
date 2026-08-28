@@ -51,7 +51,6 @@ KEYWORD_CODES = {
     'RECORD': 0x0027,
     'SET': 0x0028,
     'FILE': 0x0029,
-    'LSTRING': 0x002A,
     'ORIGIN': 0x002B,
     'READONLY': 0x002C,
     'PUBLIC': 0x002D,
