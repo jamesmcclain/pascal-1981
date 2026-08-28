@@ -26,6 +26,24 @@ from ..type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER8_TYPE, INTEGER32_TYP
 
 class TypeResolveMixin:
 
+    def _string_bound(self, param, default: int = 256) -> int:
+        """Bound of a STRING(n)/LSTRING(n) spelling, honouring a named constant.
+
+        parse_type stores a literal bound as an int and a named-constant bound
+        as the identifier's own text.  Treating the latter as "not an int"
+        resolved `LSTRING(N)` to the 256 default, which then disagreed with the
+        N+1 bytes codegen allocates for the same declaration -- `VAR s:
+        STRING(N)` could not even be assigned a string literal.  A bound that
+        is neither (one parse_type could not reduce) still takes the default a
+        bare STRING/LSTRING takes.
+        """
+        if param is None or isinstance(param, bool):
+            return default
+        if isinstance(param, int):
+            return param
+        folded = self._fold_const_int(Identifier(str(param)))
+        return folded if isinstance(folded, int) else default
+
     def _eval_index_bound(self, expr) -> Optional[tuple]:
         """Best-effort evaluate an array index-range endpoint.
 
@@ -140,11 +158,9 @@ class TypeResolveMixin:
                 # runtime builtins require ADS-style addresses.
                 return PointerType(CHAR_TYPE, flavor='ADS')
             elif name == 'STRING':
-                max_len = int(type_expr.param) if isinstance(type_expr.param, int) else 256
-                return StringType(max_len)
+                return StringType(self._string_bound(type_expr.param))
             elif name == 'LSTRING':
-                max_len = int(type_expr.param) if isinstance(type_expr.param, int) else 256
-                return LStringType(max_len)
+                return LStringType(self._string_bound(type_expr.param))
             else:
                 # Unparameterised names were already probed above; this catches
                 # a user TYPE whose name carries a param the built-ins ignore.
