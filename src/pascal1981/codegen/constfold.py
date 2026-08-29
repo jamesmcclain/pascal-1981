@@ -25,6 +25,11 @@ class ConstFoldMixin:
         v = self.constants[name_upper]
         if isinstance(v, float):
             return ir.Constant(ir.DoubleType(), v)
+        if self.constant_types.get(name_upper) == 'CHAR':
+            # CHAR storage is i8, the same width a character literal lowers to.
+            # Falling through to the i32 default would make WRITE format the
+            # value as a number rather than a glyph.
+            return ir.Constant(ir.IntType(8), int(v))
         if name_upper == 'MAXINT':
             return ir.Constant(ir.IntType(16), int(v))
         if name_upper in ('MAXINT64', 'MAXWORD64'):

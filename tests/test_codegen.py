@@ -969,6 +969,35 @@ END."""
         self.assertEqual(returncode, 0)
         self.assertEqual(stdout.strip(), "1\n2\n3")
 
+    def test_char_constant_prints_as_a_character(self):
+        """A CHAR CONST prints as its glyph, not its ordinal.
+
+        The value folds to an ordinal like any other constant, so ORD and the
+        other numeric uses keep working; what must survive the fold is that it
+        was a character, or WRITELN formats it as a number. A CONST defined as
+        another CHAR CONST inherits that.
+        """
+        src = """
+        PROGRAM P;
+        CONST
+            SPACE = ' ';
+            LETTER_A = 'A';
+            ALIAS = LETTER_A;
+            COUNT = 5;
+        VAR c: CHAR;
+        BEGIN
+            WRITELN('x', SPACE, 'y');
+            WRITELN(ALIAS);
+            WRITELN(ORD(SPACE));
+            c := LETTER_A;
+            IF c = LETTER_A THEN WRITELN('eq');
+            WRITELN(COUNT * 2)
+        END.
+        """
+        returncode, stdout = build_and_run(src)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.strip().splitlines(), ['x y', 'A', '32', 'eq', '10'])
+
     def test_typed_set_constructor_runtime(self):
         """Type-prefixed set constants execute through the set backend."""
         src = """
