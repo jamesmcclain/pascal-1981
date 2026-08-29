@@ -70,5 +70,62 @@ class TestHostUsesIntegration(unittest.TestCase):
         self.assertEqual([line.strip() for line in out.splitlines() if line.strip()], _EXPECTED)
 
 
+_INIT_INTERFACE = """INTERFACE;
+UNIT counter (bump);
+FUNCTION bump: INTEGER;
+END;
+"""
+
+_INIT_IMPLEMENTATION = """(*$INCLUDE:'counter.inc'*)
+IMPLEMENTATION OF counter;
+VAR
+  n: INTEGER;
+
+FUNCTION bump: INTEGER;
+BEGIN
+  n := n + 1;
+  bump := n
+END;
+
+BEGIN
+  n := 41
+END.
+"""
+
+_INIT_MAIN = """(*$INCLUDE:'counter.inc'*)
+PROGRAM main(output);
+USES counter;
+BEGIN
+  WRITELN(bump)
+END.
+"""
+
+
+@requires_exe
+class TestUnitInitializationCalledIntegration(unittest.TestCase):
+    """A UNIT's INITIALIZATION (BEGIN..END) body must actually run before
+    PROGRAM's own body -- pascal_init_<unit> being generated is not enough
+    if nothing ever calls it."""
+
+    def test_unit_initialization_body_runs_before_program_body(self):
+        rc, out, err = build_and_run_pascal_project(
+            files={
+                'counter.inc': _INIT_INTERFACE,
+                'counter.pas': _INIT_IMPLEMENTATION,
+                'main.pas': _INIT_MAIN,
+            },
+            compile_pairs=[
+                ('counter.inc', 'counter-interface.ll'),
+                ('counter.pas', 'counter.ll'),
+                ('main.pas', 'main.ll'),
+            ],
+            link_ir_relpaths=['counter.ll', 'main.ll'],
+            exe_name='host-uses-init',
+            link_flags=[],
+        )
+        self.assertEqual(rc, 0, msg=err)
+        self.assertEqual([line.strip() for line in out.splitlines() if line.strip()], ["42"])
+
+
 if __name__ == '__main__':
     unittest.main()

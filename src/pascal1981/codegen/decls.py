@@ -81,6 +81,12 @@ class DeclsMixin:
             for sym in list(self.scope.symbols.values()):
                 if isinstance(self.resolve_type_alias(sym.type_expr), FileType):
                     self._init_file_storage(sym.llvm_value, sym.type_expr)
+            # Call each USES'd unit's pascal_init_<name>, dependencies before
+            # dependents, before running the program's own body -- mirroring
+            # native's BuildUnitInitOrder/EmitUnitInitCalls. Without this,
+            # pascal_init_<unit> is generated but never called from anywhere,
+            # so a UNIT's INITIALIZATION body is silently dead.
+            self._emit_unit_init_calls(unit)
             # Bind program-heading parameters from the command line.
             self._codegen_program_parameters(unit)
             # Execute the program body
@@ -94,6 +100,54 @@ class DeclsMixin:
 
         self._emit_launch_registry()
         return self.module
+
+    def _build_unit_init_order(self, unit: ProgramUnit) -> List[str]:
+        """Every unit transitively reached from unit's own USES clauses,
+        dependencies before dependents, each named exactly once (lowercased).
+
+        Walks local_interfaces (the INTERFACE headers spliced into this file)
+        by name, recursing into each interface's own USES before appending it,
+        the same post-order DFS as native's BuildUnitInitOrder/DFSVisitUnit.
+        A DEVICE unit is walked (so its own dependencies still get initialized
+        if something else needs them) but never appended itself: it has no
+        pascal_init_<name> (see codegen_implementation's is_device guard), so
+        calling one would be a call to an undefined symbol.
+        """
+        local_interfaces = getattr(unit, 'local_interfaces', None) or []
+        by_name = {iface.name.upper(): iface for iface in local_interfaces}
+        order: List[str] = []
+        visiting: set = set()
+
+        def visit(name: str) -> None:
+            key = name.upper()
+            iface = by_name.get(key)
+            if iface is None or key in visiting:
+                return
+            visiting.add(key)
+            for use_clause in iface.uses:
+                visit(use_clause.name)
+            if not getattr(iface, 'is_device', False):
+                order.append(iface.name.lower())
+
+        for use_clause in unit.uses:
+            visit(use_clause.name)
+        return order
+
+    def _emit_unit_init_calls(self, unit: ProgramUnit) -> None:
+        """Call pascal_init_<name>() for every unit in dependency order.
+
+        Only a PROGRAM's own main walks the whole graph this way; a
+        MODULE/IMPLEMENTATION that itself USES other units does not call
+        their inits on its own behalf, since that would call some units'
+        inits more than once across a multi-unit link. Declares each
+        pascal_init_<name> fresh here (rather than reusing any existing
+        extern) since the target is defined in a separately compiled object.
+        """
+        i32 = ir.IntType(32)
+        init_fnty = ir.FunctionType(i32, [])
+        for uname in self._build_unit_init_order(unit):
+            init_fn = ir.Function(self.module, init_fnty, name=f'pascal_init_{uname}')
+            self.builder.call(init_fn, [])
 
     def _emit_cstring_ptr(self, text: str) -> ir.Value:
         """Create a NUL-terminated global C string and return an i8* to it."""
@@ -222,8 +276,12 @@ class DeclsMixin:
                 for decl in unit.decls:
                     self.codegen_decl(decl)
 
-                # Codegen init body if present
-                if unit.init_body:
+                # Every non-device IMPLEMENTATION emits pascal_init_<name>, even
+                # with an empty body when there is no BEGIN..END: a PROGRAM's
+                # own EmitUnitInitCalls-equivalent (see codegen_program) always
+                # calls it, and that call needs something real to link against
+                # in this unit's separately compiled object.
+                if not getattr(unit, 'is_device', False):
                     init_type = ir.FunctionType(ir.IntType(32), [])
                     init_name = f'pascal_init_{unit.name.lower()}'
                     init_func = ir.Function(self.module, init_type, name=init_name)
@@ -231,9 +289,10 @@ class DeclsMixin:
                     self.builder = IRBuilder(entry_block)
                     self.current_function = init_func
 
-                    prev_labels = self.setup_function_labels(unit.init_body)
-                    self.codegen_stmt_list(unit.init_body)
-                    self.label_blocks = prev_labels
+                    if unit.init_body:
+                        prev_labels = self.setup_function_labels(unit.init_body)
+                        self.codegen_stmt_list(unit.init_body)
+                        self.label_blocks = prev_labels
 
                     if not self.builder.block.is_terminated:
                         self.builder.ret(ir.Constant(ir.IntType(32), 0))
