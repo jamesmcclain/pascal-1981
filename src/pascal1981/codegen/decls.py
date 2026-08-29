@@ -14,9 +14,9 @@ from typing import List, Optional, Union
 import llvmlite.ir as ir
 from llvmlite.ir import IRBuilder
 
-from ..ast_nodes import (ArrayType, AssignStmt, ASTNode, ConstDecl, Declaration, Designator, EnumType, Expression, FileType, FuncCall, FuncDecl, Identifier, ImplementationUnit,
-                         InterfaceUnit, LabelDecl, ModuleUnit, NamedType, Param, PointerType, ProcCallStmt, ProcDecl, ProgramUnit, RecordType, Selector, SetConstructor, SetType,
-                         StringLiteral, Type, TypeDecl, UseClause, ValueDecl, VarDecl, WithStmt, effective_uses)
+from ..ast_nodes import (ArrayType, AssignStmt, ASTNode, CharLiteral, ConstDecl, Declaration, Designator, EnumType, Expression, FileType, FuncCall, FuncDecl, Identifier,
+                         ImplementationUnit, InterfaceUnit, LabelDecl, ModuleUnit, NamedType, Param, PointerType, ProcCallStmt, ProcDecl, ProgramUnit, RecordType, Selector,
+                         SetConstructor, SetType, StringLiteral, Type, TypeDecl, UseClause, ValueDecl, VarDecl, WithStmt, effective_uses)
 from .base import CodegenError, Scope, _is_gpu_triple
 from .llvmlite_compat import (add_argument_attribute, add_function_string_attribute, nocapture_spelling)
 
@@ -427,7 +427,19 @@ class DeclsMixin:
         # Evaluate constant at compile time and remember it so that later
         # uses (array bounds, sizeof, and plain value references) can resolve it.
         value = self.eval_const_expr(decl.value)
-        self.constants[decl.name.upper()] = value
+        name_upper = decl.name.upper()
+        self.constants[name_upper] = value
+        # A CHAR constant folds to its ordinal like any other, which is what
+        # every numeric use (array bounds, set ranges, ORD) wants.  Remember
+        # that it was a character, though: without it the value is emitted as a
+        # plain integer and WRITELN prints the ordinal instead of the glyph.
+        # A CONST defined as another CHAR CONST inherits the tag.
+        if isinstance(decl.value, CharLiteral):
+            self.constant_types[name_upper] = 'CHAR'
+        elif isinstance(decl.value, Identifier):
+            inherited = self.constant_types.get(decl.value.name.upper())
+            if inherited == 'CHAR':
+                self.constant_types[name_upper] = 'CHAR'
 
     def codegen_type_decl(self, decl: TypeDecl) -> None:
         """Record a type declaration for later codegen lookups."""
