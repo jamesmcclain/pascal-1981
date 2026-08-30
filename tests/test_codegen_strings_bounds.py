@@ -30,7 +30,7 @@ import subprocess
 import tempfile
 import unittest
 
-from tests.support import (parse_source, requires_exe, requires_llvm, typecheck_source)
+from tests.support import (RUNTIME_LIB, parse_source, requires_exe, requires_llvm, typecheck_source)
 from tests.test_codegen import (RUNTIME_DIR, _build_pascal_with_runtime, build_and_run, compile_to_ir)
 
 
@@ -373,7 +373,7 @@ def _compile_and_run_c_with_stdin(driver_src: str, runtime_files: list, stdin: s
             f.write(driver_src)
         exe_path = os.path.join(tmpdir, "prog")
         sources = [driver_path] + [os.path.join(RUNTIME_DIR, rf) for rf in runtime_files]
-        result = subprocess.run(["clang", *sources, "-o", exe_path], capture_output=True, text=True)
+        result = subprocess.run(["clang", *sources, RUNTIME_LIB, "-o", exe_path], capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(f"clang failed: {result.stderr}")
         run_result = subprocess.run([exe_path], input=stdin, capture_output=True, text=True)
