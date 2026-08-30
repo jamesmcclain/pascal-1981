@@ -701,3 +701,32 @@ def unary_op_result_type(operand_type: Type, op: str) -> Optional[Type]:
             return operand_type
 
     return None
+
+
+def fold_ordinal_intrinsic(fn: str, args: 'list[int]') -> int:
+    """Apply the compile-time integer semantics of an ordinal intrinsic.
+
+    `fn` is the upper-cased function name (WRD, BYWORD, ORD, CHR, SUCC,
+    PRED) and `args` are its already-folded integer arguments. Shared by
+    codegen's `eval_const_expr` and the type checker's `_fold_const_int` so
+    the two constant folders can't drift apart on what these intrinsics
+    compute -- only where they get their operand values from (a live
+    `self.constants` table for codegen, a `symbol_table` CONST lookup for
+    the type checker) differs between the two callers.
+
+    Raises ValueError for an unrecognized name; callers translate that into
+    their own error convention.
+    """
+    if fn == 'WRD':
+        return args[0] & 0xFFFF
+    if fn == 'BYWORD':
+        return ((args[0] & 0xFF) << 8) | (args[1] & 0xFF)
+    if fn == 'ORD':
+        return args[0]
+    if fn == 'CHR':
+        return args[0] & 0xFF
+    if fn == 'SUCC':
+        return args[0] + 1
+    if fn == 'PRED':
+        return args[0] - 1
+    raise ValueError(f'Not an ordinal intrinsic: {fn}')

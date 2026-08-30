@@ -7,7 +7,7 @@ movement: methods are unchanged and still reach each other through self.
 
 from typing import Optional
 
-from ..ast_nodes import Block, ConstDecl, FuncDecl, NamedType, ProcDecl
+from ..ast_nodes import (Block, ConstDecl, FuncCall, FuncDecl, NamedType, ProcDecl)
 from ..ast_nodes import RecordType as ASTRecordType
 from ..ast_nodes import TypeDecl, ValueDecl, VarDecl
 from ..symbol_table import Symbol
@@ -147,9 +147,19 @@ class DeclsMixin:
                 return candidate
         return None
 
+    def _has_extended_const_intrinsic(self, expr) -> bool:
+        if isinstance(expr, FuncCall):
+            if expr.name.upper() in {'ORD', 'CHR', 'SUCC', 'PRED'}:
+                return True
+            return any(self._has_extended_const_intrinsic(arg) for arg in expr.args)
+        return False
+
     def check_const_decl(self, decl: ConstDecl) -> None:
         """Type check a constant declaration."""
         if not decl.name or not decl.value:
+            return
+        if (self._has_extended_const_intrinsic(decl.value) and not self.feature_enabled('extended-const-intrinsics')):
+            self.error('CONST intrinsic calls require the extended-const-intrinsics feature', decl)
             return
 
         # Evaluate the constant value and infer type. An untyped CONST has no
@@ -158,9 +168,11 @@ class DeclsMixin:
         # fits it instead of being rejected (docs/features.py calls this out
         # as "wide integer constants").
         const_context = self._widen_untyped_const_context(decl.value)
+        errors_before = len(self.errors)
         value_type = self.infer_expression_type(decl.value, const_context)
         if not value_type:
-            self.error("Cannot infer type of constant", decl)
+            if len(self.errors) == errors_before:
+                self.error("Cannot infer type of constant", decl)
             return
 
         # Add constant to the symbol table
@@ -239,8 +251,10 @@ class DeclsMixin:
         # as an ordinal constant so they can be used as values and set elements.
         if isinstance(resolved_type, EnumType):
             resolved_type.name = decl.name
-            for member in resolved_type.members:
-                self.symbol_table.define(member, Symbol(name=member, type=resolved_type, kind='const', location=self.get_node_location(decl), is_mutable=False))
+            for ordinal, member in enumerate(resolved_type.members):
+                member_symbol = Symbol(name=member, type=resolved_type, kind='const', location=self.get_node_location(decl), is_mutable=False)
+                setattr(member_symbol, 'const_int', ordinal)
+                self.symbol_table.define(member, member_symbol)
 
         symbol = Symbol(name=decl.name, type=resolved_type, kind='type', location=self.get_node_location(decl), is_mutable=False)
         setattr(symbol, 'type_expr', decl.type_expr)

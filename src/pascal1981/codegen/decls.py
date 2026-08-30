@@ -434,12 +434,20 @@ class DeclsMixin:
         # that it was a character, though: without it the value is emitted as a
         # plain integer and WRITELN prints the ordinal instead of the glyph.
         # A CONST defined as another CHAR CONST inherits the tag.
-        if isinstance(decl.value, CharLiteral):
+        if self._const_expr_is_char(decl.value):
             self.constant_types[name_upper] = 'CHAR'
-        elif isinstance(decl.value, Identifier):
-            inherited = self.constant_types.get(decl.value.name.upper())
-            if inherited == 'CHAR':
-                self.constant_types[name_upper] = 'CHAR'
+
+    def _const_expr_is_char(self, expr) -> bool:
+        if isinstance(expr, CharLiteral):
+            return True
+        if isinstance(expr, Identifier):
+            return self.constant_types.get(expr.name.upper()) == 'CHAR'
+        if isinstance(expr, FuncCall):
+            if expr.name.upper() == 'CHR':
+                return True
+            if expr.name.upper() in {'SUCC', 'PRED'} and expr.args:
+                return self._const_expr_is_char(expr.args[0])
+        return False
 
     def codegen_type_decl(self, decl: TypeDecl) -> None:
         """Record a type declaration for later codegen lookups."""

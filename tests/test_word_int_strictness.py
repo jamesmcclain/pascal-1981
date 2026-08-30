@@ -180,6 +180,10 @@ class TestStrictWordIntOrthogonality(unittest.TestCase):
         self.assertFalse(ext["strict-word-int"], "extended must not auto-enable strict-word-int")
         self.assertTrue(is_extended(ext))
 
+    def test_extended_const_intrinsics_follow_dialect(self):
+        self.assertFalse(resolve_features("vintage")["extended-const-intrinsics"])
+        self.assertTrue(resolve_features("extended")["extended-const-intrinsics"])
+
     def test_disabling_strict_keeps_extended_dialect(self):
         # extended minus strict-word-int is still the extended dialect: the
         # C-FFI gate must stay open.
