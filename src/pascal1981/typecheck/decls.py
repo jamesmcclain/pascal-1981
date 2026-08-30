@@ -249,8 +249,10 @@ class DeclsMixin:
         # as an ordinal constant so they can be used as values and set elements.
         if isinstance(resolved_type, EnumType):
             resolved_type.name = decl.name
-            for member in resolved_type.members:
-                self.symbol_table.define(member, Symbol(name=member, type=resolved_type, kind='const', location=self.get_node_location(decl), is_mutable=False))
+            for ordinal, member in enumerate(resolved_type.members):
+                member_symbol = Symbol(name=member, type=resolved_type, kind='const', location=self.get_node_location(decl), is_mutable=False)
+                setattr(member_symbol, 'const_int', ordinal)
+                self.symbol_table.define(member, member_symbol)
 
         symbol = Symbol(name=decl.name, type=resolved_type, kind='type', location=self.get_node_location(decl), is_mutable=False)
         setattr(symbol, 'type_expr', decl.type_expr)
