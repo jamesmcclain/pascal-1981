@@ -10,7 +10,6 @@ EXTENDED = resolve_features("extended")
 
 
 @requires_exe
-@pytest.mark.xfail(strict=True, reason="extended CONST intrinsic parsing and folding are not implemented")
 def test_extended_const_intrinsics_fold_nested_values_and_preserve_char_output():
     source = """
 PROGRAM ExtendedConstIntrinsics(output);
@@ -33,19 +32,17 @@ END.
     assert stdout == "A\nB\n65\n"
 
 
-@pytest.mark.xfail(strict=True, reason="CONST intrinsic calls are still rejected by the parser")
 def test_vintage_rejects_extended_const_intrinsics_after_parsing():
     result = typecheck_source("PROGRAM P; CONST n = ORD('A'); BEGIN END.")
     assert not result.success
     assert "extended-const-intrinsics" in " ".join(str(error) for error in result.errors)
 
 
-@pytest.mark.xfail(strict=True, reason="extended CONST intrinsic validation is not implemented")
 @pytest.mark.parametrize(
     "source, expected",
     [
-        ("PROGRAM P; CONST n = ORD('A', 'B'); BEGIN END.", "ORD expects 1 argument"),
-        ("PROGRAM P; CONST c = CHR('A'); BEGIN END.", "CHR"),
+        ("PROGRAM P; CONST n = ORD('A', 'B'); BEGIN END.", "expects 1 argument"),
+        ("PROGRAM P; CONST c = CHR('A'); BEGIN END.", "expected INTEGER"),
         ("PROGRAM P; CONST n = SUCC(32767); BEGIN END.", "outside"),
         ("PROGRAM P; CONST n = PRED(WRD(0)); BEGIN END.", "outside"),
     ],

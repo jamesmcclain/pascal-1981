@@ -7,7 +7,7 @@ movement: methods are unchanged and still reach each other through self.
 
 from typing import Optional
 
-from ..ast_nodes import Block, ConstDecl, FuncDecl, NamedType, ProcDecl
+from ..ast_nodes import (Block, ConstDecl, FuncCall, FuncDecl, NamedType, ProcDecl)
 from ..ast_nodes import RecordType as ASTRecordType
 from ..ast_nodes import TypeDecl, ValueDecl, VarDecl
 from ..symbol_table import Symbol
@@ -147,9 +147,19 @@ class DeclsMixin:
                 return candidate
         return None
 
+    def _has_extended_const_intrinsic(self, expr) -> bool:
+        if isinstance(expr, FuncCall):
+            if expr.name.upper() in {'ORD', 'CHR', 'SUCC', 'PRED'}:
+                return True
+            return any(self._has_extended_const_intrinsic(arg) for arg in expr.args)
+        return False
+
     def check_const_decl(self, decl: ConstDecl) -> None:
         """Type check a constant declaration."""
         if not decl.name or not decl.value:
+            return
+        if (self._has_extended_const_intrinsic(decl.value) and not self.feature_enabled('extended-const-intrinsics')):
+            self.error('CONST intrinsic calls require the extended-const-intrinsics feature', decl)
             return
 
         # Evaluate the constant value and infer type. An untyped CONST has no

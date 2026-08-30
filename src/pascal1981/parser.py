@@ -989,10 +989,10 @@ class Parser:
         if kind == 'IDENTIFIER':
             name = self.current().lexeme
             self.pos += 1
-            # WRD(x) and BYWORD(hi,lo) may appear as constant expressions
-            # (manual p.6-5, p.11-8); parse them as FuncCall nodes so the
-            # constant-folder in codegen can evaluate them at compile time.
-            if name.upper() in {'WRD', 'BYWORD'} and self.current().kind == 'LPAREN':
+            # WRD(x) and BYWORD(hi,lo) are vintage constant constructors
+            # (manual p.6-5, p.11-8).  The remaining names are parsed here so
+            # the type checker can admit them only under the extended dialect.
+            if name.upper() in {'WRD', 'BYWORD', 'ORD', 'CHR', 'SUCC', 'PRED'} and self.current().kind == 'LPAREN':
                 self.pos += 1  # consume '('
                 args = [self.parse_constant()]
                 while self.current().kind == 'COMMA':

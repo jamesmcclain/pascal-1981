@@ -7,8 +7,8 @@ movement: methods are unchanged and still reach each other through self.
 
 from typing import Optional
 
-from ..ast_nodes import (BinOp, Designator, Expression, FuncCall, Identifier, IntLiteral, SizeofExpr, UnaryOp)
-from ..type_system import (INTEGER8_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, WORD8_TYPE, WORD32_TYPE, WORD64_TYPE, WORD_TYPE, Type)
+from ..ast_nodes import (BinOp, BoolLiteral, CharLiteral, Designator, Expression, FuncCall, Identifier, IntLiteral, SizeofExpr, UnaryOp)
+from ..type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER8_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, WORD8_TYPE, WORD32_TYPE, WORD64_TYPE, WORD_TYPE, EnumType, Type)
 
 
 class ConstFoldMixin:
@@ -35,6 +35,18 @@ class ConstFoldMixin:
             return (-2147483648, 2147483647)
         if t == INTEGER64_TYPE:
             return (-9223372036854775808, 9223372036854775807)
+        return None
+
+    def _ordinal_range_for_type(self, t: Type) -> Optional[tuple[int, int]]:
+        integer_range = self._integer_range_for_type(t)
+        if integer_range is not None:
+            return integer_range
+        if t == CHAR_TYPE:
+            return (0, 255)
+        if t == BOOLEAN_TYPE:
+            return (0, 1)
+        if isinstance(t, EnumType):
+            return (0, len(t.members) - 1)
         return None
 
     def _fold_int_literal_value(self, expr: Expression) -> Optional[int]:
@@ -88,6 +100,10 @@ class ConstFoldMixin:
         ARITH = {'PLUS', 'MINUS', 'MUL', 'DIV', 'MOD'}
         if isinstance(expr, IntLiteral):
             return expr.value
+        if isinstance(expr, CharLiteral):
+            return ord(expr.value) if len(expr.value) == 1 else None
+        if isinstance(expr, BoolLiteral):
+            return 1 if expr.value else 0
         if isinstance(expr, UnaryOp) and expr.op in ('PLUS', 'MINUS'):
             inner = self._fold_const_int(expr.operand)
             if inner is None:
@@ -117,18 +133,28 @@ class ConstFoldMixin:
             name = expr.name
         if name is not None:
             sym = self.symbol_table.lookup(name)
-            if (sym and getattr(sym, 'kind', None) == 'const' and sym.type in (INTEGER_TYPE, INTEGER32_TYPE, INTEGER64_TYPE)):
+            if (sym and getattr(sym, 'kind', None) == 'const' and self._ordinal_range_for_type(sym.type) is not None):
                 folded = getattr(sym, 'const_int', None)
                 if folded is not None:
                     return folded
         if isinstance(expr, FuncCall):
             fn = expr.name.upper()
-            if fn in ('ORD', 'SUCC', 'PRED') and expr.args:
+            if fn == 'BYWORD' and len(expr.args) == 2:
+                hi = self._fold_const_int(expr.args[0])
+                lo = self._fold_const_int(expr.args[1])
+                if hi is None or lo is None:
+                    return None
+                return ((hi & 0xFF) << 8) | (lo & 0xFF)
+            if fn in ('WRD', 'ORD', 'CHR', 'SUCC', 'PRED') and expr.args:
                 val = self._fold_const_int(expr.args[0])
                 if val is None:
                     return None
+                if fn == 'WRD':
+                    return val & 0xFFFF
                 if fn == 'ORD':
                     return val
+                if fn == 'CHR':
+                    return val & 0xFF
                 if fn == 'SUCC':
                     return val + 1
                 if fn == 'PRED':

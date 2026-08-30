@@ -121,4 +121,8 @@ class ConstFoldMixin:
                 return int(self.eval_const_expr(expr.args[0]))
             elif func_name == 'CHR':
                 return int(self.eval_const_expr(expr.args[0])) & 0xFF
+            elif func_name == 'SUCC':
+                return int(self.eval_const_expr(expr.args[0])) + 1
+            elif func_name == 'PRED':
+                return int(self.eval_const_expr(expr.args[0])) - 1
         raise CodegenError(f'Cannot evaluate constant expression: {type(expr).__name__}')

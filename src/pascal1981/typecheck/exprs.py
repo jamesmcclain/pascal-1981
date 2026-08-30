@@ -429,6 +429,13 @@ class ExprInferMixin:
                 # SUCC/PRED are defined on any ordinal type and yield the same
                 # type (enums included).
                 if isinstance(arg_type, EnumType) or arg_type in (INTEGER_TYPE, WORD_TYPE, CHAR_TYPE, BOOLEAN_TYPE):
+                    value = self._fold_const_int(expr.args[0])
+                    bounds = self._ordinal_range_for_type(arg_type)
+                    if value is not None and bounds is not None:
+                        stepped = value + (1 if lookup_name == 'SUCC' else -1)
+                        if not bounds[0] <= stepped <= bounds[1]:
+                            self.error(f"Constant {lookup_name} result outside {arg_type} range", expr)
+                            return None
                     return arg_type
                 self.error(f"Argument 1 type mismatch: {lookup_name} expects an ordinal type, got {arg_type}", expr)
                 return None
