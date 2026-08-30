@@ -68,6 +68,12 @@ _FEATURES: Dict[str, Feature] = {
         help=
         'Enable performance-hint plumbing: the [MAXNTID(x[,y[,z]])] / [REQNTID(x[,y[,z]])] / [MINCTASM(n)] launch-bound attributes on exported device kernel procedures (lowered to NVVM launch-bound facts that surface as .maxntid/.reqntid/.minnctapersm PTX directives) and the {$UNROLL n} loop metacommand (lowered to llvm.loop.unroll.count metadata on the loop it precedes). Hints only; all transforms remain LLVM\'s. Not vintage IBM Pascal.',
     ),
+    'extended-const-intrinsics':
+    Feature(
+        name='extended-const-intrinsics',
+        default=False,
+        help='Enable extended-only intrinsic calls in CONST declarations.',
+    ),
     'strict-word-int':
     Feature(
         name='strict-word-int',
