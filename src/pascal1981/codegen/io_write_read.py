@@ -14,7 +14,7 @@ from ..ast_nodes import BuiltinType, Designator
 from ..ast_nodes import EnumType as ASTEnumType
 from ..ast_nodes import Expression, FileType, FuncCall, Identifier
 from ..ast_nodes import LStringType as ASTLStringType
-from ..ast_nodes import NamedType, WriteArg
+from ..ast_nodes import NamedType, StringLiteral, WriteArg
 from ..type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER8_TYPE, INTEGER_TYPE, REAL_TYPE, WORD8_TYPE, WORD32_TYPE, WORD64_TYPE, WORD_TYPE)
 from ..type_system import EnumType as ResolvedEnumType
 from ..type_system import FileType as ResolvedFileType
@@ -120,6 +120,21 @@ class IoWriteReadMixin:
             precision = arg.precision if isinstance(arg, WriteArg) else None
             val = self.codegen_expr(expr)
             pas_ty = self._pas_type(expr)
+
+            if isinstance(expr, StringLiteral):
+                if precision is not None and self.feature_enabled('string-precision'):
+                    fmt_parts.append('%*.*s')
+                    printf_args.extend([
+                        self.coerce_printf_int(self.codegen_expr(width)) if width is not None else ir.Constant(ir.IntType(32), 0),
+                        self.coerce_printf_int(self.codegen_expr(precision)), val
+                    ])
+                elif width is not None:
+                    fmt_parts.append('%*s')
+                    printf_args.extend([self.coerce_printf_int(self.codegen_expr(width)), val])
+                else:
+                    fmt_parts.append('%s')
+                    printf_args.append(val)
+                continue
 
             enum_names = self.write_enum_names(expr)
             if enum_names is not None and self.feature_enabled('symbolic-enum-io'):

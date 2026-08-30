@@ -54,7 +54,7 @@ def build_run_linked(src: str, runtime_files, stdin: str = "", features=None) ->
             f.write(ir)
         exe_path = os.path.join(tmpdir, "prog")
         cfiles = [os.path.join(_RUNTIME, name) for name in runtime_files]
-        cc = subprocess.run(["clang", ll_path, *cfiles, "-o", exe_path, "-lm"], capture_output=True, text=True)
+        cc = subprocess.run(["clang", ll_path, *cfiles, os.path.join(_RUNTIME, "cmdline.c"), "-o", exe_path, "-lm"], capture_output=True, text=True)
         if cc.returncode != 0:
             raise RuntimeError(f"clang failed: {cc.stderr}")
         run = subprocess.run([exe_path], input=stdin, capture_output=True, text=True)

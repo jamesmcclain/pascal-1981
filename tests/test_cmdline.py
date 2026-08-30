@@ -38,12 +38,11 @@ class TestCmdlineIR(unittest.TestCase):
         self.assertIn('pas_arg_begin', ir)
         self.assertIn('pas_arg_end', ir)
 
-    def test_output_only_program_stays_runtime_free(self):
-        # A program whose only heading parameter is OUTPUT binds nothing, so the
-        # command-line runtime must not be referenced (it would force linking
-        # libpascalrt even for programs that take no input).
+    def test_output_only_program_initializes_raw_argv(self):
+        # A program whose only heading parameter is OUTPUT binds no positional
+        # values, but units such as argparse can still use the raw argv API.
         ir = _ir("PROGRAM p(output);\nBEGIN WRITELN(1) END.")
-        self.assertNotIn('pas_args_init', ir)
+        self.assertIn('pas_args_init', ir)
         self.assertNotIn('pas_arg_begin', ir)
 
     def test_input_output_not_positional(self):

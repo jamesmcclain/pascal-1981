@@ -172,16 +172,16 @@ class DeclsMixin:
         """
         from ..ast_nodes import Identifier
         params = list(getattr(unit, 'params', None) or [])
-        # INPUT/OUTPUT are bound to the keyboard/display and occupy no
-        # command-line position; if every heading parameter is one of those (or
-        # there are none), emit nothing -- programs that take no command-line
-        # input keep their previous, runtime-free main.
+        # Initialize argv for every PROGRAM. Library units such as argparse can
+        # use the raw pas_arg_count/pas_arg_value interface even when the
+        # program heading contains only INPUT/OUTPUT. This also matches the
+        # native code generator's CodegenProgramParameters.
         bindable = [p for p in params if p.upper() not in {'INPUT', 'OUTPUT'}]
-        if not bindable:
-            return
         i32 = ir.IntType(32)
         argc, argv = self.current_function.args[0], self.current_function.args[1]
         self.builder.call(self.runtime_extern('pas_args_init'), [argc, argv])
+        if not bindable:
+            return
 
         position = 0  # command-line position among bindable parameters
         for pname in params:

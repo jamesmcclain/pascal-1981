@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 import unittest
 
-from tests.support import (parse_source, requires_exe, requires_llvm, typecheck_source)
+from tests.support import (RUNTIME_LIB, parse_source, requires_exe, requires_llvm, typecheck_source)
 
 
 # Codegen helpers (only imported here, not in support.py)
@@ -63,7 +63,7 @@ def build_and_run(src: str, stdin: str = "", features=None) -> tuple:
 
         # Compile to native executable
         exe_path = os.path.join(tmpdir, "prog")
-        result = subprocess.run(["clang", ll_path, "-o", exe_path, "-lm"], capture_output=True, text=True)
+        result = subprocess.run(["clang", ll_path, RUNTIME_LIB, "-o", exe_path, "-lm"], capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(f"clang failed: {result.stderr}")
 
@@ -585,7 +585,7 @@ END."""
             # not be linked into this default CPU build (mirrors the Makefile's
             # DEVICE_SHIM=cpu default).
             runtime_sources = [c for c in glob.glob(os.path.join(repo, "runtime", "*.c")) if os.path.basename(c) != "cuda_launch.c"]
-            clang = subprocess.run(["clang", ll_path, *runtime_sources, "-o", exe_path, "-lm", "-w"], capture_output=True, text=True)
+            clang = subprocess.run(["clang", ll_path, *runtime_sources, RUNTIME_LIB, "-o", exe_path, "-lm", "-w"], capture_output=True, text=True)
             self.assertEqual(clang.returncode, 0, msg=clang.stderr)
             run = subprocess.run([exe_path], cwd=tmpdir, capture_output=True, text=True, timeout=15)
             self.assertEqual(run.returncode, 0, msg=run.stderr)
@@ -618,7 +618,7 @@ END."""
             # not be linked into this default CPU build (mirrors the Makefile's
             # DEVICE_SHIM=cpu default).
             runtime_sources = [c for c in glob.glob(os.path.join(repo, "runtime", "*.c")) if os.path.basename(c) != "cuda_launch.c"]
-            clang = subprocess.run(["clang", ll_path, *runtime_sources, "-o", exe_path, "-lm", "-w"], capture_output=True, text=True)
+            clang = subprocess.run(["clang", ll_path, *runtime_sources, RUNTIME_LIB, "-o", exe_path, "-lm", "-w"], capture_output=True, text=True)
             self.assertEqual(clang.returncode, 0, msg=clang.stderr)
             run = subprocess.run([exe_path], cwd=tmpdir, capture_output=True, text=True, timeout=15)
             self.assertEqual(run.returncode, 0, msg=run.stderr)
@@ -650,7 +650,7 @@ END."""
             # not be linked into this default CPU build (mirrors the Makefile's
             # DEVICE_SHIM=cpu default).
             runtime_sources = [c for c in glob.glob(os.path.join(repo, "runtime", "*.c")) if os.path.basename(c) != "cuda_launch.c"]
-            clang = subprocess.run(["clang", ll_path, *runtime_sources, "-o", exe_path, "-lm", "-w"], capture_output=True, text=True)
+            clang = subprocess.run(["clang", ll_path, *runtime_sources, RUNTIME_LIB, "-o", exe_path, "-lm", "-w"], capture_output=True, text=True)
             self.assertEqual(clang.returncode, 0, msg=clang.stderr)
             run = subprocess.run([exe_path], cwd=tmpdir, capture_output=True, text=True, timeout=15)
             self.assertNotEqual(run.returncode, 0)
@@ -2053,7 +2053,7 @@ def _build_pascal_with_runtime(src: str, runtime_files: list, stdin: str = "", f
             f.write(ir)
         exe_path = os.path.join(tmpdir, "prog")
         sources = [ll_path] + [os.path.join(RUNTIME_DIR, rf) for rf in runtime_files]
-        compile_result = subprocess.run(["clang", *sources, "-o", exe_path, "-lm"], capture_output=True, text=True)
+        compile_result = subprocess.run(["clang", *sources, RUNTIME_LIB, "-o", exe_path, "-lm"], capture_output=True, text=True)
         if compile_result.returncode != 0:
             raise RuntimeError(f"clang failed: {compile_result.stderr}")
         run_result = subprocess.run([exe_path], input=stdin, capture_output=True, text=True)
