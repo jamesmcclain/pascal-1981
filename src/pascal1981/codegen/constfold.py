@@ -14,6 +14,7 @@ from typing import Optional
 import llvmlite.ir as ir
 
 from ..ast_nodes import (BinOp, BoolLiteral, CharLiteral, Designator, Expression, FuncCall, Identifier, IntLiteral, RealLiteral, RetypeExpr, UnaryOp)
+from ..type_system import fold_ordinal_intrinsic
 from .base import CodegenError
 
 
@@ -110,19 +111,7 @@ class ConstFoldMixin:
                     return left % right if right != 0 else 0
         elif isinstance(expr, FuncCall):
             func_name = expr.name.upper() if hasattr(expr, 'name') else ''
-            if func_name == 'WRD':
-                raw = self.eval_const_expr(expr.args[0])
-                return int(raw) & 0xFFFF
-            elif func_name == 'BYWORD':
-                hi = int(self.eval_const_expr(expr.args[0])) & 0xFF
-                lo = int(self.eval_const_expr(expr.args[1])) & 0xFF
-                return (hi << 8) | lo
-            elif func_name == 'ORD':
-                return int(self.eval_const_expr(expr.args[0]))
-            elif func_name == 'CHR':
-                return int(self.eval_const_expr(expr.args[0])) & 0xFF
-            elif func_name == 'SUCC':
-                return int(self.eval_const_expr(expr.args[0])) + 1
-            elif func_name == 'PRED':
-                return int(self.eval_const_expr(expr.args[0])) - 1
+            if func_name in ('WRD', 'BYWORD', 'ORD', 'CHR', 'SUCC', 'PRED'):
+                args = [int(self.eval_const_expr(arg)) for arg in expr.args]
+                return fold_ordinal_intrinsic(func_name, args)
         raise CodegenError(f'Cannot evaluate constant expression: {type(expr).__name__}')

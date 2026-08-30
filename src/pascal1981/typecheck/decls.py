@@ -168,9 +168,11 @@ class DeclsMixin:
         # fits it instead of being rejected (docs/features.py calls this out
         # as "wide integer constants").
         const_context = self._widen_untyped_const_context(decl.value)
+        errors_before = len(self.errors)
         value_type = self.infer_expression_type(decl.value, const_context)
         if not value_type:
-            self.error("Cannot infer type of constant", decl)
+            if len(self.errors) == errors_before:
+                self.error("Cannot infer type of constant", decl)
             return
 
         # Add constant to the symbol table

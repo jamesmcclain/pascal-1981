@@ -8,7 +8,8 @@ movement: methods are unchanged and still reach each other through self.
 from typing import Optional
 
 from ..ast_nodes import (BinOp, BoolLiteral, CharLiteral, Designator, Expression, FuncCall, Identifier, IntLiteral, SizeofExpr, UnaryOp)
-from ..type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER8_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, WORD8_TYPE, WORD32_TYPE, WORD64_TYPE, WORD_TYPE, EnumType, Type)
+from ..type_system import (BOOLEAN_TYPE, CHAR_TYPE, INTEGER8_TYPE, INTEGER32_TYPE, INTEGER64_TYPE, INTEGER_TYPE, WORD8_TYPE, WORD32_TYPE, WORD64_TYPE, WORD_TYPE, EnumType, Type,
+                           fold_ordinal_intrinsic)
 
 
 class ConstFoldMixin:
@@ -144,21 +145,12 @@ class ConstFoldMixin:
                 lo = self._fold_const_int(expr.args[1])
                 if hi is None or lo is None:
                     return None
-                return ((hi & 0xFF) << 8) | (lo & 0xFF)
+                return fold_ordinal_intrinsic(fn, [hi, lo])
             if fn in ('WRD', 'ORD', 'CHR', 'SUCC', 'PRED') and expr.args:
                 val = self._fold_const_int(expr.args[0])
                 if val is None:
                     return None
-                if fn == 'WRD':
-                    return val & 0xFFFF
-                if fn == 'ORD':
-                    return val
-                if fn == 'CHR':
-                    return val & 0xFF
-                if fn == 'SUCC':
-                    return val + 1
-                if fn == 'PRED':
-                    return val - 1
+                return fold_ordinal_intrinsic(fn, [val])
         return None
 
     def _is_constant_integer_expr(self, expr: Expression) -> bool:
